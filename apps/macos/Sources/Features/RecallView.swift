@@ -1,4 +1,5 @@
 import AppKit
+import MarkdownUI
 import SwiftUI
 
 /// Content column: the agent activity this project has produced, newest first.
@@ -105,7 +106,7 @@ struct RecallSessionDetail: View {
                     RecallTaskSection(
                         number: index + 1,
                         task: task,
-                        workspaceRoot: session.workspaceRoot,
+                        session: session,
                         model: model
                     )
                 }
@@ -177,7 +178,7 @@ private struct RecallSessionSummary: View {
 private struct RecallTaskSection: View {
     let number: Int
     let task: RecallTask
-    let workspaceRoot: String
+    let session: RecallSession
     let model: RecallModel
 
     var body: some View {
@@ -214,8 +215,16 @@ private struct RecallTaskSection: View {
                 ForEach(task.activations) { activation in
                     RecallActivationRow(
                         activation: activation,
-                        workspaceRoot: workspaceRoot,
-                        model: model
+                        workspaceRoot: session.workspaceRoot,
+                        model: model,
+                        onOpenRetrieval: {
+                            model.openRetrieval(
+                                session: session,
+                                task: task,
+                                requestNumber: number,
+                                activation: activation
+                            )
+                        }
                     )
                 }
             }
@@ -233,6 +242,7 @@ private struct RecallActivationRow: View {
     let activation: RecallActivation
     let workspaceRoot: String
     let model: RecallModel
+    let onOpenRetrieval: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -256,6 +266,25 @@ private struct RecallActivationRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            HStack(spacing: 10) {
+                if !activation.fragments.isEmpty {
+                    Text("\(activation.fragments.count) selected chunks")
+                }
+                if let totalUs = activation.totalUs {
+                    Text(Duration.microseconds(Int64(clamping: totalUs)).formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
+                }
+                Spacer()
+                if activation.runId != nil {
+                    Button("Retrieval Process", systemImage: "chevron.right", action: onOpenRetrieval)
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("View retrieval process for \(activation.query)")
+                } else {
+                    Text("Retrieval record unavailable")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             if let error = activation.resultError {
                 Label("Memory search failed", systemImage: "exclamationmark.triangle")
                     .font(.callout)
@@ -278,9 +307,6 @@ private struct RecallActivationRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             } else {
-                Text("\(activation.fragments.count) Result\(activation.fragments.count == 1 ? "" : "s")")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
                 VStack(spacing: 8) {
                     ForEach(activation.fragments) { fragment in
                         RecallFragmentRow(
@@ -305,225 +331,140 @@ private struct RecallActivationRow: View {
     }
 }
 
-private struct RecallFragmentRow: View {
-    let fragment: RecallFragment
-    let workspaceRoot: String
-    let runId: String?
-    let model: RecallModel
-
-    var body: some View {
-        GroupBox {
-            NavigationLink {
-                RecallFragmentDetail(
-                    fragment: fragment,
-                    workspaceRoot: workspaceRoot,
-                    runId: runId,
-                    model: model
-                )
-            } label: {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "doc.text")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(fragment.displayTitle)
-                            .fontWeight(.medium)
-                            .lineLimit(1)
-
-                        Text(fragment.locationTitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        Text(fragment.preview)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-
-                        HStack(spacing: 8) {
-                            Text(fragment.scopeTitle)
-                            if let finalRank = fragment.finalRank {
-                                Text("Result \(finalRank)")
-                            }
-                            if let deliveryTitle = fragment.nonDefaultDeliveryTitle {
-                                Text(deliveryTitle)
-                            }
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    }
-
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 3)
-                }
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(runId == nil ? "View recorded memory" : "View full recalled memory")
-            .accessibilityLabel("Open recalled memory from \(fragment.path)")
-        }
-    }
-}
-
-private struct RecallFragmentDetail: View {
+struct RecallFragmentRow: View {
     let fragment: RecallFragment
     let workspaceRoot: String
     let runId: String?
     let model: RecallModel
     @State private var fullFragment: RecallFragment?
     @State private var isLoading = false
-    @State private var errorMessage: String?
+    @State private var loadFailed = false
+    @State private var loadGeneration = UUID()
 
-    private var displayedFragment: RecallFragment {
-        fullFragment ?? fragment
-    }
+    private var displayedFragment: RecallFragment { fullFragment ?? fragment }
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(displayedFragment.displayTitle)
-                    .font(.title2.weight(.semibold))
-                    .textSelection(.enabled)
-                Text(displayedFragment.locationTitle)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-
-                if !displayedFragment.headingPath.isEmpty {
-                    Text(displayedFragment.headingPath.joined(separator: " › "))
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(fragment.displayTitle)
+                        .font(.headline)
+                    Text(fragment.locationTitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-
-                HStack(spacing: 8) {
-                    Text(displayedFragment.scopeTitle)
-                    if let finalRank = displayedFragment.finalRank {
-                        Text("Result \(finalRank)")
+                    HStack(spacing: 8) {
+                        Text(fragment.scopeTitle)
+                        if let rank = fragment.finalRank {
+                            Text("Result \(rank)")
+                        }
+                        if let delivery = fragment.deliveryTitle {
+                            Text(delivery)
+                        }
                     }
-                    if let deliveryTitle = displayedFragment.deliveryTitle {
-                        Text(deliveryTitle)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-                if let explanation = displayedFragment.deliveryExplanation {
-                    Text(explanation)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Divider()
-
-            if fullFragment?.truncated == true {
-                recordedPreview(
-                    "Only the recorded preview is available for this description-only result."
-                )
-            } else if fullFragment != nil {
-                fullContent
-            } else if runId == nil {
-                recordedPreview(
-                    "This older activity does not link to a saved retrieval run, so only its recorded content is available."
-                )
-            } else if isLoading {
-                recordedPreview("Loading the full memory chunk…", showsProgress: true)
-            } else if let errorMessage {
-                recordedPreview(errorMessage, showsRetry: true)
-            } else {
-                recordedPreview("Loading the full memory chunk…", showsProgress: true)
-            }
-        }
-        .background(Color(nsColor: .textBackgroundColor))
-        .navigationTitle(displayedFragment.displayTitle)
-        .task {
-            await loadFullFragment()
-        }
-    }
-
-    @ViewBuilder
-    private var fullContent: some View {
-        if displayedFragment.content.isEmpty {
-            ContentUnavailableView(
-                "Memory Chunk Is Empty",
-                systemImage: "doc.text",
-                description: Text("This recalled chunk has no text content.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            MarkdownPreview(source: displayedFragment.content)
-        }
-    }
-
-    private func recordedPreview(
-        _ message: String,
-        showsProgress: Bool = false,
-        showsRetry: Bool = false
-    ) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if showsProgress {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: showsRetry ? "exclamationmark.triangle" : "info.circle")
-                        .foregroundStyle(showsRetry ? Color.orange : Color.secondary)
-                }
-                Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                Spacer()
-                if showsRetry {
-                    Button("Try Again") {
-                        Task { await loadFullFragment() }
+                }
+                .textSelection(.enabled)
+
+                if !displayedFragment.content.isEmpty {
+                    Markdown(displayedFragment.content)
+                        .markdownTheme(.gitHub)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(displayedFragment.emptyContentExplanation)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                if isLoading {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading the recorded chunk…")
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else if loadFailed {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("The full retrieval record is unavailable. Showing the recorded preview.")
+                        Spacer()
+                        Button("Try Again") { Task { await loadFullFragment() } }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else if displayedFragment.truncated {
+                    Text("Only the recorded preview is available for this chunk.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(12)
-
-            Divider()
-
-            if displayedFragment.content.isEmpty {
-                ContentUnavailableView(
-                    "No Recorded Preview",
-                    systemImage: "doc.text",
-                    description: Text(displayedFragment.emptyContentExplanation)
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                MarkdownPreview(source: displayedFragment.content)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
         }
+        .task(id: runId) { await loadFullFragment() }
     }
 
     private func loadFullFragment() async {
-        guard fullFragment == nil, !isLoading, let runId else { return }
+        guard fullFragment == nil, let runId else { return }
+        let generation = UUID()
+        loadGeneration = generation
         isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
+        loadFailed = false
+        defer {
+            if loadGeneration == generation { isLoading = false }
+        }
         do {
-            fullFragment = try await model.loadFragment(
+            let loaded = try await model.loadFragment(
                 workspaceRoot: workspaceRoot,
                 runId: runId,
                 unitKey: fragment.unitKey
             )
+            try Task.checkCancellation()
+            guard loadGeneration == generation else { return }
+            fullFragment = loaded
         } catch is CancellationError {
             return
         } catch {
-            errorMessage = "Couldn’t load the full chunk. The recorded preview is shown below."
+            if loadGeneration == generation { loadFailed = true }
         }
+    }
+}
+
+struct RecallRetrievalDetail: View {
+    let selection: RecallRetrievalSelection
+    let onBack: () -> Void
+    @StateObject private var retrieval: RetrievalDiagnosticsModel
+
+    init(selection: RecallRetrievalSelection, daemon: DaemonXPCClient, onBack: @escaping () -> Void) {
+        self.selection = selection
+        self.onBack = onBack
+        _retrieval = StateObject(wrappedValue: RetrievalDiagnosticsModel(daemon: daemon))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button("Back to Activity", systemImage: "chevron.left", action: onBack)
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut("[", modifiers: .command)
+                Text("\(selection.sessionTitle) / Request \(selection.requestNumber)")
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(selection.requestText)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .help(selection.requestText)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            Divider()
+            RetrievalRunDetailView(model: retrieval)
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+        .navigationTitle("Retrieval Process")
+        .task(id: selection.runId) { await retrieval.select(runId: selection.runId) }
     }
 }
 
@@ -543,23 +484,6 @@ extension RecallFragment {
         case "reuse": "Already available"
         default: nil
         }
-    }
-
-    var deliveryExplanation: String? {
-        switch action?.lowercased() {
-        case "add": "This memory chunk was newly sent to the agent for this request."
-        case "replace": "A newer version of this memory chunk replaced the version the agent already had."
-        case "reuse": "The agent already had this unchanged memory chunk, so Clumsies did not need to send it again."
-        default: nil
-        }
-    }
-
-    fileprivate var nonDefaultDeliveryTitle: String? {
-        action?.lowercased() == "add" ? nil : deliveryTitle
-    }
-
-    fileprivate var preview: String {
-        content.isEmpty ? emptyContentExplanation : content
     }
 
     fileprivate var emptyContentExplanation: String {

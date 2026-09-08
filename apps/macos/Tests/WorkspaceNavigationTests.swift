@@ -1,4 +1,6 @@
+import AppKit
 import CryptoKit
+import SwiftUI
 import XCTest
 @testable import Clumsies
 
@@ -90,9 +92,63 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertNotEqual(dsh.id, codex.id)
     }
 
+    func testActivityOpensTheExactRetrievalAndReturnsToItsSession() {
+        let model = RecallModel(daemon: DaemonXPCClient(serviceName: "test.activity.unused"))
+        let first = recallActivation(runId: "run-1", callId: "call-1")
+        let second = recallActivation(runId: "run-2", callId: "call-2")
+        let task = RecallTask(messageId: "request-1", text: "Check login", time: nil, activations: [first, second])
+        let session = RecallSession(host: .codex, sessionId: "session-1", title: "Login", workspaceRoot: "/repo", createdAt: nil, tasks: [task])
+        model.selectedSessionId = session.id
+
+        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: second)
+        XCTAssertEqual(model.retrievalSelection?.runId, "run-2")
+        XCTAssertEqual(model.retrievalSelection?.requestText, "Check login")
+        XCTAssertEqual(model.retrievalSelection?.sessionId, session.id)
+
+        model.closeRetrieval()
+        XCTAssertNil(model.retrievalSelection)
+        XCTAssertEqual(model.selectedSessionId, session.id)
+
+        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: first)
+        XCTAssertEqual(model.retrievalSelection?.runId, "run-1")
+        model.selectedSessionId = "codex:another-session"
+        XCTAssertNil(model.retrievalSelection)
+        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: first)
+        XCTAssertNil(model.retrievalSelection)
+
+        model.selectedSessionId = session.id
+        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: recallActivation(runId: nil))
+        XCTAssertNil(model.retrievalSelection)
+    }
+
+    func testActivityChunkPreviewExpandsToFitAllRecordedContent() {
+        let model = RecallModel(daemon: DaemonXPCClient(serviceName: "test.activity.unused"))
+        func previewHeight(_ content: String) -> CGFloat {
+            let view = NSHostingView(rootView: RecallFragmentRow(
+                fragment: recallFragment(action: "add", content: content),
+                workspaceRoot: "/repo",
+                runId: nil,
+                model: model
+            ).frame(width: 640))
+            view.layoutSubtreeIfNeeded()
+            return view.fittingSize.height
+        }
+        let short = previewHeight("A short paragraph.")
+        let long = previewHeight((1...20).map { "Paragraph \($0): **recorded memory**, shown without opening another page." }.joined(separator: "\n\n"))
+        XCTAssertGreaterThan(long, short + 300, "Chunk previews must grow with their content, without a fixed height or line limit.")
+    }
+
+    private func recallActivation(runId: String?, callId: String = "call-1") -> RecallActivation {
+        RecallActivation(
+            toolName: "memory", callId: callId, query: "same query", state: nil,
+            time: nil, runId: runId, runStatus: "succeeded", fragments: [], resultError: nil
+        )
+    }
+
     private func recallFragment(
         action: String?,
-        unitKey: String = "memory-1#0"
+        unitKey: String = "memory-1#0",
+        content: String = "Example"
     ) -> RecallFragment {
         RecallFragment(
             action: action,
@@ -101,7 +157,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             scope: .project,
             path: "memory/example.md",
             headingPath: ["Example"],
-            content: "Example",
+            content: content,
             finalRank: 1,
             truncated: false
         )

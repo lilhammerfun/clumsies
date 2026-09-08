@@ -868,18 +868,38 @@ struct WorkspaceView: View {
                 onOpenSettings: onOpenSettings
             )
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
-        } content: {
-            RecallSessionList(model: recallModel)
-                .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
         } detail: {
-            RecallSessionDetail(model: recallModel)
-                .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
-                .toolbar {
+            ZStack {
+                // Keep the session views mounted so their selection, divider and
+                // exact scroll position survive a visit to the retrieval trace.
+                HSplitView {
+                    RecallSessionList(model: recallModel)
+                        .frame(minWidth: 260, idealWidth: 300, maxWidth: 380, maxHeight: .infinity)
+                    RecallSessionDetail(model: recallModel)
+                        .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .opacity(recallModel.retrievalSelection == nil ? 1 : 0)
+                .allowsHitTesting(recallModel.retrievalSelection == nil)
+                .accessibilityHidden(recallModel.retrievalSelection != nil)
+                .disabled(recallModel.retrievalSelection != nil)
+
+                if let selection = recallModel.retrievalSelection {
+                    RecallRetrievalDetail(
+                        selection: selection,
+                        daemon: store.daemon,
+                        onBack: recallModel.closeRetrieval
+                    )
+                    .frame(minWidth: RetrievalDiagnosticsLayout.mainPaneMinimumWidth)
+                }
+            }
+            .toolbar {
+                if recallModel.retrievalSelection == nil {
                     recallToolbarContent
                 }
+            }
         }
         .onAppear {
-            let target: NavigationSplitViewVisibility = store.sidebarExpanded ? .all : .doubleColumn
+            let target: NavigationSplitViewVisibility = store.sidebarExpanded ? .all : .detailOnly
             if recallSplitVisibility != target {
                 recallSplitVisibility = target
             }
@@ -888,11 +908,10 @@ struct WorkspaceView: View {
             }
         }
         .onChange(of: recallSplitVisibility) { _, visibility in
-            let expanded = visibility != .detailOnly
-            deferSidebarExpansionUpdate(expanded)
+            deferSidebarExpansionUpdate(visibility != .detailOnly)
         }
         .onChange(of: store.sidebarExpanded) { _, expanded in
-            let target: NavigationSplitViewVisibility = expanded ? .all : .doubleColumn
+            let target: NavigationSplitViewVisibility = expanded ? .all : .detailOnly
             if recallSplitVisibility != target {
                 recallSplitVisibility = target
             }

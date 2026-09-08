@@ -65,8 +65,6 @@ private struct RetrievalDiagnosticsView: View {
     let projectId: String?
 
     @State private var confirmsClear = false
-    @State private var exportError: String?
-    @State private var showsEvidenceReview = false
 
     var body: some View {
         NavigationSplitView {
@@ -80,69 +78,89 @@ private struct RetrievalDiagnosticsView: View {
                     confirmsClear = true
                 }
             )
-                .frame(
-                    minWidth: RetrievalDiagnosticsLayout.runListMinimumWidth,
-                    idealWidth: RetrievalDiagnosticsLayout.runListIdealWidth,
-                    maxWidth: RetrievalDiagnosticsLayout.runListMaximumWidth,
-                    maxHeight: .infinity
-                )
-                .navigationSplitViewColumnWidth(
-                    min: RetrievalDiagnosticsLayout.runListMinimumWidth,
-                    ideal: RetrievalDiagnosticsLayout.runListIdealWidth,
-                    max: RetrievalDiagnosticsLayout.runListMaximumWidth
-                )
-        } detail: {
-            RetrievalRunContent(model: model)
             .frame(
-                minWidth: RetrievalDiagnosticsLayout.mainPaneMinimumWidth,
-                maxWidth: .infinity,
+                minWidth: RetrievalDiagnosticsLayout.runListMinimumWidth,
+                idealWidth: RetrievalDiagnosticsLayout.runListIdealWidth,
+                maxWidth: RetrievalDiagnosticsLayout.runListMaximumWidth,
                 maxHeight: .infinity
             )
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        if model.detail?.run.status == .succeeded {
-                            if model.detail?.evaluationCase == nil {
-                                Button {
-                                    Task { await model.markInaccurate() }
-                                } label: {
-                                    Label("Report Inaccurate", systemImage: "flag")
-                                }
-                                .disabled(model.isMutating)
-                            } else {
-                                Button {
-                                    showsEvidenceReview = true
-                                } label: {
-                                    Label(
-                                        "Review Evidence",
-                                        systemImage: "doc.text.magnifyingglass"
-                                    )
-                                }
-                            }
-                        }
+            .navigationSplitViewColumnWidth(
+                min: RetrievalDiagnosticsLayout.runListMinimumWidth,
+                ideal: RetrievalDiagnosticsLayout.runListIdealWidth,
+                max: RetrievalDiagnosticsLayout.runListMaximumWidth
+            )
+        } detail: {
+            RetrievalRunDetailView(model: model)
+                .frame(
+                    minWidth: RetrievalDiagnosticsLayout.mainPaneMinimumWidth,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
+        }
+        .confirmationDialog(
+            "Clear unpinned retrieval history?",
+            isPresented: $confirmsClear
+        ) {
+            Button("Clear History", role: .destructive) {
+                Task { await model.clearUnpinnedHistory() }
+            }
+        } message: {
+            Text("Runs used by Evaluation Cases will be kept.")
+        }
+    }
+}
 
-                        if canExportEvaluationSet {
-                            if model.detail?.run.status == .succeeded {
-                                Divider()
-                            }
+struct RetrievalRunDetailView: View {
+    @ObservedObject var model: RetrievalDiagnosticsModel
+    @State private var exportError: String?
+    @State private var showsEvidenceReview = false
 
+    var body: some View {
+        RetrievalRunContent(model: model)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    if model.detail?.run.status == .succeeded {
+                        if model.detail?.evaluationCase == nil {
                             Button {
-                                Task { await exportEvaluationSet() }
+                                Task { await model.markInaccurate() }
+                            } label: {
+                                Label("Report Inaccurate", systemImage: "flag")
+                            }
+                            .disabled(model.isMutating)
+                        } else {
+                            Button {
+                                showsEvidenceReview = true
                             } label: {
                                 Label(
-                                    "Export Evaluation Set",
-                                    systemImage: "square.and.arrow.up"
+                                    "Review Evidence",
+                                    systemImage: "doc.text.magnifyingglass"
                                 )
                             }
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
                     }
-                    .menuIndicator(.hidden)
-                    .help("More")
-                    .accessibilityLabel("More")
-                    .disabled(!hasMoreActions)
+
+                    if canExportEvaluationSet {
+                        if model.detail?.run.status == .succeeded {
+                            Divider()
+                        }
+
+                        Button {
+                            Task { await exportEvaluationSet() }
+                        } label: {
+                            Label(
+                                "Export Evaluation Set",
+                                systemImage: "square.and.arrow.up"
+                            )
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
                 }
+                .menuIndicator(.hidden)
+                .help("More")
+                .accessibilityLabel("More")
+                .disabled(!hasMoreActions)
             }
         }
         .sheet(isPresented: $showsEvidenceReview) {
@@ -153,9 +171,11 @@ private struct RetrievalDiagnosticsView: View {
         }
         .onChange(of: model.selectedRunId) { _, _ in
             showsEvidenceReview = false
+            exportError = nil
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let message = model.errorMessage ?? exportError {
+            if (model.detail != nil || model.selectedRunId == nil),
+               let message = model.errorMessage ?? exportError {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle")
@@ -170,20 +190,11 @@ private struct RetrievalDiagnosticsView: View {
                 }
             }
         }
-        .confirmationDialog(
-            "Clear unpinned retrieval history?",
-            isPresented: $confirmsClear
-        ) {
-            Button("Clear History", role: .destructive) {
-                Task { await model.clearUnpinnedHistory() }
-            }
-        } message: {
-            Text("Runs used by Evaluation Cases will be kept.")
-        }
     }
 
     private var canExportEvaluationSet: Bool {
-        model.runs.contains { $0.evaluationCaseStatus == .ready }
+        model.detail?.evaluationCase?.status == .ready
+            || model.runs.contains { $0.evaluationCaseStatus == .ready }
     }
 
     private var hasMoreActions: Bool {
@@ -345,6 +356,18 @@ private struct RetrievalRunContent: View {
                     }
                 }
                 CandidateTraceTable(detail: detail)
+                    .id(detail.run.runId)
+            }
+        } else if model.selectedRunId != nil {
+            ContentUnavailableView {
+                Label("Retrieval Run Unavailable", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(model.errorMessage ?? "This retrieval record may have been removed.")
+                    .textSelection(.enabled)
+            } actions: {
+                Button("Retry") {
+                    Task { await model.select(runId: model.selectedRunId) }
+                }
             }
         } else {
             ContentUnavailableView(
@@ -372,9 +395,10 @@ private struct RetrievalRunSummary: View {
             }
             HStack(spacing: 24) {
                 summaryItem(
-                    "Result",
+                    "Returned",
                     "\(run.returnedFragmentCount) fragments · \(run.returnedTokenCount) tokens"
                 )
+                .help("Includes reused chunks already available to the agent. Tokens describe the selected content, not newly sent tokens or model usage.")
                 summaryItem("Corpus", "\(run.resourceCount) resources · \(run.unitCount) units")
                 summaryItem("Total", formatDuration(run.latencies.totalUs))
             }
@@ -395,23 +419,52 @@ private struct RetrievalRunSummary: View {
     }
 }
 
+enum RetrievalCandidateFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case selected = "Selected"
+    case excluded = "Not Selected"
+
+    var id: Self { self }
+
+    func includes(_ candidate: RetrievalCandidate) -> Bool {
+        switch self {
+        case .all: true
+        case .selected: candidate.selected
+        case .excluded: !candidate.selected
+        }
+    }
+}
+
 private struct CandidateTraceTable: View {
     let detail: RetrievalRunDetail
+    @State private var filter: RetrievalCandidateFilter = .all
+
+    private var candidates: [RetrievalCandidate] {
+        detail.candidates.filter(filter.includes)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Candidate Trace")
                     .font(.headline)
+                Picker("Candidates", selection: $filter) {
+                    ForEach(RetrievalCandidateFilter.allCases) { filter in
+                        Text(filter.rawValue).tag(filter)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
                 Spacer()
-                Text("\(detail.candidates.count) candidates")
+                Text("\(candidates.count) / \(detail.candidates.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
             .frame(height: 42)
             Divider()
-            Table(detail.candidates) {
+            Table(candidates) {
                 TableColumn("Final") { candidate in
                     Text(rank(candidate.finalRank))
                         .monospacedDigit()
@@ -455,9 +508,9 @@ private struct CandidateTraceTable: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
-                if detail.candidates.isEmpty {
+                if candidates.isEmpty {
                     ContentUnavailableView(
-                        "No Candidates",
+                        detail.candidates.isEmpty ? "No Candidates" : "No Matching Candidates",
                         systemImage: "list.bullet.rectangle"
                     )
                 }

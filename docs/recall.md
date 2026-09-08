@@ -1,6 +1,6 @@
 # Activity
 
-Activity is a read-only view of **memory use inside local agent sessions**.
+Activity shows **memory use inside local agent sessions**.
 It projects provider-specific logs into one small hierarchy:
 
 > agent activity → user request → memory search → memory chunks made available to the agent
@@ -17,10 +17,18 @@ Three columns, newest session first:
 | --- | --- |
 | Sidebar | The existing global sidebar, with Activity selected. |
 | Content | Agent activity for bound workspaces. Each row shows a **DSH** or **Codex** host badge, title, request count, and time. |
-| Detail | The user request, the exact memory query written by the agent, and the selected memory chunks. A chunk opens to its complete historical text when that snapshot is available. |
+| Detail | The user request, the exact memory query written by the agent, search duration, and the selected memory chunks rendered inline as Markdown from their historical snapshots. |
 
 The host badge is part of session identity: session ids only need to be unique
 within a host.
+
+Each memory search offers **Retrieval Process** when a run identity is available.
+It opens that run's summary and full candidate table in the workspace, temporarily
+hiding the session list while keeping the global sidebar. Back returns to the
+same session and search. This drill-down belongs to one activation; a request
+can contain several searches. The detail also reuses **Report Inaccurate** and
+**Review Evidence** to capture and review an evaluation case for that run. The
+shared diagnostics view also supports a cross-session retrieval-run list.
 
 ## What a memory search means
 
@@ -35,8 +43,9 @@ The raw query goes through exact id/path/title matching, BM25 full-text search,
 semantic vector search, reciprocal-rank fusion, and cross-encoder reranking.
 The final assembly removes overlapping chunks and applies relevance, per-file,
 fragment-count, and token-budget limits. Activity shows only the chunks made
-available to the agent; model scores and excluded candidates remain retrieval
-diagnostics rather than end-user content.
+available to the agent. Model scores and excluded candidates appear in the
+Retrieval Process detail when requested, keeping the session's reading flow
+focused on requests and selected chunks.
 
 The delivery state is a context delta, not a memory edit:
 
@@ -106,14 +115,19 @@ to that task until the next human message. DSH call/result records are paired by
 For new logs, `structuredContent.run_id` is the authoritative link to
 `retrieval_runs`; selected candidates from that exact run supply stable chunk
 identity, heading, result order, and preview text. The query text is display
-data, not an identity key.
+data, not an identity key. The same lookup supplies optional `total_us` for a
+terminal run; it stays absent while the run is running or unavailable. This is
+the run's recorded retrieval duration, not model response time or a sum of all
+stage timings. Chunk counts include `reuse` and do not mean newly sent content.
 
 Retrieval history stores only a bounded preview in each candidate row, but it
-also retains the complete resource body used by that run. Opening a chunk uses
-`run_id + unit_key` and the candidate's frozen locator to read the exact
-historical text. It never reads the current Memory document, which may have
-changed since the activity occurred. Description-only units have no body byte
-range and therefore fall back honestly to their stored preview.
+also retains the complete resource body used by that run. Each visible chunk
+loads its complete text for an inline Markdown preview using `run_id + unit_key`
+and the candidate's frozen locator. It never reads the current Memory document,
+which may have changed since the activity occurred. Description-only units have no body byte
+range and therefore fall back honestly to their stored preview. Missing or
+cleared run records also keep the tool result's recorded preview; an unavailable
+snapshot does not mean no search took place.
 
 Older logs may not contain `run_id`. They remain visible with any fragments or
 error embedded in their tool result. The daemon uses `(project_id, query)` only
@@ -125,7 +139,9 @@ duplicates. Ambiguous logs keep `run_id` and run status absent.
 - Sources are DSH and Codex Desktop/App rollouts for bound workspaces.
 - The model is a memory-activity projection, not a reusable normalization of the
   full transcript and not a ChatGPT data-export parser.
-- The page never mutates memory, Issues, session files, or retrieval history.
+- Session browsing does not change Memory, Issues, or session files. Reporting
+  an inaccurate run and reviewing evidence update retrieval evaluation records
+  and retain the source run for that evaluation.
 
 ## Implementation map
 

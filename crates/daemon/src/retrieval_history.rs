@@ -2379,10 +2379,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recall_fragment_endpoint_reads_only_the_selected_frozen_run_chunk() {
+    async fn activity_and_fragment_endpoint_use_the_selected_frozen_run() {
         let temp = tempfile::tempdir().unwrap();
         let mut config = DaemonConfig::for_root(temp.path().join("daemon"));
         config.project.server_url = "https://clumsies.test".to_owned();
+        let codex_sessions = temp.path().join("codex/sessions");
+        config.codex_home = Some(temp.path().join("codex"));
+        std::fs::create_dir_all(&codex_sessions).unwrap();
         let state = DaemonState::initialize_with_credential_store(config, Arc::new(NoCredentials))
             .await
             .unwrap();
@@ -2476,11 +2479,71 @@ mod tests {
                 ],
                 unit_count: 2,
                 returned_fragment_count: 1,
+                latencies: RetrievalStageLatencies {
+                    total_us: 123_456,
+                    ..RetrievalStageLatencies::default()
+                },
                 ..RetrievalRunCompletion::default()
             },
         )
         .await
         .unwrap();
+
+        let running_id = start_run(&state, "prj_nested", "历史查询", "fingerprint")
+            .await
+            .unwrap();
+        let mut log = vec![
+            serde_json::json!({
+                "type": "session_meta", "payload": { "id": "activity", "cwd": child }
+            }),
+            serde_json::json!({
+                "type": "event_msg", "payload": {
+                    "type": "user_message", "message": "Show the historical recall"
+                }
+            }),
+        ];
+        for id in [&run_id, &running_id] {
+            log.push(serde_json::json!({
+                "type": "event_msg", "payload": {
+                    "type": "item_completed", "item": {
+                        "type": "McpToolCall", "id": id, "server": "clumsies", "tool": "memory",
+                        "arguments": { "op": { "activate": { "query": "历史查询" } } },
+                        "result": { "structuredContent": {
+                            "run_id": id,
+                            "fragments": [{
+                                "action": "add", "unit_key": "memory-1/history/0/0",
+                                "resource_id": "memory-1", "path": "memory/history.md",
+                                "content": "Recorded tool preview"
+                            }]
+                        } }
+                    }
+                }
+            }));
+        }
+        std::fs::write(
+            codex_sessions.join("rollout-activity.jsonl"),
+            log.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let request = crate::recall::ListRecallsRequest {
+            workspace_root: None,
+            project_id: Some("prj_nested".to_owned()),
+            limit: None,
+        };
+        let activity = crate::recall::list_recalls(&state, request.clone())
+            .await
+            .unwrap();
+        assert_eq!(activity.sessions.len(), 1);
+        let activations = &activity.sessions[0].tasks[0].activations;
+        assert_eq!(activations.len(), 2);
+        assert_eq!(activations[0].run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(activations[0].total_us, Some(123_456));
+        assert_eq!(activations[0].fragments[0].content, expected);
+        assert_eq!(activations[1].run_status.as_deref(), Some("running"));
+        assert_eq!(activations[1].total_us, None);
 
         let response = crate::recall::get_recall_fragment(
             &state,
@@ -2526,6 +2589,20 @@ mod tests {
                 ..
             })
         ));
+
+        clear_retrieval_runs(
+            &state,
+            ClearRetrievalRunsRequest {
+                project_id: Some("prj_nested".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let cleared = crate::recall::list_recalls(&state, request).await.unwrap();
+        let activation = &cleared.sessions[0].tasks[0].activations[0];
+        assert_eq!(activation.run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(activation.total_us, None);
+        assert_eq!(activation.fragments[0].content, "Recorded tool preview");
     }
 
     #[test]
