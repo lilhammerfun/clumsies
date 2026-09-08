@@ -15,6 +15,7 @@ use crate::{
 pub const IDENTIFIER_NAMESPACE: &str = "ai.clumsies";
 pub const DAEMON_AGENT_LABEL: &str = "ai.clumsies.daemon";
 pub const DAEMON_MACH_SERVICE_NAME: &str = DAEMON_AGENT_LABEL;
+const STABLE_SERVER_URL: &str = "https://app.clumsies.ai";
 pub const DEV_INSTANCE_ID_ENV: &str = "CLUMSIES_DEV_INSTANCE_ID";
 const DEV_DAEMON_SERVICE_PREFIX: &str = "ai.clumsies.daemon.dev.";
 const DEV_KEYCHAIN_SERVICE_PREFIX: &str = "ai.clumsies.dev.";
@@ -79,7 +80,7 @@ impl DaemonConfig {
         }
         let (launch_agent_label, mach_service_name, keychain_service) =
             daemon_runtime_names(dev_instance_id.as_deref());
-        let project = ProjectConfig::from_env();
+        let project = ProjectConfig::from_env(dev_instance_id.is_none());
         let sync = SyncConfig {
             enabled: parse_bool_env("CLUMSIES_SYNC_ENABLED")?.unwrap_or(true),
             interval: Duration::from_millis(
@@ -367,7 +368,8 @@ impl LaunchAgentConfig {
     }
 
     pub fn plist_contents(&self) -> String {
-        let mut dev_environment = String::new();
+        let mut runtime_environment =
+            plist_environment_variable("CLUMSIES_SERVER_URL", &self.server_url);
         if let Some(instance_id) = self.dev_instance_id.as_deref() {
             for (name, value) in [
                 (DEV_INSTANCE_ID_ENV, instance_id.to_owned()),
@@ -375,12 +377,11 @@ impl LaunchAgentConfig {
                     "CLUMSIES_DAEMON_LAUNCH_AGENTS_DIR",
                     self.launch_agents_dir.display().to_string(),
                 ),
-                ("CLUMSIES_SERVER_URL", self.server_url.clone()),
             ] {
-                dev_environment.push_str(&plist_environment_variable(name, &value));
+                runtime_environment.push_str(&plist_environment_variable(name, &value));
             }
             if let Some(codex_home) = &self.codex_home {
-                dev_environment.push_str(&plist_environment_variable(
+                runtime_environment.push_str(&plist_environment_variable(
                     "CODEX_HOME",
                     &codex_home.display().to_string(),
                 ));
@@ -414,7 +415,7 @@ impl LaunchAgentConfig {
     <string>{cache_dir}</string>
     <key>CLUMSIES_DAEMON_LOG_DIR</key>
     <string>{log_dir}</string>
-{dev_environment}    <key>CLUMSIES_DAEMON_BINARY_SHA256</key>
+{runtime_environment}    <key>CLUMSIES_DAEMON_BINARY_SHA256</key>
     <string>{binary_sha256}</string>
     <key>RUST_LOG</key>
     <string>info</string>
@@ -432,7 +433,7 @@ impl LaunchAgentConfig {
             root_dir = escape_plist_value(self.root_dir.to_string_lossy().as_ref()),
             cache_dir = escape_plist_value(self.cache_dir.to_string_lossy().as_ref()),
             log_dir = escape_plist_value(self.log_dir.to_string_lossy().as_ref()),
-            dev_environment = dev_environment,
+            runtime_environment = runtime_environment,
             binary_sha256 = escape_plist_value(&self.binary_sha256),
             stdout = escape_plist_value(self.standard_output_path().to_string_lossy().as_ref()),
             stderr = escape_plist_value(self.standard_error_path().to_string_lossy().as_ref()),
@@ -836,6 +837,24 @@ mod launch_agent_tests {
     }
 
     #[test]
+    fn stable_launch_agent_carries_the_server_url_for_cold_start() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::for_root(root.path().join("runtime"));
+        config.project.server_url = STABLE_SERVER_URL.to_owned();
+        let program_path = root
+            .path()
+            .join("Clumsies.app/Contents/Resources/clumsiesd");
+        std::fs::create_dir_all(program_path.parent().unwrap()).unwrap();
+        std::fs::write(&program_path, "stable-daemon").unwrap();
+
+        let launch_agent = LaunchAgentConfig::from_daemon_config(&config, &program_path).unwrap();
+        let plist = launch_agent.plist_contents();
+
+        assert!(plist.contains("<key>CLUMSIES_SERVER_URL</key>"));
+        assert!(plist.contains(STABLE_SERVER_URL));
+    }
+
+    #[test]
     fn plist_currency_tracks_the_installed_launch_agent_definition() {
         let root = tempfile::tempdir().unwrap();
         let daemon_config = DaemonConfig::for_root(root.path());
@@ -972,12 +991,18 @@ fn set_owner_only_permissions(_path: &Path) -> Result<(), DaemonError> {
 }
 
 impl ProjectConfig {
-    pub(crate) fn from_env() -> Self {
+    pub(crate) fn from_env(use_stable_server_default: bool) -> Self {
         Self {
             server_url: env::var("CLUMSIES_SERVER_URL")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_default(),
+                .unwrap_or_else(|| {
+                    if use_stable_server_default {
+                        STABLE_SERVER_URL.to_owned()
+                    } else {
+                        String::new()
+                    }
+                }),
             project_id: env::var("CLUMSIES_PROJECT_ID")
                 .ok()
                 .and_then(non_empty_string),
