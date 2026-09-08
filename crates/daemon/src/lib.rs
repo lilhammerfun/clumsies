@@ -100,15 +100,15 @@ pub use types::{
     DaemonDraftOperationResponse, DaemonDraftOperationSource, DaemonDraftReconciliationStatus,
     DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary, DaemonError, DaemonHealth,
     DaemonIpcEndpoint, DaemonIpcRequest, DaemonIpcResponse, DaemonIpcTransport,
-    DaemonLocalDraftStatus, DaemonMcpStatus, DaemonProjectBinding, DaemonProjectBindingListRequest,
+    DaemonLocalDraftStatus, DaemonProjectBinding, DaemonProjectBindingListRequest,
     DaemonProjectBindingListResponse, DaemonProjectBindingRemoveRequest,
     DaemonProjectBindingRemoveResponse, DaemonProjectBindingReplaceRequest,
     DaemonProjectBindingResolveRequest, DaemonProjectConfig, DaemonProjectConfigUpdateRequest,
     DaemonProjectSelectionRequest, DaemonProjectSyncRetryRequest, DaemonProjectSyncStatusRequest,
     DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse, DaemonSyncRetryRequest,
     DaemonSyncStatus, DraftOperationSyncStatus, ErrorEnvelope, LaunchAgentRuntimeStatus,
-    LocalDbStatus, McpAdapterStatus, ProjectAgentAdapterRuntimeRequirement, SyncChannelStatus,
-    SyncRetryChannel, SyncState,
+    LocalDbStatus, ProjectAgentAdapterRuntimeRequirement, SyncChannelStatus, SyncRetryChannel,
+    SyncState,
 };
 pub use types::{
     DaemonContentDraftUpdate, DaemonCreateDraftOperation, DaemonDeleteDraftOperation,

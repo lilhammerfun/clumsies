@@ -232,13 +232,13 @@ Drafts, settings, models, and files outside the managed subtree are preserved.
 ## Diagnostics
 
 Desktop can read daemon health, bootstrap state, project configuration, sync
-status, MCP status, draft lists, draft details, and operation results through
+status, draft lists, draft details, and operation results through
 typed XPC requests. It can request explicit retry without directly mutating queue
 rows.
 
-The native Diagnostics window has separate Runtime and Retrieval pages.
-Retrieval lists the active Project's latest Runs and loads one complete trace on
-demand. Candidate columns show exact/BM25, vector, RRF, reranker, final rank,
+Settings → Support opens the log folder.
+Memory Search History lists the active Project's latest Runs and loads one
+complete trace on demand. Candidate columns show exact/BM25, vector, RRF, reranker, final rank,
 score, exclusion reason, and activation delta action. A successful Run can be
 added to the local Evaluation Set, graded from 0–3, supplemented with missed
 resource evidence, exported as a versioned fixture, or retained while unpinned

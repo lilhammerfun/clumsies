@@ -2417,11 +2417,6 @@ async fn ipc_dispatch_routes_the_complete_daemon_api() {
         .await;
     assert!(retry.ok);
 
-    let mcp_status = service
-        .dispatch(DaemonIpcRequest::empty("mcp_status"))
-        .await;
-    assert!(mcp_status.ok);
-
     let response = service
         .dispatch(DaemonIpcRequest::new(
             "store_draft_operation",
@@ -5549,17 +5544,6 @@ async fn draft_operation_rejects_multiple_operation_variants() {
         .await;
 
     assert!(matches!(response, Err(DaemonError::InvalidRequest(_))));
-}
-
-#[tokio::test]
-async fn mcp_status_reports_no_daemon_owned_supervisor() {
-    let (_, _, service) = common::test_daemon().await;
-
-    let status = service.mcp_status();
-
-    assert!(!status.running);
-    assert_eq!(status.endpoint, None);
-    assert!(status.adapters.is_empty());
 }
 
 #[tokio::test]

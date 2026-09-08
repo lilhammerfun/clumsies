@@ -158,7 +158,7 @@ deferred lane（ready 后并行、彼此独立）
   ├─ Review inventory
   ├─ archived integration inspection
   ├─ daemon retry sync
-  └─ sync / MCP status
+  └─ sync status
 ```
 
 ### 3.1 first-ready 保留什么
