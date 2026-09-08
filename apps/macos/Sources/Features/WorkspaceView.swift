@@ -25,23 +25,28 @@ enum SyncToolbarPresentation: Equatable {
     ) -> Self? {
         guard isAvailable else { return .unavailable(message: nil) }
 
-        if let status {
-            if status.failedOperationCount > 0 || status.draftSync.state == "failed" {
-                return .failed(
-                    changeCount: status.failedOperationCount,
-                    message: status.draftSync.lastError?.message
-                )
-            }
-            if status.draftSync.state == "degraded" {
-                return .unavailable(message: status.draftSync.lastError?.message)
-            }
-            if status.pendingOperationCount > 0
-                || ["queued", "syncing", "retrying"].contains(status.draftSync.state) {
-                return .syncing(changeCount: status.pendingOperationCount)
-            }
-            if ["failed", "degraded"].contains(status.commitSync.state) {
-                return .unavailable(message: status.commitSync.lastError?.message)
-            }
+        guard let status else {
+            return serverDataSource == "stale" ? .stale : .unavailable(message: nil)
+        }
+        if status.failedOperationCount > 0 || status.draftSync.state == "failed" {
+            return .failed(
+                changeCount: status.failedOperationCount,
+                message: status.draftSync.lastError?.message
+            )
+        }
+        if status.draftSync.state == "degraded" {
+            return .unavailable(message: status.draftSync.lastError?.message)
+        }
+        if status.pendingOperationCount > 0
+            || ["queued", "syncing", "retrying"].contains(status.draftSync.state) {
+            return .syncing(changeCount: status.pendingOperationCount)
+        }
+        if ["failed", "degraded"].contains(status.commitSync.state) {
+            return .unavailable(message: status.commitSync.lastError?.message)
+        }
+        if status.draftSync.state != "idle"
+            || !["idle", "queued", "syncing", "retrying"].contains(status.commitSync.state) {
+            return .unavailable(message: nil)
         }
 
         if serverDataSource == "stale" { return .stale }
@@ -57,44 +62,52 @@ enum SyncToolbarPresentation: Equatable {
         switch self {
         case .syncing: "arrow.triangle.2.circlepath"
         case .failed: "cloud.exclamationmark"
-        case .unavailable: "icloud.slash"
-        case .stale: "icloud.slash"
+        case .unavailable(let message): message == nil ? "questionmark.circle" : "cloud.exclamationmark"
+        case .stale: "clock.arrow.circlepath"
         }
     }
 
     var label: String {
         switch self {
         case .syncing(let count):
-            count == 1
-                ? "Uploading 1 Draft change"
-                : count > 1 ? "Uploading \(count) Draft changes" : "Uploading Draft changes"
+            count == 1 ? "Syncing 1 change" : count > 1 ? "Syncing \(count) changes" : "Syncing changes"
         case .failed:
-            "Sync failed"
-        case .unavailable:
-            "Sync unavailable"
+            "Changes haven't synced"
+        case .unavailable(let message):
+            message == nil ? "Sync status unavailable" : "Sync needs attention"
         case .stale:
-            "Showing cached data"
+            "Showing saved content"
         }
     }
 
     var detail: String {
         switch self {
         case .syncing:
-            return "Clumsies is uploading Project-carried Draft changes in the background."
-        case .failed(let count, let message):
-            if let message, !message.isEmpty { return message }
+            return "Your changes are syncing in the background."
+        case .failed(let count, _):
             return count == 1
-                ? "One change could not be synchronized."
+                ? "One change couldn't be synced. Try again."
                 : count > 1
-                    ? "\(count) changes could not be synchronized."
-                    : "Clumsies could not synchronize with the server."
+                    ? "\(count) changes couldn't be synced. Try again."
+                    : "Your changes couldn't be synced. Try again."
         case .unavailable(let message):
-            if let message, !message.isEmpty { return message }
-            return "Clumsies could not read sync status from the background service."
+            return message == nil
+                ? "Clumsies can't check whether your changes are synced. Try again to check."
+                : "Clumsies couldn't finish syncing. Try again, or check the error details."
         case .stale:
-            return "Clumsies is showing cached Server data because the latest data could not be reached. Local edits remain saved."
+            return "The latest content couldn't be loaded. What you see may be out of date."
         }
     }
+
+    var errorDetails: String? {
+        let message: String?
+        switch self {
+        case .failed(_, let value), .unavailable(let value): message = value
+        case .syncing, .stale: message = nil
+        }
+        return message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? message : nil
+    }
+
 }
 
 enum WorkspaceColumnLayout: Equatable {
@@ -117,9 +130,9 @@ private enum DocumentSyncReadiness {
 
 struct WorkspaceView: View {
     @ObservedObject var store: WorkspaceStore
+    let onSignOut: () -> Void
     let onOpenSettings: () -> Void
-    let onOpenDiagnostics: (DiagnosticsDestination) -> Void
-    let onShowLogs: () -> Void
+    let onManageProject: (String, String) -> Void
     let loadsReviewDetail: Bool
     @StateObject private var recallModel: RecallModel
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
@@ -136,19 +149,18 @@ struct WorkspaceView: View {
     @State private var pendingReviewToolbarAction: ReviewMenuAction?
     @State private var pendingProjectReviewDrafts: [LocalDraft] = []
     @State private var showsProjectReviewRequest = false
-    @State private var selectedAdministrationSection: AdministrationSection? = .overview
 
     init(
         store: WorkspaceStore,
+        onSignOut: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
-        onOpenDiagnostics: @escaping (DiagnosticsDestination) -> Void,
-        onShowLogs: @escaping () -> Void,
+        onManageProject: @escaping (String, String) -> Void,
         loadsReviewDetail: Bool = true
     ) {
         self.store = store
+        self.onSignOut = onSignOut
         self.onOpenSettings = onOpenSettings
-        self.onOpenDiagnostics = onOpenDiagnostics
-        self.onShowLogs = onShowLogs
+        self.onManageProject = onManageProject
         self.loadsReviewDetail = loadsReviewDetail
         _recallModel = StateObject(wrappedValue: RecallModel(daemon: store.daemon))
     }
@@ -217,9 +229,8 @@ struct WorkspaceView: View {
         NavigationSplitView(columnVisibility: $splitVisibility) {
                 GlobalSidebar(
                     store: store,
-                    onOpenSettings: onOpenSettings,
-                    onOpenDiagnostics: onOpenDiagnostics,
-                    onShowLogs: onShowLogs
+                    onSignOut: onSignOut,
+                    onOpenSettings: onOpenSettings
                 )
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
             } content: {
@@ -357,8 +368,8 @@ struct WorkspaceView: View {
                                         ProgressView()
                                             .controlSize(.small)
                                             .frame(width: 24, height: 24)
-                                            .help("Retrying Draft Sync")
-                                            .accessibilityLabel("Retrying Draft Sync")
+                                            .help("Retrying sync")
+                                            .accessibilityLabel("Retrying sync")
                                     } else {
                                         Button {
                                             Task {
@@ -371,8 +382,8 @@ struct WorkspaceView: View {
                                         } label: {
                                             Image(systemName: "arrow.clockwise")
                                         }
-                                        .help("Retry Draft Sync")
-                                        .accessibilityLabel("Retry Draft Sync")
+                                        .help("Retry sync")
+                                        .accessibilityLabel("Retry sync")
                                     }
                                 case .unavailable:
                                     Button {} label: {
@@ -389,8 +400,8 @@ struct WorkspaceView: View {
                                             ? "exclamationmark.triangle"
                                             : "arrow.trianglehead.2.clockwise.rotate.90")
                                     }
-                                    .help("Sync")
-                                    .accessibilityLabel("Sync")
+                                    .help(item.draft?.reconciliation == .conflicts ? "Review conflicting changes" : "Sync")
+                                    .accessibilityLabel(item.draft?.reconciliation == .conflicts ? "Review conflicting changes" : "Sync")
                                 }
                             }
 
@@ -469,16 +480,14 @@ struct WorkspaceView: View {
                         ToolbarSpacer(.fixed, placement: .automatic)
                     }
 
-                    if store.selectedSection != .administration {
-                        ToolbarItem(id: "workspace.search", placement: .trailingPinned) {
-                            ClassicSearchField(
-                                text: $store.searchQuery,
-                                prompt: workspaceSearchPrompt,
-                                accessibilityIdentifier: "workspace-toolbar-search",
-                                accessibilityHelp: "Search across the current workspace",
-                                focusToken: workspaceSearchFocusRequest
-                            )
-                        }
+                    ToolbarItem(id: "workspace.search", placement: .trailingPinned) {
+                        ClassicSearchField(
+                            text: $store.searchQuery,
+                            prompt: workspaceSearchPrompt,
+                            accessibilityIdentifier: "workspace-toolbar-search",
+                            accessibilityHelp: "Search across the current workspace",
+                            focusToken: workspaceSearchFocusRequest
+                        )
                     }
                 }
             }
@@ -535,9 +544,8 @@ struct WorkspaceView: View {
         NavigationSplitView(columnVisibility: $reviewSplitVisibility) {
             GlobalSidebar(
                 store: store,
-                onOpenSettings: onOpenSettings,
-                onOpenDiagnostics: onOpenDiagnostics,
-                onShowLogs: onShowLogs
+                onSignOut: onSignOut,
+                onOpenSettings: onOpenSettings
             )
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
@@ -648,7 +656,6 @@ struct WorkspaceView: View {
         case .bundles: "Search Bundles"
         case .reviews: "Search Reviews"
         case .sessions: "Search Activity"
-        case .administration: "Search Administration"
         }
     }
 
@@ -857,9 +864,8 @@ struct WorkspaceView: View {
         NavigationSplitView(columnVisibility: $recallSplitVisibility) {
             GlobalSidebar(
                 store: store,
-                onOpenSettings: onOpenSettings,
-                onOpenDiagnostics: onOpenDiagnostics,
-                onShowLogs: onShowLogs
+                onSignOut: onSignOut,
+                onOpenSettings: onOpenSettings
             )
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } content: {
@@ -951,10 +957,6 @@ struct WorkspaceView: View {
             ToolbarItem {
                 EmptyView()
             }
-        case .administration:
-            ToolbarItem {
-                EmptyView()
-            }
         }
     }
 
@@ -969,8 +971,6 @@ struct WorkspaceView: View {
             EmptyView()
         case .sessions:
             EmptyView()
-        case .administration:
-            AdministrationNavigator(selection: $selectedAdministrationSection)
         }
     }
 
@@ -981,7 +981,7 @@ struct WorkspaceView: View {
             if store.projects.isEmpty, !store.resources.contains(where: { $0.scope == .org }) {
                 ProjectUnavailableView(store: store)
             } else if store.showsProjectSettings, store.activeProjectId != nil {
-                ProjectSettingsView(store: store)
+                ProjectSettingsView(store: store, onManageProject: onManageProject)
             } else {
                 MemoryMainPane(store: store)
             }
@@ -995,11 +995,6 @@ struct WorkspaceView: View {
             EmptyView()
         case .sessions:
             EmptyView()
-        case .administration:
-            AdministrationView(
-                store: store,
-                section: selectedAdministrationSection ?? .overview
-            )
         }
     }
 
@@ -1085,8 +1080,7 @@ struct WorkspaceView: View {
     }
 
     private var syncToolbarPresentation: SyncToolbarPresentation? {
-        guard store.selectedSection != .administration,
-              store.activeProjectId != nil else { return nil }
+        guard store.activeProjectId != nil else { return nil }
         return SyncToolbarPresentation.resolve(
             status: store.runtime?.sync,
             isAvailable: store.syncStatusAvailable,
@@ -1206,12 +1200,18 @@ private struct SyncIssuePopover: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let message = store.syncRetryErrorMessage {
-                Label(message, systemImage: "exclamationmark.triangle")
+            if store.syncRetryErrorMessage != nil {
+                Label("Sync still couldn't finish. You can try again.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Sync retry failed: \(message)")
+            }
+            if let message = store.syncRetryErrorMessage ?? presentation.errorDetails {
+                DisclosureGroup("Error details") {
+                    Text(message)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Divider()
@@ -1221,15 +1221,14 @@ private struct SyncIssuePopover: View {
                 switch presentation {
                 case .failed, .unavailable:
                     Button {
-                        Task {
-                            _ = await store.retrySync(projectId: store.activeProjectId)
-                        }
+                        guard let projectId = store.activeProjectId else { return }
+                        Task { _ = await store.retrySync(projectId: projectId) }
                     } label: {
                         if store.isRetryingSync {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Text("Retry Project Sync")
+                            Text("Try Again")
                         }
                     }
                     .disabled(store.isRetryingSync)
@@ -1246,7 +1245,7 @@ private struct SyncIssuePopover: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Text("Refresh Project")
+                            Text("Get Latest Content")
                         }
                     }
                     .disabled(isReloading)
@@ -1263,16 +1262,13 @@ private struct SyncIssuePopover: View {
 
 private struct GlobalSidebar: View {
     @ObservedObject var store: WorkspaceStore
+    let onSignOut: () -> Void
     let onOpenSettings: () -> Void
-    let onOpenDiagnostics: (DiagnosticsDestination) -> Void
-    let onShowLogs: () -> Void
 
     var body: some View {
         List(selection: selection) {
             Section {
-                ForEach(WorkspaceSection.sidebarSections(
-                    canAdminister: store.canAdministerOrganization
-                )) { section in
+                ForEach(WorkspaceSection.allCases) { section in
                     SidebarDestinationLabel(section: section)
                         .tag(GlobalSidebarDestination.section(section))
                 }
@@ -1304,10 +1300,7 @@ private struct GlobalSidebar: View {
             account: store.account,
             displayName: accountDisplayName,
             onOpenSettings: onOpenSettings,
-            onOpenDiagnostics: onOpenDiagnostics,
-            onShowLogs: onShowLogs,
-            onRefresh: { Task { await store.reload() } },
-            onSignOut: { Task { await store.signOut() } }
+            onSignOut: onSignOut
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

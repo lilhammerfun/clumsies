@@ -64,23 +64,6 @@ final class ProjectManagementTests: XCTestCase {
         )
     }
 
-    func testDesktopProjectCreationRequiresALocalRepository() {
-        XCTAssertFalse(
-            ProjectCreationValidation.isValid(
-                name: "Project",
-                description: "",
-                repositoryCount: 0
-            )
-        )
-        XCTAssertTrue(
-            ProjectCreationValidation.isValid(
-                name: "Project",
-                description: "",
-                repositoryCount: 2
-            )
-        )
-    }
-
     func testProjectCreationIsAvailableFromEveryProjectFilter() throws {
         let macOSRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -105,11 +88,8 @@ final class ProjectManagementTests: XCTestCase {
         )
     }
 
-    func testAdministrationProjectCreationHasNoRepositoryRequirement() throws {
-        let request = WorkspaceStore.adminProjectCreationRequest(
-            name: "Server-only Project",
-            description: ""
-        )
+    func testProjectCreationKeepsLocalSetupOutOfTheServerRequest() throws {
+        let request = CreateProjectRequest(name: "Server-only Project", description: nil)
         let data = try JSONCoding.encoder().encode(request)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]

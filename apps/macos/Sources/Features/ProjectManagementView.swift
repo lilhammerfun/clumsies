@@ -11,21 +11,17 @@ enum ProjectMetadataValidation {
     }
 }
 
-enum ProjectCreationValidation {
-    static func isValid(name: String, description: String, repositoryCount: Int) -> Bool {
-        ProjectMetadataValidation.isValid(name: name, description: description)
-            && repositoryCount > 0
-    }
-}
-
 struct ProjectCreationSheet: View {
     @ObservedObject var store: WorkspaceStore
+    var onCreated: ((String) async -> Void)? = nil
+    var onUnsavedChangesChange: (Bool) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @FocusState private var nameFocused: Bool
     @State private var name = ""
     @State private var description = ""
     @State private var repositories: [URL] = []
     @State private var selectedBundleId: String?
+    @State private var showsOptions = false
     @State private var isCreating = false
     @State private var errorMessage: String?
     @State private var idempotencyKey = UUID().uuidString.lowercased()
@@ -33,114 +29,63 @@ struct ProjectCreationSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             Text("New Project")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
+                .font(.headline)
                 .padding(.top, 20)
-                .padding(.bottom, 8)
-
             Form {
-                Section("Project") {
-                    TextField("Name", text: $name)
-                        .focused($nameFocused)
+                Section {
+                    TextField("Name", text: $name).focused($nameFocused)
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(2...4)
                 }
-
-                Section("Repositories") {
-                    ForEach(repositories, id: \.path) { repository in
-                        HStack(spacing: 10) {
-                            Image(systemName: "folder")
-                                .foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(repository.lastPathComponent)
-                                    .lineLimit(1)
-                                Text(repository.deletingLastPathComponent().path)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                Section {
+                    DisclosureGroup("Additional options", isExpanded: $showsOptions) {
+                        Picker("Initial memory", selection: $selectedBundleId) {
+                            Text("None").tag(Optional<String>.none)
+                            ForEach(store.bundles) { bundle in
+                                Text(bundle.name).tag(Optional(bundle.id))
                             }
-                            Spacer()
-                            Button {
-                                repositories.removeAll { $0.path == repository.path }
-                            } label: {
-                                Image(systemName: "xmark")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Remove Repository")
-                            .accessibilityLabel("Remove \(repository.lastPathComponent)")
                         }
-                    }
-
-                    Button {
-                        chooseRepositories()
-                    } label: {
-                        Label("Add Repositories…", systemImage: "plus")
+                        ForEach(repositories, id: \.path) { repository in
+                            HStack {
+                                Text(repository.lastPathComponent).lineLimit(1)
+                                    .help(repository.path)
+                                Spacer()
+                                Button {
+                                    repositories.removeAll { $0 == repository }
+                                } label: { Image(systemName: "minus.circle") }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Remove \(repository.lastPathComponent)")
+                            }
+                        }
+                        Button("Attach Repositories…") { chooseRepositories() }
+                        Text("Repositories can also be attached later on this Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-
-                Section("Memory") {
-                    Picker("Bundle", selection: $selectedBundleId) {
-                        Text("None")
-                            .tag(Optional<String>.none)
-                        ForEach(store.bundles) { bundle in
-                            Text("\(bundle.name) (\(bundle.resourceIds.count))")
-                                .tag(Optional(bundle.id))
-                        }
-                    }
-
-                    Text("A Bundle imports its Organization memory into the new Project.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 if let errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .textSelection(.enabled)
-                            .foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
                 }
             }
             .formStyle(.grouped)
             .disabled(isCreating)
-
-            Divider()
-
             HStack {
+                if isCreating { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel", role: .cancel) {
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-                .disabled(isCreating)
-
-                Button("Create") {
-                    create()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!isValid || isCreating)
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction).disabled(isCreating)
+                Button("Create") { create() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!ProjectMetadataValidation.isValid(name: name, description: description) || isCreating)
             }
-            .padding(12)
+            .padding(16)
         }
-        .frame(width: 560, height: 640)
+        .frame(width: 480, height: showsOptions ? 500 : 320)
         .interactiveDismissDisabled(isCreating)
-        .onAppear {
-            DispatchQueue.main.async {
-                nameFocused = true
-            }
+        .onAppear { nameFocused = true }
+        .onChange(of: name.isEmpty && description.isEmpty && repositories.isEmpty && selectedBundleId == nil) { _, empty in
+            onUnsavedChangesChange(!empty)
         }
-    }
-
-    private var isValid: Bool {
-        ProjectCreationValidation.isValid(
-            name: name,
-            description: description,
-            repositoryCount: repositories.count
-        )
+        .onDisappear { onUnsavedChangesChange(false) }
     }
 
     private func chooseRepositories() {
@@ -148,31 +93,33 @@ struct ProjectCreationSheet: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.canCreateDirectories = true
-        panel.prompt = "Add"
+        panel.prompt = "Attach"
         panel.begin { response in
             guard response == .OK else { return }
             let existing = Set(repositories.map(\.standardized.path))
-            repositories += panel.urls
-                .map(\.standardized)
-                .filter { !existing.contains($0.path) }
+            repositories += panel.urls.map(\.standardized).filter { !existing.contains($0.path) }
             repositories.sort { $0.path < $1.path }
         }
     }
 
     private func create() {
-        guard isValid, !isCreating else { return }
+        guard !isCreating else { return }
         isCreating = true
         errorMessage = nil
         Task {
             do {
-                try await store.createProject(
-                    name: name,
-                    description: description,
-                    idempotencyKey: idempotencyKey,
-                    repositoryPaths: repositories.map(\.path),
-                    bundleId: selectedBundleId
+                let id = try await store.createProject(
+                    name: name, description: description, idempotencyKey: idempotencyKey,
+                    repositoryPaths: repositories.map(\.path), bundleId: selectedBundleId
                 )
+                onUnsavedChangesChange(false)
+                if let onCreated {
+                    await onCreated(id)
+                } else {
+                    store.selectedSection = .memory
+                    store.showsProjectSettings = false
+                    await store.selectProject(id)
+                }
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
@@ -211,306 +158,65 @@ struct ProjectUnavailableView: View {
 
 struct ProjectSettingsView: View {
     @ObservedObject var store: WorkspaceStore
+    let onManageProject: (String, String) -> Void
     @State private var project: ProjectRecord?
-    @State private var name = ""
-    @State private var description = ""
-    @State private var isLoading = false
-    @State private var isSaving = false
+    @State private var members: [ProjectMemberRecord] = []
     @State private var errorMessage: String?
 
     var body: some View {
         Form {
-            Section("General") {
-                if isLoading, project == nil {
-                    ProgressView()
-                        .controlSize(.small)
-                } else if let project {
-                    if store.canManageProjects {
-                        TextField("Name", text: $name)
-                        TextField("Description", text: $description, axis: .vertical)
-                            .lineLimit(2...5)
-
-                        HStack {
-                            Spacer()
-                            Button("Save") {
-                                save(project)
-                            }
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(!hasChanges || !isValid || isSaving)
-                        }
-                    } else {
-                        LabeledContent("Name", value: project.name)
-                        LabeledContent(
-                            "Description",
-                            value: project.description.isEmpty ? "None" : project.description
-                        )
+            Section("Organization project") {
+                if let project {
+                    LabeledContent("Name", value: project.name)
+                    if !project.description.isEmpty {
+                        LabeledContent("Description", value: project.description)
                     }
+                    if store.canManageProjects {
+                        Button("Manage Project…") { onManageProject(project.id, project.name) }
+                    }
+                } else if errorMessage == nil {
+                    ProgressView().controlSize(.small)
                 }
-
                 if let errorMessage {
-                    Text(errorMessage)
-                        .textSelection(.enabled)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
+                    Button("Try Again") { Task { await load() } }
                 }
             }
-
-            ProjectMembersSettings(store: store)
+            if !store.canManageProjects && !members.isEmpty {
+                Section("Members") {
+                    ForEach(members) { member in
+                        UserIdentityLabel(account: member.user, displayName: member.user.displayName ?? member.user.email)
+                    }
+                }
+            }
             ProjectLocalSetupSettings(store: store)
             ProjectMemoryCacheSettings(store: store)
         }
         .formStyle(.grouped)
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .task(id: store.activeProjectId) {
-            await load()
-        }
-    }
-
-    private var hasChanges: Bool {
-        guard let project else { return false }
-        return name != project.name || description != project.description
-    }
-
-    private var isValid: Bool {
-        ProjectMetadataValidation.isValid(name: name, description: description)
+        .task(id: store.activeProjectId) { await load() }
     }
 
     private func load() async {
-        guard let projectId = store.activeProjectId else {
-            project = nil
-            return
-        }
-        isLoading = true
+        guard let id = store.activeProjectId else { return }
+        project = nil
+        members = []
         errorMessage = nil
-        defer { isLoading = false }
         do {
-            apply(try await store.projectRecord(projectId, refresh: true))
+            let result = try await store.projectRecord(id, refresh: true)
+            guard !Task.isCancelled, store.activeProjectId == id else { return }
+            project = result
+            if !store.canManageProjects {
+                let people = try await store.projectMemberDirectory(projectId: id)
+                guard !Task.isCancelled, store.activeProjectId == id else { return }
+                members = people
+            }
         } catch is CancellationError {
             return
         } catch {
+            guard store.activeProjectId == id else { return }
             errorMessage = error.localizedDescription
-        }
-    }
-
-    private func save(_ project: ProjectRecord) {
-        guard isValid, !isSaving else { return }
-        isSaving = true
-        errorMessage = nil
-        Task {
-            do {
-                apply(try await store.updateProject(
-                    project.id,
-                    expectedRevision: project.revision,
-                    name: name,
-                    description: description
-                ))
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSaving = false
-        }
-    }
-
-    private func apply(_ project: ProjectRecord) {
-        self.project = project
-        name = project.name
-        description = project.description
-    }
-
-}
-
-private struct ProjectMembersSettings: View {
-    @ObservedObject var store: WorkspaceStore
-    @State private var organizationMembers: [OrganizationMemberRecord] = []
-    @State private var isLoading = false
-    @State private var mutatingUserId: String?
-    @State private var showsInvite = false
-    @State private var errorMessage: String?
-
-    var body: some View {
-        Section("Members") {
-            if isLoading, store.projectMembers.isEmpty {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                ForEach(store.projectMembers) { member in
-                    HStack(spacing: 10) {
-                        UserIdentityLabel(
-                            account: member.user,
-                            displayName: member.user.displayName ?? member.user.email
-                        )
-                        Spacer()
-                        Text(member.role.title)
-                            .foregroundStyle(.secondary)
-                        if mutatingUserId == member.id {
-                            ProgressView()
-                                .controlSize(.mini)
-                        }
-                    }
-                }
-            }
-
-            if store.canManageProjects {
-                Menu {
-                    ForEach(availableOrganizationMembers) { member in
-                        Button(member.displayName ?? member.email) {
-                            add(member)
-                        }
-                    }
-                    if !availableOrganizationMembers.isEmpty {
-                        Divider()
-                    }
-                    Button("Invite New Member…") {
-                        showsInvite = true
-                    }
-                } label: {
-                    Label("Add Member…", systemImage: "plus")
-                }
-                .disabled(isLoading || mutatingUserId != nil)
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .textSelection(.enabled)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .task(id: store.activeProjectId) {
-            await load()
-        }
-        .sheet(isPresented: $showsInvite) {
-            InviteProjectMemberSheet(store: store) {
-                Task { await loadOrganizationMembers() }
-            }
-        }
-    }
-
-    private var availableOrganizationMembers: [OrganizationMemberRecord] {
-        let projectIds = Set(store.projectMembers.map(\.id))
-        return organizationMembers.filter {
-            $0.status != "disabled" && !projectIds.contains($0.id)
-        }
-    }
-
-    private func load() async {
-        isLoading = true
-        errorMessage = nil
-        await store.refreshProjectMembers()
-        if store.canManageProjects {
-            await loadOrganizationMembers()
-        }
-        isLoading = false
-    }
-
-    private func loadOrganizationMembers() async {
-        do {
-            organizationMembers = try await store.organizationMemberDirectory()
-        } catch is CancellationError {
-            return
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func add(_ member: OrganizationMemberRecord) {
-        mutate(member.id) {
-            _ = try await store.addProjectMember(userId: member.id)
-        }
-    }
-
-    private func mutate(
-        _ userId: String,
-        operation: @escaping () async throws -> Void
-    ) {
-        guard mutatingUserId == nil else { return }
-        mutatingUserId = userId
-        errorMessage = nil
-        Task {
-            defer { mutatingUserId = nil }
-            do {
-                try await operation()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-}
-
-private struct InviteProjectMemberSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @ObservedObject var store: WorkspaceStore
-    let onComplete: () -> Void
-    @State private var email = ""
-    @State private var role: ProjectMemberRole = .member
-    @State private var isSaving = false
-    @State private var errorMessage: String?
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section {
-                    TextField("Email", text: $email)
-                        .textContentType(.emailAddress)
-                    Picker("Project Role", selection: $role) {
-                        ForEach(ProjectMemberRole.allCases, id: \.self) { role in
-                            Text(role.title).tag(role)
-                        }
-                    }
-                } header: {
-                    Text("Invite Member")
-                } footer: {
-                    Text("The member is invited to the organization and added to this Project.")
-                }
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .textSelection(.enabled)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .formStyle(.grouped)
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) {
-                    dismiss()
-                }
-                Button("Invite") {
-                    invite()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(normalizedEmail.isEmpty || isSaving)
-            }
-            .padding()
-        }
-        .frame(width: 440, height: 300)
-    }
-
-    private var normalizedEmail: String {
-        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    private func invite() {
-        guard !normalizedEmail.isEmpty, !isSaving else { return }
-        isSaving = true
-        errorMessage = nil
-        Task {
-            do {
-                _ = try await store.inviteAndAddProjectMember(
-                    email: normalizedEmail,
-                    role: role
-                )
-                onComplete()
-                dismiss()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSaving = false
         }
     }
 }

@@ -38,127 +38,24 @@ enum RetrievalEvidenceReviewAction: Equatable {
     }
 }
 
-enum DiagnosticsDestination: String, Identifiable {
-    case runtime
-    case retrieval
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .runtime: "Runtime Status"
-        case .retrieval: "Retrieval Runs"
-        }
-    }
-
-    var defaultContentSize: NSSize {
-        switch self {
-        case .runtime: NSSize(width: 640, height: 560)
-        case .retrieval: NSSize(width: 1_600, height: 850)
-        }
-    }
-
-    var minimumContentSize: NSSize {
-        switch self {
-        case .runtime: NSSize(width: 520, height: 440)
-        case .retrieval:
-            NSSize(
-                width: RetrievalDiagnosticsLayout.minimumWindowContentWidth,
-                height: 560
-            )
-        }
-    }
-}
-
-struct NativeDiagnosticsView: View {
+struct NativeRetrievalDiagnosticsView: View {
     @ObservedObject var store: WorkspaceStore
-    let destination: DiagnosticsDestination
     @StateObject private var retrieval: RetrievalDiagnosticsModel
 
-    init(store: WorkspaceStore, destination: DiagnosticsDestination) {
+    init(store: WorkspaceStore) {
         self.store = store
-        self.destination = destination
-        _retrieval = StateObject(
-            wrappedValue: RetrievalDiagnosticsModel(daemon: store.daemon)
-        )
+        _retrieval = StateObject(wrappedValue: RetrievalDiagnosticsModel(daemon: store.daemon))
     }
 
     var body: some View {
-        Group {
-            switch destination {
-            case .runtime:
-                RuntimeDiagnosticsView(store: store)
-            case .retrieval:
-                RetrievalDiagnosticsView(
-                    model: retrieval,
-                    projectName: store.activeProject?.name,
-                    projectId: store.activeProjectId
-                )
-            }
-        }
-        .task(id: "\(destination.rawValue):\(store.activeProjectId ?? "")") {
-            guard destination == .retrieval else { return }
+        RetrievalDiagnosticsView(
+            model: retrieval,
+            projectName: store.activeProject?.name,
+            projectId: store.activeProjectId
+        )
+        .task(id: store.activeProjectId) {
             await retrieval.load(projectId: store.activeProjectId)
         }
-    }
-}
-
-private struct RuntimeDiagnosticsView: View {
-    @ObservedObject var store: WorkspaceStore
-
-    var body: some View {
-        Form {
-            if let runtime = store.runtime {
-                Section("Daemon") {
-                    LabeledContent("Version", value: runtime.health.daemonVersion)
-                    LabeledContent("Project", value: runtime.health.projectId ?? "Not selected")
-                    LabeledContent("Database", value: runtime.health.localDb.path)
-                    LabeledContent("Schema", value: String(runtime.health.localDb.schemaVersion))
-                    LabeledContent("MCP", value: runtime.mcp.map { $0.running ? "Running" : "Stopped" } ?? "Loading")
-                    LabeledContent("Log directory", value: runtime.health.logDir)
-                }
-                Section("Synchronization") {
-                    let retryProjectId = store.activeProjectId ?? runtime.health.projectId
-                    let isRetrying = store.isRetryingSync(
-                        channel: "all",
-                        projectId: retryProjectId
-                    )
-                    LabeledContent("Drafts", value: runtime.sync?.draftSync.state.capitalized ?? "Loading")
-                    LabeledContent("Commits", value: runtime.sync?.commitSync.state.capitalized ?? "Loading")
-                    LabeledContent(
-                        "Pending operations",
-                        value: runtime.sync.map { String($0.pendingOperationCount) } ?? "Loading"
-                    )
-                    LabeledContent(
-                        "Failed operations",
-                        value: runtime.sync.map { String($0.failedOperationCount) } ?? "Loading"
-                    )
-                    LabeledContent(
-                        "Drafts behind",
-                        value: runtime.sync.map { String($0.behindDraftCount) } ?? "Loading"
-                    )
-                    LabeledContent(
-                        "Reconciliation conflicts",
-                        value: runtime.sync.map { String($0.reconciliationConflictCount) } ?? "Loading"
-                    )
-                    Button(isRetrying ? "Retrying…" : "Retry Current Project") {
-                        Task {
-                            _ = await store.retrySync(
-                                projectId: retryProjectId
-                            )
-                        }
-                    }
-                    .disabled(isRetrying)
-                }
-                Section("Server") {
-                    LabeledContent("Data source", value: runtime.serverDataSource.capitalized)
-                    LabeledContent("URL", value: runtime.health.serverUrl)
-                }
-            } else {
-                ProgressView()
-            }
-        }
-        .formStyle(.grouped)
     }
 }
 

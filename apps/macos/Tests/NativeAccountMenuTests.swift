@@ -4,36 +4,32 @@ import XCTest
 
 @MainActor
 final class NativeAccountMenuTests: XCTestCase {
-    func testDiagnosticsIsANativeSubmenuOfTheAccountMenu() {
-        var openedDestination: DiagnosticsDestination?
-        var didShowLogs = false
-        let coordinator = NativeAccountMenu.Coordinator(
-            configuration: .init(
-                account: nil,
-                displayName: "Dylan",
-                onOpenSettings: {},
-                onOpenDiagnostics: { openedDestination = $0 },
-                onShowLogs: { didShowLogs = true },
-                onRefresh: {},
-                onSignOut: {}
-            )
-        )
+    func testAccountMenuIdentifiesTheAccountAndOffersOnlySettingsAndSignOut() {
+        var didOpenSettings = false
+        var didSignOut = false
+        let coordinator = NativeAccountMenu.Coordinator(configuration: .init(
+            account: .init(userId: "user-1", email: "dylan@example.com", displayName: "Dylan",
+                avatarUrl: nil, role: "member"),
+            onOpenSettings: { didOpenSettings = true },
+            onSignOut: { didSignOut = true }
+        ))
 
         let menu = coordinator.makeMenu()
-        let diagnostics = menu.item(withTitle: "Diagnostics")
-        let submenu = diagnostics?.submenu
+        XCTAssertEqual(menu.items.map(\.title), ["dylan@example.com", "Settings…", "", "Sign Out"])
+        XCTAssertFalse(menu.items[0].isEnabled)
+        XCTAssertTrue(menu.items[2].isSeparatorItem)
+        XCTAssertTrue(menu.items.allSatisfy { $0.submenu == nil })
+        menu.performActionForItem(at: 1)
+        XCTAssertTrue(didOpenSettings)
+        XCTAssertFalse(didSignOut)
+        menu.performActionForItem(at: 3)
+        XCTAssertTrue(didSignOut)
+    }
 
-        XCTAssertNotNil(submenu)
-        XCTAssertTrue(submenu?.supermenu === menu)
-        XCTAssertEqual(
-            submenu?.items.map(\.title),
-            ["Runtime Status", "Retrieval Runs", "", "Show Logs in Finder"]
-        )
-
-        submenu?.performActionForItem(at: 0)
-        XCTAssertEqual(openedDestination?.rawValue, DiagnosticsDestination.runtime.rawValue)
-
-        submenu?.performActionForItem(at: 3)
-        XCTAssertTrue(didShowLogs)
+    func testMissingAccountDoesNotShowAnInventedIdentity() {
+        let coordinator = NativeAccountMenu.Coordinator(configuration: .init(
+            account: nil, onOpenSettings: {}, onSignOut: {}
+        ))
+        XCTAssertEqual(coordinator.makeMenu().items.map(\.title), ["Settings…", "", "Sign Out"])
     }
 }

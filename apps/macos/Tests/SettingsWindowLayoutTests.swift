@@ -5,87 +5,122 @@ import XCTest
 
 @MainActor
 final class SettingsWindowLayoutTests: XCTestCase {
-    func testNormalizeRepairsHostingControllerCollapsedContentSize() {
-        let controller = NSHostingController(rootView: Text("Settings"))
-        controller.sizingOptions = []
+    func testNormalizeRepairsCollapsedWindowAndPreservesAUserSize() {
         let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: SettingsWindowLayout.defaultContentSize),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
-
-        window.contentViewController = controller
-        XCTAssertLessThan(
-            window.contentLayoutRect.width,
-            SettingsWindowLayout.minimumContentSize.width
-        )
-
-        SettingsWindowLayout.normalize(window, pane: .general)
-
-        XCTAssertEqual(window.contentLayoutRect.size, SettingsWindowLayout.defaultContentSize)
+        window.isReleasedWhenClosed = false
+        SettingsWindowLayout.normalize(window)
+        XCTAssertEqual(window.contentLayoutRect.width, SettingsWindowLayout.defaultContentSize.width)
+        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, SettingsWindowLayout.minimumContentSize.height)
         XCTAssertEqual(window.contentMinSize, SettingsWindowLayout.minimumContentSize)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+        XCTAssertTrue(window.styleMask.contains(.miniaturizable))
+        XCTAssertEqual(window.toolbarStyle, .unified)
+        window.setContentSize(NSSize(width: 880, height: 760))
+        let selectedFrame = window.frame
+        window.title = "Security"
+        SettingsWindowLayout.normalize(window)
+        XCTAssertEqual(window.frame, selectedFrame)
+        XCTAssertEqual(window.title, "Security")
     }
 
-    func testNormalizePreservesAValidUserSelectedSize() {
-        let selectedSize = NSSize(width: 760, height: 620)
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: selectedSize),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-
-        SettingsWindowLayout.normalize(window, pane: .advanced)
-
-        XCTAssertEqual(window.contentLayoutRect.size, selectedSize)
-        XCTAssertEqual(window.contentMinSize, SettingsWindowLayout.minimumContentSize)
-        XCTAssertEqual(window.title, "Advanced")
-        XCTAssertFalse(window.styleMask.contains(.miniaturizable))
-        XCTAssertFalse(window.styleMask.contains(.resizable))
-    }
-
-    func testPaneRestorationDefaultsToGeneralAndRejectsUnknownValues() {
+    func testNavigationRestoresPaneAndProtectsDraftsAcrossHistory() {
         let suite = "SettingsWindowLayoutTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-
-        XCTAssertEqual(SettingsPane.restored(from: defaults), .general)
-        SettingsPane.agent.persist(in: defaults)
-        XCTAssertEqual(SettingsPane.restored(from: defaults), .agent)
         defaults.set("unknown", forKey: SettingsPane.defaultsKey)
-        XCTAssertEqual(SettingsPane.restored(from: defaults), .general)
+        let navigation = SettingsNavigation(defaults: defaults)
+        XCTAssertEqual(navigation.destination, .pane(.general))
+        navigation.navigate(to: .pane(.organization))
+        navigation.navigate(to: .organization(.members))
+        navigation.isSaving = true
+        navigation.hasUnsavedChanges = true
+        navigation.goBack()
+        XCTAssertEqual(navigation.destination, .organization(.members))
+        XCTAssertNil(navigation.pendingDestination)
+        navigation.isSaving = false
+        navigation.hasUnsavedChanges = true
+        navigation.goBack()
+        XCTAssertEqual(navigation.destination, .organization(.members))
+        XCTAssertEqual(navigation.pendingDestination, .pane(.organization))
+        navigation.pendingDestination = nil
+        XCTAssertTrue(navigation.hasUnsavedChanges)
+        navigation.goBack()
+        navigation.discardAndNavigate()
+        XCTAssertEqual(navigation.destination, .pane(.organization))
+        XCTAssertFalse(navigation.hasUnsavedChanges)
+        navigation.goForward()
+        XCTAssertEqual(navigation.destination, .organization(.members))
+        XCTAssertEqual(SettingsPane.restored(from: defaults), .organization)
+        navigation.navigate(to: .organization(.projects))
+        navigation.navigate(to: .project(id: "project-1", name: "Design"))
+        navigation.goBack()
+        XCTAssertEqual(navigation.destination, .organization(.projects))
+        navigation.goForward()
+        XCTAssertEqual(navigation.destination, .project(id: "project-1", name: "Design"))
+        navigation.didDeleteProject("project-1")
+        XCTAssertEqual(navigation.destination, .organization(.projects))
+        navigation.goBack()
+        XCTAssertEqual(navigation.destination, .organization(.members))
+        navigation.goForward()
+        XCTAssertEqual(navigation.destination, .organization(.projects))
+        XCTAssertFalse(navigation.canGoForward)
+        navigation.isSaving = true
+        navigation.navigate(to: .pane(.general))
+        XCTAssertEqual(navigation.destination, .pane(.general), "A background membership update must not lock unrelated Settings panes")
+        navigation.isSaving = false
+        navigation.resetForAuthorityChange()
+        XCTAssertEqual(navigation.destination, .pane(.general))
+        XCTAssertFalse(navigation.canGoBack)
+        XCTAssertFalse(navigation.canGoForward)
     }
 
-    func testNativePreferenceToolbarSelectsAndPersistsPane() {
+    func testDeletingProjectDoesNotInterruptAnotherSettingsPage() {
         let suite = "SettingsWindowLayoutTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let controller = SettingsTabViewController(
-            items: SettingsPane.allCases.map { ($0, NSViewController()) },
-            selectedPane: .agent,
-            defaults: defaults
+        let navigation = SettingsNavigation(defaults: defaults)
+        navigation.navigate(to: .project(id: "deleted", name: "Old project"))
+        navigation.navigate(to: .pane(.advanced))
+        navigation.didDeleteProject("deleted")
+        XCTAssertEqual(navigation.destination, .pane(.advanced))
+        navigation.goBack()
+        XCTAssertEqual(navigation.destination, .pane(.general))
+        navigation.goForward()
+        XCTAssertEqual(navigation.destination, .pane(.advanced))
+    }
+
+    func testSettingsSearchFindsChildrenAndRespectsOrganizationPermission() {
+        XCTAssertEqual(SettingsDestination.search("email domains", canAdminister: true), [.organization(.access)])
+        XCTAssertTrue(SettingsDestination.search("credentials", canAdminister: true).isEmpty)
+        XCTAssertTrue(SettingsDestination.search("credentials", canAdminister: false).isEmpty)
+        XCTAssertEqual(SettingsDestination.search("updates", canAdminister: false), [.pane(.general)])
+        XCTAssertEqual(SettingsDestination.search("plugin", canAdminister: false), [.pane(.agent)])
+        XCTAssertEqual(SettingsDestination.search("SSO", canAdminister: true), [.organization(.access)])
+    }
+
+    func testClosingSettingsCanKeepEditingOrDiscardTheDraft() {
+        let suite = "SettingsWindowLayoutTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let navigation = SettingsNavigation(defaults: defaults)
+        let controller = SettingsWindowController(
+            store: WorkspaceStore(), softwareUpdateController: SoftwareUpdateController(startingUpdater: false),
+            onShowLogs: {}, navigation: navigation
         )
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: SettingsWindowLayout.defaultContentSize),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-
-        window.contentViewController = controller
-        SettingsWindowLayout.configure(window, pane: controller.selectedPane)
-
-        XCTAssertEqual(controller.tabStyle, .toolbar)
-        XCTAssertEqual(window.toolbarStyle, .preference)
-        XCTAssertEqual(window.toolbar?.allowsUserCustomization, false)
-        XCTAssertEqual(window.title, "Agent")
-        XCTAssertFalse(window.styleMask.contains(.miniaturizable))
-        XCTAssertFalse(window.styleMask.contains(.resizable))
-
-        controller.selectedTabViewItemIndex = 2
-        XCTAssertEqual(controller.selectedPane, .advanced)
-        XCTAssertEqual(window.title, "Advanced")
-        XCTAssertEqual(SettingsPane.restored(from: defaults), .advanced)
+        let window = NSWindow()
+        window.isReleasedWhenClosed = false
+        controller.window = window
+        navigation.hasUnsavedChanges = true
+        controller.confirmDiscard = { false }
+        XCTAssertFalse(controller.windowShouldClose(window))
+        XCTAssertTrue(navigation.hasUnsavedChanges)
+        controller.confirmDiscard = { true }
+        XCTAssertTrue(controller.windowShouldClose(window))
+        controller.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: window))
+        XCTAssertNil(controller.window)
+        XCTAssertFalse(navigation.hasUnsavedChanges)
     }
 }

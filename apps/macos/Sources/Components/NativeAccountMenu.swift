@@ -5,9 +5,6 @@ struct NativeAccountMenu: NSViewRepresentable {
     let account: UserReference?
     let displayName: String
     let onOpenSettings: () -> Void
-    let onOpenDiagnostics: (DiagnosticsDestination) -> Void
-    let onShowLogs: () -> Void
-    let onRefresh: () -> Void
     let onSignOut: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -29,11 +26,7 @@ struct NativeAccountMenu: NSViewRepresentable {
     private var configuration: Configuration {
         Configuration(
             account: account,
-            displayName: displayName,
             onOpenSettings: onOpenSettings,
-            onOpenDiagnostics: onOpenDiagnostics,
-            onShowLogs: onShowLogs,
-            onRefresh: onRefresh,
             onSignOut: onSignOut
         )
     }
@@ -47,11 +40,7 @@ struct NativeAccountMenu: NSViewRepresentable {
 
     struct Configuration {
         let account: UserReference?
-        let displayName: String
         let onOpenSettings: () -> Void
-        let onOpenDiagnostics: (DiagnosticsDestination) -> Void
-        let onShowLogs: () -> Void
-        let onRefresh: () -> Void
         let onSignOut: () -> Void
     }
 
@@ -78,35 +67,17 @@ struct NativeAccountMenu: NSViewRepresentable {
 
             if let account = configuration.account {
                 let identity = NSMenuItem(
-                    title: account.displayName ?? account.email,
+                    title: account.email,
                     action: nil,
                     keyEquivalent: ""
                 )
                 identity.isEnabled = false
                 menu.addItem(identity)
-                menu.addItem(.separator())
             }
 
-            menu.addItem(actionItem("Settings", action: #selector(openSettings)))
-
-            let diagnostics = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
-            diagnostics.isEnabled = true
-            diagnostics.submenu = makeDiagnosticsMenu()
-            menu.addItem(diagnostics)
-
-            menu.addItem(actionItem("Refresh", action: #selector(refresh)))
+            menu.addItem(actionItem("Settings…", action: #selector(openSettings)))
             menu.addItem(.separator())
             menu.addItem(actionItem("Sign Out", action: #selector(signOut)))
-            return menu
-        }
-
-        private func makeDiagnosticsMenu() -> NSMenu {
-            let menu = NSMenu(title: "Diagnostics")
-            menu.autoenablesItems = false
-            menu.addItem(actionItem("Runtime Status", action: #selector(openRuntimeStatus)))
-            menu.addItem(actionItem("Retrieval Runs", action: #selector(openRetrievalRuns)))
-            menu.addItem(.separator())
-            menu.addItem(actionItem("Show Logs in Finder", action: #selector(showLogs)))
             return menu
         }
 
@@ -119,22 +90,6 @@ struct NativeAccountMenu: NSViewRepresentable {
 
         @objc private func openSettings() {
             configuration.onOpenSettings()
-        }
-
-        @objc private func openRuntimeStatus() {
-            configuration.onOpenDiagnostics(.runtime)
-        }
-
-        @objc private func openRetrievalRuns() {
-            configuration.onOpenDiagnostics(.retrieval)
-        }
-
-        @objc private func showLogs() {
-            configuration.onShowLogs()
-        }
-
-        @objc private func refresh() {
-            configuration.onRefresh()
         }
 
         @objc private func signOut() {

@@ -972,37 +972,6 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertTrue(source.contains("guard !Task.isCancelled else { return }"))
     }
 
-    func testRetrySyncHasAnIndependentPostReadyTask() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Domain/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let retryTask = try XCTUnwrap(
-            source.range(of: "postReadyRetrySyncTask = Task")
-        )
-        let statusTask = try XCTUnwrap(
-            source.range(of: "postReadyMCPTask = Task")
-        )
-        let statusEnd = try XCTUnwrap(
-            source[statusTask.lowerBound...].range(
-                of: "\n    private func applyLocalAgentAdapterResult"
-            )
-        )
-
-        XCTAssertLessThan(retryTask.lowerBound, statusTask.lowerBound)
-        XCTAssertTrue(
-            source[retryTask.lowerBound..<statusTask.lowerBound]
-                .contains("self.retrySync(projectId: self.activeProjectId)")
-        )
-        XCTAssertFalse(
-            source[statusTask.lowerBound..<statusEnd.lowerBound]
-                .contains("self.retrySync(")
-        )
-    }
-
     func testRetrySyncSharesOnlyTheSameProjectAndChannelTask() throws {
         let draftsA = SyncRetryKey(channel: "drafts", projectId: "project-a")
         XCTAssertEqual(
@@ -1081,10 +1050,6 @@ final class DaemonContractTests: XCTestCase {
             contentsOf: macOSRoot.appending(path: "Sources/Features/MemoryWorkspaceView.swift"),
             encoding: .utf8
         )
-        let diagnostics = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Features/DiagnosticsView.swift"),
-            encoding: .utf8
-        )
 
         for source in [workspace, memory] {
             XCTAssertTrue(source.contains(
@@ -1095,11 +1060,6 @@ final class DaemonContractTests: XCTestCase {
                     + "                        channel: \"drafts\""
             ))
         }
-        XCTAssertTrue(diagnostics.contains(
-            "store.isRetryingSync(\n"
-                + "                        channel: \"all\",\n"
-                + "                        projectId: retryProjectId"
-        ))
     }
 
     func testAuthorityResetCancelsRetriesAndDismissedBackgroundErrorsStayDismissed() throws {
@@ -1459,7 +1419,7 @@ final class DaemonContractTests: XCTestCase {
             "account = nil",
             "organization = nil",
             "projectMetadata.removeAll()",
-            "projectMembers.removeAll()",
+            "clearAdministration()",
             "orgRefCommitId = nil",
             #"orgRefEtag = """#,
             "activeProjectId = nil",
@@ -2937,6 +2897,51 @@ final class DaemonContractTests: XCTestCase {
             ),
             .stale
         )
+    }
+
+    func testSyncToolbarDoesNotHideMissingOrUnknownStatus() {
+        XCTAssertEqual(
+            SyncToolbarPresentation.resolve(status: nil, isAvailable: true, serverDataSource: "live"),
+            .unavailable(message: nil)
+        )
+        XCTAssertEqual(
+            SyncToolbarPresentation.resolve(
+                status: syncStatus(draftState: "unknown"), isAvailable: true, serverDataSource: "live"
+            ),
+            .unavailable(message: nil)
+        )
+        XCTAssertEqual(
+            SyncToolbarPresentation.resolve(
+                status: syncStatus(commitState: "unknown"), isAvailable: true, serverDataSource: "live"
+            ),
+            .unavailable(message: nil)
+        )
+    }
+
+    func testSyncToolbarKeepsOriginalErrorsAvailableWithoutUsingThemAsTheSummary() {
+        let message = "HTTP 409: draft base version conflict"
+        let presentation = SyncToolbarPresentation.failed(changeCount: 2, message: message)
+        XCTAssertEqual(presentation.label, "Changes haven't synced")
+        XCTAssertEqual(presentation.detail, "2 changes couldn't be synced. Try again.")
+        XCTAssertEqual(presentation.errorDetails, message)
+        XCTAssertEqual(SyncToolbarPresentation.unavailable(message: message).errorDetails, message)
+        XCTAssertNil(SyncToolbarPresentation.unavailable(message: "  ").errorDetails)
+    }
+
+    func testSyncToolbarExplainsUnknownStatusWithoutClaimingTheUserIsOffline() {
+        let presentation = SyncToolbarPresentation.unavailable(message: nil)
+        XCTAssertEqual(presentation.label, "Sync status unavailable")
+        XCTAssertEqual(presentation.symbolName, "questionmark.circle")
+        XCTAssertEqual(presentation.detail, "Clumsies can't check whether your changes are synced. Try again to check.")
+        XCTAssertNil(presentation.errorDetails)
+    }
+
+    func testSyncToolbarUsesPlainLanguageForProgressAndOutdatedContent() {
+        XCTAssertEqual(SyncToolbarPresentation.syncing(changeCount: 1).label, "Syncing 1 change")
+        XCTAssertEqual(SyncToolbarPresentation.syncing(changeCount: 2).label, "Syncing 2 changes")
+        XCTAssertEqual(SyncToolbarPresentation.stale.label, "Showing saved content")
+        XCTAssertEqual(SyncToolbarPresentation.stale.detail,
+            "The latest content couldn't be loaded. What you see may be out of date.")
     }
 
     private func operation(_ value: DaemonDraftOperation, id: String) -> DaemonLocalDraftOperation {

@@ -12,16 +12,6 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertEqual(WorkspaceSection.sessions.title, "Activity")
     }
 
-    func testAdministrationSidebarRequiresAdministratorCapability() {
-        XCTAssertFalse(
-            WorkspaceSection.sidebarSections(canAdminister: false).contains(.administration)
-        )
-        XCTAssertEqual(
-            WorkspaceSection.sidebarSections(canAdminister: true).last,
-            .administration
-        )
-    }
-
     func testAdministrationMutationsRequireAdminWriteAndFreshLoadedData() {
         XCTAssertTrue(WorkspaceStore.administrationMutationAllowed(
             capabilities: ["admin:write"],
@@ -124,7 +114,6 @@ final class WorkspaceNavigationTests: XCTestCase {
             WorkspaceSection.memory,
             .bundles,
             .sessions,
-            .administration,
         ] {
             XCTAssertEqual(
                 WorkspaceColumnLayout(section: section),

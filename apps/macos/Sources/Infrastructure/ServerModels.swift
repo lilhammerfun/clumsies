@@ -66,18 +66,6 @@ enum ProjectMemberRole: String, Codable, CaseIterable, Sendable {
     }
 }
 
-struct OrganizationMemberRecord: Codable, Identifiable, Hashable, Sendable {
-    var id: String { userId }
-
-    let userId: String
-    let email: String
-    let displayName: String?
-    let role: String
-    let status: String
-    let externalIdentityBound: Bool
-    let revision: Int
-}
-
 struct ProjectMemberRecord: Codable, Identifiable, Hashable, Sendable {
     var id: String { user.userId }
 
@@ -85,11 +73,6 @@ struct ProjectMemberRecord: Codable, Identifiable, Hashable, Sendable {
     let user: UserReference
     let role: ProjectMemberRole
     let joinedAt: String
-}
-
-struct CreateOrganizationMemberRequest: Codable, Sendable {
-    let email: String
-    let role: String
 }
 
 struct CreateProjectMemberRequest: Codable, Sendable {
@@ -122,7 +105,7 @@ enum AdminMemberStatus: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .invited: "Invited"
+        case .invited: "Not signed in yet"
         case .active: "Active"
         case .disabled: "Disabled"
         }
@@ -193,9 +176,12 @@ struct AdminAuditEventRecord: Codable, Identifiable, Hashable, Sendable {
 
     let eventId: String
     let actorUserId: String?
+    let actorDisplayName: String?
+    let actorEmail: String?
     let action: String
     let targetType: String
     let targetId: String?
+    let targetDisplayName: String?
     let createdAt: String
 }
 
@@ -231,13 +217,79 @@ struct AdminHealthRecord: Codable, Hashable, Sendable {
 }
 
 struct AdministrationSnapshot: Hashable, Sendable {
-    let organization: AdminOrganizationRecord
-    let members: [AdminOrganizationMemberRecord]
-    let projects: [AdminProjectRecord]
-    let tokens: [AdminAccessTokenRecord]
-    let auditEvents: [AdminAuditEventRecord]
-    let identityProvider: AdminIdentityProviderStatus
-    let health: AdminHealthRecord
+    var organization: AdminOrganizationRecord?
+    var members: [AdminOrganizationMemberRecord] = []
+    var projects: [AdminProjectRecord] = []
+    var auditEvents: [AdminAuditEventRecord] = []
+    var identityProvider: AdminIdentityProviderStatus?
+
+    mutating func apply(
+        _ page: AdministrationSnapshot,
+        section: AdministrationSection,
+        appending: Bool
+    ) {
+        switch section {
+        case .organization: organization = page.organization
+        case .members: Self.apply(page.members, to: &members, appending: appending)
+        case .projects: Self.apply(page.projects, to: &projects, appending: appending)
+        case .access:
+            organization = page.organization
+            identityProvider = page.identityProvider
+        case .audit: Self.apply(page.auditEvents, to: &auditEvents, appending: appending)
+        }
+    }
+
+    mutating func updateProject(_ project: AdminProjectRecord) {
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[index] = project
+        } else {
+            projects.insert(project, at: 0)
+        }
+    }
+
+    private static func apply<Item: Identifiable>(
+        _ page: [Item],
+        to items: inout [Item],
+        appending: Bool
+    ) {
+        guard appending else { items = page; return }
+        let existing = Set(items.map(\.id))
+        items += page.filter { !existing.contains($0.id) }
+    }
+}
+
+struct AdministrationPageState: Sendable {
+    var isLoaded = false
+    var isLoading = false
+    var isStale = true
+    var errorMessage: String?
+    var nextCursor: String?
+    var seenCursors: Set<String> = []
+    var query = ""
+
+    mutating func offsetProjectCursor(by delta: Int) {
+        guard let nextCursor else { return }
+        // Admin project cursors are decimal offsets. Local inserts/deletions move that boundary.
+        guard let offset = Int(nextCursor), offset >= 0 else {
+            isStale = true
+            self.nextCursor = nil
+            return
+        }
+        let (adjusted, overflow) = offset.addingReportingOverflow(delta)
+        guard !overflow, adjusted >= 0 else {
+            isStale = true
+            self.nextCursor = nil
+            return
+        }
+        self.nextCursor = String(adjusted)
+        seenCursors.removeAll()
+    }
+}
+
+struct AdministrationPageResult: Sendable {
+    var snapshot = AdministrationSnapshot()
+    var isStale = false
+    var nextCursor: String?
 }
 
 struct UpdateAdminOrganizationRequest: Codable, Sendable {
@@ -253,10 +305,6 @@ struct CreateAdminOrganizationMemberRequest: Codable, Sendable {
 struct UpdateAdminOrganizationMemberRequest: Codable, Sendable {
     let role: AdminOrganizationRole?
     let status: AdminMemberStatus?
-}
-
-struct UpdateAdminProjectMemberRequest: Codable, Sendable {
-    let role: ProjectMemberRole
 }
 
 struct ListResponse<Item: Decodable & Sendable>: Decodable, Sendable {
