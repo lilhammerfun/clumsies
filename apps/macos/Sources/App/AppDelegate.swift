@@ -9,106 +9,6 @@ private enum MainWindowSurface: Equatable {
 }
 
 @MainActor
-enum SettingsWindowLayout {
-    static let defaultContentSize = NSSize(width: 620, height: 470)
-    static let minimumContentSize = NSSize(width: 520, height: 400)
-
-    static func configure(_ window: NSWindow, pane: SettingsPane) {
-        window.styleMask.remove(.miniaturizable)
-        window.styleMask.remove(.resizable)
-        window.title = pane.title
-        window.toolbarStyle = .preference
-        window.toolbar?.allowsUserCustomization = false
-        window.toolbar?.autosavesConfiguration = false
-        window.toolbar?.displayMode = .iconAndLabel
-        window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
-        window.standardWindowButton(.zoomButton)?.isEnabled = false
-    }
-
-    static func normalize(_ window: NSWindow, pane: SettingsPane) {
-        configure(window, pane: pane)
-        window.contentMinSize = minimumContentSize
-        let contentSize = window.contentLayoutRect.size
-        guard contentSize.width < minimumContentSize.width
-            || contentSize.height < minimumContentSize.height
-        else {
-            return
-        }
-        window.setContentSize(defaultContentSize)
-    }
-}
-
-@MainActor
-final class SettingsTabViewController: NSTabViewController {
-    private let panes: [SettingsPane]
-    private let defaults: UserDefaults
-
-    init(
-        items: [(SettingsPane, NSViewController)],
-        selectedPane: SettingsPane,
-        defaults: UserDefaults = .standard
-    ) {
-        panes = items.map(\.0)
-        self.defaults = defaults
-        super.init(nibName: nil, bundle: nil)
-        tabStyle = .toolbar
-        for (pane, controller) in items {
-            controller.title = pane.title
-            let item = NSTabViewItem(viewController: controller)
-            item.identifier = pane.rawValue
-            item.label = pane.title
-            item.image = NSImage(systemSymbolName: pane.systemImage, accessibilityDescription: pane.title)
-            addTabViewItem(item)
-        }
-        selectedTabViewItemIndex = panes.firstIndex(of: selectedPane) ?? 0
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    var selectedPane: SettingsPane {
-        panes.indices.contains(selectedTabViewItemIndex)
-            ? panes[selectedTabViewItemIndex]
-            : .general
-    }
-
-    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
-        super.tabView(tabView, didSelect: tabViewItem)
-        guard let rawValue = tabViewItem?.identifier as? String,
-              let pane = SettingsPane(rawValue: rawValue) else {
-            return
-        }
-        pane.persist(in: defaults)
-        view.window?.title = pane.title
-    }
-}
-
-@MainActor
-enum DiagnosticsWindowLayout {
-    static func configure(_ window: NSWindow, destination: DiagnosticsDestination) {
-        window.title = destination.title
-        window.styleMask.insert(.fullSizeContentView)
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = true
-        window.toolbarStyle = .unified
-        window.contentMinSize = destination.minimumContentSize
-    }
-
-    static func normalize(_ window: NSWindow, destination: DiagnosticsDestination) {
-        configure(window, destination: destination)
-        let contentSize = window.contentLayoutRect.size
-        guard contentSize.width < destination.minimumContentSize.width
-            || contentSize.height < destination.minimumContentSize.height
-        else {
-            return
-        }
-        window.setContentSize(destination.defaultContentSize)
-    }
-}
-
-@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let store = WorkspaceStore()
     private let softwareUpdateController = SoftwareUpdateController()
@@ -117,14 +17,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var startupTask: Task<Void, Never>?
     private var mainWindow: NSWindow?
     private var authenticationWindow: NSWindow?
-    private var settingsWindow: NSWindow?
-    private var diagnosticsWindow: NSWindow?
+    private lazy var settingsWindowController = SettingsWindowController(
+        store: store, softwareUpdateController: softwareUpdateController,
+        onShowLogs: { [weak self] in self?.showLogsInFinder() }
+    )
     private var statusItem: NSStatusItem?
     private lazy var statusMenu = makeStatusMenu()
     private var isFlushingForTermination = false
     private var mainWindowSurface: MainWindowSurface?
+    private var mainWorkspaceAccountID: String?
+    private var mainWorkspaceOrganizationID: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hosted tests must not start live authentication or daemon work.
+        guard NSClassFromString("XCTestCase") == nil else { return }
         NSApp.setActivationPolicy(.regular)
         installApplicationMenu()
         installStatusItem()
@@ -148,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard settingsWindowController.confirmDiscardIfNeeded() else { return .terminateCancel }
         guard store.hasPendingChanges else { return .terminateNow }
         guard !isFlushingForTermination else { return .terminateLater }
         isFlushingForTermination = true
@@ -175,7 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return store.canCreateMemory(kind: store.selectedKind, scope: .org)
         }
         if menuItem.action == #selector(closeActiveTab(_:)) {
-            return store.activeVisibleTab != nil
+            return (NSApp.keyWindow != nil && NSApp.keyWindow !== mainWindow)
+                || store.activeVisibleTab != nil
         }
         if menuItem.action == #selector(toggleSidebar(_:)) {
             menuItem.title = store.sidebarExpanded ? "Hide Sidebar" : "Show Sidebar"
@@ -224,9 +132,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 Task { await self.store.reload() }
             }
         case .ready:
+            let wasAuthenticating = authenticationWindow != nil
             authenticationWindow?.orderOut(nil)
             authenticationWindow = nil
-            presentMainWindow()
+            if mainWindowSurface == .workspace,
+               mainWorkspaceAccountID == store.account?.userId,
+               mainWorkspaceOrganizationID == store.organization?.orgId {
+                mainWindow?.title = store.organization?.name ?? "Clumsies Lab"
+                if wasAuthenticating { mainWindow?.makeKeyAndOrderFront(nil) }
+            } else {
+                presentMainWindow()
+            }
         case .failed(let message):
             authenticationWindow?.orderOut(nil)
             authenticationWindow = nil
@@ -287,14 +203,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentMainWindow() {
+        mainWorkspaceAccountID = store.account?.userId
+        mainWorkspaceOrganizationID = store.organization?.orgId
         presentMainContent(
             WorkspaceView(
                 store: store,
+                onSignOut: { [weak self] in self?.signOut() },
                 onOpenSettings: { [weak self] in self?.presentSettingsWindow() },
-                onOpenDiagnostics: { [weak self] destination in
-                    self?.presentDiagnosticsWindow(destination)
-                },
-                onShowLogs: { [weak self] in self?.showLogsInFinder() }
+                onManageProject: { [weak self] id, name in
+                    guard let self else { return }
+                    self.settingsWindowController.navigation.navigate(to: .project(id: id, name: name))
+                    self.presentSettingsWindow()
+                }
             ),
             surface: .workspace,
             title: store.organization?.name ?? "Clumsies Lab"
@@ -396,67 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentSettingsWindow() {
-        if let settingsWindow {
-            let pane = (settingsWindow.contentViewController as? SettingsTabViewController)?
-                .selectedPane ?? .general
-            SettingsWindowLayout.normalize(settingsWindow, pane: pane)
-            settingsWindow.makeKeyAndOrderFront(nil)
-            return
-        }
-        let selectedPane = SettingsPane.restored()
-        let items = SettingsPane.allCases.map { pane in
-            let controller = NSHostingController(
-                rootView: NativeSettingsView(
-                    store: store,
-                    softwareUpdateController: softwareUpdateController,
-                    pane: pane,
-                    onOpenDiagnostics: { [weak self] in
-                        self?.presentDiagnosticsWindow(.runtime)
-                    },
-                    onShowLogs: { [weak self] in self?.showLogsInFinder() }
-                )
-            )
-            controller.sizingOptions = []
-            return (pane, controller as NSViewController)
-        }
-        let controller = SettingsTabViewController(items: items, selectedPane: selectedPane)
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: SettingsWindowLayout.defaultContentSize),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentViewController = controller
-        SettingsWindowLayout.normalize(window, pane: selectedPane)
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        settingsWindow = window
-    }
-
-    private func presentDiagnosticsWindow(_ destination: DiagnosticsDestination) {
-        let controller = NSHostingController(
-            rootView: NativeDiagnosticsView(store: store, destination: destination)
-        )
-        controller.sizingOptions = []
-        if let diagnosticsWindow {
-            diagnosticsWindow.contentViewController = controller
-            DiagnosticsWindowLayout.normalize(diagnosticsWindow, destination: destination)
-            diagnosticsWindow.makeKeyAndOrderFront(nil)
-            return
-        }
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: destination.defaultContentSize),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentViewController = controller
-        DiagnosticsWindowLayout.normalize(window, destination: destination)
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        diagnosticsWindow = window
+        settingsWindowController.showWindow(nil)
     }
 
     @objc func showLogsInFinderAction(_ sender: Any?) {
@@ -701,6 +561,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.mainMenu = mainMenu
     }
 
+    private func signOut() {
+        guard settingsWindowController.confirmDiscardIfNeeded() else { return }
+        Task { await store.signOut() }
+    }
+
     @objc private func showSettings(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
         presentSettingsWindow()
@@ -716,6 +581,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func closeActiveTab(_ sender: Any?) {
+        if let keyWindow = NSApp.keyWindow, keyWindow !== mainWindow {
+            keyWindow.performClose(sender)
+            return
+        }
         if !store.closeActiveTab() {
             mainWindow?.performClose(sender)
         }
@@ -732,7 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             store.focusReviewSearch()
         case .memory, .bundles:
             store.focusWorkspaceSearch()
-        case .sessions, .administration:
+        case .sessions:
             break
         }
     }

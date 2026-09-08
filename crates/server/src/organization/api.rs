@@ -197,9 +197,12 @@ pub struct AccessTokenListResponse {
 pub struct AuditEvent {
     pub event_id: String,
     pub actor_user_id: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub actor_email: Option<String>,
     pub action: String,
     pub target_type: String,
     pub target_id: Option<String>,
+    pub target_display_name: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -255,8 +258,11 @@ mod tests {
         let event = AuditEvent {
             event_id: "evt_test".to_owned(),
             actor_user_id: None,
+            actor_display_name: None,
+            actor_email: None,
             action: "test.created".to_owned(),
             target_type: "test".to_owned(),
+            target_display_name: None,
             target_id: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
         };

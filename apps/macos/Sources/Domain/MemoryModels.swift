@@ -5,7 +5,6 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
     case bundles
     case reviews
     case sessions
-    case administration
 
     var id: String { rawValue }
 
@@ -15,7 +14,6 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
         case .bundles: "Bundles"
         case .reviews: "Reviews"
         case .sessions: "Activity"
-        case .administration: "Administration"
         }
     }
 
@@ -25,16 +23,7 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
         case .bundles: "shippingbox"
         case .reviews: "checkmark.bubble"
         case .sessions: "bubble.left.and.bubble.right"
-        case .administration: "building.2"
         }
-    }
-
-    static func sidebarSections(canAdminister: Bool) -> [WorkspaceSection] {
-        var sections: [WorkspaceSection] = [.memory, .bundles, .reviews, .sessions]
-        if canAdminister {
-            sections.append(.administration)
-        }
-        return sections
     }
 }
 
@@ -232,7 +221,6 @@ struct ProjectState: Identifiable, Hashable, Sendable {
 struct RuntimeState: Equatable, Sendable {
     let health: DaemonHealth
     let sync: DaemonSyncStatus?
-    let mcp: DaemonMCPStatus?
     let serverDataSource: String
 }
 

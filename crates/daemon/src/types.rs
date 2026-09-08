@@ -372,20 +372,6 @@ pub struct DaemonRetryResponse {
     pub started: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct DaemonMcpStatus {
-    pub running: bool,
-    pub endpoint: Option<String>,
-    pub adapters: Vec<McpAdapterStatus>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct McpAdapterStatus {
-    pub name: String,
-    pub running: bool,
-    pub last_error: Option<ApiError>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, Default, PartialEq, Eq)]
 pub struct DaemonDraftListQuery {
     pub resource: Option<String>,

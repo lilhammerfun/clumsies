@@ -360,18 +360,6 @@ struct DaemonRetryResponse: Codable, Sendable {
     let started: Bool
 }
 
-struct DaemonMCPStatus: Codable, Equatable, Sendable {
-    let running: Bool
-    let endpoint: String?
-    let adapters: [DaemonMCPAdapterStatus]
-}
-
-struct DaemonMCPAdapterStatus: Codable, Equatable, Sendable {
-    let name: String
-    let running: Bool
-    let lastError: APIErrorPayload?
-}
-
 struct DaemonServerRequest: Codable, Sendable {
     let method: String
     let path: String

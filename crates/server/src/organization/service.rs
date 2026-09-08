@@ -96,8 +96,10 @@ impl ServerRepository {
         &self,
         offset: i64,
         limit: i64,
+        query: Option<&str>,
     ) -> Result<MemberListResponse, ServerError> {
-        let items = postgres::list_admin_members(self.pool(), offset, limit + 1).await?;
+        let query = query.map(str::trim).filter(|query| !query.is_empty());
+        let items = postgres::list_admin_members(self.pool(), offset, limit + 1, query).await?;
         let (items, page_info) = admin_page(items, offset, limit);
         Ok(MemberListResponse { items, page_info })
     }
@@ -523,8 +525,11 @@ impl ServerRepository {
         org_id: &str,
         offset: i64,
         limit: i64,
+        query: Option<&str>,
     ) -> Result<AuditEventListResponse, ServerError> {
-        let items = postgres::list_audit_events(self.pool(), org_id, offset, limit + 1).await?;
+        let query = query.map(str::trim).filter(|query| !query.is_empty());
+        let items =
+            postgres::list_audit_events(self.pool(), org_id, offset, limit + 1, query).await?;
         let (items, page_info) = admin_page(items, offset, limit);
         Ok(AuditEventListResponse { items, page_info })
     }

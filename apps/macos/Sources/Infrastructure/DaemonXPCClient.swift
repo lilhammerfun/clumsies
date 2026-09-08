@@ -194,10 +194,6 @@ struct DaemonXPCClient: Sendable {
         )
     }
 
-    func mcpStatus() async throws -> DaemonMCPStatus {
-        try await call(method: "mcp_status", payload: EmptyPayload())
-    }
-
     func listDrafts(_ query: DaemonDraftListQuery = .init(limit: 200)) async throws -> DaemonDraftListResponse {
         try await call(method: "list_drafts", payload: query)
     }

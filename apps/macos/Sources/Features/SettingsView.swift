@@ -1,65 +1,7 @@
 import AppKit
 import SwiftUI
 
-enum SettingsPane: String, CaseIterable {
-    case general
-    case agent
-    case advanced
-
-    static let defaultsKey = "ClumsiesSettingsPane"
-
-    var title: String {
-        switch self {
-        case .general: "General"
-        case .agent: "Agent"
-        case .advanced: "Advanced"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .general: "gearshape"
-        case .agent: "person.2"
-        case .advanced: "wrench.and.screwdriver"
-        }
-    }
-
-    static func restored(from defaults: UserDefaults = .standard) -> Self {
-        defaults.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .general
-    }
-
-    func persist(in defaults: UserDefaults = .standard) {
-        defaults.set(rawValue, forKey: Self.defaultsKey)
-    }
-}
-
-struct NativeSettingsView: View {
-    @ObservedObject var store: WorkspaceStore
-    @ObservedObject var softwareUpdateController: SoftwareUpdateController
-    let pane: SettingsPane
-    let onOpenDiagnostics: () -> Void
-    let onShowLogs: () -> Void
-
-    var body: some View {
-        Group {
-            switch pane {
-            case .general:
-                GeneralSettingsView(softwareUpdateController: softwareUpdateController)
-            case .agent:
-                AgentsSettingsView(store: store)
-            case .advanced:
-                AdvancedSettingsView(
-                    store: store,
-                    onOpenDiagnostics: onOpenDiagnostics,
-                    onShowLogs: onShowLogs
-                )
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-}
-
-private struct GeneralSettingsView: View {
+struct GeneralSettingsView: View {
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
 
     private var version: String {
@@ -70,6 +12,19 @@ private struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                VStack(spacing: 10) {
+                    SettingsIcon(symbol: "gearshape.fill", color: .gray, size: 52)
+                    Text("General").font(.system(size: 22, weight: .semibold))
+                    Text("App information and software updates.")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                LabeledContent("Version", value: version)
+                    .textSelection(.enabled)
+            }
             Section("Updates") {
                 Toggle(
                     "Automatically check for updates",
@@ -86,19 +41,19 @@ private struct GeneralSettingsView: View {
                     )
                 )
                 .disabled(!softwareUpdateController.allowsAutomaticUpdates)
-                Button("Check for Updates...") { softwareUpdateController.checkForUpdates() }
-                    .disabled(!softwareUpdateController.canCheckForUpdates)
-            }
-            Section("About") {
-                LabeledContent("Version", value: version)
+                LabeledContent("Software updates") {
+                    Button("Check for Updates…") { softwareUpdateController.checkForUpdates() }
+                        .disabled(!softwareUpdateController.canCheckForUpdates)
+                }
             }
         }
         .formStyle(.grouped)
-        .padding(12)
+        .font(.system(size: 13))
+        .toggleStyle(.switch)
     }
 }
 
-private struct AgentsSettingsView: View {
+struct AgentsSettingsView: View {
     @ObservedObject var store: WorkspaceStore
     @State private var status: DaemonCodexPluginStatus?
     @State private var isWorking = false
@@ -107,25 +62,43 @@ private struct AgentsSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Codex") {
-                if let status {
-                    LabeledContent("Host", value: status.hostInstalled ? "Installed" : "Not installed")
-                    LabeledContent("Marketplace", value: marketplaceLabel(status))
-                    LabeledContent("Plugin installed", value: status.pluginInstalled ? "Yes" : "No")
-                    LabeledContent("Plugin enabled", value: status.pluginEnabled ? "Yes" : "No")
-                    LabeledContent("Installed version", value: status.installedVersion ?? "Not installed")
-                    LabeledContent("Expected version", value: status.expectedVersion)
-                    LabeledContent("Status", value: status.ready ? "Ready" : "Needs repair")
-                } else if errorMessage == nil {
-                    ProgressView()
-                        .controlSize(.small)
+            Section {
+                LabeledContent("Status") {
+                    if isWorking {
+                        ProgressView().controlSize(.small)
+                    } else if errorMessage != nil {
+                        Text("Unavailable").foregroundStyle(.secondary)
+                    } else if let status {
+                        Label(
+                            status.ready ? "Ready" : "Needs repair",
+                            systemImage: status.ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+                        )
+                        .foregroundStyle(status.ready ? Color.green : Color.orange)
+                    } else {
+                        Text("Checking…").foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent("Version", value: status?.installedVersion ?? (status == nil ? "—" : "Not installed"))
+                LabeledContent("Codex integration") {
+                    Button("Repair") { Task { await repair() } }
+                        .disabled(isWorking || status?.hostInstalled == false)
                 }
 
-                Text("Clumsies installs and keeps this user-level Plugin enabled automatically. Repository bindings choose the Project used by Memory.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
+                if let status {
+                    DisclosureGroup("Installation details") {
+                        LabeledContent("Host", value: status.hostInstalled ? "Installed" : "Not installed")
+                        LabeledContent("Marketplace", value: marketplaceLabel(status))
+                        LabeledContent("Plugin installed", value: status.pluginInstalled ? "Yes" : "No")
+                        LabeledContent("Plugin enabled", value: status.pluginEnabled ? "Yes" : "No")
+                        LabeledContent("Expected version", value: status.expectedVersion)
+                    }
+                }
+                DisclosureGroup("After plugin changes") {
+                    Text("Restart Codex and start a new task, then review Clumsies in /hooks. Plugin readiness does not confirm hook trust or AgentRun readiness.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let errorMessage {
                     Text(errorMessage)
                         .textSelection(.enabled)
@@ -134,24 +107,23 @@ private struct AgentsSettingsView: View {
                 }
                 if let repairMessage {
                     Text(repairMessage)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-
-                Button("Repair") { Task { await repair() } }
-                    .disabled(isWorking || status?.hostInstalled == false)
-            }
-
-            Section("After Codex Plugin Changes") {
-                Text("Restart Codex and start a new task. In that task, open /hooks and review the current Clumsies Hook. Plugin Enabled does not mean Hook Trusted or AgentRun Ready.")
+            } header: {
+                Text("Codex")
+            } footer: {
+                Text("Clumsies maintains this integration automatically. Repository bindings determine which project’s Memory is used.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             RepositoryAgentSettingsView(store: store)
         }
         .formStyle(.grouped)
-        .padding(12)
+        .font(.system(size: 13))
+        .toggleStyle(.switch)
         .task { await load() }
     }
 
@@ -208,63 +180,62 @@ private struct RepositoryAgentSettingsView: View {
 
     var body: some View {
         Group {
-            Section("Repository Integrations") {
-                if isLoading, projects.isEmpty {
-                    ProgressView()
-                        .controlSize(.small)
-                } else if store.projects.isEmpty {
-                    Text("Create a Project and bind a repository before configuring these Agents.")
-                        .foregroundStyle(.secondary)
-                } else if projects.isEmpty {
-                    Text("Add a repository in Project Settings before configuring these Agents.")
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("These integrations write Clumsies-managed configuration into specific repositories. Manage every Project here.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .textSelection(.enabled)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .task(id: [store.projectBindingsGeneration.uuidString]
-                + store.projects.map { "\($0.id):\($0.name)" }) {
-                await load()
-            }
-
-            ForEach(projects) { project in
-                Section(project.name) {
-                    ForEach(project.repositories) { repository in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(URL(fileURLWithPath: repository.workspaceRoot).lastPathComponent)
-                                .fontWeight(.medium)
-                            Text(repository.workspaceRoot)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .help(repository.workspaceRoot)
-
-                            ForEach(ProjectAgentAdapterKind.repositoryIntegrationCases) { adapter in
-                                Toggle(
-                                    adapter.title,
-                                    isOn: adapterBinding(adapter, repository: repository)
-                                )
-                                .disabled(!workingKeys.isEmpty)
-                                .accessibilityLabel(
-                                    "\(adapter.title) for \(URL(fileURLWithPath: repository.workspaceRoot).lastPathComponent) in \(project.name)"
-                                )
-                            }
+            if projects.isEmpty || errorMessage != nil {
+                Section("Repository Integrations") {
+                    if isLoading, projects.isEmpty {
+                        LabeledContent("Repositories") {
+                            ProgressView().controlSize(.small)
                         }
-                        .padding(.vertical, 2)
+                    } else if store.projects.isEmpty {
+                        Text("Create a project and bind a repository to configure these agents.")
+                            .foregroundStyle(.secondary)
+                    } else if projects.isEmpty {
+                        Text("Add a repository in Project Settings to configure these agents.")
+                            .foregroundStyle(.secondary)
+                    }
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .textSelection(.enabled)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
+
+            ForEach(projects) { project in
+                ForEach(project.repositories) { repository in
+                    Section {
+                        ForEach(ProjectAgentAdapterKind.repositoryIntegrationCases) { adapter in
+                            Toggle(
+                                adapter.title,
+                                isOn: adapterBinding(adapter, repository: repository)
+                            )
+                            .toggleStyle(.switch)
+                            .disabled(!workingKeys.isEmpty)
+                            .accessibilityLabel(
+                                "\(adapter.title) for \(URL(fileURLWithPath: repository.workspaceRoot).lastPathComponent) in \(project.name)"
+                            )
+                        }
+                    } header: {
+                        Text("\(project.name) · \(URL(fileURLWithPath: repository.workspaceRoot).lastPathComponent)")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(repository.workspaceRoot)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(repository.workspaceRoot)
+                                .textSelection(.enabled)
+                            Text("Changes update Clumsies-managed configuration in this repository.")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .task(id: [store.projectBindingsGeneration.uuidString]
+            + store.projects.map { "\($0.id):\($0.name)" }) {
+            await load()
         }
     }
 
@@ -364,25 +335,21 @@ private struct RepositoryAgentSettingsView: View {
     }
 }
 
-private struct AdvancedSettingsView: View {
-    @ObservedObject var store: WorkspaceStore
-    let onOpenDiagnostics: () -> Void
+struct SupportSettingsView: View {
     let onShowLogs: () -> Void
 
     var body: some View {
         Form {
-            Section("Runtime") {
-                LabeledContent("Server", value: store.runtime?.health.serverUrl ?? "Unavailable")
-                LabeledContent("Daemon", value: store.runtime?.health.daemonVersion ?? "Unavailable")
-                LabeledContent("Background service", value: "LaunchAgent")
-            }
             Section {
-                Button("Open Runtime Status...") { onOpenDiagnostics() }
-                Button("Show Logs in Finder") { onShowLogs() }
+                LabeledContent("Logs") {
+                    Button("Show in Finder", action: onShowLogs)
+                }
+            } footer: {
+                Text("Use logs to help investigate a problem with Clumsies.")
             }
         }
         .formStyle(.grouped)
-        .padding(12)
+        .font(.system(size: 13))
     }
 }
 

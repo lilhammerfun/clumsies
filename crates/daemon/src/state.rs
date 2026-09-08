@@ -1103,14 +1103,6 @@ impl DaemonState {
         }
     }
 
-    pub fn mcp_status(&self) -> DaemonMcpStatus {
-        DaemonMcpStatus {
-            running: false,
-            endpoint: None,
-            adapters: Vec::new(),
-        }
-    }
-
     pub async fn sync_status(&self) -> Result<DaemonSyncStatus, DaemonError> {
         load_sync_status(self).await
     }
@@ -1931,7 +1923,6 @@ impl DaemonIpcService {
             "project_retry_sync" => {
                 dispatch_async!(self, request.payload, project_retry_sync)
             }
-            "mcp_status" => dispatch_value!(self, mcp_status),
             "list_drafts" => dispatch_async!(self, request.payload, list_drafts),
             "get_draft" => {
                 let payload =

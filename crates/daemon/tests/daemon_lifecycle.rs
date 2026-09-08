@@ -1637,7 +1637,8 @@ async fn schema_18_migration_replaces_graded_judgments_with_confirmed_evidence()
 #[test]
 fn launch_agent_plist_uses_standard_identity_and_runtime_paths() {
     let root = tempfile::tempdir().unwrap();
-    let config = DaemonConfig::for_root(root.path());
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = "https://server.example.test".to_owned();
     let program_path = fake_daemon_program(root.path());
     let launch_agent = LaunchAgentConfig::from_daemon_config(&config, &program_path).unwrap();
 
@@ -1660,7 +1661,9 @@ fn launch_agent_plist_uses_standard_identity_and_runtime_paths() {
     assert!(plist.contains(&format!("<string>{}</string>", root.path().display())));
     assert!(!plist.contains("CLUMSIES_DEV_INSTANCE_ID"));
     assert!(!plist.contains("CLUMSIES_DAEMON_LAUNCH_AGENTS_DIR"));
-    assert!(!plist.contains("CLUMSIES_SERVER_URL"));
+    assert!(plist.contains(
+        "<key>CLUMSIES_SERVER_URL</key>\n    <string>https://server.example.test</string>"
+    ));
     assert!(!plist.contains("CODEX_HOME"));
     assert!(!plist.contains("127.0.0.1"));
     assert!(!plist.contains("daemon-endpoint.json"));
@@ -2416,11 +2419,6 @@ async fn ipc_dispatch_routes_the_complete_daemon_api() {
         ))
         .await;
     assert!(retry.ok);
-
-    let mcp_status = service
-        .dispatch(DaemonIpcRequest::empty("mcp_status"))
-        .await;
-    assert!(mcp_status.ok);
 
     let response = service
         .dispatch(DaemonIpcRequest::new(
@@ -5549,17 +5547,6 @@ async fn draft_operation_rejects_multiple_operation_variants() {
         .await;
 
     assert!(matches!(response, Err(DaemonError::InvalidRequest(_))));
-}
-
-#[tokio::test]
-async fn mcp_status_reports_no_daemon_owned_supervisor() {
-    let (_, _, service) = common::test_daemon().await;
-
-    let status = service.mcp_status();
-
-    assert!(!status.running);
-    assert_eq!(status.endpoint, None);
-    assert!(status.adapters.is_empty());
 }
 
 #[tokio::test]

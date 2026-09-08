@@ -5,7 +5,7 @@ use crate::{
     DaemonDraftListResponse, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
     DaemonError, DaemonHealth, DaemonIpcRequest, DaemonIpcResponse, DaemonIpcService,
     DaemonLegacyAgentAdapterInspectionRequest, DaemonLegacyAgentAdapterInspectionResponse,
-    DaemonMcpStatus, DaemonProjectAgentAdapter, DaemonProjectAgentAdapterInstallRequest,
+    DaemonProjectAgentAdapter, DaemonProjectAgentAdapterInstallRequest,
     DaemonProjectAgentAdapterListRequest, DaemonProjectAgentAdapterListResponse,
     DaemonProjectAgentAdapterRemoveRequest, DaemonProjectAgentAdapterRemoveResponse,
     DaemonProjectBinding, DaemonProjectBindingListRequest, DaemonProjectBindingListResponse,
@@ -452,11 +452,6 @@ impl DaemonIpcClient {
             serde_json::to_value(request)?,
         ))?
         .into_payload()
-    }
-
-    pub fn mcp_status(&self) -> Result<DaemonMcpStatus, DaemonError> {
-        self.call(DaemonIpcRequest::empty("mcp_status"))?
-            .into_payload()
     }
 
     pub fn list_drafts(
