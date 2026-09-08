@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -408,12 +409,7 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     let runtime_mode = daemon_runtime_mode(config.dev_instance_id.as_deref())?;
     let mach_service_name = runtime_mode.mach_service_name.clone();
 
-    let log_file = Mutex::new(
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(config.log_dir.join("daemon.log"))?,
-    );
+    let log_file = Mutex::new(open_daemon_log(&config.log_dir)?);
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_timer(SystemTime)
@@ -556,6 +552,14 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+fn open_daemon_log(log_dir: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::create_dir_all(log_dir)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("daemon.log"))
+}
+
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
@@ -568,6 +572,16 @@ fn print_status(status: &daemon::DaemonBootstrapStatus) -> Result<(), serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_log_open_creates_the_log_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let log_dir = root.path().join("nested/logs");
+
+        let _log = open_daemon_log(&log_dir).unwrap();
+
+        assert!(log_dir.join("daemon.log").is_file());
+    }
 
     #[test]
     fn proxy_modes_are_parsed_before_daemon_initialization() {
