@@ -41,14 +41,14 @@ pub(crate) async fn update_admin_org(
 pub(crate) async fn list_admin_members(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
-    Query(query): Query<AdminPageQuery>,
+    Query(query): Query<AdminSearchQuery>,
 ) -> Result<Json<crate::api::MemberListResponse>, HttpError> {
     require_org_admin(&principal)?;
-    let page = parse_admin_page(query)?;
+    let page = parse_admin_page(query.page)?;
     Ok(Json(
         state
             .repository
-            .list_admin_members(page.offset, page.limit)
+            .list_admin_members(page.offset, page.limit, query.q.as_deref())
             .await?,
     ))
 }
@@ -294,16 +294,28 @@ pub(crate) async fn delete_admin_token(
 pub(crate) async fn list_admin_audit_events(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
-    Query(query): Query<AdminPageQuery>,
+    Query(query): Query<AdminSearchQuery>,
 ) -> Result<Json<crate::api::AuditEventListResponse>, HttpError> {
     require_org_admin(&principal)?;
-    let page = parse_admin_page(query)?;
+    let page = parse_admin_page(query.page)?;
     Ok(Json(
         state
             .repository
-            .list_admin_audit_events(&principal.org_id, page.offset, page.limit)
+            .list_admin_audit_events(
+                &principal.org_id,
+                page.offset,
+                page.limit,
+                query.q.as_deref(),
+            )
             .await?,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AdminSearchQuery {
+    #[serde(flatten)]
+    page: AdminPageQuery,
+    q: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

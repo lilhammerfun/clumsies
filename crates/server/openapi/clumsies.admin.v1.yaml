@@ -145,6 +145,14 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - name: q
+          in: query
+          description: >-
+            Case-insensitive literal substring search of member email and display name.
+            Surrounding whitespace is ignored; empty input returns all records.
+            Pagination applies to matching records; keep q unchanged while using a cursor.
+          schema:
+            type: string
       responses:
         "200":
           description: Member page.
@@ -408,6 +416,14 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - name: q
+          in: query
+          description: >-
+            Case-insensitive literal substring search of action, actor name or email, and current target name.
+            Surrounding whitespace is ignored; empty input returns all records.
+            Pagination applies to matching records; keep q unchanged while using a cursor.
+          schema:
+            type: string
       responses:
         "200":
           description: Audit event page.
@@ -816,11 +832,15 @@ components:
           $ref: "#/components/schemas/PageInfo"
     AuditEvent:
       type: object
-      required: [event_id, actor_user_id, action, target_type, target_id, created_at]
+      required: [event_id, actor_user_id, actor_display_name, actor_email, action, target_type, target_id, created_at]
       properties:
         event_id:
           type: string
         actor_user_id:
+          type: [string, "null"]
+        actor_display_name:
+          type: [string, "null"]
+        actor_email:
           type: [string, "null"]
         action:
           type: string
@@ -828,6 +848,9 @@ components:
           type: string
         target_id:
           type: [string, "null"]
+        target_display_name:
+          type: [string, "null"]
+          description: Current target name, or null when the object no longer exists or has no supported name.
         created_at:
           type: string
           format: date-time

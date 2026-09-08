@@ -238,8 +238,39 @@ async fn owner_can_operate_the_complete_admin_contract() {
     .await;
     assert_eq!(deleted_project.id, project.project_id);
 
+    sqlx::query(
+        "INSERT INTO audit_events (event_id, org_id, action, target_type)
+         VALUES ('evt_system_identity_test', $1, 'system.test', 'test')",
+    )
+    .bind(&bootstrap.org_id)
+    .execute(&postgres.pool)
+    .await
+    .unwrap();
+
     let audit_events: AuditEventListResponse =
         get_json(app.clone(), "/api/v1/admin/audit-events").await;
+    let system_event = audit_events
+        .items
+        .iter()
+        .find(|event| event.event_id == "evt_system_identity_test")
+        .expect("audit events without an actor must remain visible");
+    assert_eq!(system_event.actor_user_id, None);
+    assert_eq!(system_event.actor_display_name, None);
+    assert_eq!(system_event.actor_email, None);
+    let owner_event = audit_events
+        .items
+        .iter()
+        .find(|event| event.action == "admin.org_updated")
+        .expect("organization update must record the owner identity");
+    assert_eq!(
+        owner_event.actor_user_id.as_deref(),
+        Some(bootstrap.user_id.as_str())
+    );
+    assert_eq!(owner_event.actor_display_name.as_deref(), Some("Owner"));
+    assert_eq!(
+        owner_event.actor_email.as_deref(),
+        Some("owner@example.com")
+    );
     assert!(
         audit_events
             .items
@@ -284,6 +315,127 @@ async fn owner_can_operate_the_complete_admin_contract() {
     )
     .await;
     assert_eq!(deleted_member.id, member.user_id);
+}
+
+#[tokio::test]
+async fn admin_search_filters_before_paging_and_resolves_current_audit_targets() {
+    let postgres = common::migrated_postgres().await;
+    let bootstrap = common::initialize_installation(
+        postgres.pool.clone(),
+        "Search Organization",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Atlas Needle",
+    )
+    .await;
+    let (app, _) = common::authenticated_router(postgres.pool.clone()).await;
+    sqlx::query(
+        "INSERT INTO users (user_id, email, display_name, role, status) VALUES
+         ('usr_search_alpha', 'alpha@example.com', 'Search Person', 'member', 'invited'),
+         ('usr_search_beta', 'search@example.com', 'Beta', 'member', 'invited'),
+         ('usr_search_other', 'other@example.com', 'Other', 'member', 'invited')",
+    )
+    .execute(&postgres.pool)
+    .await
+    .unwrap();
+
+    let first: MemberListResponse =
+        get_json(app.clone(), "/api/v1/admin/members?limit=1&q=%20SeArCh%20").await;
+    assert_eq!(first.items[0].user_id, "usr_search_alpha");
+    let next = first.page_info.next_cursor.unwrap();
+    let second: MemberListResponse = get_json(
+        app.clone(),
+        &format!("/api/v1/admin/members?limit=1&q=search&cursor={next}"),
+    )
+    .await;
+    assert_eq!(second.items[0].user_id, "usr_search_beta");
+    assert!(!second.page_info.has_more);
+    let blank: MemberListResponse = get_json(app.clone(), "/api/v1/admin/members?q=%20%20").await;
+    assert_eq!(blank.items.len(), 4);
+    let literal: MemberListResponse = get_json(app.clone(), "/api/v1/admin/members?q=%25").await;
+    assert!(
+        literal.items.is_empty(),
+        "search must not interpret SQL wildcards"
+    );
+
+    sqlx::query(
+        "INSERT INTO audit_events
+         (event_id, org_id, actor_user_id, action, target_type, target_id, created_at) VALUES
+         ('evt_search_org', $1, $2, 'admin.org_updated', 'org', $1, '2030-01-01'),
+         ('evt_search_project', $1, $2, 'admin.project_updated', 'project', $3, '2030-01-02'),
+         ('evt_search_membership', $1, $2, 'admin.project_member_created', 'project_member',
+            $3 || ':usr_search_alpha', '2030-01-03'),
+         ('evt_search_user', $1, $2, 'admin.member_updated', 'user', 'usr_search_alpha', '2030-01-04'),
+         ('evt_search_deleted', $1, $2, 'admin.project_deleted', 'project', 'prj_removed', '2030-01-05')",
+    )
+    .bind(&bootstrap.org_id)
+    .bind(&bootstrap.user_id)
+    .bind(&bootstrap.project_id)
+    .execute(&postgres.pool)
+    .await
+    .unwrap();
+    let first: AuditEventListResponse = get_json(
+        app.clone(),
+        "/api/v1/admin/audit-events?limit=1&q=%20ATLAS%20",
+    )
+    .await;
+    assert_eq!(first.items[0].event_id, "evt_search_membership");
+    assert_eq!(
+        first.items[0].target_display_name.as_deref(),
+        Some("Atlas Needle · Search Person")
+    );
+    let next = first.page_info.next_cursor.unwrap();
+    let second: AuditEventListResponse = get_json(
+        app.clone(),
+        &format!("/api/v1/admin/audit-events?limit=1&q=atlas&cursor={next}"),
+    )
+    .await;
+    assert_eq!(second.items[0].event_id, "evt_search_project");
+    assert_eq!(
+        second.items[0].target_display_name.as_deref(),
+        Some("Atlas Needle")
+    );
+    assert!(!second.page_info.has_more);
+    let all: AuditEventListResponse = get_json(
+        app.clone(),
+        "/api/v1/admin/audit-events?q=owner%40example.com",
+    )
+    .await;
+    for (id, name) in [
+        ("evt_search_org", Some("Search Organization")),
+        ("evt_search_user", Some("Search Person")),
+        ("evt_search_deleted", None),
+    ] {
+        let event = all.items.iter().find(|event| event.event_id == id).unwrap();
+        assert_eq!(event.target_display_name.as_deref(), name);
+    }
+    let action: AuditEventListResponse = get_json(
+        app.clone(),
+        "/api/v1/admin/audit-events?q=admin.project_deleted",
+    )
+    .await;
+    assert_eq!(action.items.len(), 1);
+    assert_eq!(action.items[0].event_id, "evt_search_deleted");
+
+    let (member_app, _) = common::authenticated_router_as(
+        postgres.pool.clone(),
+        "alpha@example.com",
+        "subject-search-alpha",
+        "Search Person",
+    )
+    .await;
+    for path in [
+        "/api/v1/admin/members?q=search",
+        "/api/v1/admin/audit-events?q=atlas",
+    ] {
+        let response = member_app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
 }
 
 #[tokio::test]
