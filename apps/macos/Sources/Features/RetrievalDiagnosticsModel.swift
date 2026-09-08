@@ -31,7 +31,7 @@ struct EvaluationEvidenceDraft: Identifiable, Equatable, Sendable {
 @MainActor
 final class RetrievalDiagnosticsModel: ObservableObject {
     @Published private(set) var runs: [RetrievalRun] = []
-    @Published var selectedRunId: String?
+    @Published private(set) var selectedRunId: String?
     @Published private(set) var detail: RetrievalRunDetail?
     @Published private(set) var evidenceDrafts: [EvaluationEvidenceDraft] = []
     @Published private(set) var isLoading = false
@@ -40,12 +40,17 @@ final class RetrievalDiagnosticsModel: ObservableObject {
     @Published var errorMessage: String?
 
     private let daemon: DaemonXPCClient
+    private let fetchRun: @MainActor (String) async throws -> RetrievalRunDetail
     private var projectId: String?
     private(set) var nextCursor: String?
     private var selectionGeneration = UUID()
 
-    init(daemon: DaemonXPCClient) {
+    init(
+        daemon: DaemonXPCClient,
+        fetchRun: (@MainActor (String) async throws -> RetrievalRunDetail)? = nil
+    ) {
         self.daemon = daemon
+        self.fetchRun = fetchRun ?? { try await daemon.retrievalRun($0) }
     }
 
     func load(projectId: String?) async {
@@ -114,19 +119,16 @@ final class RetrievalDiagnosticsModel: ObservableObject {
     }
 
     func select(runId: String?) async {
-        guard runId != selectedRunId || detail?.run.runId != runId else { return }
+        if let runId, runId == selectedRunId, detail?.run.runId == runId { return }
         selectedRunId = runId
         let generation = UUID()
         selectionGeneration = generation
-        guard let runId else {
-            detail = nil
-            evidenceDrafts = []
-            return
-        }
         detail = nil
         evidenceDrafts = []
-        isLoading = true
         errorMessage = nil
+        isLoading = false
+        guard let runId else { return }
+        isLoading = true
         defer {
             if selectionGeneration == generation {
                 isLoading = false
@@ -145,11 +147,13 @@ final class RetrievalDiagnosticsModel: ObservableObject {
     @discardableResult
     func markInaccurate() async -> Bool {
         guard let runId = detail?.run.runId else { return false }
+        let generation = selectionGeneration
         return await mutate {
             _ = try await daemon.createEvaluationCase(
                 CreateEvaluationCaseRequest(runId: runId)
             )
-            try await refreshDetail(runId: runId)
+            guard selectionGeneration == generation else { return }
+            try await loadDetail(runId: runId, generation: generation)
         }
     }
 
@@ -160,6 +164,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             return false
         }
         let evidence = evidenceDrafts.map(\.input)
+        let generation = selectionGeneration
         return await mutate {
             _ = try await daemon.resolveEvaluationCase(
                 ResolveEvaluationCaseRequest(
@@ -169,7 +174,8 @@ final class RetrievalDiagnosticsModel: ObservableObject {
                     noneMatched: evidence.isEmpty
                 )
             )
-            try await refreshDetail(runId: runId)
+            guard selectionGeneration == generation else { return }
+            try await loadDetail(runId: runId, generation: generation)
         }
     }
 
@@ -205,49 +211,37 @@ final class RetrievalDiagnosticsModel: ObservableObject {
     }
 
     func exportEvaluationSet() async throws -> ExportEvaluationSetResponse {
-        try await daemon.exportEvaluationSet(projectId: projectId)
+        try await daemon.exportEvaluationSet(
+            projectId: runs.isEmpty ? detail?.run.projectId : projectId
+        )
     }
 
     private func loadDetail(runId: String, generation: UUID) async throws {
-        let loaded = try await daemon.retrievalRun(runId)
-        guard selectionGeneration == generation else { return }
-        apply(loaded)
-    }
-
-    private func refreshDetail(runId: String) async throws {
-        let loaded = try await daemon.retrievalRun(runId)
-        apply(loaded)
-        let response = try await daemon.listRetrievalRuns(
-            RetrievalRunListRequest(
-                projectId: projectId,
-                status: nil,
-                cursor: nil,
-                limit: 100
-            )
-        )
-        runs = response.items
-        nextCursor = response.nextCursor
-    }
-
-    private func apply(_ loaded: RetrievalRunDetail) {
+        let loaded = try await fetchRun(runId)
+        guard selectionGeneration == generation,
+              selectedRunId == loaded.run.runId,
+              !Task.isCancelled else { return }
         detail = loaded
-        if selectedRunId != loaded.run.runId {
-            selectedRunId = loaded.run.runId
-        }
         evidenceDrafts = loaded.evidence.map(EvaluationEvidenceDraft.init)
+        if let index = runs.firstIndex(where: { $0.runId == loaded.run.runId }) {
+            runs[index] = loaded.run
+        }
     }
 
     @discardableResult
     private func mutate(_ operation: () async throws -> Void) async -> Bool {
         guard !isMutating else { return false }
         isMutating = true
+        let generation = selectionGeneration
         errorMessage = nil
         defer { isMutating = false }
         do {
             try await operation()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            if selectionGeneration == generation {
+                errorMessage = error.localizedDescription
+            }
             return false
         }
     }

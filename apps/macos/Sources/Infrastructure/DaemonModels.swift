@@ -952,6 +952,7 @@ struct RecallActivation: Codable, Identifiable, Sendable {
     let time: Int64?
     let runId: String?
     let runStatus: String?
+    var totalUs: UInt64? = nil
     let fragments: [RecallFragment]
     let resultError: String?
 }

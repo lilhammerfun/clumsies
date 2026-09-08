@@ -1,6 +1,6 @@
 # Activity：本地 Agent 记忆活动
 
-Activity 是 macOS App 中只读的本地诊断视图。它把 DSH 与 Codex Desktop/App 的会话日志投影成同一套小模型：
+Activity 是 macOS App 中的本地记忆活动视图。它把 DSH 与 Codex Desktop/App 的会话日志投影成同一套小模型：
 
 > Agent 活动 → 用户请求 → Memory 检索 → 实际交付给 Agent 的 Memory 片段
 
@@ -8,7 +8,7 @@ Activity 是 macOS App 中只读的本地诊断视图。它把 DSH 与 Codex Des
 
 ## 当前契约
 
-Activity 只回答三个问题：
+会话阅读围绕三类信息展开：
 
 1. 某个已绑定工作区中的用户请求是什么；
 2. Agent 当时传给 `memory.activate` 的原始查询是什么；
@@ -20,9 +20,11 @@ Activity 只回答三个问题：
 |---|---|
 | 全局侧栏 | 选中 Activity 工作区。 |
 | 会话列表 | 已绑定工作区中的 Agent 活动；每行显示 DSH 或 Codex host、标题、请求数和时间。 |
-| 详情 | 用户请求、原始 Memory 查询、检索状态与已交付片段；存在历史快照时可打开完整片段。 |
+| 详情 | 用户请求、原始 Memory 查询、检索状态与耗时，以及直接内联渲染为 Markdown 的完整历史片段。 |
 
 会话身份是 `(host, session_id)`，因为 session id 只要求在各自 host 内唯一。项目筛选会包含该 Project 绑定的全部工作区。
+
+有 run 身份的每次 Memory 检索提供 **Retrieval Process** 入口。点击后，工作区临时收起会话列表，保留全局侧栏，用完整宽度展示该次检索摘要与候选表；返回时恢复原会话和检索位置。一个用户请求可以包含多次检索，入口始终指向当前这一次。详情复用 **Report Inaccurate** 和 **Review Evidence**，可以为该 run 建立评估案例并核对证据。共享的 Diagnostics 视图也支持跨会话的 Retrieval Runs 列表。
 
 ## 用户请求与 Memory 查询不是同一份数据
 
@@ -31,7 +33,7 @@ Activity 只回答三个问题：
 
 查询依次参与精确 id/path/title 匹配、BM25 全文检索、语义向量检索、reciprocal-rank fusion 与 cross-encoder rerank。最终装配会去除重叠片段，并应用相关性、单资源数量、总片段数和 token budget 限制。
 
-Activity 只展示最终交付给 Agent 的片段。候选分数、排序中间量和被排除的候选属于检索诊断数据，不作为 Activity 的用户内容显示。
+Activity 的会话页展示最终向 Agent 提供的片段。候选分数、排序中间量和被排除的候选放在按需打开的 Retrieval Process 详情里，让会话阅读仍围绕用户请求与检索结果展开。
 
 ### `add`、`replace` 与 `reuse`
 
@@ -104,7 +106,9 @@ payload.item = {
 
 新日志中，`structuredContent.run_id` 是关联本地 `retrieval_runs` 的权威身份。daemon 还会校验该 run 属于工作区绑定的 Project；查询文本只用于展示，不是身份键。
 
-选中候选的 `unit_key`、heading、最终顺序和预览来自该 run。打开片段时使用 `run_id + unit_key` 和冻结 locator，从该次 run 保留的 corpus body 读取历史正文，而不是读取可能已经变化的当前 Memory。description-only 检索单元没有正文 byte range，因此只能如实返回当时保存的预览。
+选中候选的 `unit_key`、heading、最终顺序和预览来自该 run。每张可见片段卡使用 `run_id + unit_key` 和冻结 locator，从该次 run 保留的 corpus body 读取完整历史正文，并直接内联渲染 Markdown，不读取可能已经变化的当前 Memory。description-only 检索单元没有正文 byte range，因此只能如实返回当时保存的预览。快照缺失或检索历史已清理时，保留工具结果中的原始预览；历史记录不可用不等于没有发生检索。
+
+同一次关联读取还提供可选的 `total_us`：只显示已结束 run 记录的检索耗时，运行中或无法关联时保持缺失。该值不是模型回复耗时，也不能通过简单相加各阶段计时得出。片段数量包含 `reuse`，不表示本次新发送的内容数量。
 
 旧日志可能没有 `run_id`。此时仍展示工具结果中自带的片段或错误；daemon 只有在 `(project_id, query)` 恰好匹配唯一 retrieval run 时才补关联，不会从多个同 query 结果中擅自选择“最新一条”。匹配不唯一时，run 状态与历史正文保持缺失。
 
@@ -122,7 +126,7 @@ Activity 不会为了生成视图把本地会话日志上传到 Server，也不�
 
 底层 `workspace_root` filter 尚未验证 binding，是当前隐私边界缺口，不应由文档掩盖。它不改变“日志只在本机读取”的事实，但会扩大本地 XPC 调用者可选择的目录范围。
 
-Activity 页面及其 XPC 方法不会修改 Memory、Issue、session 文件或 retrieval history，也不会导入 ChatGPT 数据导出。源日志与 retrieval history 的保留和删除仍由各自的本地存储生命周期负责，不由 Activity 视图管理。
+浏览 Activity 不会修改 Memory、Issue 或 session 文件，也不会导入 ChatGPT 数据导出。检索详情中的不准确反馈与证据核对会更新评估记录，并为评估保留对应的 source run。源日志与其他 retrieval history 的保留和删除仍由各自的本地存储生命周期负责。
 
 ## 资源上限与失败行为
 

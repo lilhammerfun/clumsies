@@ -94,6 +94,8 @@ pub struct RecallActivation {
     /// Resolved retrieval-run identity when the daemon has a matching record.
     pub run_id: Option<String>,
     pub run_status: Option<String>,
+    /// Recorded retrieval duration; absent until a matching run is terminal.
+    pub total_us: Option<u64>,
     /// Recalled fragments. Populated from the daemon's retrieval run when a
     /// matching run exists; otherwise empty.
     pub fragments: Vec<RecallFragment>,
@@ -429,7 +431,7 @@ async fn join_retrieval_run(
     project_id: &str,
     query: &str,
     requested_run_id: Option<&str>,
-) -> Result<Option<(String, String, Vec<RecallFragment>)>, DaemonError> {
+) -> Result<Option<(String, String, Option<u64>, Vec<RecallFragment>)>, DaemonError> {
     if project_id.is_empty() {
         return Ok(None);
     }
@@ -482,6 +484,7 @@ async fn join_retrieval_run(
     Ok(Some((
         detail.run.run_id,
         run_status_str(detail.run.status).to_owned(),
+        (detail.run.status != RetrievalRunStatus::Running).then_some(detail.run.latencies.total_us),
         fragments,
     )))
 }
@@ -595,6 +598,7 @@ fn parse_session_text(text: &str, workspace_root: &str) -> Option<RecallSession>
                     time: event.get("time").and_then(Value::as_i64),
                     run_id: None,
                     run_status: None,
+                    total_us: None,
                     fragments: Vec::new(),
                     result_error: None,
                 });
@@ -689,12 +693,13 @@ async fn enrich_session(state: &DaemonState, project_id: &str, session: &mut Rec
                     continue;
                 }
             };
-            if let Some((run_id, run_status, fragments)) = joined {
+            if let Some((run_id, run_status, total_us, fragments)) = joined {
                 activation.run_id = Some(run_id);
                 activation.run_status = Some(run_status);
+                activation.total_us = total_us;
                 // Retrieval history supplies stable selection metadata and a
                 // preview even when a reuse response omitted content. The UI
-                // loads the complete frozen chunk only when it is opened.
+                // loads the complete frozen chunk when its preview becomes visible.
                 if !fragments.is_empty() {
                     activation.fragments = fragments;
                 }
@@ -823,6 +828,7 @@ fn codex_recall_session(session: codex::CodexSession, workspace_root: String) ->
                         time: None,
                         run_id: activation.run_id,
                         run_status: None,
+                        total_us: None,
                         fragments: activation
                             .fragments
                             .into_iter()
