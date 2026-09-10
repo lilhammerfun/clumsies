@@ -40,26 +40,30 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         targetId: String? = nil,
         isDeletion: Bool = false,
         status: DaemonLocalDraftStatus = .open,
+        serverId: String? = nil,
+        syncStatus: DaemonDraftSyncState = .queued,
+        freshness: DraftFreshness = .current,
+        reconciliation: DraftReconciliationStatus = .clean,
         path: String? = nil,
         kind: MemoryKind = .context
     ) -> LocalDraft {
         LocalDraft(
             id: id,
             projectId: "p1",
-            serverId: nil,
+            serverId: serverId,
             serverVersion: 0,
             baseCommitId: nil,
             currentCommitId: nil,
-            freshness: .current,
+            freshness: freshness,
             hasUpstreamResourceChanges: false,
-            reconciliation: .clean,
+            reconciliation: reconciliation,
             reconciliationCandidateId: nil,
             scope: scope,
             kind: kind,
             targetId: targetId,
             status: status,
             origin: .desktop,
-            syncStatus: .queued,
+            syncStatus: syncStatus,
             updatedAt: "2026-01-01T00:00:00Z",
             document: EditableMemoryDocument(
                 title: id,
@@ -204,6 +208,30 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertTrue(
             MemoryFileTreeMenu.reviewableDrafts([openOrg], inOrgView: true).isEmpty
         )
+    }
+
+    func testReviewSelectionAllowsBehindDraftsButRequiresEveryDraftToBeSynced() {
+        let current = localDraft("current", scope: .org, serverId: "server-current", syncStatus: .synced)
+        XCTAssertFalse(MemoryFileTreeMenu.isReviewSelectionReady([]))
+        XCTAssertTrue(MemoryFileTreeMenu.isReviewSelectionReady([current]))
+
+        for reconciliation: DraftReconciliationStatus in [.unknown, .clean, .conflicts] {
+            let behind = localDraft(
+                "behind", scope: .org, serverId: "server-behind", syncStatus: .synced,
+                freshness: .behind, reconciliation: reconciliation
+            )
+            XCTAssertTrue(MemoryFileTreeMenu.isReviewSelectionReady([behind]))
+            XCTAssertTrue(MemoryFileTreeMenu.isReviewSelectionReady([current, behind]))
+        }
+
+        for syncStatus: DaemonDraftSyncState in [.queued, .syncing, .retrying, .failed] {
+            let unsynced = localDraft(
+                "unsynced", scope: .org, serverId: "server-unsynced", syncStatus: syncStatus
+            )
+            XCTAssertFalse(MemoryFileTreeMenu.isReviewSelectionReady([current, unsynced]))
+        }
+        let missingServerId = localDraft("local", scope: .org, syncStatus: .synced)
+        XCTAssertFalse(MemoryFileTreeMenu.isReviewSelectionReady([current, missingServerId]))
     }
 
     func testDirectoryDiscardIncludesEveryProjectCarriedDraftOnce() {

@@ -15,6 +15,12 @@ Project selection controls effective Memory, Drafts, and Review context. A proje
 
 The UI restores a selection only when it remains valid. Loading, conflict, offline, selection, and error states do not rely on color alone, and keyboard navigation remains available.
 
+## Review requests
+
+Directory and multi-selection Review requests include open Organization Drafts carried by the selected Project. Every Draft must be synced and have a Server ID; directory operations and document synchronization also block the entry point.
+
+Behind Drafts, including those with conflicts, can open the request sheet. The sheet loads reconciliation candidates and asks the user to resolve conflicting files before updating the Drafts and creating one Review in the same transaction. The entry point does not require freshness to be current.
+
 ## Implementation boundary
 
 SwiftUI lives under `apps/macos/`; Draft persistence, synchronization, and authority checks live in the shared daemon and Server contracts. Planned interactions are tracked as gaps, not documented as shipped behavior.
