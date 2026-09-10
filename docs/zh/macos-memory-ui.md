@@ -122,13 +122,16 @@ tab 的 Project 身份为空。因此打开相同 resource ID 的 Org 视图与 
 
 ## 7. Review 集成
 
-只有 Project-carried、open、已同步且 freshness 为 current 的 Organization Draft 可以
-提交 Review。选中目录或多个文件时，客户端收集所有符合条件的 Draft，用
+Project-carried、open 且已同步到 Server 的 Organization Draft 可以进入 Review 提交
+面板；freshness 为 behind 或存在冲突不会禁用入口。选中目录或多个文件时，客户端收集
+所有符合条件的 Draft，用
 `localizedStandardCompare(path)` 排序，并用一次请求创建一个有序多 Draft Review；
 未变化文件和旧 Project 权威不会加入。该比较器没有额外 tie-breaker，因此不应把
 当前顺序当成跨 locale 的规范化顺序。
 
-如果任一 Draft behind，目录提交要求先逐项协调，不创建只覆盖部分文件的 Review。
+如果任一 Draft behind，提交面板加载协调候选，有冲突的文件由用户逐项确认解决结果，
+再在同一事务中协调全部草稿并创建 Review，不创建只覆盖部分文件的 Review。未同步、
+缺少 Server ID、目录操作或文档同步进行中时，入口仍禁用。
 Discard 和 deletion proposal 仍按各自 Draft 生命周期处理。Review 详情、评论和合并行为
 由 [《macOS Reviews 当前设计》](./reviews-ui-design.md) 定义。
 

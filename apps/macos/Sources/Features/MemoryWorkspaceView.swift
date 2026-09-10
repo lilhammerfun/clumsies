@@ -722,9 +722,7 @@ private struct FileTreeView: View {
             targetItems,
             inOrgView: isOrgView
         )
-        let reviewSelectionIsReady = !reviewDrafts.isEmpty && reviewDrafts.allSatisfy {
-            $0.syncStatus == .synced && $0.serverId != nil && $0.freshness == .current
-        }
+        let reviewSelectionIsReady = MemoryFileTreeMenu.isReviewSelectionReady(reviewDrafts)
         let directoryDrafts = selectedDirectory == nil
             ? []
             : MemoryFileTreeMenu.discardableDrafts(targetItems, inOrgView: isOrgView)
@@ -2440,6 +2438,13 @@ enum MemoryDirectoryMutationError: LocalizedError, Equatable {
 /// only in the read-only Org view; Draft proposals and Remove from Project
 /// exist only inside an explicit Project context.
 enum MemoryFileTreeMenu {
+    static func isReviewSelectionReady(_ drafts: [LocalDraft]) -> Bool {
+        // The request sheet reconciles behind drafts, including conflicts.
+        !drafts.isEmpty && drafts.allSatisfy {
+            $0.syncStatus == .synced && $0.serverId != nil
+        }
+    }
+
     /// One directory Review contains every open Organization Draft below the
     /// selection. Unchanged files and legacy Project authority are excluded.
     static func reviewableDrafts(
