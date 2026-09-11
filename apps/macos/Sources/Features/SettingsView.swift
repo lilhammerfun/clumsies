@@ -344,6 +344,9 @@ struct SupportSettingsView: View {
                 LabeledContent("Logs") {
                     Button("Show in Finder", action: onShowLogs)
                 }
+                LabeledContent("Diagnostics") {
+                    Button("Export…") { ClientDiagnostics.presentExport() }
+                }
             } footer: {
                 Text("Use logs to help investigate a problem with Clumsies.")
             }

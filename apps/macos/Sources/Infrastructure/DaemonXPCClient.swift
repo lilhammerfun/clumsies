@@ -26,7 +26,8 @@ enum DaemonXPCError: LocalizedError, Sendable {
         case .invalidReply:
             return "The local Clumsies daemon returned an invalid response."
         case .daemon(let error):
-            return "\(error.code): \(error.message)"
+            let request = error.requestId.map { " (request \($0))" } ?? ""
+            return "\(error.code): \(error.message)\(request)"
         }
     }
 }
@@ -261,10 +262,18 @@ struct DaemonXPCClient: Sendable {
         payload: Payload,
         timeout: TimeInterval = 30
     ) async throws -> Response {
+        try await ClientDiagnostics.operation(layer: "xpc", method: method) {
+            try await performCall(method: method, payload: payload, timeout: timeout)
+        }
+    }
+
+    private func performCall<Payload: Encodable & Sendable, Response: Decodable & Sendable>(
+        method: String, payload: Payload, timeout: TimeInterval
+    ) async throws -> Response {
         let encoder = JSONCoding.encoder()
         let payloadData = try encoder.encode(payload)
         let payloadObject = try JSONSerialization.jsonObject(with: payloadData)
-        let requestObject: [String: Any] = ["method": method, "payload": payloadObject]
+        let requestObject: [String: Any] = ["method": method, "payload": payloadObject, "request_id": ClientDiagnostics.requestID ?? ""]
         guard JSONSerialization.isValidJSONObject(requestObject) else {
             throw DaemonXPCError.invalidRequest
         }

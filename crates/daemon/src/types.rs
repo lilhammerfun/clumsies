@@ -6,7 +6,6 @@ use serde_json::json;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use thiserror::Error;
-use uuid::Uuid;
 
 use crate::CredentialStoreError;
 use crate::server_client::is_retryable_http_status;
@@ -44,6 +43,8 @@ pub struct DaemonIpcRequest {
     /// resident clients omit this marker and retain the existing IPC contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_runtime: Option<AgentRuntimeIdentity>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request_id: String,
 }
 
 impl DaemonIpcRequest {
@@ -52,6 +53,7 @@ impl DaemonIpcRequest {
             method: method.into(),
             payload,
             agent_runtime: None,
+            request_id: crate::diagnostics::new_request_id(),
         }
     }
 
@@ -90,11 +92,10 @@ impl DaemonIpcResponse {
         if self.ok {
             serde_json::from_value(self.payload).map_err(DaemonError::from)
         } else {
-            let message = self
-                .error
-                .map(|error| format!("{}: {}", error.code, error.message))
-                .unwrap_or_else(|| "daemon IPC call failed without error details".to_owned());
-            Err(DaemonError::Ipc(message))
+            Err(match self.error {
+                Some(error) => DaemonError::Remote(error),
+                None => DaemonError::Ipc("daemon IPC call failed without error details".to_owned()),
+            })
         }
     }
 }
@@ -1060,12 +1061,14 @@ pub struct ApiError {
 }
 
 pub(crate) fn api_error_from_daemon_error(error: DaemonError) -> ApiError {
+    let details = crate::diagnostics::error_details(&error);
     let error = match error {
+        DaemonError::Remote(error) => return error,
         DaemonError::Search { code, message } => {
             return ApiError {
                 code,
                 message,
-                request_id: format!("req_{}", Uuid::new_v4().simple()),
+                request_id: crate::diagnostics::request_id(),
                 details: json!({}),
             };
         }
@@ -1073,7 +1076,7 @@ pub(crate) fn api_error_from_daemon_error(error: DaemonError) -> ApiError {
             return ApiError {
                 code: code.to_owned(),
                 message,
-                request_id: format!("req_{}", Uuid::new_v4().simple()),
+                request_id: crate::diagnostics::request_id(),
                 details: json!({}),
             };
         }
@@ -1086,7 +1089,16 @@ pub(crate) fn api_error_from_daemon_error(error: DaemonError) -> ApiError {
         DaemonError::Io(error) => ("io_error", error.to_string()),
         DaemonError::Sqlx(error) => ("local_db_error", error.to_string()),
         DaemonError::SerdeJson(error) => ("invalid_json", error.to_string()),
-        DaemonError::Reqwest(error) => ("server_request_failed", error.to_string()),
+        DaemonError::Reqwest(error) => (
+            "server_request_failed",
+            if error.is_timeout() {
+                "HTTP request timed out".to_owned()
+            } else if error.is_connect() {
+                "HTTP connection failed".to_owned()
+            } else {
+                error.without_url().to_string()
+            },
+        ),
         DaemonError::CredentialStore(error) => ("credential_store_failed", error.to_string()),
         DaemonError::Server(message) => ("server_sync_failed", message),
         DaemonError::ServerResponse { status, body } => (
@@ -1095,14 +1107,15 @@ pub(crate) fn api_error_from_daemon_error(error: DaemonError) -> ApiError {
         ),
         DaemonError::Launchctl(message) => ("launchctl_failed", message),
         DaemonError::Ipc(message) => ("daemon_ipc_failed", message),
+        DaemonError::Remote(_) => unreachable!("remote errors return above"),
         DaemonError::Search { .. } => unreachable!("search errors return above"),
         DaemonError::State { .. } => unreachable!("state errors return above"),
     };
     ApiError {
         code: code.to_owned(),
         message,
-        request_id: format!("req_{}", Uuid::new_v4().simple()),
-        details: json!({}),
+        request_id: crate::diagnostics::request_id(),
+        details,
     }
 }
 
@@ -1132,6 +1145,8 @@ pub enum DaemonError {
     Launchctl(String),
     #[error("daemon IPC error: {0}")]
     Ipc(String),
+    #[error("{}: {} (request {})", .0.code, .0.message, .0.request_id)]
+    Remote(ApiError),
     #[error("search error ({code}): {message}")]
     Search { code: String, message: String },
     #[error("state error ({code}): {message}")]

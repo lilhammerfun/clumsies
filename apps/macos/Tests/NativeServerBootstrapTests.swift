@@ -3,6 +3,35 @@ import XCTest
 @testable import Clumsies
 
 final class NativeServerBootstrapTests: XCTestCase {
+    func testNativeFailuresHaveCorrelatedSanitizedDiagnostics() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = ClientLog(directory: directory)
+        for status in [503, 200] {
+            NativeSetupURLProtocol.handler = { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-clumsies-request-id"), "req_native_\(status)")
+                let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["x-request-id": "req_server_\(status)"])!
+                return (response, Data("SECRET_INVALID_RESPONSE".utf8))
+            }
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [NativeSetupURLProtocol.self]
+            let transport = URLSession(configuration: configuration)
+            defer { transport.invalidateAndCancel(); NativeSetupURLProtocol.handler = nil }
+            let client = NativeServerSetupClient(origin: try ServerOrigin(validating: "https://clumsies.example.com"), transport: transport)
+            await ClientDiagnostics.$testLog.withValue(log) {
+                await ClientDiagnostics.$requestID.withValue("req_native_\(status)") {
+                    do { _ = try await client.status(); XCTFail("Expected failure") }
+                    catch {}
+                }
+            }
+        }
+        let content = try String(contentsOf: directory.appending(path: "client.log"), encoding: .utf8)
+        for value in ["req_native_503", "req_server_503", "req_native_200", "req_server_200", "http_failed", "decode", "request_failed"] {
+            XCTAssertTrue(content.contains(value), "Missing \(value)")
+        }
+        XCTAssertFalse(content.contains("SECRET_INVALID_RESPONSE"))
+    }
+
     func testServerOriginRequiresHTTPSExceptForLoopbackHTTP() throws {
         XCTAssertEqual(
             try ServerOrigin(validating: "https://clumsies.example.com/").url.absoluteString,

@@ -43,14 +43,23 @@ pub(crate) fn instrument(app: Router) -> Router {
                     .get::<RequestId>()
                     .map(|request_id| request_id.0.as_str())
                     .unwrap_or("missing");
+                let client_request_id = request
+                    .headers()
+                    .get("x-clumsies-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .filter(|value| valid_request_id(value))
+                    .unwrap_or("missing");
                 info_span!(
                     "http_request",
                     method = %request.method(),
                     route,
                     request_id,
+                    client_request_id,
                 )
             })
-            .on_request(())
+            .on_request(|_request: &Request, span: &Span| {
+                tracing::info!(parent: span, "http request received");
+            })
             .on_response(
                 |response: &Response<Body>, latency: Duration, span: &Span| {
                     tracing::info!(
@@ -105,4 +114,47 @@ fn valid_request_id(value: &str) -> bool {
 
 fn new_request_id() -> String {
     format!("req_{}", uuid::Uuid::new_v4().simple())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ingress_logs_link_client_and_server_ids_without_query_or_body() {
+        let path =
+            std::env::temp_dir().join(format!("clumsies-telemetry-{}.log", uuid::Uuid::new_v4()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&path).unwrap())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let app = instrument(Router::new().route("/probe", axum::routing::post(|| async { "ok" })));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/probe?token=SECRET_QUERY")
+                    .header("x-request-id", "req_proxy")
+                    .header("x-clumsies-request-id", "req_client")
+                    .body(Body::from("SECRET_BODY"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["x-request-id"], "req_proxy");
+        let logs = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        for expected in [
+            "http request received",
+            "http request completed",
+            "req_client",
+            "req_proxy",
+        ] {
+            assert!(logs.contains(expected), "missing {expected}: {logs}");
+        }
+        assert!(!logs.contains("SECRET"));
+    }
 }

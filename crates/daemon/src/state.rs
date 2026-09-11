@@ -831,6 +831,7 @@ impl DaemonState {
                 )
                 .await?
                 {
+                    tracing::warn!(event = "http_cache_fallback", request_id = %crate::diagnostics::request_id(), route = %crate::diagnostics::route(&request.path));
                     return Ok(cached);
                 }
                 return Err(error);
@@ -839,7 +840,11 @@ impl DaemonState {
         };
         let status = response.status().as_u16();
         let headers = filter_proxy_response_headers(response.headers());
-        let body = match response.text().await {
+        let body = match response
+            .text()
+            .await
+            .map_err(|error| crate::diagnostics::http_error(error, "body"))
+        {
             Ok(body) => body,
             Err(error) if cacheable => {
                 if let Some(cached) = load_cached_server_response(
@@ -852,6 +857,7 @@ impl DaemonState {
                 )
                 .await?
                 {
+                    tracing::warn!(event = "http_cache_fallback", request_id = %crate::diagnostics::request_id(), route = %crate::diagnostics::route(&request.path));
                     return Ok(cached);
                 }
                 return Err(error.into());
@@ -882,6 +888,7 @@ impl DaemonState {
             )
             .await?
         {
+            tracing::warn!(event = "http_cache_fallback", request_id = %crate::diagnostics::request_id(), route = %crate::diagnostics::route(&request.path));
             return Ok(cached);
         }
         Ok(response)
@@ -1624,12 +1631,18 @@ impl DaemonState {
         let state = self.clone();
         Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(state.inner.config.sync.interval);
+            let mut failures = (0, String::new());
             loop {
                 let retry_transient_failures = tokio::select! {
                     _ = interval.tick() => true,
                     _ = state.inner.sync_notify.notified() => false,
                 };
-                let _ = state.run_sync_cycle(retry_transient_failures).await;
+                crate::diagnostics::REQUEST_ID
+                    .scope(crate::diagnostics::new_request_id(), async {
+                        let result = state.run_sync_cycle(retry_transient_failures).await;
+                        crate::diagnostics::worker_result("sync", &mut failures, &result);
+                    })
+                    .await;
             }
         }))
     }
@@ -1685,10 +1698,12 @@ impl DaemonState {
         let state = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
+            let mut failures = (0, String::new());
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let _ = work_tracking::recover_stale_runs(&state.inner.pool).await;
+                let result = work_tracking::recover_stale_runs(&state.inner.pool).await;
+                crate::diagnostics::worker_result("run_reaper", &mut failures, &result);
             }
         })
     }
@@ -1829,6 +1844,25 @@ impl DaemonIpcService {
     }
 
     pub async fn dispatch(&self, request: DaemonIpcRequest) -> DaemonIpcResponse {
+        let id = crate::diagnostics::validated_request_id(&request.request_id)
+            .unwrap_or_else(crate::diagnostics::new_request_id);
+        crate::diagnostics::REQUEST_ID.scope(id.clone(), async {
+            let started = std::time::Instant::now();
+            // IPC method names are identifiers, not caller-supplied paths or payloads.
+            let method = crate::diagnostics::validated_request_id(&request.method).unwrap_or_else(|| "invalid".to_owned());
+            let response = self.dispatch_request(request).await;
+            if let Some(error) = &response.error {
+                tracing::warn!(event = "ipc_failed", request_id = %id, method, elapsed_ms = started.elapsed().as_millis() as u64, code = %error.code, details = %error.details);
+            } else if method == "server_request" {
+                tracing::info!(event = "ipc_completed", request_id = %id, method, elapsed_ms = started.elapsed().as_millis() as u64);
+            } else {
+                tracing::debug!(event = "ipc_completed", request_id = %id, method, elapsed_ms = started.elapsed().as_millis() as u64);
+            }
+            response
+        }).await
+    }
+
+    async fn dispatch_request(&self, request: DaemonIpcRequest) -> DaemonIpcResponse {
         let result = match request.method.as_str() {
             "health" => dispatch_value!(self, health, async),
             "project_config" => dispatch_value!(self, project_config),

@@ -41,6 +41,57 @@ SwiftUI/AppKit -> XPC -> daemon -> HTTPS -> Server
 This keeps credentials in daemon and macOS Keychain without a WebView or CORS
 dependency.
 
+## Client diagnostics
+
+The App writes JSON lines to `client.log` in its configured daemon log directory
+(`~/Library/Logs/ai.clumsies` for stable installations). This works when launched
+from Finder as well as from development scripts. The resident daemon writes
+structured events to `daemon.log`; it no longer duplicates every event to
+launchd stderr. Each primary log and `clumsiesd.crash.log` retains the active
+file and three archives, each capped at 4 MiB. Oversized pre-upgrade files are
+trimmed to their tails. Management commands do not share the resident writer.
+File-sink failures are reported to OSLog (App) or stderr (daemon); stderr also
+retains bootstrap errors that occur before daemon logging starts.
+
+Desktop generates a `request_id` for XPC calls. Daemon keeps it in error
+envelopes and sends it as `x-clumsies-request-id` and `x-request-id` on HTTP
+requests. Server ingress logs retain both the client ID and the Server's own
+ID, since a proxy can replace `x-request-id`. HTTP logs distinguish request
+start, received headers, body/decode failure and completion. A completed XPC
+call can still carry an unsuccessful HTTP status. An XPC timeout does not
+cancel a mutation already dispatched to Server; inspect the matching IDs
+before retrying. Missing completion logs alone do not prove a request never
+arrived. Older clients may omit the ID and older daemons may omit error
+`details`; the envelope remains readable.
+
+Request diagnostics record method, API resource family (not nested Memory
+paths or query strings), elapsed time, status, byte/draft counts and safe
+transport causes/OS codes. They do not record bodies, authorization headers,
+cookies or raw error source strings. Native login/setup/recovery requests and
+response decoding use the same App failure boundary. Sync/reaper workers log
+the first failure and power-of-two repeats of the same safe error signature,
+plus recovery; a changed error signature is logged immediately; stale HTTP cache
+fallbacks are explicit. Individual HTTP attempts remain visible.
+
+**Settings → Support → Diagnostics → Export**, the menu-bar **Export
+Diagnostics…** item, and the startup error page create a local diagnostic
+folder. Its manifest identifies the instance, collection time, App executable
+hash, App/daemon versions and missing or unreadable files. Only named
+App/daemon, crash and bootstrap/development log files are included, with at
+most 4 MiB per file; databases, Memory and Keychain data are not collected.
+Existing crash/legacy records are copied as logs, not re-sanitized. Nothing is
+uploaded automatically. Review the manifest if a file sink was unavailable.
+
+Regression evidence lives in `crates/daemon/tests/client_diagnostics.rs`,
+daemon diagnostics/XPC unit tests, Server telemetry tests, and macOS
+`ClientDiagnosticsTests` / `NativeServerBootstrapTests`. Changes to request or
+logging boundaries must verify failure evidence, correlation, redaction and
+retention, in addition to successful requests. Run `cargo test -p daemon
+--test client_diagnostics`, `cargo test -p daemon --lib --bins`, `cargo test -p
+server telemetry::tests --lib`, and `just test-macos`. All are covered by the
+existing Rust/macOS CI jobs. The timeout probe uses 118 fake Drafts, a loopback
+server, temporary storage and an in-memory credential store.
+
 ## Draft synchronization
 
 Every local operation is persisted before synchronization is attempted. The

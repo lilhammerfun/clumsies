@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 enum ServerClientError: LocalizedError, Sendable {
     case invalidPath
@@ -22,11 +21,6 @@ enum ServerClientError: LocalizedError, Sendable {
 }
 
 struct ServerClient: Sendable {
-    private static let logger = Logger(
-        subsystem: ClumsiesIdentifiers.namespace,
-        category: "ServerClient"
-    )
-
     let daemon: DaemonXPCClient
     private let dataSourceTracker = ServerDataSourceTracker()
     private let requestLimiter = ServerRequestLimiter(limit: 12)
@@ -63,7 +57,14 @@ struct ServerClient: Sendable {
         headers: [String: String] = [:],
         body: Body
     ) async throws -> Response {
-        let data = try JSONCoding.encoder().encode(body)
+        let data: Data
+        do {
+            data = try JSONCoding.encoder().encode(body)
+        } catch {
+            ClientDiagnostics.record("request_encode_failed", ["request_id": ClientDiagnostics.requestID ?? "req_" + UUID().uuidString.lowercased(),
+                "route": ClientDiagnostics.route(path), "method": method, "kind": "encode"])
+            throw error
+        }
         guard let bodyString = String(data: data, encoding: .utf8) else {
             throw ServerClientError.invalidResponse("Could not encode the request body.")
         }
@@ -83,6 +84,12 @@ struct ServerClient: Sendable {
         headers: [String: String] = [:],
         body: String? = nil
     ) async throws -> DaemonServerResponse {
+        try await ClientDiagnostics.operation(layer: "server", method: method) {
+            try await performRaw(method: method, path: path, query: query, headers: headers, body: body)
+        }
+    }
+
+    private func performRaw(method: String, path: String, query: [URLQueryItem], headers: [String: String], body: String?) async throws -> DaemonServerResponse {
         let requestPath = try buildPath(path, query: query)
         let dataSourceGeneration = dataSourceTracker.generation
         let response = try await requestLimiter.run {
@@ -94,7 +101,14 @@ struct ServerClient: Sendable {
         if response.isStaleCache, !Task.isCancelled {
             dataSourceTracker.markStale(generation: dataSourceGeneration)
         }
-        return response
+        ClientDiagnostics.record((200..<300).contains(response.status) ? "server_completed" : "server_failed", [
+            "request_id": ClientDiagnostics.requestID ?? "", "method": method, "route": ClientDiagnostics.route(path),
+            "status": String(response.status), "source": response.isStaleCache ? "cache" : "server",
+            "server_request_id": ClientDiagnostics.identifier(response.headers["x-request-id"] ?? "")
+        ])
+        return DaemonServerResponse(status: response.status,
+            headers: response.headers.merging(["x-clumsies-request-id": ClientDiagnostics.requestID ?? ""], uniquingKeysWith: { _, current in current }),
+            body: response.body)
     }
 
     private func request<Response: Decodable & Sendable>(
@@ -109,14 +123,15 @@ struct ServerClient: Sendable {
         return try decode(response, method: method, path: requestPath)
     }
 
-    private func decode<Response: Decodable & Sendable>(
+    func decode<Response: Decodable & Sendable>(
         _ response: DaemonServerResponse,
         method: String,
         path: String
     ) throws -> Response {
         guard (200..<300).contains(response.status) else {
             let message = Self.errorMessage(from: response.body)
-            throw ServerClientError.response(status: response.status, message: message)
+            let requestID = response.headers["x-request-id"].map { " (request \(ClientDiagnostics.identifier($0)))" } ?? ""
+            throw ServerClientError.response(status: response.status, message: message + requestID)
         }
         guard let data = response.body.data(using: .utf8) else {
             throw ServerClientError.invalidResponse("Response body is not UTF-8.")
@@ -130,7 +145,8 @@ struct ServerClient: Sendable {
                 path: path,
                 responseType: Response.self
             )
-            Self.logger.error("\(message, privacy: .public)")
+            ClientDiagnostics.record("response_decode_failed", ["method": method, "route": ClientDiagnostics.route(path),
+                "kind": "decode", "request_id": response.headers["x-clumsies-request-id"] ?? "", "server_request_id": ClientDiagnostics.identifier(response.headers["x-request-id"] ?? "")])
             throw ServerClientError.invalidResponse(message)
         }
     }

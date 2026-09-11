@@ -26,6 +26,8 @@ Write "None — no user-visible behavior" only when genuinely applicable. -->
 ## Verification
 
 <!-- List exact automated commands and manual scenarios with their results.
+For client request/logging changes, include failure injection evidence showing
+correlation IDs, safe causal details, redaction, and bounded retention/export.
 Identify anything not run and explain why. -->
 
 ## Compatibility and migration

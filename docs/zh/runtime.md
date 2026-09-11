@@ -29,6 +29,42 @@ Agent Host -> stdio MCP / Hook -> signed short proxy -> typed XPC -> resident da
 
 短进程只负责有界 framing、`memory` MCP tool、Project 选择与 XPC 转发。它不初始化 `DaemonState`，不打开 SQLite，不加载模型，也不启动后台 worker。启动时，代理必须验证自身协议 revision 和 build identity 与常驻 daemon 一致。
 
+## 客户端诊断日志
+
+App 将 JSON 行写入当前实例日志目录的 `client.log`，稳定版默认路径为
+`~/Library/Logs/ai.clumsies`。从 Finder 启动也会落盘。常驻 daemon 将结构化事件
+写入 `daemon.log`，不再把每条事件重复写入 launchd stderr。两个主日志和
+`clumsiesd.crash.log` 各保留当前文件及三个归档，每个最多 4 MiB；升级前超限
+文件只保留末尾内容。管理命令不与常驻进程共用文件写入器。文件日志不可用时，
+App 向 OSLog 报告，daemon 向 stderr 报告；初始化日志之前的启动错误仍在 stderr。
+
+App 为 XPC 调用生成 `request_id`，daemon 将其保留在错误信封中，并通过 HTTP
+的 `x-clumsies-request-id`、`x-request-id` 发送。代理可能替换后者，因此服务端
+收到请求时同时记录客户端 ID 与服务端 ID。日志区分请求开始、收到响应头、
+响应体读取或解码失败及完成。XPC 调用成功返回也可能携带 HTTP 错误状态。
+XPC 超时不会撤销已经发往服务端的修改，重试前应按 ID 核查结果；缺少完成日志
+不能证明请求从未到达。旧客户端可以省略 ID，旧 daemon 可以省略错误 `details`，
+客户端仍能读取错误信封。
+
+请求日志记录方法、API 资源类别、耗时、状态、字节数、草稿数量及安全的传输
+原因和 OS 错误码；不记录 Memory 子路径、查询参数、请求或响应正文、令牌、
+Cookie 及原始错误链字符串。原生登录、初始化和管理员恢复的请求与解码失败也
+进入 App 公共边界。同步和运行回收任务记录首次失败、同类错误次数为 2 的幂次的重复失败
+及恢复，错误类别或安全的原因字段变化时立即记录；HTTP 缓存回退有独立记录，每次实际 HTTP 尝试仍可查询。
+
+设置的 **Support → Diagnostics → Export**、菜单栏的 **Export Diagnostics…**
+和启动失败页会导出本地诊断目录。清单包含实例、收集时间、App 可执行文件哈希、
+App/daemon 版本，以及缺失或不可读文件。只收集指定名称的 App、daemon、崩溃、
+启动及开发日志，每个文件最多取末尾 4 MiB，不收集数据库、Memory 或 Keychain，
+也不会自动上传。已有崩溃和旧日志按文件复制，不重新脱敏；日志文件不可用时应
+检查导出清单。
+
+请求或日志边界改动需要验证失败证据、关联、脱敏及保留上限，成功请求不能替代
+这些检查。回归命令为 `cargo test -p daemon --test client_diagnostics`、
+`cargo test -p daemon --lib --bins`、`cargo test -p server telemetry::tests --lib`
+和 `just test-macos`，现有 Rust/macOS CI 会运行这些测试。超时测试使用 118 条
+假草稿、回环服务器、临时目录和内存凭据存储，不接触真实账号或 Keychain。
+
 ## Project 绑定与两种 MCP 启动语义
 
 daemon 以规范化工作目录查找当前 Server 下最具体的已绑定祖先；Git worktree 没有独立绑定时，还会尝试主 checkout 的仓库根。绑定只使用规范 `project_id`，不会把旧 `ws_id` 当作 Project ID。当前运行时不再读取或迁移 `~/.clumsies/config.toml`；目录绑定由 Desktop/daemon 明确维护。

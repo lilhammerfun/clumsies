@@ -166,7 +166,7 @@ struct NativeAuthenticatedSession: @unchecked Sendable {
             headers: headers,
             body: body
         )
-        let (data, response) = try await transport.data(for: request)
+        let (data, response) = try await ClientDiagnostics.data(for: request, using: transport)
         try AuthenticationClient.validate(response: response, data: data)
         return data
     }
@@ -178,8 +178,10 @@ struct NativeAuthenticatedSession: @unchecked Sendable {
         headers: [String: String] = [:],
         body: Data? = nil
     ) async throws -> Response {
-        let data = try await data(path: path, method: method, headers: headers, body: body)
-        return try JSONCoding.decoder().decode(type, from: data)
+        try await ClientDiagnostics.operation(layer: "native_http", method: method) {
+            let data = try await data(path: path, method: method, headers: headers, body: body)
+            return try JSONCoding.decoder().decode(type, from: data)
+        }
     }
 }
 
@@ -260,9 +262,11 @@ struct AuthenticationClient: @unchecked Sendable {
     }
 
     private func send<Response: Decodable & Sendable>(_ request: URLRequest) async throws -> Response {
-        let (data, response) = try await transport.data(for: request)
-        try Self.validate(response: response, data: data)
-        return try JSONCoding.decoder().decode(Response.self, from: data)
+        try await ClientDiagnostics.operation(layer: "native_http", method: request.httpMethod ?? "GET") {
+            let (data, response) = try await ClientDiagnostics.data(for: request, using: transport)
+            try Self.validate(response: response, data: data)
+            return try JSONCoding.decoder().decode(Response.self, from: data)
+        }
     }
 
     static func validate(response: URLResponse, data: Data) throws {
