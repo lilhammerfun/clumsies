@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hosted tests must not start live authentication or daemon work.
         guard NSClassFromString("XCTestCase") == nil else { return }
+        ClientDiagnostics.record("app_started", ClientDiagnostics.metadata)
         NSApp.setActivationPolicy(.regular)
         installApplicationMenu()
         installStatusItem()
@@ -323,6 +324,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showLogsInFinder()
     }
 
+    @objc private func exportDiagnostics(_ sender: Any?) {
+        ClientDiagnostics.presentExport()
+    }
+
     private func showLogsInFinder() {
         let path = store.runtime?.health.logDir
         let logURL: URL
@@ -378,6 +383,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             keyEquivalent: ""
         )
         revealLogs.target = self
+        let exportLogs = menu.addItem(withTitle: "Export Diagnostics…", action: #selector(exportDiagnostics(_:)), keyEquivalent: "")
+        exportLogs.target = self
         menu.addItem(.separator())
         menu.addItem(
             withTitle: "Quit \(ClumsiesIdentifiers.appDisplayName)",
@@ -734,6 +741,12 @@ private struct FailureView: View {
                 }
                 .buttonStyle(.bordered)
 
+            }
+
+            HStack(spacing: 12) {
+                Button("Export Diagnostics…") { ClientDiagnostics.presentExport() }
+                    .buttonStyle(.bordered)
+
                 Button(copied ? "Copied!" : "Copy Diagnostics") {
                     let pasteboard = NSPasteboard.general
                     pasteboard.clearContents()
@@ -741,6 +754,7 @@ private struct FailureView: View {
                     Clumsies Startup Diagnostics:
                     Error: \(message)
                     Log Directory: \(AppBundleRuntimeLocation.defaultLogDirectoryURL.path)
+                    \(ClientDiagnostics.metadata.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
                     """
                     pasteboard.setString(report, forType: .string)
                     copied = true

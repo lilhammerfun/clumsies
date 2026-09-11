@@ -34,10 +34,14 @@ private final class AvatarImageCache {
                     let (data, response) = try await URLSession.shared.data(for: request)
                     guard let response = response as? HTTPURLResponse,
                           (200..<300).contains(response.statusCode) else {
+                        ClientDiagnostics.record("avatar_failed", ["kind": "http_status", "status": String((response as? HTTPURLResponse)?.statusCode ?? 0)])
                         return nil
                     }
-                    return NSImage(data: data)
+                    let image = NSImage(data: data)
+                    if image == nil { ClientDiagnostics.record("avatar_failed", ["kind": "decode"]) }
+                    return image
                 } catch {
+                    ClientDiagnostics.record("avatar_failed", ClientDiagnostics.failureFields(error))
                     return nil
                 }
             }

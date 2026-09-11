@@ -726,6 +726,7 @@ fn retrieval_error(error: &DaemonError) -> (String, String) {
         DaemonError::InvalidConfig(_) => "invalid_config".to_owned(),
         DaemonError::Launchctl(_) => "launchctl_error".to_owned(),
         DaemonError::Ipc(_) => "ipc_error".to_owned(),
+        DaemonError::Remote(error) => error.code.clone(),
     };
     (code, error.to_string())
 }

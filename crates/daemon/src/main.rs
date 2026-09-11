@@ -15,7 +15,6 @@ use daemon::{
 };
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::time::SystemTime;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProcessMode {
@@ -125,8 +124,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match runtime.block_on(run_daemon(args)) {
                 Ok(()) => Ok(()),
                 Err(error) => {
-                    // Startup and fatal runtime errors carry a structured,
-                    // traceable record in daemon.log in addition to stderr.
+                    // Trace when logging is ready; returning Err also reports pre-logging
+                    // startup failures to the launchd stderr stream.
                     tracing::error!(
                         error = %error,
                         "clumsiesd daemon exited with a fatal error"
@@ -409,13 +408,6 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     let runtime_mode = daemon_runtime_mode(config.dev_instance_id.as_deref())?;
     let mach_service_name = runtime_mode.mach_service_name.clone();
 
-    let log_file = Mutex::new(open_daemon_log(&config.log_dir)?);
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_timer(SystemTime)
-        .with_writer(std::io::stderr.and(log_file))
-        .with_target(false)
-        .init();
     if !args.is_empty() {
         let mut launch_agent =
             LaunchAgentConfig::from_daemon_config(&config, std::env::current_exe()?)?;
@@ -454,7 +446,7 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             }
             [] => unreachable!(),
             _ => {
-                tracing::error!(
+                eprintln!(
                     "usage: clumsiesd [mcp serve|_agent agent-run-event --host <host>|--print-launch-agent-plist|--install-launch-agent|--status-launch-agent|--bootstrap-launch-agent|--bootout-launch-agent|--restart-launch-agent|--reconcile-launch-agent]"
                 );
                 std::process::exit(64);
@@ -462,6 +454,26 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    let writer: Box<dyn std::io::Write + Send> = match open_daemon_log(&config.log_dir) {
+        Ok(log) => Box::new(log),
+        Err(error) => {
+            eprintln!(
+                "diagnostic_log_open_failed kind={:?}; using stderr",
+                error.kind()
+            );
+            Box::new(std::io::stderr())
+        }
+    };
+    let log_file = Mutex::new(writer);
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_timer(SystemTime)
+        .with_ansi(false)
+        .with_writer(log_file)
+        .with_target(true)
+        .init();
     /// Structured crash observability for the resident daemon.
     ///
     /// Hard signal faults (e.g. stack overflow) bypass Rust panics entirely and
@@ -504,11 +516,7 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 build_id = daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID,
                 "clumsiesd panicked:\n{backtrace}"
             );
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&crash_log_path)
-            {
+            if let Ok(mut file) = daemon::diagnostics::RotatingLog::new(&crash_log_path) {
                 let _ = writeln!(
                     file,
                     "clumsiesd panicked (pid {} version {} build_id {}): {info}",
@@ -543,6 +551,9 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     let health = service.health().await;
 
     tracing::info!(
+        pid = std::process::id(),
+        version = env!("CARGO_PKG_VERSION"),
+        build_id = daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID,
         "clumsiesd initialized for Mach service {} with installation {}",
         mach_service_name,
         health.daemon_installation_id
@@ -552,12 +563,8 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-fn open_daemon_log(log_dir: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::create_dir_all(log_dir)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join("daemon.log"))
+fn open_daemon_log(log_dir: &Path) -> std::io::Result<daemon::diagnostics::RotatingLog> {
+    daemon::diagnostics::RotatingLog::new(&log_dir.join("daemon.log"))
 }
 
 async fn shutdown_signal() {

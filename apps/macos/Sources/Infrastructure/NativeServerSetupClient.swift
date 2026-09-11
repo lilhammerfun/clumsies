@@ -182,38 +182,40 @@ struct NativeServerSetupClient: @unchecked Sendable {
 
     private func send<Response: Decodable & Sendable>(_ originalRequest: URLRequest) async throws
         -> Response {
-        var request = originalRequest
-        let cookieStorage = transport.configuration.httpCookieStorage
-        if request.value(forHTTPHeaderField: "cookie") == nil,
-           let url = request.url,
-           let cookies = cookieStorage?.cookies(for: url),
-           !cookies.isEmpty {
-            for (name, value) in HTTPCookie.requestHeaderFields(with: cookies) {
-                request.setValue(value, forHTTPHeaderField: name)
+        try await ClientDiagnostics.operation(layer: "native_http", method: originalRequest.httpMethod ?? "GET") {
+            var request = originalRequest
+            let cookieStorage = transport.configuration.httpCookieStorage
+            if request.value(forHTTPHeaderField: "cookie") == nil,
+               let url = request.url,
+               let cookies = cookieStorage?.cookies(for: url),
+               !cookies.isEmpty {
+                for (name, value) in HTTPCookie.requestHeaderFields(with: cookies) {
+                    request.setValue(value, forHTTPHeaderField: name)
+                }
             }
-        }
-        let (data, response) = try await transport.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw NativeServerSetupError.server(
-                status: 0,
-                message: "No HTTP response was returned."
-            )
-        }
-        if let url = request.url {
-            let headerFields = http.allHeaderFields.reduce(into: [String: String]()) {
-                result, field in
-                result[String(describing: field.key)] = String(describing: field.value)
+            let (data, response) = try await ClientDiagnostics.data(for: request, using: transport)
+            guard let http = response as? HTTPURLResponse else {
+                throw NativeServerSetupError.server(
+                    status: 0,
+                    message: "No HTTP response was returned."
+                )
             }
-            let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: url)
-            cookieStorage?.setCookies(cookies, for: url, mainDocumentURL: nil)
+            if let url = request.url {
+                let headerFields = http.allHeaderFields.reduce(into: [String: String]()) {
+                    result, field in
+                    result[String(describing: field.key)] = String(describing: field.value)
+                }
+                let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: url)
+                cookieStorage?.setCookies(cookies, for: url, mainDocumentURL: nil)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let apiError = try? JSONCoding.decoder().decode(APIErrorPayload.self, from: data)
+                let message = apiError.map { "\($0.code): \($0.message)" }
+                    ?? String(decoding: data, as: UTF8.self)
+                throw NativeServerSetupError.server(status: http.statusCode, message: message)
+            }
+            return try JSONCoding.decoder().decode(Response.self, from: data)
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let apiError = try? JSONCoding.decoder().decode(APIErrorPayload.self, from: data)
-            let message = apiError.map { "\($0.code): \($0.message)" }
-                ?? String(decoding: data, as: UTF8.self)
-            throw NativeServerSetupError.server(status: http.statusCode, message: message)
-        }
-        return try JSONCoding.decoder().decode(Response.self, from: data)
     }
 
     private static func makeEphemeralTransport() -> URLSession {

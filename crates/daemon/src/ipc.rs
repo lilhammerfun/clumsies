@@ -793,13 +793,20 @@ mod platform {
                 let message = SendXpc(message as *mut c_void);
                 let peer = SendXpc(peer as *mut c_void);
                 let response_json = dispatch_message(&service, message).await;
-                if let (Ok(response_json), Ok(reply)) = (response_json, unsafe {
-                    XpcOwnedObject::new(xpc_dictionary_create_reply(message.0))
-                }) && set_xpc_string(reply.as_ptr(), RESPONSE_JSON_KEY, &response_json).is_ok()
-                {
+                let sent = response_json.and_then(|response_json| {
+                    let reply =
+                        unsafe { XpcOwnedObject::new(xpc_dictionary_create_reply(message.0)) }?;
+                    set_xpc_string(reply.as_ptr(), RESPONSE_JSON_KEY, &response_json)?;
                     unsafe {
                         xpc_connection_send_message(peer.0, reply.as_ptr());
                     }
+                    Ok::<_, DaemonError>(())
+                });
+                if let Err(error) = sent {
+                    tracing::error!(
+                        event = "xpc_reply_failed",
+                        kind = crate::diagnostics::error_kind(&error)
+                    );
                 }
                 unsafe {
                     xpc_release(peer.0);
@@ -820,13 +827,59 @@ mod platform {
         service: &DaemonIpcService,
         message: SendXpc,
     ) -> Result<String, DaemonError> {
-        let request_json = xpc_dictionary_string(message.0, REQUEST_JSON_KEY)?;
-        let request: DaemonIpcRequest = serde_json::from_str(&request_json)?;
-        let response = match validate_agent_runtime_request(&request) {
-            Ok(()) => service.dispatch(request).await,
-            Err(error) => DaemonIpcResponse::from_result(Err(error)),
+        let request = decode_xpc_request(xpc_dictionary_string(message.0, REQUEST_JSON_KEY));
+        let response = match request {
+            Ok(request) => match validate_agent_runtime_request(&request) {
+                Ok(()) => service.dispatch(request).await,
+                Err(error) => {
+                    tracing::warn!(event = "xpc_validation_failed", request_id = %crate::diagnostics::validated_request_id(&request.request_id).unwrap_or_default(), kind = crate::diagnostics::error_kind(&error));
+                    let id = crate::diagnostics::validated_request_id(&request.request_id)
+                        .unwrap_or_else(crate::diagnostics::new_request_id);
+                    crate::diagnostics::REQUEST_ID
+                        .scope(id, async { DaemonIpcResponse::from_result(Err(error)) })
+                        .await
+                }
+            },
+            Err(response) => *response,
         };
         serde_json::to_string(&response).map_err(DaemonError::from)
+    }
+
+    fn decode_xpc_request(
+        json: Result<String, DaemonError>,
+    ) -> Result<DaemonIpcRequest, Box<DaemonIpcResponse>> {
+        json.and_then(|json| serde_json::from_str(&json).map_err(DaemonError::from)).map_err(|error| {
+            let response = DaemonIpcResponse::from_result(Err(error));
+            if let Some(error) = &response.error {
+                tracing::warn!(event = "xpc_decode_failed", request_id = %error.request_id, code = %error.code);
+            }
+            Box::new(response)
+        })
+    }
+
+    #[cfg(test)]
+    mod diagnostic_tests {
+        use super::*;
+        #[test]
+        fn malformed_xpc_payload_becomes_an_error_reply_and_log() {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("xpc.log");
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::INFO)
+                .with_ansi(false)
+                .with_writer(std::fs::File::create(&path).unwrap())
+                .finish();
+            let _guard = tracing::subscriber::set_default(subscriber);
+            let response = decode_xpc_request(Ok("{SECRET_BODY".to_owned())).unwrap_err();
+            assert!(!response.ok);
+            let id = &response.error.as_ref().unwrap().request_id;
+            let serialized = serde_json::to_string(&response).unwrap();
+            assert!(serialized.contains(id));
+            let logs = std::fs::read_to_string(path).unwrap();
+            assert!(logs.contains("xpc_decode_failed"));
+            assert!(logs.contains(id));
+            assert!(!logs.contains("SECRET_BODY"));
+        }
     }
 
     /// XPC objects are reference-counted and documented as safe to use from

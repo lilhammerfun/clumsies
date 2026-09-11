@@ -216,7 +216,13 @@ where
                 }
                 None => tool_error("local daemon rejected the operation without error details"),
             },
-            Err(_) => tool_error("local daemon is unavailable or rejected the memory operation"),
+            Err(error) => {
+                let error = crate::types::api_error_from_daemon_error(error);
+                tool_structured_error(
+                    format!("{} (request {})", error.message, error.request_id),
+                    json!({"error": error}),
+                )
+            }
         }
     }
 }

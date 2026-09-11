@@ -7,6 +7,7 @@ pub mod agent_runtime;
 mod commit_sync;
 pub mod config;
 mod credentials;
+pub mod diagnostics;
 mod draft;
 mod ipc;
 mod migration;

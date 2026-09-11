@@ -133,18 +133,44 @@ async fn send_server_request(
         server_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
-    let mut builder = state
-        .inner
-        .http
-        .request(method, url)
-        .bearer_auth(access_token);
+    let mut builder = state.inner.http.request(method.clone(), url);
+    if !access_token.is_empty() {
+        builder = builder.bearer_auth(access_token);
+    }
     for (name, value) in headers {
         builder = builder.header(name, value);
     }
+    let request_id = crate::diagnostics::request_id();
+    let body_bytes = body.as_ref().map_or(0, Vec::len);
+    let draft_count = (path.split('?').next() == Some("/api/v1/reviews"))
+        .then_some(body.as_ref())
+        .flatten()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+        .and_then(|v| {
+            v.get("drafts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+        });
     if let Some(body) = body {
         builder = builder.body(body);
     }
-    Ok(builder.send().await?)
+    let started = std::time::Instant::now();
+    let route = crate::diagnostics::route(path);
+    tracing::info!(event = "http_started", %request_id, %method, %route, body_bytes, draft_count);
+    let response = builder
+        .header("x-clumsies-request-id", &request_id)
+        .header("x-request-id", &request_id)
+        .send()
+        .await
+        .map_err(|error| crate::diagnostics::http_error(error, "send"))?;
+    let server_request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(crate::diagnostics::validated_request_id);
+    tracing::info!(event = "http_headers", %request_id, server_request_id, %method, %route,
+        status = response.status().as_u16(), elapsed_ms = started.elapsed().as_millis() as u64);
+    Ok(response)
 }
 
 async fn refresh_server_tokens(
@@ -174,23 +200,24 @@ async fn refresh_server_tokens(
     let refresh_token = config.refresh_token.clone().ok_or_else(|| {
         DaemonError::InvalidConfig("refresh_token is required to refresh the session".to_owned())
     })?;
-    let url = format!(
-        "{}/api/v1/auth/token",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = state
-        .inner
-        .http
-        .post(url)
-        .json(&json!({
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token
-        }))
-        .send()
-        .await?;
+    let response = send_server_request(
+        state,
+        &config.server_url,
+        "",
+        reqwest::Method::POST,
+        "/api/v1/auth/token",
+        &BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
+        Some(serde_json::to_vec(
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh_token}),
+        )?),
+    )
+    .await?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| crate::diagnostics::http_error(error, "body"))?;
         if status == reqwest::StatusCode::BAD_REQUEST
             || status == reqwest::StatusCode::UNAUTHORIZED
             || status == reqwest::StatusCode::FORBIDDEN
@@ -208,7 +235,7 @@ async fn refresh_server_tokens(
             body,
         });
     }
-    let tokens: ServerTokenRefreshResponse = response.json().await?;
+    let tokens: ServerTokenRefreshResponse = decode_server_json(response).await?;
 
     let _mutation = state.inner.project_config_mutation.lock().await;
     let current = state.project_config_snapshot();
@@ -235,7 +262,10 @@ where
     R: DeserializeOwned,
 {
     let response = ensure_server_success(response).await?;
-    Ok(response.json::<R>().await?)
+    response
+        .json::<R>()
+        .await
+        .map_err(|error| crate::diagnostics::http_error(error, "decode"))
 }
 
 pub(crate) async fn ensure_server_success(
@@ -245,7 +275,10 @@ pub(crate) async fn ensure_server_success(
     if status.is_success() {
         return Ok(response);
     }
-    let body = response.text().await.unwrap_or_default();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| crate::diagnostics::http_error(error, "body"))?;
     Err(DaemonError::ServerResponse {
         status: status.as_u16(),
         body,
