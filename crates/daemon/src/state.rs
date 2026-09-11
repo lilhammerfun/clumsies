@@ -860,9 +860,9 @@ impl DaemonState {
                     tracing::warn!(event = "http_cache_fallback", request_id = %crate::diagnostics::request_id(), route = %crate::diagnostics::route(&request.path));
                     return Ok(cached);
                 }
-                return Err(error.into());
+                return Err(error);
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
         let response = DaemonServerResponse {
             status,

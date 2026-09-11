@@ -840,20 +840,20 @@ mod platform {
                         .await
                 }
             },
-            Err(response) => response,
+            Err(response) => *response,
         };
         serde_json::to_string(&response).map_err(DaemonError::from)
     }
 
     fn decode_xpc_request(
         json: Result<String, DaemonError>,
-    ) -> Result<DaemonIpcRequest, DaemonIpcResponse> {
+    ) -> Result<DaemonIpcRequest, Box<DaemonIpcResponse>> {
         json.and_then(|json| serde_json::from_str(&json).map_err(DaemonError::from)).map_err(|error| {
             let response = DaemonIpcResponse::from_result(Err(error));
             if let Some(error) = &response.error {
                 tracing::warn!(event = "xpc_decode_failed", request_id = %error.request_id, code = %error.code);
             }
-            response
+            Box::new(response)
         })
     }
 

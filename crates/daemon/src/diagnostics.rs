@@ -165,16 +165,16 @@ impl RotatingLog {
             } else {
                 path.with_extension(format!("log.{index}"))
             };
-            if let Ok(metadata) = std::fs::metadata(&old_path) {
-                if metadata.len() > limit {
-                    let mut old = OpenOptions::new().read(true).write(true).open(&old_path)?;
-                    old.seek(SeekFrom::End(-(limit as i64)))?;
-                    let mut tail = Vec::with_capacity(limit as usize);
-                    old.read_to_end(&mut tail)?;
-                    old.set_len(0)?;
-                    old.seek(SeekFrom::Start(0))?;
-                    old.write_all(&tail)?;
-                }
+            if let Ok(metadata) = std::fs::metadata(&old_path)
+                && metadata.len() > limit
+            {
+                let mut old = OpenOptions::new().read(true).write(true).open(&old_path)?;
+                old.seek(SeekFrom::End(-(limit as i64)))?;
+                let mut tail = Vec::with_capacity(limit as usize);
+                old.read_to_end(&mut tail)?;
+                old.set_len(0)?;
+                old.seek(SeekFrom::Start(0))?;
+                old.write_all(&tail)?;
             }
         }
         let file = Self::open(path)?;
