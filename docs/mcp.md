@@ -1,10 +1,20 @@
-# MCP
+# MCP: the Memory tool
+
+MCP is the interface a Coding Agent uses to work with this Project's Memory. You do not need Server URLs, access tokens or a `project_id` argument in a tool call: the managed integration resolves the current working directory to a Project, and daemon owns the local data and authenticated synchronization.
+
+The normal sequence is **activate → load when needed → store only when asked to maintain Memory**. `activate` helps discover relevant context; `load` gives you complete, exact resources; `store` creates a proposal. See [Domain interfaces](/reference/domain-api) for how this differs from Desktop XPC and Server HTTP.
 
 Clumsies exposes one agent-facing tool:
 
 | Tool | Purpose |
 |---|---|
 | `memory` | Read the bound Project's Effective Memory or persist Project-carried proposal Drafts (`store`). |
+
+| Operation | Use it when | Result |
+| --- | --- | --- |
+| `activate` | Starting a substantive task, without knowing which resources matter | Ranked fragments with resource IDs and paths |
+| `load` | You need a complete resource, or will edit one | Full resource, stable ID and complete-resource hash |
+| `store` | The user explicitly asks to create/update/rename/delete/discard managed Memory | Durable local Draft operation and synchronization status |
 
 The App-bundled Rust `clumsiesd mcp serve` process is a protocol proxy.
 Effective Memory construction, indexing, retrieval, exact loading, Draft
@@ -22,13 +32,22 @@ There is no setup call. The removed `retrieve` tool, host-session binding,
 dispatch. Runtime guidance is delivered by `InitializeResult.instructions` and
 the tool descriptions.
 
+The examples below show the tool's **arguments** or the returned domain object, not the outer JSON-RPC envelope. MCP returns a successful domain object in `structuredContent` and as serialized text in `content`, with `isError: false`. Tool failures use `isError: true`; malformed protocol messages can instead fail at the JSON-RPC layer.
+
+## Common input rules
+
+- `op` must contain exactly one of `activate`, `load` or `store`.
+- Omit optional fields instead of sending `null`; unknown fields are rejected.
+- Field names are case-sensitive. In particular, `knownHashes` is camelCase, while `expected_hash` is snake_case.
+- Project binding belongs to the integration. Calls cannot override it with a `project_id` argument.
+
 ## Memory
 
 `memory` unifies all memory operations under a single tool with an `op` tagged enum: `activate`, `load`, and `store`.
 
 ### Memory Guidelines (`CLUMSIES.md`)
 
-Each project may define a memory guidelines document (conventionally `CLUMSIES.md` or `README.md` at the workspace root). This document establishes:
+Each Project may define a managed Memory guidelines document, conventionally at the Memory path `CLUMSIES.md`. This is an exact path inside Effective Memory, not an instruction to open an arbitrary file from the operating system. The document establishes:
 1. **Taxonomy & Organization**: Standard directory layouts (e.g. `architecture/*`, `decisions/*`, `guides/*`).
 2. **Update Rules & Mutation Policy**: When the agent should propose drafts, what descriptions to write, and what not to persist.
 3. **Deprecation Policy**: How conflicting or obsolete memories should be superseded.
@@ -60,11 +79,7 @@ reranking, resource diversity limits, token budgeting, and fragment delta
 calculation in one operation. `kind`, `group`, `limit`, model names, and ranking
 parameters are deliberately not agent-facing inputs.
 
-The `agent_activation.v2` profile maps the BGE reranker logit through sigmoid
-and removes candidates below the daemon-owned relevance floor. It also keeps
-only the highest-ranked member of overlapping spans from the same resource.
-Token budgeting consumes the remaining relevance-ordered prefix instead of
-filling unused space with lower-ranked short fragments.
+Retrieval parameters belong to daemon; callers describe the task rather than tuning a search engine. [Retrieval evaluation](/retrieval-evaluation) explains the ranking and diagnostic details.
 
 The response contains:
 
@@ -90,7 +105,7 @@ The response contains:
 }
 ```
 
-`add` and `replace` include content. `reuse` identifies content already present
+The response may also contain a local diagnostic `run_id`. `add` and `replace` include content. `reuse` identifies content already present
 in the caller's context and omits it. `removed` invalidates units that have been
 deleted, lost permission, or disappeared after reparsing. A unit that is merely
 irrelevant to the current query is not removed.
@@ -129,6 +144,28 @@ optional. When a known hash matches the current complete resource,
 `load` reads the same Effective Memory as `activate`, including current local
 Draft overlays. It does not perform fuzzy search, embedding, or reranking.
 
+A response without a matching known hash looks like this; the ID and hash are illustrative:
+
+```json
+{
+  "resources": [
+    {
+      "resource_id": "mem_123",
+      "scope": "org",
+      "kind": "memory",
+      "path": "architecture/retrieval.md",
+      "title": "Retrieval",
+      "description": "How the project retrieves Memory",
+      "content_hash": "sha256:example",
+      "changed": true,
+      "content": "# Retrieval\n\nLoad the complete resource before editing."
+    }
+  ]
+}
+```
+
+Use the returned `resource_id` for an update and the returned `content_hash` for `expected_hash`. An activation fragment hash identifies a fragment; it is not the complete-resource hash required by `store.update`.
+
 ### Store
 
 Call `memory` with `op: { store: ... }` only when the user explicitly asks to create, update, rename,
@@ -146,13 +183,13 @@ Operations:
 
 | Operation | Required fields | Optional fields |
 |---|---|---|
-| `create` | `path`, `body` | `description`, `resource` |
-| `update` | `id`, `expected_hash`, `replacements` | `description`, `resource` |
-| `rename` | `id`, `new_path` | `description`, `resource` |
-| `delete` | `id` | `description`, `resource` |
-| `discard` | `id` | `resource` |
+| `create` | `path`, `body` | `description` |
+| `update` | `id`, `expected_hash`, `replacements` | `description` |
+| `rename` | `id`, `new_path` | `description` |
+| `delete` | `id` | `description` |
+| `discard` | `id` | none |
 
-`resource` defaults to `memory`. IDs may be `mem_`-prefixed or legacy `ctx_` / `rul_` / `wfl_` values; legacy
+`resource` is an optional field on `store`, alongside `create` or `update`, not inside that operation. Its only allowed value is `memory`, which is also the default. IDs may be `mem_`-prefixed or legacy `ctx_` / `rul_` / `wfl_` values; legacy
 IDs stay stable and opaque and are never rewritten.
 
 `delete` removes the addressed item from Local Effective Memory. When the item
@@ -205,13 +242,12 @@ atomically against the same original content. A stale hash, missing match,
 ambiguous match, or overlap rejects the complete update without creating a
 Draft operation. `new_text` may be empty to delete text.
 
-Paths are free-form within the managed Memory namespace. The create
+Paths address the managed Memory namespace, not arbitrary local filesystem files. The create
 `body` is the complete resource content; updates never accept a complete body
 from the agent — daemon materializes the verified replacements into the
 complete Draft result. Memory bodies are Markdown; whether a resource reads as
 a rule, workflow, or context is expressed by its content and path, not by a
-wire type. `description` is an optional semantic summary on create/update and
-an explicit retrieval field. Metaprompt and `mpf` are not valid wire values.
+wire type. `description` is an optional semantic summary and retrieval field. Its publication currently has a Server persistence gap; see [Data model implementation notes](/data-model). Metaprompt and `mpf` are not valid wire values.
 
 A successful result contains the local operation ID, Draft ID, queue status,
 and sync status. It means the operation is durably stored locally and queued
@@ -219,6 +255,32 @@ for automatic synchronization. It does not mean a Review was merged or an
 authority Ref moved. Ordinary Project members may propose and submit changes,
 but only an Org owner or administrator may approve, reject, or merge an Org
 publication Review.
+
+For example, a queued local write can return:
+
+```json
+{
+  "local_operation_id": "lop_example",
+  "draft_id": "drf_example",
+  "queued": true,
+  "sync_status": "queued"
+}
+```
+
+`sync_status` can be `queued`, `syncing`, `retrying`, `synced` or `failed`. Even `synced` means that a Draft reached Server, not that it was approved or published.
+
+## Errors and recovery
+
+| Error or condition | What to do |
+| --- | --- |
+| `search_model_preparing` | Wait for background model preparation; the response reports progress |
+| `invalid_activation_state` | Discard stale state and activate with a fresh context; never claim missing fragments are still available |
+| `memory_resource_not_found` | Check the exact ID/path and current Project; a load does not silently drop missing targets |
+| `memory_content_changed` | Load the complete resource again and reassess the intended edit |
+| `text_replacement_not_found` / `text_replacement_ambiguous` / `text_replacement_overlap` | Correct exact replacement spans using the freshly loaded content; the update is rejected atomically |
+| `agent_runtime_mismatch` | Align the managed proxy and resident daemon builds; restarting a stale host integration may be necessary |
+
+A failed update does not permit a fallback full-body overwrite. A failed activation does not mean that no relevant Memory exists. Treat those as failed operations, then recover using the explicit error.
 
 ## Daemon operations
 
@@ -258,3 +320,7 @@ building, the previous ready generation remains queryable; the scheduler
 atomically publishes the new generation when it is complete. Model, vector,
 generation, and state failures remain
 explicit protocol errors.
+
+## Implementation references
+
+The executable input contract and advertised tool schema live in [mcp_contract.rs](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/agent_runtime/mcp_contract.rs). [mcp.rs](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/agent_runtime/mcp.rs) handles stdio/JSON-RPC and result wrapping; [search response types](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/mod.rs) and [daemon operation types](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/types.rs) define the returned data.

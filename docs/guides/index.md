@@ -1,24 +1,36 @@
 # Guides
 
-Guides are organized by operating role rather than by subsystem.
+Start with the outcome you want. Each guide covers an operating task; the architecture and reference pages explain the design behind it.
 
-The point of this section is not to restate the architecture. It is to tell a reader which path matches the work they are actually doing.
+## New to the project?
 
-## Choose the guide that matches the job
+Follow this route before reading source code:
 
-| If you are trying to do | Start here | Why |
+1. [Understand Clumsies](/overview): the problem it solves and the six core concepts.
+2. [Architecture](/architecture): where Desktop, daemon, Server, and agent integrations run.
+3. [Data model](/data-model): how Memory, Draft, Review, and version snapshots relate.
+4. [End-to-end flows](/flows): follow the deployment rollback checklist from retrieval to publication.
+5. [Domain API map](/reference/domain-api): connect product operations to MCP, XPC, and HTTP.
+6. [Codebase map](/repos): choose the implementation entry point for your question.
+
+If you want to try the product first, go directly to the member workflow below and return to the design pages as needed.
+
+## Choose a task
+
+| I want to… | Guide | Expected result |
 | --- | --- | --- |
-| bring up Server and the database for a team | [Deployment](/guides/deploy-for-an-org) | covers local self-hosted bring-up, bootstrap identity, and what still remains manual |
-| use clumsies inside a repo as a normal member | [Member workflow](/guides/how-to-use-clumsies) | starts from Desktop, then follows the Draft, Review, and Commit workflow |
-| wire an agent host into the local runtime | [Agent runtime](/guides/agent-runtime) | covers `clumsiesd mcp serve`, the private Hook proxy, daemon XPC, and release identity |
-| understand lifecycle observation | [AgentRun lifecycle](/guides/agent-run-injection) | explains the bounded, fail-open AgentRun event path |
-| connect the DeepSeek Harness web app | [DSH integration](/guides/dsh-integration) | registers the MCP server and forwards session/turn events as `dsh` AgentRuns |
-| work on the clumsies repository itself | [Development workflow](/guides/development-workflow) | worktree and Dev Instance isolation used by the project |
-| learn where effective Memory comes from | [Memory storage boundary](/guides/rule-store-unification) | Server Commit generations, Draft overlays, and the MCP proxy read path |
-| understand the retired standalone CLI | [Archived Zig CLI](/guides/cli-commands) | why `clumsies` the binary is not an active surface |
+| Use Memory in my repository and propose a change | [Member workflow](/guides/how-to-use-clumsies) | A bound repository and a Draft ready for Review |
+| Deploy a Server for my team | [Organization deployment](/guides/deploy-for-an-org) | A configured installation and first owner |
+| Connect an agent host | [Agent runtime](/guides/agent-runtime) | A host-managed path to the resident daemon |
+| Understand agent lifecycle events | [AgentRun lifecycle](/guides/agent-run-injection) | Know which events are recorded and what they do |
+| Connect DeepSeek Harness | [DSH integration](/guides/dsh-integration) | MCP registration and lifecycle forwarding |
+| Develop Clumsies locally | [Development workflow](/guides/development-workflow) | An isolated worktree and Dev Instance |
+| Understand local caches and Draft overlays | [Memory storage boundary](/guides/rule-store-unification) | Know which data is authoritative and which is derived |
 
-## What guides should and should not do
+The [archived CLI page](/guides/cli-commands) explains historical commands. It is not the current onboarding path.
 
-Guides should explain a real operating path from start to finish. They should answer what the actor is trying to accomplish, what state changes on disk or in Server, and where to look when something breaks.
+## Know which role you need
 
-Guides should not duplicate the architecture pages. If a section only restates that Server is authoritative or that MCP is agent-facing, it belongs in [Architecture](/architecture) or [MCP](/mcp), not in a guide.
+Members with Project access can use its Memory, create their own Drafts, submit Reviews, and participate in allowed Review discussions. Organization owners/admins manage Projects and organization-Memory selections and authorize publication. Installing an agent integration does not grant additional Server permissions.
+
+The [member guide](/guides/how-to-use-clumsies) shows where these roles meet in one workflow. The [domain API map](/reference/domain-api) describes the enforcement boundaries.

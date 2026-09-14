@@ -1,184 +1,99 @@
-# Unified Memory Model
+# Unified Memory design
 
-Date: 2026-08-15 · Status: implemented in code
+This page explains the constraints and tradeoffs behind the [core data model](/data-model). Read it when implementing or reviewing a feature. It describes current code behavior; see [Project authority cutover](/project-authority-migration) for migration history.
 
-This document is the implementation blueprint for replacing the
-closed Rule / Workflow / Context types with one unified Memory object across
-Server, daemon, OpenAPI, MCP, macOS, and the Agent Adapter. The Server, daemon,
-API contract, MCP, and macOS unification commits landed on 2026-08-15; this
-page is the design and migration record for that change. It is a destructive
-refactor: existing data is protected and migrated, while the old
-three-type write contracts are not preserved for the long term.
+## Why there is one Memory type
 
-> Authority update (2026-08-26): Organization is now the only active Memory
-> authority. Projects select Organization Memory, own a projection Ref, and
-> carry Organization-scoped Draft overlays. References to Project-scoped
-> authority below describe the historical schema; they are retained
-> only as migration context. See [Project authority cutover](/project-authority-migration).
+Deployment rollback checklists, coding constraints, and architecture notes are all Markdown Memory with stable IDs. A path under `rules/` or `workflow/` does not grant a different type, permission, or execution capability.
 
-## Core object
+This separates changes to a team's knowledge organization from protocol changes across Server, daemon, MCP, and clients. The system governs identity, versions, permissions, and publication. Retrieval judges relevance to a task; it does not approve content or promote a Draft to published authority.
 
-A Memory is the only first-class content object. No Category/Tag is
-introduced in this phase; `title`, `description` and `content` are the
-primary semantic surface an Agent can understand.
+The current Memory content contract carries a body and optional description. It has no Category/Tag, `content_type`, `content_format`, `agent_instruction`, or `invocable_skill` fields. Historical `ctx_`, `rul_`, and `wfl_` IDs remain valid; their prefixes do not determine current behavior.
+
+## One publication source, multiple Project projections
+
+Publication authority determines the current official shared content. The Organization Ref points to the current Organization Commit; a Review merge updates that version.
+
+Project Org Selection stores Memory IDs. Server uses them to generate a Project Commit from current Organization content and update the Project Ref. Such a purpose-specific view of existing data is a **projection**. The Project Ref is a synchronization unit, not another publication entry point.
+
+Why keep a Project Commit instead of filtering the Organization on every Agent call? The daemon can download a specific Project snapshot, install and index it locally, and track which version it is using. Selection changes and relevant upstream resource changes refresh the projection.
+
+Two boundaries matter:
+
+- Removing a Project selection changes that Project's baseline; it does not delete Organization Memory.
+- A Draft originates from a Project but targets Organization publication. Newly created Memory is automatically selected for the originating Project at merge; changes to existing Memory must target resources already selected by that Project.
+
+## Local views and publication views
 
 ```text
-Memory {
-  id: string            // stable opaque ID, e.g. mem_... (see ID policy)
-  scope: org            // project is historical read/cleanup compatibility
-  title: string
-  path: string          // stable path within org or project namespace
-  description: string   // required on create, optional on update
-  content: string       // Markdown body
-  content_format: string // e.g. "markdown"
-  revision: int
-  status: active | deprecated | archived
-  provenance: string    // org | project | selected_org | bootstrap | config
-  created_at, updated_at
-}
+Installed Project projection
+  + this Project's open/submitted Draft operations
+  = Effective Memory
+  → Index Revision matching content and model versions
+  → memory.activate / memory.load
 ```
 
-### ID policy
+Successful `memory.store` means the daemon persisted the proposal and scheduled synchronization. It does not mean Server has received it, a Review has approved it, or the Organization Ref has advanced. Successful synchronization is also different from publication.
 
-- Existing `ctx_` / `rul_` / `wfl_` IDs stay stable and opaque; they are not
-  rewritten. The migration emits an `old_id -> memory_id` map that is the
-  identity for those IDs.
-- New objects are created with `mem_` prefixed IDs.
-- Identity never changes when a user renames a category or a path.
+Overlays preserve Commit or Draft provenance. Search indexes are derived from this view. When an index is behind, readiness must be handled explicitly; an index for another version cannot be presented as current content.
 
-### Description
+The local daemon may not yet have downloaded the latest Project Commit. “Currently effective locally” can therefore differ from “currently published on Server.” Investigations should examine the installed Ref, Draft state, and index version together.
 
-- `description` is a required, agent-generated semantic summary on create.
-- Updates may change `description`; concurrent overwrite is prevented with
-  `revision` / `content_hash` (If-Match semantics) exactly like content.
-- `description` is an explicit retrieval field: it is chunked and indexed
-  separately by BM25 and vector search, and the reranker records its field
-  source. A test proves the retrieval chain consumes the field rather than
-  merely echoing it back.
+## Three independent Draft state dimensions
 
-## What is deleted
+| Dimension | Values | Question |
+|---|---|---|
+| Lifecycle `status` | `open`, `submitted`, `merged`, `discarded` | Where is the proposal in its lifecycle? |
+| `freshness` | `current`, `behind` | Does Base Commit equal the current upstream Commit? |
+| `reconciliation` | `unknown`, `clean`, `conflicts` | Is a comparison available, and can the changes be combined without conflicts? |
 
-- `ResourceKind` / `DraftResourceKind` / `TreeEntryKind` closed enums and all
-  long-term compatibility branches for the old three types.
-- Type-specific endpoints (`/rules`, `/context`, `/workflows` lists and gets).
-- The three ID groups on `ProjectOrgSelection` (`rule_ids`, `context_ids`,
-  `workflow_ids`) and `PersonalBundle`; both become a single `resource_ids`
-  list.
-- Type-specific materialization directories (`cache/context/`,
-  `cache/rule/`); one unified materialization layout is used.
-- `ContextKind` (file/note/decision/reference) and `workflow_steps`.
-- The kind double-check between Draft identity and Draft content.
+A Draft can be `submitted + behind + clean`: submitted for review, behind upstream, but reconcilable. Treating behind as failure or conflicts as a terminal lifecycle state obscures recovery paths.
 
-## What is retained
+Server compares Base, Current, and Draft Result. A candidate is bound to Draft version and current Ref; generating it does not modify the Draft. Rebase saves the previous Draft revision, advances Base, and expresses operations against that new baseline. It does not publish.
 
-- Organization authority and per-Project Draft-overlay isolation.
-- Draft / Review / Commit lifecycle (drafts still belong to a project).
-- Commit and Ref mechanics; the Organization Ref is authoritative and each
-  Project Ref is a selected-memory projection.
-- Authority and provenance: `provenance`, `status` and `scope` remain system
-  fields and are never inferred from `description` text or user naming.
-- Content format detection for Markdown preview (via `content_format`, not
-  via the deleted kind).
-- Unified RAG: all Memory enters one retrieval corpus; the algorithms
-  (BM25, dense, RRF, reranker, budget) are unchanged.
+Each behind Draft in a single- or multi-Draft submission can carry its own confirmed candidate. Server applies the candidates within the create/resubmit Review transaction. Missing candidates return reconciliation information; stale candidates require rereading and comparing again.
 
-## Server changes
+## Review transactions and approval
 
-- `resources` table: `resource_kind` CHECK narrowed to `('memory')` for new
-  writes; `description` column added (NOT NULL with a migration backfill);
-  `context_kind` and `applies_when` dropped; `workflow_steps` dropped.
-- `tree_entries.resource_kind` accepts `('memory', 'project_org_selection')`;
-  the latter remains a system entry kind for daemon bookkeeping.
-- `drafts` / `draft_operations`: `resource_kind` CHECK narrowed to
-  `('memory')`; typed content variants collapse into one Memory content
-  carrying `description`.
-- `project_org_resource_selections` and `personal_bundle_items`: drop the
-  `resource_kind` column (already keyed by `resource_id`).
-- New unified endpoints: `GET /api/v1/org/memories`,
-  `GET /api/v1/projects/{project_id}/memories`,
-  `GET /api/v1/org/memories/{memory_id}`,
-  `GET /api/v1/projects/{project_id}/memories/{memory_id}`.
-- `ProjectOrgSelection` and `PersonalBundle` DTOs use a single
-  `resource_ids: [string]`.
-- Draft create/update DTOs accept a unified Memory ref (scope + id/path)
-  without a kind.
+A Review holds a nonempty, ordered, deduplicated set of Drafts. They must belong to one Project and publication scope and be owned by the submitting author. Both operation ordering within a Draft and Draft ordering within a Review are part of the data semantics. UUID ordering and asynchronous response order cannot substitute for them.
 
-## daemon changes
+The publication transaction performs five main steps:
 
-- `DaemonDraftContent` collapses from three variants to one Memory content
-  carrying `description`.
-- `DaemonResourceKind` is removed or reduced to the system kinds the daemon
-  still manages (`memory`, `project_org_selection`).
-- Commit sync accepts the unified `TreeEntryKind`; unknown system kinds are
-  rejected with a distinct error.
-- Search schema: `search_resources` indexes `description` as its own column;
-  chunking, BM25 and vector fields record `description` vs `content` source;
-  retrieval history keeps the field source.
-- Materialization uses one namespace instead of `context/` vs `rule/`.
-- Draft overlay validation drops the kind double-check.
-- Local SQLite schema version bump with a migration that rewrites kind values
-  and rebuilds derived search indexes.
+1. Lock coordination data, the Review, and its Drafts; check Review version, Draft states, and current Organization Ref.
+2. Ensure each Draft Base matches the current Ref. Behind proposals require reconciliation.
+3. For an approved Review, verify the complete result hash so approval of old content cannot publish changed content.
+4. Materialize and apply operations in order, create one Organization Commit, and advance the Organization Ref once.
+5. Refresh affected Project projections, record the merge, and mark the Review and Drafts merged.
 
-## MCP / Agent Adapter
+Publication changes roll back together on failure. Some failure paths retain a generated reconciliation candidate so the client can proceed with coordination; that is not partial Memory publication.
 
-- `activate` / `load` / `store` use the unified Memory contract; results no
-  longer carry a three-type kind.
-- Workflow Skill generation is explicitly retired. Its former Zig
-  implementation remains available in Git commit
-  `4b18f7947a977dbc6b62f560b698dc992597f19d` at
-  `archive/zig-cli/src/client/adapter/workflow_skills.zig`, outside the active
-  build boundary.
-- The former `activate` / `ntmd` host-native layer is retired.
-  Direct-file adapters no longer install project guidance as host skills and
-  clean up their old `.agents/skills` / `.claude/skills` artifacts. The Codex
-  plugin adds only a generic Clumsies bootstrap Skill: it uses MCP to activate
-  Memory and dynamically load relevant project-maintained skills. Those skills
-  remain ordinary resources in Memory Space, are governed by the unified
-  Memory contract, and are never copied into Codex's skill directories.
+An owner/admin may approve then merge, or directly merge an open Review. Direct merge still requires authorization and full validation and records the decision actor. Approval binds to the result: a rebase preserving the complete result may preserve approval; a changed result invalidates it. A timestamp, title, or previous approval is not a substitute for checking the result.
 
-## macOS
+## Snapshot read costs
 
-- `MemoryKind` is removed from the UI (the Local/Hub merge into one Memory
-  section landed first; this phase removes the remaining kind-driven
-  creation defaults, path validation, preview gating, bundle grouping and
-  selection ID splitting).
-- Create flow collects a non-empty `description`.
-- Bundles and Project Org Selection use single `resource_ids`.
-- Empty states, search details and context menus are kind-free.
+A Commit payload contains the complete Tree and Blob content. Commit-state currently returns `incremental_supported: false`. Several Review files may reference the same Base/Current Commit; they share a snapshot rather than each owning an independent remote file version.
 
-## Migration
+Clients should organize a load around unique Commit IDs, then map snapshot contents to files. File count, unique snapshot count, response size, and page readiness are separate measurements. A successful HTTP request proves that request completed, not that the whole Review page is ready.
 
-1. Generate a repeatable, verifiable neutral export covering: effective
-   Memory bodies, title/path, description (backfilled), status, provenance,
-   active Drafts and Project/Org relations that must be
-   preserved. This is implemented as the org-admin endpoint
-   `GET /api/v1/admin/memory-export`, which emits every Memory (including
-   `issues/` paths), all Drafts with their raw operations, Project org
-   selections and personal bundles. IDs are emitted verbatim, so the export
-   doubles as the `old_id -> memory_id` identity map; the exported
-   `content_hash` is the byte-level comparison key.
-2. Take a full database backup (PostgreSQL dump and daemon SQLite copy).
-3. Import into the new schema; verify counts, content hashes, description,
-   scope/project relations and active Drafts.
-   `dev/memory-migration-verify.sh check <before.json> <after.json>` compares
-   two exports (identity set, per-memory hash/scope/description, draft,
-   selection and bundle counts, draft operation count) and fails loudly on
-   any discrepancy; `dev/memory-migration-verify.sh fetch` pulls the export
-   from a live server with an org-admin bearer token.
-4. Emit an `old_id -> memory_id` map; any unmigrated or conflicting object is
-   reported explicitly.
-5. Archive old Commit history offline; generate and verify a new baseline
-   Commit from the migrated effective state.
-6. A migration rehearsal must be able to restore from backup and repeat
-   export / import / verification on a fresh database.
+## Current implementation boundaries
 
-## Acceptance evidence
+These limitations remain in the checked implementation. Design intent must not be presented as a completed capability.
 
-- No new write path accepts the old three types (grep for the enum variants
-  in Server/daemon/OpenAPI/generated clients).
-- `activate` returns description-aware results and a test demonstrates the
-  retrieval chain uses the field.
-- macOS creates a Memory with a required description and edits it with
-  revision guards.
-- Unified RAG, Draft sync, Commit install, macOS Memory section, MCP real
-  host and data-restore end-to-end tests pass.
+| Boundary | Current behavior | Implication |
+|---|---|---|
+| Stale OpenAPI TreeEntry declaration | Rust/SQL use `memory` and `project_org_selection`, and runtime may return `description`; public OpenAPI still lists the old three kinds and omits description | Verify actual DTOs when integrating; old generated types are insufficient |
+| Incomplete description persistence | Drafts can carry descriptions and `resources.description` is non-null, but merge create/update SQL does not write it | Published descriptions may be empty or retain old values; end-to-end description retrieval is not guaranteed |
+| Remaining macOS classification | `MemoryKind` still participates in some UI, path, and display behavior | UI labels are not Server domain types or Agent execution capabilities |
+| Historical Project Memory routes | `/projects/{project_id}/memories` queries historical project-scoped resources | It is not Selection + Draft Effective Memory and must not build the current Project view |
+
+Update these boundaries alongside the corresponding code fixes. Historical read compatibility neither creates a new Project publication authority nor restores retired Rule/Workflow/Context write contracts.
+
+## Checks when reviewing an implementation
+
+- Does Memory identity survive renames, projections, and migrations? Are path collisions checked in the correct namespace?
+- Are Organization publication, Project selection, and local Draft provenance distinct? Is local store success mistakenly presented as publication?
+- Does each operation use its own required version and Ref, without mixing resource revision, Draft version, and Review version?
+- Is multi-Draft publication atomic, with every Draft checked rather than only the first?
+- Does the derived index match Effective Memory, parser, and model versions?
+
+Implementation sources: [Memory DTOs](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/api.rs), [Review/Draft DTOs](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/changes/api.rs), [publication and reconciliation](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/changes/postgres.rs), [snapshot generation and resource writes](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/postgres.rs), [commit-state](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/service.rs), [index implementation](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/index.rs), [public OpenAPI](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/openapi/clumsies.public.v1.yaml), and [macOS MemoryKind](https://github.com/lilhammerfun/clumsies/blob/main/apps/macos/Sources/Domain/MemoryModels.swift).

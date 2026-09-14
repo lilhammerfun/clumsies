@@ -1,131 +1,114 @@
 # 术语表
 
-## Server
+遇到名词时用本页查含义。第一次认识项目，建议先读[认识 Clumsies](/zh/overview)和[核心数据模型](/zh/data-model)，不用按顺序背术语。
 
-共享权威服务。负责 Organization Memory、Project 选择与投影、Bundle、Draft/Review、
-Blob/Tree/Commit/Ref 与身份授权。它不负责本机工作目录、检索模型或 AgentRun。
+## Organization
 
-## Memory
-
-clumsies 唯一的一等内容对象。active 发布权威只存在于 Organization scope。Memory
-拥有稳定 opaque ID、可变路径、Server `name`、语义 `description`、Markdown 正文、
-revision 与状态（`active`、`deprecated`、`archived`）。daemon 的展示标题从 Markdown
-第一个标题或路径派生。
-
-新对象使用 `mem_` 前缀；历史 `ctx_`、`rul_`、`wfl_` ID 保持稳定。重命名改变路径与
-`name`，不改变 ID。`description` 会作为独立检索字段，但当前链路仍可能为空或在 merge
-时未持久化，不能把它描述为已端到端强制。
-
-## Rule、Workflow、Context
-
-旧版封闭 Memory 类型。当前它们只是正文表达的角色：Rule 是行为约束，Workflow 是可
-复用步骤，Context 是背景或证据。Server、daemon 主链与 MCP 不再按这三种类型分派；
-macOS 残留的 `MemoryKind` 属于待清理兼容实现。
-
-## Organization authority
-
-Organization Memory 的唯一发布 Ref 与 Commit 历史。所有 active Memory 的 create、
-update、rename、delete 最终都必须经 Organization-scoped Draft、Review 和 merge 发布。
+拥有共享 Memory 发布历史的组织。Organization owner/admin 可以作发布决定；Project 选择组织里的内容用于具体项目。
 
 ## Project
 
-Server 签发的仓库绑定、成员授权、Organization Memory 选择、投影 Ref 与 Draft carrier。
-Project 不是 Memory authority scope，也不等于本机文件夹。`Workspace` 是已退役旧称。
+Server 签发身份的项目对象，管理成员、Organization Memory 选择，并承载待发布 Draft。本机目录可以绑定到 Project，但目录不是 Project 身份。`Workspace` 是旧称，当前接口使用 `project_id`。
 
-## Project view / Effective Memory
+## Memory
 
-Project view 包含该 Project 选择的 Organization Memory 投影。daemon 在已安装投影上叠加
-该 Project 携带的 `open` / `submitted` Draft，形成 Effective Memory。Project Ref 只
-版本化投影，不是第二个发布头。
+一份具有稳定 ID 的 Markdown 知识。数据库称为 `resources`，HTTP 使用 `memory_id`。当前活跃发布资源只属于 Organization；规则、流程和背景都使用同一种 Memory。
 
-## Project binding
+ID 标识“哪一份知识”，path 表示“目前放在哪个路径”，revision 表示“资源的哪次修订”。重命名不换 ID。`name` 来自文件名；daemon 展示标题来自 Markdown 标题或文件名。详细字段见[数据模型](/zh/data-model)。
 
-daemon 本机状态，把“规范 Server authority + canonical workspace root”映射到规范
-`project_id`。managed host-plugin 必须从当前目录解析绑定；普通 `mcp serve` 在没有目录
-绑定时可以兼容使用 Desktop 当前选中的 Project。旧 `ws_id` 不是 Project 身份，当前
-runtime 不再读取或迁移 `~/.clumsies/config.toml`。
+## Organization authority
 
-## Project Local Storage
+Organization 的正式内容发布权威，由 Organization Ref 及其 Commit 历史表达。“有权威”不是说内容一定正确，而是说它已经通过系统的组织发布边界。未发布 Draft 与检索排序不能自行获得这个身份。
 
-当前安装为某个 Project 保存可重建 Commit generation 和检索索引的位置。设置以 Server
-authority 与 `project_id` 为键，不进入 Server Project 元数据，也不跨安装同步。自定义
-目录只作为 marker-owned `.clumsies/cache-v1` 子树的父目录；Draft、队列、凭据和共享
-模型仍留在中心存储。
+## Project Org Selection
 
-## Bundle
+Project 明确选择的 Organization Memory ID 集合。它决定 Project 发布基线的内容；整个集合有独立 revision。Selection 不复制 Memory，也不是用户的个人 Bundle。
 
-某成员保存在 Server 的 Organization Memory ID 集合（`resource_ids`）。它用于发现和
-复用，不复制资源、不改变资源身份，也不影响 Project Org Selection 或 Organization Ref。
+## Projection（投影）
 
-## Blob / Tree / Commit / Ref
+从已有权威数据按用途生成的视图。Project Commit 是 Organization 内容按 Org Selection 生成的版本化投影；它便于本机同步，但不是另一个发布源。
 
-- Blob：内容寻址的不可变正文；
-- Tree：某版本的资源集合；
-- Commit：带 parent 的不可变版本；
-- Ref：可前移的头指针。
+## Effective Memory（有效内容）
 
-Organization Ref 是发布权威；Project Ref 标识选择投影。Manifest 是退役运行时术语。
+daemon 将已安装的 Project 投影与该 Project 当前 `open` / `submitted` Draft 组合得到的可读内容。活动 Draft 使用自己的 Base 与操作计算结果。它可能包含未发布内容，也可能因本机同步进度而晚于 Server 最新版本。
 
 ## Draft
 
-由 Project 携带、以 Organization 为发布目标的本地优先提案。Draft 保存 Base Commit、
-version 和有序 create/update/rename/delete 操作。生命周期只有 `open`、`submitted`、
-`merged`、`discarded`；`behind` 是 freshness，`clean` / `conflicts` 是 reconciliation。
+待发布提案：由 Project 携带，以 Organization 为目标，保存 Base Commit、版本及有序 create/update/rename/delete 操作。状态为 `open`、`submitted`、`merged`、`discarded`。本地 Draft 可能尚未同步，不能当作可清理缓存。
+
+## Base / Current / Draft Result
+
+三方比较的三个输入：Base 是修改开始时的发布快照，Current 是现在的发布状态，Draft Result 是把提案操作应用到 Base 后得到的结果。它们用于判断上游更新与本次修改能否组合。
+
+## Freshness / Reconciliation
+
+Freshness 表示 Draft 是否跟上当前 Ref：`current` 或 `behind`。Reconciliation 表示比较进度或结果：`unknown`、`clean`、`conflicts`。落后不一定冲突；两者都不是 Draft 生命周期状态。
+
+## Reconciliation candidate / Rebase
+
+candidate 是 Server 生成的比较结果，绑定 Draft version 和 Base/Current Commit。rebase 是确认并应用候选：保存旧 revision、更新 Base、重新表达操作。它不发布 Memory；候选过期后需要重新比较。
 
 ## Review
 
-Server 上的人类协调与授权发布对象。一个 Review 可有序包含一个或多个 Draft；决定和
-merge 在同一事务中校验整组 Draft、生成一个 Commit 并推进一次 Ref。任何一项失败都不
-发布部分结果。
+Server 中用于协调和发布一组 Draft 的对象。Draft 集合有顺序，merge 时整组修改在一个事务中发布。批准结果由哈希绑定；内容结果变化后不能继续使用旧批准。有权限的用户可合并 open 或 approved Review。
 
-## Reconciliation / Rebase
+## Blob / Tree / Commit / Ref
 
-Reconciliation 是 Server 对 Base、Current 与 Draft Result 的规范比较，只生成绑定 Draft
-version 和当前 Ref 的候选，不修改 Draft。Rebase 是显式应用确认候选：保留旧 revision、
-把 Base 推进到 Current，并用 `diff(Current, confirmed result)` 替换操作。两者都不发布；
-只有 Review merge 推进 Ref。
+- **Blob：** 不可变正文，同样的内容可被不同快照引用。
+- **Tree：** 一个版本里的条目集合，将 Memory ID、路径和来源连接到 Blob。
+- **Commit：** 指向 Tree、记录父版本的不可变完整快照；不是代码仓库的 Git commit。
+- **Ref：** 指向当前 Commit 的可移动指针。Organization Ref 代表发布，Project Ref 代表选择投影。
 
-## Adapter
+## Revision / Version / ETag / CAS
 
-让 Clumsies runtime 在 Agent Host 中可用的纳管集成层。Codex 使用 App 管理的全局
-Plugin；Claude Code、opencode、dsh、Antigravity 使用各自 direct-file/client 集成。
-Adapter 注册 MCP 和生命周期桥，不是 Server 或 MCP 协议本身。
+revision 和 version 是不同对象的修订或并发版本，不能跨对象互换。ETag 是 HTTP 表达版本身份的一种方式，例如资源详情的 `"rev-3"`。CAS（compare-and-swap）要求写入时看到的版本仍然成立，否则拒绝旧写入。Commit ID 和正文哈希各有用途，也不能充当任意对象的 version。
+
+## Content hash / Effective Memory hash / Index Revision
+
+content hash 标识正文内容；Effective Memory hash 标识本机有效内容输入；Index Revision 标识基于内容及检索模型、解析器等构建的索引版本。索引必须与要查询的有效内容匹配。它们都不是用户审批或权限凭据。
+
+## Bundle
+
+一个用户保存在 Server 的 Memory ID 集合，类似个人共享知识收藏夹。改变或删除 Bundle 不修改 Memory 本身，也不自动改变 Project Org Selection。
+
+## Project binding
+
+本机“Server 地址 + 规范目录 → project_id”的映射。纳管 host-plugin 必须解析并复查目录绑定；普通手工 `mcp serve` 无绑定时可兼容回退到 Desktop 当前 Project。见 [Project](/zh/workspace)。
+
+## Generation / Project Local Storage
+
+generation 是 daemon 安装的不可变快照文件目录。Project Local Storage 是这台安装为某个 Project 保存可重建 generation 和检索数据库的位置。它不是 Server 的项目目录设置，也不搬走中心 Draft、队列或凭据。
+
+## Daemon / Runtime proxy / XPC
+
+daemon 是本机常驻后台进程，负责持久化、同步和检索；proxy 是把 Agent 协议转成本地请求的短进程；XPC 是 macOS 进程间通信机制。MCP proxy 不拥有另一份数据库或模型实例。见[系统架构](/zh/architecture)。
+
+## Server
+
+共享 HTTP 服务，负责身份授权、Organization Memory、Project 选择、Draft/Review 和版本快照。PostgreSQL 保存服务端状态。本机目录绑定、检索模型与 AgentRun 不属于 Server Memory 发布数据。
+
+## Adapter / Agent Host
+
+Agent Host 是运行编码 Agent 的产品。Adapter 是让 Clumsies 在这个宿主中可用的集成层，负责安装 MCP 配置及相应生命周期桥。Codex 使用纳管全局 Plugin；其他支持的宿主采用各自集成方式，见 [Adapter](/zh/adapter)。
 
 ## MCP
 
-Agent-facing 协议面，只暴露一个工具：
-
-- `memory`：`activate`、`load`、`store`；
-
-App 内 `clumsiesd mcp serve` 是 stdio-to-XPC 短进程 proxy，不拥有数据库、模型或后台
-worker，也不是内容发布权威。
+Agent 调用工具的协议。Clumsies 当前只暴露一个 `memory` 工具，支持 `activate`、`load`、`store` 三种 action。它不暴露 Review 审批、merge 或任意 Server 请求。
 
 ## AgentRun
 
-daemon 本机记录的一次 root turn 或 subagent 执行。它提供 revision、父子关系、lease 与
-outcome，只用于本地 Activity 与诊断。
+本机记录的一次 root turn 或 subagent 执行，包含父子关系、版本、租约和 outcome。用于 Activity 与诊断，不是 Server Review，也不发布 Memory。
 
-## Retrieval Run
+## Retrieval Run / Evaluation Case / Corpus
 
-daemon 本机保存的一次有效 `memory.activate` 轨迹，包括 query、Effective Memory/Index
-Revision 身份、各排序阶段候选、最终 disposition、延迟和失败信息。它不是 MCP 工具，也
-不会上传 Server。
+Retrieval Run 是一次 `memory.activate` 的本地检索记录，保存 query、数据与索引身份、候选、结果和延迟。Evaluation Case 将成功记录对应的查询、完整 corpus（资源集合）和人工证据判断冻结成评测样本。它们用来解释和检验检索，不属于 MCP 的新工具，也不会随 Memory 发布上传到 Server。
 
-## Evaluation Case / Corpus
+## Issue / Assignee / Claim
 
-Evaluation Case 把成功 Retrieval Run 的 query、完整 Effective Memory corpus 和人工证据
-判断冻结为版本化评测样本。Corpus 包含该次运行的完整资源集合，不只是返回片段；被 Case
-引用的 Run 不随普通历史清理删除。
+这些词出现在早期任务协作设计和数据库迁移中：Issue 表示工作事项，assignee 表示负责人，claim 表示临时执行租约。当前 Server 路由没有提供对应的共享 Issue API，不能仅因历史表仍存在就当成可用领域能力。当前本机执行跟踪以 AgentRun 为主。
 
-## Assignee / claim
+## Rule / Workflow / Context 与历史名称
 
-assignee 是 Server 保存的长期负责人，必须是 Project 成员；claim 是某用户与
-AgentRun 当前执行 Issue 的短租约。两者彼此独立，也都不能代替 Issue content revision
-CAS。
+Rule、Workflow、Context 是旧版封闭 Memory 类型。现在它们可以描述文档用途，不是 Server/MCP 的三种内容类型；macOS 尚有旧 UI 分类残留。
 
-## Artifact / Hub / Local / Attestation
-
-- Artifact：Organization Memory 管理面的退役名称；
-- Hub：早期 Organization UI 标签，不是服务；
-- Local：早期 Project-scoped Memory UI 标签，不代表当前 authority；
-- Attestation：退役 Zig 客户端事件流能力，历史源码可从 Git commit `4b18f7947a977dbc6b62f560b698dc992597f19d` 恢复。
+Artifact 是 Organization Memory 管理面的旧称；Hub、Local 是旧 UI 标签；Manifest 是旧运行时术语；Attestation 属于已退役客户端事件流。阅读历史文档时先确认其日期与实现范围，不要据此创建当前不存在的对象或接口。

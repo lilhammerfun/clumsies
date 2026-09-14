@@ -1,0 +1,31 @@
+# Diagram sources
+
+Generated with the built-in imagegen tool for the Clumsies documentation.
+The adjacent documentation supplies the accessible text equivalent.
+These diagrams describe the normal path, not every setup or recovery endpoint.
+
+## system-architecture.png
+
+Use case: infographic-diagram
+Asset type: production technical documentation architecture diagram, Clumsies, raster illustration.
+Primary request: A technically precise software architecture diagram in the style of ByteDance / Volcengine engineering documents: clean white canvas, restrained cyan and cobalt blue, flat pale blue grouping containers, crisp dark text, simple rectangles, thin orthogonal directional arrows, generous space, no logos, no gradients, no 3D. Landscape high resolution 2400 x 1500 or similar.
+Text in English only, exact spelling. Title "Clumsies system architecture".
+Two large clearly separated containers: left wider container "macOS device", right container "Organization deployment".
+Inside macOS: top row two boxes "Desktop" and "Agent host". Desktop has arrow down labelled "typed XPC" to wide middle box "Resident clumsiesd". Agent host has arrow down labelled "MCP stdio / Hook" to small box "Runtime proxy", then arrow to Resident clumsiesd labelled "typed XPC". Arrange proxy above resident so no crossing arrows.
+Resident subtitle "Draft queue · Sync · Retrieval".
+Bottom row inside device three boxes: "SQLite" subtitle "Drafts / queues / local records", "Project storage" subtitle "Generations / search index", "Keychain" subtitle "Tokens". Resident connects downward separately to each bottom box. Thin neutral lines for local storage access.
+Inside right deployment: box "Rust Server" subtitle "Auth · Memory · Reviews"; beneath it arrow to cylinder "PostgreSQL" subtitle "Shared authority".
+ONE long solid blue arrow from Resident clumsiesd to Rust Server labelled "Authenticated HTTPS". Align these boxes horizontally.
+Below or at bottom right inside deployment small note "Organization Ref = published head". Bottom footer full width outside containers: "Normal data path · Sign-in and recovery omitted".
+Constraints: this is the exact normal data topology; no Desktop/Agent arrows directly to database or Server, no local SQLite to Postgres connection. No arrows between bottom storage boxes. All labels legible, no invented components, no extra paths. Clearly separated device/deployment boundaries. Keep labels short and large at documentation width. No Chinese labels; prose caption will localize.
+
+## memory-lifecycle.png
+
+Use case: infographic-diagram
+Asset type: production technical documentation lifecycle diagram for Clumsies.
+Primary request: technically precise Memory workflow in ByteDance / Volcengine technical architecture visual style: white canvas, cobalt blue and restrained cyan, pale blue grouped lanes, dark navy crisp English text, flat rectangles and straight directional arrows, large readable type, generous whitespace, no logos, no 3D, no gradients. Landscape 2400 x 1500 or similar.
+Title "From a local draft to shared Memory".
+Three horizontal lanes, flow left to right within each. Lane 1 labelled "1  Propose on this device": box "Edit Memory" -> box "Local Draft + operations" -> box "Sync to Server". Under local draft box place small tag "Saved locally". Lane 2 labelled "2  Publish in the organization": first box "Server Draft" -> box "Review + conflict check" -> box "Authorized merge" -> box "Organization Commit + Ref". Below last box tag "Published". One descending arrow from lane1 Sync to Server to lane2 Server Draft, routed in free whitespace at edge, no diagonal crossings. Note under lane2 "One transaction publishes the ordered draft set".
+Lane 3 labelled "3  Read in the project": box "Project selection" -> box "Project projection" -> box "Effective Memory" -> box "activate / load".
+One descending arrow from lane2 Organization Commit + Ref to lane3 Project projection labelled "Refresh". A secondary small box "Unmerged Draft result" just above Effective Memory within lane3, down arrow into Effective Memory labelled "Overlay". Effective Memory has subtitle "Selected content + draft results". Footer "Local acceptance, synchronization, and publication are different states."
+Constraints: depict authorized merge as the publishing boundary, don't imply Agent can publish. Do not show a second project authority. All text exactly spelled; no extra entities or side flows. Keep the three lanes visually separated. Arrows clear, no text overlaps.

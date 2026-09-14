@@ -5,9 +5,9 @@
 
 ## 1. 基本原则
 
-推荐以“一项独立工作、一棵 worktree、一个分支、一个 PR”为交付单元。worktree 只隔离
+同一会话同时只写一棵 worktree，后续任务默认沿用。确需更换时，先收口或明确交接原目录中的修改，停止对旧目录写入，再建立新工作区。不要把新任务自动等同于新 worktree。worktree 只隔离
 源码和 Git 状态；App、daemon、端口、数据库、Keychain、缓存和日志仍可能互相冲突，
-因此每棵 worktree 必须启动自己的完整 **Dev Instance**。
+因此需要运行 macOS 产品时，应使用当前 worktree 的独立 **Dev Instance**。只改文档时运行文档构建和预览即可。
 
 ```text
 worktree
@@ -23,10 +23,10 @@ Application Support、Keychain 身份或全局 Codex Plugin；只有显式执行
 
 ## 2. 核心开发循环
 
-1. 从合适的基线创建独立 worktree 和分支，例如：
+1. 在主 checkout 下确认当前工作区状态；没有需要复用的工作区时，从合适基线创建分支，例如：
 
    ```sh
-   git worktree add target/codex-worktrees/<name> -b codex/<name> main
+   git worktree add .worktree/<name> -b codex/<name> main
    ```
 
 2. 在新 worktree 内启动完整 Dev Instance：
@@ -36,11 +36,12 @@ Application Support、Keychain 身份或全局 Codex Plugin；只有显式执行
    ```
 
 3. 修改并运行覆盖所改层级的测试。
-4. PR 合并且不再需要实例后，先清理实例，再删除 worktree：
+4. PR 合并且不再需要实例后，先在该 worktree 内清理实例，再回到主 checkout 删除它：
 
    ```sh
    just dev-macos-reset
-   git worktree remove target/codex-worktrees/<name>
+   cd /absolute/path/to/main-checkout
+   git worktree remove .worktree/<name>
    git branch -d codex/<name>
    ```
 

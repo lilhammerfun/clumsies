@@ -1,50 +1,43 @@
 # Organization Memory
 
-> 文档属性：概念定义型 / 详细设计型｜L2–L3｜当前权威。
+Organization Memory 是团队正式发布的知识库。一份 Memory 可以被多个 Project 选择，但它的身份和发布历史只维护一套。先读[核心数据模型](/zh/data-model)，可以看到从一份文档到 Review 发布的完整例子。
 
-Organization Memory 是统一 Memory 模型唯一可发布的内容权威。本页保留历史路由
-`/artifact`，因为早期产品曾把该对象称为 Artifact、把对应界面称为 Hub；这些名称不再
-代表独立领域对象或服务。
+本页沿用历史地址 `/artifact`。Artifact 和 Hub 是旧产品名称，不是当前系统里的额外对象或服务。
 
-## 权威边界
+## 组织拥有内容，Project 决定使用范围
 
-每个 Organization 拥有唯一的权威 Ref 与不可变 Commit 历史。Project 只选择其中的
-Memory、物化自己的投影 Ref，并承载合并前 Draft；它不创建第二套权威命名空间，也不以
-路径或本机副本替代稳定资源 ID。
+假设组织有三份 Memory：编码约定、支付接口说明和部署回滚检查单。Payments 可以选择全部三份，Website 只选择编码约定和部署回滚检查单。这些 Project 引用同一批 Memory ID，不各自复制一份正文。
 
-```text
-Organization Ref -> Organization Commit -> Organization Memory
-                                      |
-                                      +-> Project selection -> Project Ref
-Project-carried Organization Draft ---------------------------> Review / merge
-```
+组织的已发布状态由 Organization Ref 指向的 Commit 记录。Project 的选择会生成各自的 Project Commit；上游选中资源发生变化时，Server 刷新相关 Project 投影，本机再同步新版本。
 
-Blob、Tree、Commit 与 Ref 记录发布版本；Draft、Review 与 merge 构成人工协调和发布
-边界。普通成员可提出、提交和评论变更，Organization owner/admin 决定发布。MCP 与
-daemon 不能直接推进 Organization Ref。
+| 动作 | 改变什么 |
+|---|---|
+| 在 Project 中选择 / 移除 Memory | Project 的选择与投影 |
+| 修改 Memory | 先形成该 Project 携带的 Organization Draft |
+| 提交 Review | 把一个或多个 Draft 交给人协调 |
+| merge Review | 更新 Organization 发布内容及相关 Project 投影 |
+| 重命名 Memory | 发布后改变路径；稳定 ID 不变 |
+| delete Memory | 发布后归档当前资源；已有不可变快照保留历史 |
 
-## Memory
+普通成员在授权范围内提出、提交和评论变更。Organization owner/admin 有发布决定权限。Agent 的 `memory.store` 只保存提案，MCP 不提供审批或 merge 工具；具体接口权限见[接口参考](/zh/reference/)。
 
-当前只有一个一等内容对象 `Memory`。规则、流程、项目背景等用途由 Markdown 正文与路径
-表达，不再由 Context、Rule、Workflow 三种封闭类型决定。
+## 一份 Memory 包含什么
 
-Memory 拥有稳定 opaque ID、Organization 内唯一路径、权威 `name`、语义
-`description`、Markdown 正文、revision 与状态。展示标题由 daemon 从 Markdown 第一
-个标题或路径派生，不等同于 Server `name` 或 Draft title。
+每份 Memory 有稳定 ID、组织内路径、由路径生成的 `name`、摘要 `description`、Markdown 正文和状态。完整字段与可空性见[Memory 字段表](/zh/data-model#memory-身份、路径与正文)。
 
-`description` 是目标模型中的独立检索摘要，但当前写入链允许空值，Server merge 也尚未
-可靠持久化 Draft description；这属于现行实现缺口，不应把“字段存在”写成“端到端必填
-且保留”。完整字段、版本和兼容边界见[统一 Memory 数据模型](/zh/unified-memory-model)。
+正文可以表达规则、流程或背景知识，但没有对应的三种系统内容类型。路径和标题供人组织知识，不赋予额外权限，也不会自动把普通文档变成 Agent Host 的可执行 Skill。
 
-## Bundle
+摘要当前允许为空，Server merge 还存在未完整持久化 Draft 摘要的限制。阅读有摘要的文档时可以利用它理解内容，但不能假设所有已发布 Memory 都有可靠摘要，见[实现边界](/zh/unified-memory-model#当前实现边界)。
 
-Bundle 是某个成员保存在 Server 的 Organization Memory ID 集合（`resource_ids`），用于
-发现和复用共享内容，不形成内容副本或新权威：
+## Bundle：个人收藏的一组 Memory
 
-- Memory 可以不属于任何 Bundle，也可以同时属于多个 Bundle；
-- Bundle membership 不改变资源 ID、路径、正文或发布状态；
-- Bundle 是个人选择，Project Org Selection 是 Project 投影输入，两者彼此独立；
-- 删除或调整 Bundle 不能推进 Organization Ref。
+Bundle 是用户保存在 Server 的 Memory ID 集合，用于归组、发现和复用。例如一个人可以创建“新同事入门”Bundle，其中包含编码约定和部署回滚检查单。
 
-Project 选择、Draft overlay 与 Effective Memory 见 [Project](/zh/workspace)，系统级权威图
-见[系统架构](/zh/architecture)。
+- Memory 不必属于任何 Bundle，也可同时属于多个 Bundle。
+- Bundle 调整只改个人集合，不修改正文、资源 ID 或发布状态。
+- 收藏进 Bundle 不会自动加入某个 Project 的 Org Selection。
+- 删除 Bundle 不会删除其中的 Memory。
+
+数据表为 `personal_bundles` 与 `personal_bundle_items`。Project 选择使用另外两张表，见[数据存储映射](/zh/data-model#数据实际存在哪里)。
+
+继续阅读：[Project](/zh/workspace)、[统一 Memory 设计](/zh/unified-memory-model)。实现依据：[Memory API](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/api.rs)、[资源与 Bundle 持久化](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/postgres.rs)。

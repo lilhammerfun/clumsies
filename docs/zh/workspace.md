@@ -1,102 +1,67 @@
 # Project
 
-> 文档属性：概念定义型 / 详细设计型｜L2–L3｜当前权威。
+Project 把一个项目的成员、使用的知识和待发布修改组织在一起。本机仓库目录可以绑定到这个 Project，让 Agent 在工作时找到正确的 Memory。Project 的身份由 Server 签发，不能用文件夹名称代替。
 
-Project 是仓库绑定、授权边界、Organization Memory 选择和 Draft carrier，不是 Memory
-权威命名空间。本页保留历史路由 `/workspace` 以兼容旧链接；当前 API 与运行时只使用
-`project_id`。
+本页保留历史地址 `/workspace`；当前 API 使用 `project_id`。Project 与 Organization 的关系见[核心数据模型](/zh/data-model)。
 
-## 身份与本地绑定
+## 一个 Project 管理什么
 
-Server 签发规范 Project 身份。本机目录只是安装级绑定：
+| 内容 | 保存在哪里 | 用途 |
+|---|---|---|
+| 名称、描述、成员 | Server | 标识项目及访问权限 |
+| Org Selection | Server | 决定该 Project 使用哪些已发布 Organization Memory |
+| Project Ref / Commit | Server，并同步到 daemon | 给选择结果建立一个可安装的版本 |
+| Project 携带的 Draft | 先在本机持久化，再同步到 Server | 保存以 Organization 为发布目标的提案 |
+| 本机目录绑定 | daemon | 把当前仓库目录解析为 `project_id` |
+| 安装 generation 与检索索引 | daemon 管理的文件 / SQLite | 支持 Agent 在本机读取和检索 |
 
-```text
-normalized Server authority
-  + canonical workspace root
-  -> canonical project_id
-```
+成员授权与内容选择是两件事。被选中表示内容进入该 Project 的基线，不意味着个人 Bundle、目录绑定或某个 Agent 请求可以改变成员权限。
 
-常驻 daemon 把绑定保存在中心 SQLite，规范化调用方当前目录并选择最长的已绑定祖先；
-Git worktree 没有独立绑定时，还可解析主 checkout 的仓库根。文件夹名称、旧 `ws_id` 和
-请求参数都不能充当 Project 身份。当前运行时不再读取或迁移
-`~/.clumsies/config.toml`。
-
-两种 Agent 入口的兼容策略不同：
-
-- 纳管 host-plugin 必须由当前目录解析绑定，启动及每次 `tools/call` 都校验仍为同一
-  Project；绑定缺失或变化时关闭式失败。
-- 手工启动的普通 `mcp serve` 先解析目录；没有绑定时可兼容使用 daemon 中 Desktop
-  当前选中的 Project。该回退不是调用方可写的 `project_id`，也不适用于 host-plugin。
-
-因此多个已绑定 MCP 进程可同时服务不同仓库，Desktop 选中项不会重定向纳管进程。
-
-## Organization 权威与 Project 投影
-
-Organization 是唯一 active Memory 权威。Project 保存 Organization Memory ID 选择集合，
-并持有由“选择 + 当前 Organization Commit”生成的 Project Ref/Commit。Project Ref 是可
-同步、可安装的物化投影，不是第二个发布目标：Review merge 推进 Organization Ref，选择
-变化或上游权威变化刷新 Project Ref。
+## 选择怎样变成当前可读内容
 
 ```text
-Organization Ref + Project Org Selection
-  -> Project Ref / Commit projection
-  -> installed generation
-  + Project-carried open/submitted Org Drafts
-  -> Effective Memory
+Organization 当前 Memory + Project Org Selection
+  → Server 生成 Project Commit / Ref
+  → daemon 安装快照
+  + 该 Project 的 open/submitted Draft 修改
+  → Effective Memory
 ```
 
-仓库专属知识也先作为由该 Project 携带的 Organization-scoped Draft。合并前 overlay 只在
-该 Project 可见；批准后成为 Organization 权威，并自动加入携带 Project 的选择集合。
+以 Payments 为例，它选择部署回滚检查单后，所有绑定到这个 Project 的工作目录都指向同一个 Server Project。某次编辑生成由 Payments 携带的 Draft；同步到另一台安装后，那台安装也能呈现这个 Project 的提案。它不是某个目录中独立发布的文件，也不会变成另一个 Project 的未发布修改。
 
-`GET /api/v1/projects/{project_id}/memories` 及详情路由只读取遗留的
-Project-scoped authority 数据，不返回 Project selection、投影或 Effective Memory。当前
-客户端不得用这两个接口构建 Project 视图。
+未发布修改仅叠加到承载它的 Project。merge 后，Organization 内容更新，选中受影响资源的 Project 才会获得新的投影。对于新建 Memory，Server 还会把它自动加入发起 Project 的选择。
 
-## 本机状态
+`GET /api/v1/projects/{project_id}/memories` 是历史 Project-authority 数据的读取接口。它不包含当前选择投影和本地 Draft，不能用它代替 Effective Memory。
 
-常驻 daemon 持有 Project 的安装级状态：
+## 目录绑定怎样工作
 
-- 目录绑定和 Server authority；
-- 已安装的 Organization Ref 与 Project 投影 Ref；
-- 不可变 Commit generation；
-- 当前 Draft、操作队列和同步状态；
-- 与 Effective Memory hash 匹配的派生检索索引；
-- 可选 Project Local Storage 位置及 move 状态；
-- 仓库级 direct-file Adapter 记录；
-- Server Issue 的本地副本和本机 AgentRun 投影。
-
-Server 仍对 Project membership、Org Selection、Organization Memory、Review/merge、共享
-本地绑定、缓存或 AgentRun 都不会创建远端权威。
-
-## Effective Memory
-
-Agent 读取的不是某个 HTTP Project-memory 列表，而是 daemon 合成的当前视图：
+绑定关系是：
 
 ```text
-installed Project projection + current open/submitted Draft operations
-  -> Effective Memory hash
-  -> matching Index Revision
-  -> memory.activate / memory.load
+规范化的 Server 地址 + 本机规范目录 → Server project_id
 ```
 
-`memory.store` 先在 daemon 中持久化一个由绑定 Project 携带、以 Organization 为发布目标
-的 Draft，并加入同步队列。成功只表示本地接受；它不会更新 Organization Ref、审批
-Review 或让其他 Project 立即看到提案。
+daemon 把关系保存在中心 SQLite 的 `project_bindings` 中。调用者位于子目录时，优先匹配最长的已绑定祖先目录；Git worktree 没有自身绑定时，还可以通过主 checkout 的仓库根解析。移动或重新绑定目录改变的是本机定位关系，不改变 Server Project 身份。
+
+两种 Agent 入口的规则不同：
+
+| 入口 | 选择 Project 的方式 |
+|---|---|
+| 纳管 host-plugin | 必须从工作目录解析绑定；启动及每次 `tools/call` 校验绑定，丢失或改变时请求失败 |
+| 手工普通 `mcp serve` | 先解析工作目录；无绑定时可兼容使用 daemon 中 Desktop 当前选中的 Project |
+
+因此，两个已经绑定的 Agent 进程可以同时服务不同仓库，切换 Desktop 选中项不会重定向纳管进程。工具请求本身不能随意指定另一个 `project_id` 来绕过绑定。
+
+当前 runtime 不再读取或迁移 `~/.clumsies/config.toml`，旧 `ws_id` 也不是 Project 身份。安装与入口细节见[Adapter](/zh/adapter)和[本地运行时](/zh/runtime)。
 
 ## Project Local Storage
 
-每个 Project 可为本机选择可重建 generation 与检索数据库的位置。设置以 Server
-authority 和 `project_id` 为键，只属于当前安装，不进入 Server Project 元数据。
+一台安装可以为某个 Project 选择 generation 与检索数据库的保存位置。这个设置以 Server 地址和 `project_id` 为键，仅作用于本机，不属于 Server Project 元数据。
 
-用户选择的目录只是 daemon 托管子树的父目录。中心 Draft、操作队列、凭据、缓存权威
-对象和共享模型不会随之移动。自定义位置不可用时，daemon 明确返回错误，不会悄悄在默认
-位置创建第二份活动缓存。迁移、ownership marker、CAS 和恢复语义见
-[本地运行时](/zh/runtime#project-local-storage)。
+用户选中的目录是 daemon 托管子目录的父目录。中心 Draft、同步操作、凭据、快照缓存对象和共享模型不会跟着移动。自定义目录不可用时，daemon 返回明确错误，不会悄悄建立另一份活动缓存。具体迁移和恢复流程见[本地运行时](/zh/runtime#project-local-storage)。
 
-## 相关文档
+## 排查“为什么没读到这份 Memory”
 
-- [Organization Memory](/zh/artifact)：唯一内容权威与 Bundle；
-- [统一 Memory 数据模型](/zh/unified-memory-model)：字段、投影、Draft 与多 Draft Review；
-- [本地运行时](/zh/runtime)：目录解析、存储、同步和失败行为；
-- [Adapter](/zh/adapter)：各 Agent Host 的纳管方式；
-- [系统架构](/zh/architecture)：跨组件不变量。
+按数据流依次检查：当前目录绑定的 Project、该 Project 的 Org Selection、daemon 已安装的 Project Commit、是否有 Draft 覆盖、检索索引是否就绪。发布成功但本机尚未同步、项目未选择、Draft 覆盖旧基线，是不同的问题。
+
+继续阅读：[Organization Memory](/zh/artifact)、[核心数据模型](/zh/data-model)、[系统架构](/zh/architecture)。实现依据：[绑定解析](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/state.rs)、[MCP 入口](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/agent_runtime/mcp.rs)、[Project 投影](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/postgres.rs)、[本地存储](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/project_storage.rs)。

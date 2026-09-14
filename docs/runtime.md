@@ -1,4 +1,6 @@
-# Runtime
+# Local runtime
+
+Start with [Architecture](/architecture) and [End-to-end flows](/flows) to understand the overall design. This page covers persistent local state, synchronization, retrieval, and recovery. For symptoms and recovery steps, see [Troubleshooting](/guides/troubleshooting).
 
 ## Local daemon
 
@@ -300,7 +302,7 @@ The local methods are `list_retrieval_runs`, `get_retrieval_run`,
 `clear_retrieval_runs`, and `export_evaluation_set`. Retrieval history is
 central daemon state and remains independent from Project Local Storage.
 Retention keeps the latest 500 unpinned Runs per Project; Evaluation Cases pin
-their source Runs and immutable corpora. See `docs/retrieval-evaluation.md`.
+their source Runs and immutable corpora. See [Retrieval and evaluation](/retrieval-evaluation).
 
 Server diagnostics are available at `/api/v1/admin/health`. Database, schema,
 Commit service, and OIDC are reported as separate components.

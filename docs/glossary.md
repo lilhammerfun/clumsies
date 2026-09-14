@@ -1,192 +1,114 @@
 # Glossary
 
-## Server
+Use this page to look up a term. For a first introduction, read [Meet Clumsies](/overview) and the [core data model](/data-model); you do not need to memorize the vocabulary first.
 
-Server is the authority layer. It owns Organization Memory, Project selections
-and projections, personal Bundles, Draft and Review lifecycles, identity and
-authorization, and the Blob / Tree / Commit / Ref version graph.
+## Organization
 
-This is the architectural center of gravity for the whole project. If a page explains clumsies as a set of local files plus some helper commands, it is missing the point.
-
-## Memory
-
-Memory is the single first-class content object in clumsies. Active authority
-is Organization-scoped and carries a stable opaque ID, title, stable path,
-required semantic `description`, Markdown `content` body, `revision`, and
-`status` (`active`, `deprecated`, or `archived`). The wire/storage scope value
-`project` remains only for reading and discarding historical rows.
-
-New objects get `mem_`-prefixed IDs. Existing `ctx_` / `rul_` / `wfl_` IDs stay
-stable and opaque; the migration emits an `old_id -> memory_id` map as their
-identity. Identity never changes when a user renames a path.
-
-`description` is an explicit retrieval field: it is chunked and indexed
-separately by BM25 and vector search, and the reranker records its field
-source.
-
-## Rule, Workflow, and Context
-
-Rule, Workflow, and Context were the former closed memory types. They are now
-roles a Memory plays, expressed by its content and path rather than by a type
-discriminator:
-
-| Former type | Meaning as a Memory role |
-| --- | --- |
-| Rule | a strong behavioral constraint for an agent |
-| Workflow | an ordered reusable procedure |
-| Context | project or organization knowledge and evidence |
-
-All three are Markdown-backed Memory objects in the unified model. When the
-docs mean a single behavioral instruction, they should usually say `rule`, not
-`prompt`. A rule tells the agent what to do; it does not tell the agent what
-the project is.
-
-## Organization authority and Project view
-
-Organization Memory is shared across the Organization and has the sole
-authority Ref and Commit history. A Project selects the Organization resources
-its repository consumes and carries Organization Draft overlays that remain
-visible only in that Project before merge. Its Project Ref versions this
-selection projection; it is not a second authority head.
-
-The historical UI labels were **Hub** (Organization authority) and **Local**
-(Project-scoped authority). The macOS app has since merged navigation into one
-Memory section. Any surviving Project-scoped resource is legacy read-only data
-scheduled for the authority cutover, not an active product namespace.
-
-## Artifact
-
-Artifact is a retired name for the former organization-level memory manager.
-The current product surface is the Memory section's organization scope
-(historically called Hub). Server, not Hub, is the authority process.
+The organization owning shared Memory publication history. Organization owners/admins can make publication decisions; Projects select its content for their work.
 
 ## Project
 
-Project is the repository binding, membership boundary, Organization Memory
-selection, projection Ref, and carrier for private Draft overlays. It is not a
-Memory authority scope or a local folder; local paths resolve to a stable
-Server-issued Project ID.
+A Server-identified project that manages members, Organization Memory selection, and proposed Drafts. Local directories bind to it but are not its identity. Workspace is a former name; current APIs use `project_id`.
 
-`Workspace` is a retired name that may still appear in old code and legacy
-documents.
+## Memory
 
-## Project binding
+A Markdown knowledge resource with a stable ID. SQL calls it `resources`; HTTP uses `memory_id`. Active published resources currently belong only to Organization. Rules, procedures, and background notes all use the same Memory object.
 
-A Project binding is daemon-owned local state that maps a canonical directory
-root to one canonical Server `project_id` under a specific Server authority.
-MCP resolves the nearest bound ancestor of its current working directory. The
-binding is independent from the Project currently displayed by Desktop.
+ID identifies the resource, path locates it in the namespace, and revision identifies a resource revision. Renaming preserves ID. `name` comes from the filename; the daemon's display title comes from a Markdown heading or filename. See the [data model](/data-model).
 
-A legacy `ws_id` is not a Project binding. It may supply a path and display name
-during one-time migration, but its identifier is never accepted as a
-`project_id`.
+## Organization authority
 
-## Project Local Storage
+The official publication boundary expressed by the Organization Ref and its Commit history. Authority means content passed the Organization publication process, not that it is necessarily correct. Drafts and retrieval rankings cannot grant themselves this status.
 
-Project Local Storage is the current installation's daemon-owned location for
-one Project's rebuildable Commit generations and derived search index. The
-setting is keyed by Server authority and `project_id`; it is not Server Project
-metadata, does not synchronize across installations, and is not an editable
-working directory.
+## Project Org Selection
 
-The selected directory is only a parent for a marker-owned `.clumsies/cache-v1`
-subtree. Drafts, operation queues, cached authority objects, credentials, and
-shared retrieval models remain in their central stores. If the selected volume
-is unavailable, daemon does not silently use a second default cache.
+The explicit set of Organization Memory IDs selected for a Project's published baseline. The collection has its own revision. Selection neither copies Memory nor represents a user's personal Bundle.
 
-## Bundle
+## Projection
 
-A Bundle is a personal, Server-stored selection of shared memory resources
-(a single `resource_ids` list). It helps one user reuse a curated set without
-turning that selection into organization authority. A resource may exist
-outside every Bundle, and the same resource may appear in multiple Bundles.
-
-## Manifest
-
-Manifest is a retired runtime term. Authority versions use Blob, Tree, Commit,
-and Ref. The daemon materializes a validated Commit generation, overlays local
-Draft operations into Effective Memory, and builds a separate derived Index
-Revision for retrieval.
-
-## Attestation
-
-Attestation is a legacy event-stream capability. Agent observability is not part
-of the current product direction or MCP memory contract. Historical client
-source remains recoverable from Git commit
-`4b18f7947a977dbc6b62f560b698dc992597f19d`.
-
-## Adapter
-
-Adapter is the host integration layer. It connects clumsies to coding agents
-such as Codex, Claude Code, opencode, and the DeepSeek Harness by installing
-the hooks, config, and runtime glue needed for the protocol to actually run.
-Codex uses one App-managed user-global Plugin; repository-writing hosts use
-repository-scoped integrations managed from **Settings → Agent**.
-Hosts consume the MCP tools directly; the former thin host-native skill layer
-is retired.
-
-Adapter is not the Server and not the MCP protocol itself. It is the layer that makes the runtime usable inside a specific host.
-
-## MCP
-
-MCP is the agent-facing protocol surface. It is the runtime path through which an agent activates task-relevant fragments, loads known complete resources, and stores explicit Draft refinements.
-
-MCP is not an authority or storage layer. The App-bundled Rust `clumsiesd mcp
-serve` proxy validates the agent-facing contract and delegates Effective
-Memory, retrieval, loading, and Draft persistence to the
-resident daemon over XPC.
-
-The current implementation exposes one `memory` tool with `activate`, `load`,
-and `store` operations.
-
-## Retrieval Run and Evaluation Case
-
-A Retrieval Run is the daemon-local durable record of one valid memory
-activation. It captures the query, Effective Memory and Index Revision
-identities, all ranking-stage values, final candidate disposition, latency, and
-failure details. It is not an agent-facing tool and is never Server telemetry.
-
-An Evaluation Case pins one successful Run together with its immutable
-Evaluation Corpus and versioned human judgments. The corpus is the complete
-Effective Memory resource set used by that Run, not only the returned
-fragments. Evaluation Cases survive unpinned history clearing and can be
-exported for B1–B4 comparison.
-
-## Draft and Review
-
-A Draft is local in-progress work over a Memory resource and is carried by a
-Project. A Review is the Server collaboration object that decides whether
-those operations may move an authority Ref. The carrying Project and authority
-target are separate concepts; Organization is not modeled as a Project.
-
-Draft is local-first state. Review is shared workflow.
-
-Every new Draft targets Organization authority. `project_id` identifies the
-Project carrying its private pre-merge overlay; it does not select a Project
-authority Ref. Project-scoped Drafts exist only as historical cleanup inputs.
-
-Draft lifecycle is only `open`, `submitted`, `merged`, or `discarded`.
-`behind` is freshness, not a lifecycle state; `clean` and `conflicts` describe a
-reconciliation candidate and do not prevent further Draft edits.
-
-## Sync, Reconciliation, and Rebase
-
-Sync downloads the latest authority Commit/Ref or uploads Draft operations. It
-does not change a Draft Base.
-
-Reconciliation is Server's canonical comparison of Base, Current, and Draft
-Result. It produces a candidate bound to one Draft version and one current Ref,
-without modifying the Draft.
-
-Rebase is the explicit application of a confirmed candidate. It preserves the
-previous Draft revision, advances `base_commit_id` to Current, and replaces the
-operations with the diff from Current to the confirmed result. Rebase never
-moves an authority Ref; only Review merge does that.
+A purpose-specific view generated from existing authoritative data. A Project Commit is a versioned projection of Organization content through Org Selection. It supports synchronization without becoming another publication source.
 
 ## Effective Memory
 
-Effective Memory is the daemon's local read model. It starts with the latest
-installed Project projection of selected Organization Memory. A resource with
-a personal Draft uses that Draft's complete `Base + operations` result; all
-other resources use the projection generation. It is not a personal Ref or a
-whole-Project branch pinned to an old Organization Commit.
+Content the daemon assembles from the installed Project projection and that Project's `open` / `submitted` Drafts. Active Draft results are computed from their own Base and operations. The view can contain unpublished content and can lag Server publication while synchronization catches up.
+
+## Draft
+
+A proposal carried by a Project and targeting Organization publication. It records Base Commit, version, and ordered create/update/rename/delete operations. Lifecycle states are `open`, `submitted`, `merged`, and `discarded`. A local Draft may not yet be synchronized and is not disposable cache data.
+
+## Base / Current / Draft Result
+
+The three inputs to comparison: Base is the publication snapshot the change started from; Current is today's published state; Draft Result applies proposal operations to Base. Their comparison determines whether upstream changes and the proposal can be combined.
+
+## Freshness / Reconciliation
+
+Freshness says whether a Draft matches the current Ref: `current` or `behind`. Reconciliation records comparison availability or result: `unknown`, `clean`, or `conflicts`. Behind does not necessarily mean conflicted; neither dimension is a Draft lifecycle state.
+
+## Reconciliation candidate / Rebase
+
+A candidate is a Server-generated comparison bound to Draft version and Base/Current Commits. Rebase confirms and applies it, retaining a previous revision, updating Base, and expressing operations against the new baseline. It does not publish Memory. Stale candidates require another comparison.
+
+## Review
+
+A Server object for coordinating and publishing an ordered group of Drafts. Merge publishes the group in one transaction. Approval binds to a result hash; changed results cannot use an old approval. Authorized users can merge open or approved Reviews.
+
+## Blob / Tree / Commit / Ref
+
+- **Blob:** immutable text that several snapshots can reference.
+- **Tree:** entries connecting Memory IDs, paths, and provenance to Blobs.
+- **Commit:** an immutable complete snapshot referencing a Tree and parent; not a Git commit in the code repository.
+- **Ref:** a movable pointer to the current Commit. Organization Ref identifies publication; Project Ref identifies a selection projection.
+
+## Revision / Version / ETag / CAS
+
+Revision and version identify changes or concurrency state for different objects and are not interchangeable. ETag is an HTTP representation of version identity, such as resource detail `"rev-3"`. CAS, compare-and-swap, accepts a write only if its expected version still holds. Commit IDs and body hashes also have distinct purposes; they are not universal version tokens.
+
+## Content hash / Effective Memory hash / Index Revision
+
+Content hash identifies body content. Effective Memory hash identifies the local effective-content input. Index Revision identifies an index built from content plus model, parser, and other retrieval versions. The index must match the effective content being queried. None of these is an approval or permission credential.
+
+## Bundle
+
+A user's Server-stored set of Memory IDs, similar to a personal collection of shared knowledge. Changing or deleting a Bundle does not modify Memory or automatically change Project Org Selection.
+
+## Project binding
+
+The local mapping from Server URL and canonical directory to `project_id`. A managed host-plugin must resolve and revalidate this binding. Plain manually started `mcp serve` can fall back to the Desktop-selected Project when no directory binding exists. See [Project](/workspace).
+
+## Generation / Project Local Storage
+
+A generation is an immutable snapshot directory installed by the daemon. Project Local Storage is where an installation keeps a Project's rebuildable generations and search database. It is not a Server project-directory setting and does not relocate central Drafts, queues, or credentials.
+
+## Daemon / Runtime proxy / XPC
+
+The daemon is the resident local process that persists data, synchronizes, and retrieves Memory. A proxy translates Agent protocols into local requests. XPC is the macOS interprocess communication mechanism. An MCP proxy owns neither a separate business database nor a model instance. See [Architecture](/architecture).
+
+## Server
+
+The shared HTTP service governing identity, Organization Memory, Project selection, Drafts/Reviews, and snapshots. PostgreSQL holds its state. Local directory bindings, retrieval models, and AgentRuns are not Server Memory publication data.
+
+## Adapter / Agent Host
+
+An Agent Host is the product running the coding Agent. An Adapter makes Clumsies available in that host by installing MCP configuration and lifecycle integration. Codex uses a managed global Plugin; other supported hosts have their own integration mechanisms. See [Adapter](/adapter).
+
+## MCP
+
+The protocol Agents use to invoke tools. Clumsies exposes one `memory` tool with `activate`, `load`, and `store` actions. It exposes no Review approval, merge, or arbitrary Server request tool.
+
+## AgentRun
+
+A local record of a root turn or subagent execution, including parent relationship, version, lease, and outcome. It supports Activity and diagnostics; it is neither a Server Review nor a Memory publication.
+
+## Retrieval Run / Evaluation Case / Corpus
+
+A Retrieval Run records a local `memory.activate` query, data/index identity, candidates, results, and latency. An Evaluation Case freezes a successful run's query, complete corpus of resources, and human evidence judgments into an evaluation sample. These explain and test retrieval; they are not additional MCP tools and are not uploaded with Memory publication.
+
+## Issue / Assignee / Claim
+
+These terms occur in earlier work-coordination designs and migrations: Issue means a work item, assignee its owner, and claim a temporary execution lease. Current Server routes expose no corresponding shared Issue API. Historical tables alone do not establish an available domain capability. Current local execution tracking centers on AgentRun.
+
+## Rule / Workflow / Context and historical names
+
+Rule, Workflow, and Context were closed Memory types. They now describe document purposes rather than three Server/MCP content types; some old macOS UI classification remains.
+
+Artifact was the Organization Memory management surface; Hub and Local were UI labels; Manifest was a runtime term; Attestation belonged to a retired client event stream. Check historical documents against their implementation period instead of treating old terms as current objects or interfaces.
