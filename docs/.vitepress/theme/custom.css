@@ -26,7 +26,7 @@
   --vp-custom-block-danger-bg: rgba(255, 242, 240, 0.8);
   --vp-code-color: #c93b86;
   --vp-code-bg: rgba(20, 21, 24, 0.055);
-  --vp-code-block-bg: #16181d;
+  --vp-code-block-bg: var(--vp-c-bg-elv);
   --vp-code-line-highlight-bg: rgba(255, 255, 255, 0.06);
   --vp-button-brand-bg: #e657a0;
   --vp-button-brand-hover-bg: #c93b86;
