@@ -1,8 +1,6 @@
 # Server
 
-Server is the deployable authority service for clumsies. **Hub is not another
-service name**: Hub is a historical Desktop label for the organization scope of
-the unified Memory model. The Rust binary and container are named Server.
+Server is the deployable service responsible for shared Clumsies state and publication. This page is for developers deploying or changing it. Start with [Architecture](/architecture) and [Domain interfaces](/reference/domain-api) for the overall design.
 
 ## Responsibilities
 
@@ -25,11 +23,11 @@ endpoint. No client is allowed to update authoritative memory directly.
 
 ## Version model
 
-The authority graph uses Git terminology because the concepts are equivalent:
+The snapshot graph uses familiar version-control concepts. These objects describe Memory history, not the source repository’s Git commits:
 
 ```text
-Blob -> Tree -> Commit -> Ref
-                    ^
+Ref -> Commit -> Tree -> entries -> Blob
+         ^
 Draft(base_commit_id)
 ```
 
@@ -40,9 +38,7 @@ immutable Organization Commit, and advances the authority Ref. Project Refs are
 rebuilt when their selection or selected Organization authority changes.
 Project metadata revision is separate from both histories.
 
-The unified Memory endpoints are `GET /api/v1/org/memories`,
-`GET /api/v1/projects/{project_id}/memories`, and the corresponding
-`{memory_id}` detail routes. An org-admin `GET /api/v1/admin/memory-export`
+Published Organization Memory is read through `GET /api/v1/org/memories` and its `{memory_id}` detail route. The old `/api/v1/projects/{project_id}/memories` routes read legacy Project-scope rows; they do not return the current selection projection or Effective Memory. Use Project org-selections and commit-state for the projection, and local MCP for Effective Memory. An org-admin `GET /api/v1/admin/memory-export`
 emits every Memory (including `issues/` paths), all Drafts with their raw
 operations, Project org selections, and personal bundles as the repeatable,
 verifiable migration export.
@@ -59,19 +55,16 @@ only a conflicts candidate accepts a complete user-resolved state.
 Creating or resubmitting a Review and approving it for publication are
 coordination boundaries. A Project member may propose, submit, inspect, and
 comment; only an Organization owner or administrator may approve or reject an
-Org publication Review. Approval records the decision and advances the target
-Ref in one transaction, moving an Open Review directly to Merged. The merge
-endpoint still accepts historical Approved Reviews. Review creation/submission
+Org publication Review. Desktop Approve calls the merge endpoint, recording the decision and advancing the target Ref in one transaction. That endpoint accepts Open or Approved Reviews. A standalone HTTP `approved` decision only records approval; it does not publish. Review creation/submission
 can apply each Draft's confirmed candidate in the same Ref-locked transaction.
 Publication never performs the first stale check as a normal workflow; it retains
 `If-Match`/CAS as the final concurrency guard.
 
-The detailed state model and failure semantics are maintained in the Obsidian
-architecture document `architecture/draft-reconciliation.md`.
+See [Data structures](/data-model), [End-to-end flows](/flows), and [HTTP contracts](/reference/http-api) for the state model, request examples, and failure semantics.
 
 ## HTTP contracts
 
-The OpenAPI sources are the canonical wire contracts:
+The checked-in HTTP specifications are listed below. They have known payload and behavior differences from the implementation; consult [HTTP contract limitations](/reference/http-api) before generating a client. Route coverage tests alone do not verify payloads:
 
 | Contract | Scope |
 | --- | --- |
@@ -143,7 +136,7 @@ not a usable deployment.
 ## Verify
 
 ```bash
-bun run api:check
+cargo test -p server --lib axum_routes_match_public_and_admin_openapi
 cargo test -p server
 cargo test -p daemon
 ```

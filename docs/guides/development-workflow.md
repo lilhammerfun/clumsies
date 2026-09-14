@@ -1,14 +1,14 @@
 # Development Workflow: Worktrees
 
 Clumsies development uses Git worktrees so concurrent changes do not share a
-working tree, build output, or development runtime.
+working tree, build output, or development runtime. A session writes to only one worktree at a time and reuses it for follow-up work. Before switching, finish or explicitly hand off existing changes and stop writing to the old directory. A new task does not automatically require a new worktree.
 
 ## Core loop
 
-1. Create a worktree and branch from the appropriate baseline:
+1. Check existing work and reuse its worktree when appropriate. When a new one is needed, create it from the main checkout and an appropriate baseline:
 
    ```sh
-   git worktree add target/codex-worktrees/<name> -b codex/<name> main
+   git worktree add .worktree/<name> -b codex/<name> main
    ```
 
 2. Develop and verify inside that worktree.
@@ -17,7 +17,8 @@ working tree, build output, or development runtime.
 
    ```sh
    just dev-macos-reset
-   git worktree remove target/codex-worktrees/<name>
+   cd /absolute/path/to/main-checkout
+   git worktree remove .worktree/<name>
    git branch -d codex/<name>
    ```
 
@@ -25,7 +26,7 @@ working tree, build output, or development runtime.
 
 | Thing | Convention |
 |---|---|
-| Worktree | `target/codex-worktrees/<slug>` |
+| Worktree | `.worktree/<slug>` |
 | Agent branch | `codex/<slug>` |
 | Commit subject | `<area>: <summary>`, at most 72 characters |
 
@@ -34,7 +35,7 @@ that is under review; create a new branch and cherry-pick the relevant commits.
 
 ## Dev Instance isolation
 
-Each worktree can run a complete isolated Dev Instance with `just dev-macos`.
+For docs-only changes, build and preview VitePress; no macOS runtime is needed. To run the product, each worktree can use a complete isolated Dev Instance with `just dev-macos`.
 Its canonical path determines the App identity, daemon service, runtime
 directories, Keychain service, Compose project, dynamic ports, and isolated
 `CODEX_HOME`.

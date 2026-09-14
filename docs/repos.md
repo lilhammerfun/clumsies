@@ -1,46 +1,59 @@
-# Codebase map
+# Find your way around the codebase
 
-Clumsies is an active Bun, Swift, and Rust monorepo. Ownership follows runtime
-boundaries rather than language alone. The retired Zig client is absent from
-the active tree and remains recoverable from Git commit
-`4b18f7947a977dbc6b62f560b698dc992597f19d`.
+The repository contains the macOS App, the resident daemon, the authority Server, and this documentation site. Start with the [architecture](/architecture) and [end-to-end flow](/flows); then choose a source path based on the question you are trying to answer.
 
-| Path | Responsibility |
+The two Rust workspace members are `crates/server` and `crates/daemon`. Swift owns the native interface. Bun runs the VitePress documentation tooling.
+
+## Directory map
+
+| Path | Responsibility | Read it when you want to… |
+| --- | --- | --- |
+| `apps/macos/Sources/Features/` | SwiftUI product screens and user actions | Understand what a person sees and can do |
+| `apps/macos/Sources/Domain/` | App models, workspace state, and workflow coordination | Follow a click through loading, validation, and state updates |
+| `apps/macos/Sources/Infrastructure/` | Typed daemon XPC client and other platform integration | See how Desktop reaches the local runtime |
+| `crates/daemon/src/agent_runtime/` | MCP contract and short-lived agent proxies | Understand the agent-facing tool boundary |
+| `crates/daemon/src/state.rs`, `draft.rs` | Local state, durable Draft writes, and synchronization | Understand what “queued” means |
+| `crates/daemon/src/commit_sync.rs`, `project_storage.rs` | Commit installation, local generations, and cache locations | Trace published data reaching a Mac |
+| `crates/daemon/src/search/` | Effective Memory, chunking, indexing, and retrieval | Understand how relevant fragments are selected |
+| `crates/server/src/` | HTTP routing and domain modules | Understand shared data and authorization |
+| `crates/server/migrations/` | PostgreSQL schema history | Inspect persistent records and constraints |
+| `crates/server/openapi/` | Public and Admin HTTP contracts | Look up request/response schemas |
+| `assets/adapters/`, `packages/clumsies/` | Host integration assets and the Clumsies plugin | See how hosts launch the bundled runtime |
+| `dev/`, `apps/macos/Scripts/` | Local development and build utilities | Run an isolated development environment |
+| `docs/`, `docs/zh/` | English and Chinese documentation | Improve this site |
+
+There is no active `src/client/` standalone client tree. Historical CLI material is [archived](/guides/cli-commands).
+
+## Trace one operation instead of reading every file
+
+For the deployment rollback checklist, these are useful short routes:
+
+| Question | Source route |
 | --- | --- |
-| `apps/macos/` | Native macOS product client built with AppKit and SwiftUI |
-| `crates/server/` | deployable Rust authority service, HTTP contracts, and PostgreSQL schema |
-| `crates/daemon/` | resident macOS launchd daemon, local state and workers, Agent runtime proxies, native adapter installer, and XPC contracts |
-| `assets/adapters/` | host-specific integration assets |
-| `docs/` | VitePress public documentation |
+| What happens when a user edits and requests Review? | `Features/WorkspaceView.swift` → `Domain/WorkspaceStore.swift` → `Infrastructure/DaemonXPCClient.swift` |
+| What does an agent's `memory.store` do? | `agent_runtime/mcp_contract.rs` → `agent_runtime/mod.rs` → `state.rs::store_draft_operation` → local Draft queue |
+| What validates and publishes a Review? | Server `http.rs` → `changes/http.rs` → `changes/service.rs` → `changes/postgres.rs` |
+| How does publication reach selected Projects? | Server `memory/postgres.rs` → daemon `commit_sync.rs` → `search/` |
+| How is repository context resolved? | Daemon `main.rs` → Project-binding XPC methods → daemon state |
 
-## Authority boundaries
+Paths in the first row are relative to `apps/macos/Sources/`; the other daemon paths are relative to `crates/daemon/src/`.
 
-`crates/server` owns Organization Memory authority, Project selections and
-projection Refs, identity, authorization, Bundles, review lifecycle, and Commit
-history.
+The Server pattern is deliberate: HTTP handlers decode requests and enforce access, service methods coordinate domain work, and PostgreSQL code performs state transitions and transactions. Check all three when changing a public operation.
 
-`crates/daemon` owns local drafts, queued operations, automatic synchronization,
-token refresh, retrieval, native Server transport, and both short-lived Agent
-proxy modes. A proxy validates and forwards typed requests to the resident
-process over XPC; it does not initialize daemon state. The crate is not an
-authority source.
+## Read the tests alongside the implementation
 
-`apps/macos` is the primary human product. It uses typed XPC requests and never
-persists Server credentials. The unified Memory section switches between the
-Organization authority view and a Project's selected/effective Memory view.
-Historical Project-scoped rows are displayed only for migration compatibility.
+| Behavior | Where to find executable examples |
+| --- | --- |
+| Multi-file Review order and atomic publication | `crates/server/tests/draft_operation_ordering.rs` |
+| Draft upload, merge, projection updates, and two-daemon convergence | `crates/daemon/tests/server_integration.rs` |
+| Local persistence and process restart | `crates/daemon/tests/daemon_lifecycle.rs` |
+| Agent proxy and real XPC boundary | `crates/daemon/tests/agent_runtime_xpc_e2e.rs` |
+| Desktop daemon contract and state mapping | `apps/macos/Tests/DaemonContractTests.swift` |
 
-The App bundle contains one signed `clumsiesd`. launchd runs it as the resident
-daemon, while supported Agent hosts run the same binary as `mcp serve` or
-`_agent agent-run-event`. Adapter manifests pin the bundled path and release
-identity so another checkout or stale helper cannot become the runtime.
+A test tells you what behavior the implementation promises. It does not establish a production latency target; use the [performance documentation](/performance/) for measurement and scope.
 
-## Read in this order
+## Open the main entry points
 
-1. Read the HTTP OpenAPI files in `crates/server/openapi`.
-2. Read `crates/server/src/http.rs` and `repository.rs` for authority behavior.
-3. Read `crates/daemon/src/lib.rs` and `ipc.rs` for local synchronization.
-4. Read `crates/daemon/src/main.rs` and `agent_runtime/` for resident/proxy process boundaries.
-5. Read `crates/daemon/src/agent_adapter.rs` for host installation and migration.
-6. Read `apps/macos/Sources/Infrastructure/DaemonXPCClient.swift` for daemon transport.
-7. Read `apps/macos/Sources/Features/WorkspaceView.swift` for product workflow composition.
+[Desktop workspace](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/apps/macos/Sources/Domain/WorkspaceStore.swift) · [MCP contract](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/agent_runtime/mcp_contract.rs) · [daemon state](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/state.rs) · [Server router](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/http.rs) · [Review transactions](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs)
+
+To run and change the project, continue to [Development workflow](/guides/development-workflow). For interface semantics before implementation, use the [domain API map](/reference/domain-api).

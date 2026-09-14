@@ -1,6 +1,6 @@
 # 本地运行时
 
-> 文档属性：详细设计型｜L3 具体规范｜面向工程实现、运营保障与质量审计。
+本页解释 daemon 的持久状态、同步、检索和恢复边界。初次阅读建议先看[系统架构](/zh/architecture)与[完整流程](/zh/flows)；遇到故障可直接查[排查问题](/zh/guides/troubleshooting)。
 
 `clumsiesd` 是当前用户作用域的 macOS launchd 常驻服务。Desktop 负责原生交互；daemon 在 Desktop 关闭后继续持久化 Draft、同步 Commit、构建检索索引并服务 Agent。Agent Host 启动同一个 App 内签名二进制的短进程 `mcp serve` 或 `_agent agent-run-event` 代理，再通过 XPC 调用常驻 daemon。
 
@@ -166,7 +166,7 @@ Server health 位于 `/api/v1/admin/health`。本地实现变更至少运行对�
 
 ```bash
 cargo test -p daemon
-bun run api:check
+cargo test -p server --lib axum_routes_match_public_and_admin_openapi
 bun run build
 ```
 

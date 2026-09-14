@@ -1,177 +1,101 @@
-# 统一 Memory 数据模型
+# 统一 Memory 设计
 
-本文是 Clumsies 当前 Memory 数据架构的权威说明，面向实现、接口和质量评审。它描述系统现在如何确定发布权威、Project 投影、Draft overlay 与 Review 合并语义；历史迁移过程不在本文展开，参见 [Project Memory 权威切换](/zh/project-authority-migration)。
+本页解释数据模型背后的约束与取舍，适合已经读过[核心数据模型](/zh/data-model)、准备实现或评审功能的人。这里描述当前代码行为；历史迁移见 [Project 权威切换](/zh/project-authority-migration)。
 
-## 核心结论
+## 为什么只有一种 Memory
 
-当前模型只有一个可发布内容对象：`Memory`。
+部署回滚检查单、编码约束、架构说明，都保存为具有稳定 ID 的 Markdown Memory。当前协议不会因为文件放在 `rules/` 或 `workflow/` 下就赋予它新的类型、权限或执行能力。
 
-- **Organization 是唯一的 Memory 发布权威。** 新建、更新、重命名和删除最终都必须通过 Organization-scoped Draft、Review 与 merge 写入 Organization Ref。
-- **Project 不是 Memory 权威。** Project 保存 Organization Memory 的选择集合，并持有由该集合生成的 Project Ref；该 Ref 是可同步、可安装的投影，不是第二份发布源。
-- **Draft 由 Project 携带。** Draft 的发布目标是 Organization，但在 merge 前只覆盖携带它的 Project 的 Effective Memory，不会直接修改 Organization，也不会影响其他 Project。
-- **Review 可以包含一个或多个 Draft。** 多 Draft Review 按顺序关联 Draft，并以一个数据库事务完成校验、应用、Commit 与 Ref 前移；任一 Draft 失败时整次 merge 不提交。
-- Rule、Workflow、Context 不再是 Server、daemon 或 MCP 的内容类型。它们只可以作为 Markdown 内容与路径表达的语义；macOS 仍保留的 `MemoryKind` 属于尚未收口的 UI 实现，见[当前实现缺口](#当前实现缺口)。
+这样做把两种变化分开：团队可以调整知识的组织方式，不必同时改 Server、daemon、MCP 和每个客户端的枚举。系统仍负责身份、版本、权限和发布流程。检索负责判断内容与当前任务是否相关，不能代替批准，也不能把 Draft 提升成已发布内容。
 
-```mermaid
-flowchart LR
-    OA[Organization Memory 权威] --> OR[Organization Ref / Commit]
-    OR --> PS[Project Org Selection]
-    PS --> PR[Project Ref / Commit 投影]
-    PR --> EM[Project Effective Memory]
-    LD[Project 携带的 open / submitted Draft] -->|overlay| EM
-    LD --> RV[有序的单 Draft 或多 Draft Review]
-    RV -->|授权审批并原子 merge| OA
-```
+当前 wire contract 的 Memory 内容只有正文及可选摘要；没有 Category/Tag、`content_type`、`content_format`、`agent_instruction` 或 `invocable_skill` 字段。历史 `ctx_`、`rul_`、`wfl_` ID 保留，不能从 ID 前缀推断当前类型。
 
-## 设计理由与当前边界
+## 一个发布源，多个 Project 投影
 
-统一 Memory 不是把旧枚举替换成任意 `type: string`，也不是让检索相关性代替治理：
+这里的“发布源”指决定共享内容当前正式版本的地方。Organization Ref 指向当前 Organization Commit；一次 Review merge 更新这个版本。
 
-- 旧 Rule、Workflow、Context 只声明分类，没有验证“指令、事实、流程”的内容语义；让这三个值继续支配 API、身份、路径、UI 和 Adapter 行为，只会把一次分类调整放大成全链路协议变更。
-- `activate` 不接收 kind filter。Project selection 决定哪些发布资源进入 Effective Memory，之后所有 Memory 使用同一套分块、BM25、向量召回、RRF、重排和预算流程；排序算法不靠旧三分类分派。
-- 任意字符串类型仍会把用户 taxonomy 与系统行为绑在一起。当前 wire contract 因此只接受统一的 `memory`，不会根据路径、标题或用户命名生成新系统类型。
-- 检索只判断相关性，不授予内容权威。Organization publication、Project selection、Commit 来源和 Draft 状态共同决定来源与治理边界；未发布 overlay 不能被误报为 Organization 权威。
-- 当前模型没有 Category/Tag、`content_type`、`agent_instruction` 或 `invocable_skill` 字段。未来如要增加用户 taxonomy、内容格式或可执行能力，必须作为彼此正交且可授权的契约设计，不能从分类显示名或 `workflow/` 路径隐式推导。
+Project Org Selection 只保存 Memory ID。Server 用它从 Organization 当前内容中生成 Project Commit，并更新 Project Ref。这种把已有数据按用途生成视图的做法称为“投影”。Project Ref 因而是同步单元，不是第二个发布入口。
 
-## 对象与权威边界
+为什么保留 Project Commit，而不是每次 Agent 请求都去筛选整个组织？因为 daemon 可以下载一个明确版本的 Project 快照，在本机安装、索引和读取，并追踪它来自哪个版本。选择变化和相关上游资源变化都会刷新投影。
 
-### Memory
+两个边界不能混淆：
 
-Server 中的发布资源以 `resources` 记录，当前业务语义如下：
+- 删除 Project 选择只改变这个 Project 的基线，不删除 Organization Memory。
+- Draft 从 Project 提出，发布目标仍为 Organization。新建 Memory 合并后自动加入发起 Project 的选择；已有 Memory 的变更必须针对该 Project 已选择的资源。
 
-| 字段 | 当前语义 |
-|---|---|
-| `memory_id` / `resource_id` | 稳定的不透明标识。新资源使用 `mem_` 前缀；迁移前的 `ctx_`、`rul_`、`wfl_` 标识继续有效，不因统一模型或重命名而改写。 |
-| `scope` | 活跃发布资源只能是 `org`。`project` 仍存在于部分 schema 和读取接口中，仅用于历史数据兼容与清理。 |
-| `path` | Organization 命名空间内的资源路径；活跃资源路径唯一。重命名改变路径，不改变资源标识。 |
-| `name` | Server 权威元数据，由路径最后一段生成；它不是独立编辑的展示标题。 |
-| `description` | 资源的语义摘要。数据库字段非空，但当前链路允许空字符串，并存在 merge 未持久化 Draft description 的缺口。 |
-| `body` / `content` | Markdown 正文。HTTP 详情使用 `content`，数据库保存为 `body`。 |
-| `content_hash` | 完整正文的内容哈希，用于加载缓存、Draft 更新和一致性校验。 |
-| `revision` | Server 资源修订号；与 Draft version、Review version、selection revision 不是同一个并发令牌。 |
-| `status` | `active`、`deprecated` 或 `archived`。历史 Project authority 数据在切换后应为非活跃状态。 |
-
-统一模型没有公开的 Rule、Workflow、Context 子类型，也没有 `content_format` 字段。当前正文按 Markdown 处理。
-
-### `name`、内容标题与 Draft 标题
-
-这三个概念不能互换：
-
-| 概念 | 来源 | 用途 |
-|---|---|---|
-| Memory `name` | Server 根据 `path` 最后一段生成，例如 `architecture.md` | 权威资源元数据与列表显示的基础值 |
-| 内容标题 `title` | daemon 取 Markdown 第一个标题；没有标题时取路径文件名并去掉扩展名 | Effective Memory 检索结果和本地展示 |
-| Draft `title` | 创建 Draft 时提供的提案标题 | Review 与变更说明，不属于合并后的 Memory 内容模型 |
-
-因此，修改 Markdown 一级标题不会改变 Server 的 `name`；重命名路径会改变 `name`，但不必改变正文标题；Draft 标题也不会成为 Memory 标题。
-
-### Tree、Commit 与 Ref
-
-发布状态通过不可变 Commit 与可前移 Ref 分发：
-
-- Organization Ref 指向 Organization 当前发布 Commit。
-- Project Org Selection 保存 Project 选择的 Organization `resource_ids`，并有独立的 `revision` 用于并发控制。
-- Project Commit 将被选中的 Organization Memory 写成 `source = selected_org` 的 Tree entry，并附带一个 `project_org_selection` 系统 entry。
-- Project Ref 指向最新投影 Commit。所选 Organization Memory 发生变化时，Server 刷新受影响 Project 的投影。
-- daemon 安装 Project Commit 后，再叠加该 Project 本地 `open`、`submitted` Draft，得到 Effective Memory。
-
-运行时 Tree entry 的内容类型只有：
-
-| `type` | 含义 |
-|---|---|
-| `memory` | 可进入 Effective Memory 的 Markdown 资源 |
-| `project_org_selection` | daemon 使用的 Project 选择快照；不是用户 Memory |
-
-Memory Tree entry 还携带 `description`，使 daemon 能把摘要作为独立检索字段。公共 OpenAPI 对这部分的声明目前落后于运行时，见[当前实现缺口](#当前实现缺口)。
-
-daemon 的历史缓存读取器仍接受 `context`、`rule`、`workflow` Tree entry，并统一投影为 Memory；新同步与新写入不能再产生这些值。这是不可变 Commit 与旧缓存的只读兼容边界，不是对旧 wire type 的恢复。用户分类名称的变化也不能改写资源 ID 或赋予执行能力。
-
-## Project 投影与 Effective Memory
-
-Project 的当前读取语义是投影加 overlay：
+## 本地视图与发布视图
 
 ```text
-Project Effective Memory
-  = Project Ref 中已选择的 Organization Memory
-  + 该 Project 携带的 open / submitted Draft overlay
+已安装的 Project 投影
+  + 该 Project 的 open/submitted Draft 操作
+  = Effective Memory
+  → 匹配该内容与模型版本的 Index Revision
+  → memory.activate / memory.load
 ```
 
-Draft overlay 按操作语义覆盖基线：
+`memory.store` 成功表示 daemon 已持久化提案并安排同步，不表示 Server 已收到、Review 已批准或 Organization Ref 已前移。同步成功也不等于发布成功。
 
-- Create 增加仅在当前 Project 可见的候选 Memory；
-- Update 替换目标 Memory 的候选正文；
-- Rename 改变候选路径；
-- Delete 从当前 Project 的 Effective Memory 中隐藏目标；
-- Discard 取消 Draft，不形成发布变更。
+overlay 保留资源的 Commit 或 Draft 来源。搜索索引只是这份视图的派生数据；索引落后时必须显式处理就绪状态，不能把错误版本的检索结果当成当前内容。
 
-overlay 只是提交前视图。`memory.store` 成功表示本地 Draft 已持久化并进入同步队列，不表示 Organization 已发布，也不表示 Organization Ref 已移动。
+本机可能尚未下载最新 Project Commit。因此“当前本地有效”与“Server 当前已发布”仍可能有时间差。排查读取问题时，应同时查看安装的 Ref、Draft 状态和索引版本。
 
-## Draft、Review 与原子发布
+## 三种独立的 Draft 状态
 
-### Draft
+| 维度 | 值 | 判断什么 |
+|---|---|---|
+| 生命周期 `status` | `open`、`submitted`、`merged`、`discarded` | 提案进行到了哪一步 |
+| 新鲜度 `freshness` | `current`、`behind` | Base Commit 是否等于当前上游 Commit |
+| 协调结果 `reconciliation` | `unknown`、`clean`、`conflicts` | 有没有可用比较结果，能否无冲突组合 |
 
-当前可写 Draft 必须满足：
+例如一个 Draft 可以同时为 `submitted + behind + clean`：已经提交，上游有新发布，但修改可以协调。把 behind 当成“失败”或把 conflicts 当成终态，都会遗漏后续可恢复流程。
 
-- `project_id` 表示携带 Draft 的 Project；
-- `resource.scope = org` 表示 merge 后的权威目标；
-- `base_commit_id` 与 Draft version 分别用于上游协调和并发控制；
-- 一个 Draft 保存有序操作，状态为 `open`、`submitted`、`merged` 或 `discarded`；
-- 对已有 Organization Memory 的变更必须以该 Project 已选择的资源为目标；Create 在 merge 后会自动加入携带 Project 的选择集合。
+Server 根据 Base、Current、Draft Result 生成候选，候选绑定 Draft version 与当前 Ref。生成候选不修改 Draft。rebase 才会保存旧 Draft revision、推进 Base、以新基线重新表达操作；它也不发布。
 
-### 多 Draft Review
+提交一个或多个 Draft 时，每个 behind Draft 可以携带自己的确认候选。Server 在 Review 创建或重新提交的事务内应用它们。缺少候选时会返回需要协调的信息；候选已经过期时必须重新读取和比较。
 
-Review 使用有序、去重的 `drafts[]`：每项包含 `draft_id` 与 `expected_draft_version`。一个 Review 至少包含一个 Draft。
+## Review 的事务与批准语义
 
-多 Draft Review 的关键约束是：
+Review 保存有序、去重的 Draft 集合，至少一项。所有 Draft 必须属于同一 Project、同一发布 scope，并由提交者拥有。Draft 内操作顺序和 Review 内 Draft 顺序都属于数据语义，不能依赖 UUID 排序或异步请求返回顺序。
 
-1. 所有 Draft 必须属于同一个 Project、使用同一权威 scope，并处于可提交状态。
-2. 多 Draft 提交前必须逐个完成 reconciliation；单 Draft 接口中的临时候选解析不能代替整组协调。
-3. 创建或重新提交 Review 时校验每个 `expected_draft_version`；merge 再锁定 Review 和所有 Draft，检查 Review version、Draft 状态、Base Commit、审批结果哈希与当前 Organization Ref。
-4. 所有 Draft 的操作按 Review 中的顺序物化并在同一事务中应用。
-5. 事务只生成一个新的 Organization Commit，并前移一次 Organization Ref；随后刷新受影响的 Project 投影。
-6. 任一校验、操作或 Commit 失败时事务回滚，不会发布半组 Draft。
+发布事务主要做五件事：
 
-Review 的批准只对当时的完整结果哈希有效。Draft 内容变化或 rebase 后必须重新形成有效审批，不能沿用旧批准。
+1. 锁定协调所需数据、Review 和 Draft，检查 Review version、Draft 状态及当前 Organization Ref。
+2. 确保各 Draft 的 Base 已与当前 Ref 对齐；落后的提案需要先协调。
+3. 对已批准 Review 验证完整结果哈希，防止批准旧内容后发布新内容。
+4. 按顺序物化并应用修改，创建一个 Organization Commit，推进一次 Organization Ref。
+5. 刷新受影响 Project 投影，记录 merge，并把 Review 和 Draft 标记为 merged。
 
-## HTTP 读取边界
+失败时，发布修改整体回滚。为了让客户端继续协调，某些失败路径会单独保留生成的 reconciliation candidate；这不代表发布了部分 Memory。
 
-以下接口读取当前 Organization 权威或 Project 投影配置：
+owner/admin 可以先 approve 再 merge，也可以直接 merge open Review。直接合并同样经过授权和完整校验，并记录决定人。批准绑定的是结果：rebase 保持完整结果不变时，可以保留批准；结果变化时旧批准失效。时间戳、标题或“之前批准过”都不能代替结果校验。
 
-| 接口 | 语义 |
-|---|---|
-| `GET /api/v1/org/memories` | Organization 发布 Memory 列表 |
-| `GET /api/v1/org/memories/{memory_id}` | Organization 发布 Memory 详情 |
-| `GET/PUT /api/v1/projects/{project_id}/org-selections` | Project 的 Organization Memory 选择集合；更新使用 selection revision 做前置条件 |
-| `GET /api/v1/projects/{project_id}/commit-state` | Project 投影 Ref 与可下载 Commit 状态 |
-| `GET /api/v1/commits/{commit_id}` | Commit、Tree、Blob 与 Project 选择快照 |
+## 快照读取的成本边界
 
-### Legacy Project Memory endpoints
+Commit payload 包含完整 Tree 和 Blob 正文，当前 commit-state 返回 `incremental_supported: false`。一个 Review 的多个文件可能引用同一个 Base/Current Commit；它们共享快照，不各自拥有一份独立的远端文件版本。
 
-`GET /api/v1/projects/{project_id}/memories` 与 `GET /api/v1/projects/{project_id}/memories/{memory_id}` 仍按 `scope = project` 查询历史 Project-authority 资源。它们：
+实现客户端时应先按唯一 Commit ID 组织一次加载，再把内容映射到各文件。文件数、唯一快照数、响应大小和页面就绪时间是不同指标。一个 HTTP 请求成功，只能说明该请求完成，不能证明整个 Review 页面已经就绪。
 
-- **不是** Project Effective Memory 接口；
-- 不返回 Project 已选择的 Organization Memory；
-- 不叠加本地 Draft；
-- 在完成权威切换的正常 Project 中通常为空。
+<span id="当前实现缺口"></span>
 
-新客户端不应使用这两个端点构建 Project Memory 视图。应使用 Project Org Selection、Project Commit payload，以及 daemon 提供的 Effective Memory 能力。
+## 当前实现边界
 
-## 当前实现缺口
+以下是核对当前代码后仍存在的限制，不应把设计意图写成已完成能力：
 
-以下事项尚未闭环，不能写成已完成能力：
+| 边界 | 当前行为 | 对使用者的影响 |
+|---|---|---|
+| TreeEntry 的 OpenAPI 声明落后 | Rust/数据库为 `memory`、`project_org_selection`，运行时可返回 `description`；公共 OpenAPI 仍列旧三分类且遗漏摘要 | 构建集成时核对真实 DTO，不能仅根据旧生成类型推断字段 |
+| Memory 摘要写入不完整 | Draft 可携带 description，`resources.description` 非 null；merge create/update SQL 尚未写入该字段 | 已发布摘要可能为空或保留旧值，不能保证端到端摘要检索 |
+| macOS 旧分类仍有残留 | `MemoryKind` 仍参与部分 UI、路径和展示逻辑 | UI 标签不是 Server 领域类型或 Agent 执行能力 |
+| 历史 Project Memory 读取路由 | `/projects/{project_id}/memories` 查询历史 project-scoped resources | 它不返回 Selection + Draft 的 Effective Memory，不能据此构建当前 Project 内容视图 |
 
-1. **公共 OpenAPI 的 `TreeEntry` 契约过时。** Rust 与数据库只接受 `memory | project_org_selection`，且运行时 `TreeEntry` 可携带 `description`；当前 OpenAPI 和生成的 TypeScript 仍声明 `rule | context | workflow | project_org_selection`，同时遗漏 `description`。在契约修复前，运行时 Rust/数据库行为才是事实，但外部客户端仍有类型不一致风险。
-2. **`description` 尚未可靠持久化。** MCP、macOS 与 Draft API 当前都允许省略 description；Server merge 的资源 Create/Update 路径也尚未把 Draft content 中的 description 写入 `resources.description`。因此已合并资源可能保留空摘要，不能宣称 description-aware retrieval 已端到端保证。
-3. **macOS 的 `MemoryKind` 尚未移除。** UI 仍以 `context`、`rules`、`workflows` 做创建默认值、路径校验、预览选择与 Bundle 分组。这是 UI 层遗留行为，不代表 Server、daemon 或 MCP 恢复了三种 wire type。
-4. **用户 taxonomy 与系统 capability 尚未建模。** 当前没有 Category/Tag、独立内容格式、指令信任级别或可执行 capability。活动 Adapter 只安装通用 Clumsies bootstrap，并通过 MCP 动态读取普通 Memory；它不会再把 `workflow/` 路径自动发布成 host skill。若产品需要这些能力，必须先定义权限、版本、归档和兼容语义，不能把自由字符串重新塞回 `type`。
+这些边界应随对应代码修复一起更新。历史兼容读取并不授权创建新的 Project 发布源，也不恢复已退役的 Rule/Workflow/Context 写入协议。
 
-修复这些缺口时，应同步更新 OpenAPI、生成客户端、Server merge、macOS UI 与对应契约测试；仅修改本文不能视为实现完成。
+## 评审实现时检查什么
 
-## 不变量
+- Memory ID 是否在重命名、投影和迁移中保持稳定；路径冲突是否在同一命名空间内检查。
+- 是否保留 Organization 发布、Project 选择、本地 Draft 三层来源；是否把本地 store 成功误报成已发布。
+- 是否使用操作本身要求的版本和 Ref，而不是混用 resource revision、Draft version、Review version。
+- 多 Draft 发布是否全成全败，是否检查每个 Draft，而不是只检查首项。
+- 派生索引是否与当前 Effective Memory、解析器和模型版本一致。
 
-- Organization 是唯一可发布 Memory authority；Project-scoped active resource 或 open/submitted Draft 均不合法。
-- Project 的选择集合、Project Ref 投影和本地 Draft overlay 是三个不同层次，revision 不能混用。
-- 资源 ID 在重命名、统一模型和投影过程中保持稳定。
-- 一个 Review 的所有 Draft 要么在一个事务中全部发布，要么一个也不发布。
-- Effective Memory 可以包含未发布 overlay；任何读取结果都必须保留其 source、Draft 或 Commit 来源，不能把候选状态误报为 Organization 权威。
-- MCP 与 daemon 不能审批、merge 或直接发布 Organization Memory；授权发布只能经过 Server Review 流程。
+实现依据：[Memory DTO](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/api.rs)、[Review/Draft DTO](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/changes/api.rs)、[发布事务与 reconciliation](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/changes/postgres.rs)、[快照生成与资源写入](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/postgres.rs)、[commit-state](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/service.rs)、[索引实现](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/index.rs)、[公共 OpenAPI](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/openapi/clumsies.public.v1.yaml)、[macOS MemoryKind](https://github.com/lilhammerfun/clumsies/blob/main/apps/macos/Sources/Domain/MemoryModels.swift)。

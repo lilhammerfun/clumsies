@@ -1,263 +1,118 @@
-# Architecture
+---
+description: Understand Clumsies through its processes, data ownership, and read/write boundaries.
+---
+# System architecture
 
-## System boundary
+Clumsies separates two responsibilities: **a developer's Mac saves proposals, synchronizes data, and runs retrieval; the organization's Server manages shared content and authorizes publication.** Desktop and agents use the same local background process, so their drafts come from the same local state.
 
-```mermaid
-flowchart LR
-    subgraph Machine["User machine"]
-        Desktop["Desktop"]
-        Host["Agent host"]
-        Proxy["App-bundled clumsiesd proxy<br/>mcp serve / _agent"]
-        Daemon["Resident clumsiesd<br/>Rust + launchd"]
-        LocalDB[("Local SQLite")]
-        ProjectStorage["Project Local Storage<br/>generations + search index"]
-        Models["Shared model cache"]
-    end
+This page explains which processes handle a request, where data lives, who can change it, and why these boundaries exist. Start with [Meet Clumsies](/overview) if the product is new to you. Field-level detail belongs in [Core data structures](/data-model).
 
-    subgraph Deployment["Self-hosted deployment"]
-        Server["Rust Server"]
-        Postgres[("PostgreSQL")]
-    end
+## The system at a glance
 
-    Browser["System browser / organization OIDC"]
+[![Normal Clumsies data path: Desktop uses XPC; an agent uses an MCP proxy and XPC to reach the resident daemon. The daemon uses SQLite, Project storage, and Keychain, and calls the Server over HTTPS. The Server uses PostgreSQL.](/diagrams/system-architecture.png)](/diagrams/system-architecture.png)
 
-    Desktop -->|"macOS XPC"| Daemon
-    Host -->|"MCP stdio or lifecycle Hook"| Proxy
-    Proxy -->|"typed macOS XPC"| Daemon
-    Daemon --> LocalDB
-    Daemon -->|"resolve + atomic materialization"| ProjectStorage
-    Daemon --> Models
-    Daemon -->|"authenticated HTTPS"| Server
-    Desktop -->|"native setup + recovery HTTPS"| Server
-    Desktop --> Browser
-    Browser --> Server
-    Server --> Postgres
-```
+The left boundary is the user's macOS device; the right is the organization's deployment. Open the image for full size. Sign-in, initial setup, and administrator recovery use separate paths described below.
 
-## Why Desktop and daemon both exist
-
-A browser cannot reliably own arbitrary local project files or remain available
-when its page is closed. Desktop provides the native user experience and local
-file access; daemon provides a lifecycle independent from whether the Desktop
-window is open.
-
-For example, an MCP `store` call can create a draft while Desktop is closed.
-Daemon persists and synchronizes it. When Desktop opens later, it reads the same
-draft queue. Conversely, a draft edited in Desktop remains available to MCP
-because it was not stored in renderer state.
-
-## Ownership
-
-| Component | Owns | Does not own |
+| Component | What it is | Role in a deployment rollback checklist example |
 | --- | --- | --- |
-| Server | authority resources, identity, authorization, review state, Commit graph, audit | local files and client process lifecycle |
-| daemon | local Project bindings, Project storage registry, local drafts, queued operations, cached Blob/Tree/Commit objects, installed Refs, immutable generations, derived search indexes, refresh handling, native Server proxy | authority decisions and merge policy |
-| Desktop | trusted Server-origin selection, native setup and sign-in, administration interaction state, editors, navigation, and review workflows | durable bearer-token storage and durable authority |
-| Agent runtime proxy | bounded MCP decoding, Hook normalization, Project binding lookup, and typed XPC forwarding | databases, models, background workers, or a second retrieval implementation |
+| Desktop | Native Swift macOS application | Display and edit the checklist, review differences, confirm publication |
+| Agent host | The application running a coding agent | Call the `memory` tool during a task |
+| Runtime proxy | A protocol-proxy process using the bundled `clumsiesd` | Convert MCP or lifecycle Hooks into typed local requests |
+| Resident daemon | Rust `clumsiesd`, managed by launchd | Persist drafts, synchronize, prepare effective content, run retrieval |
+| Server | Rust HTTP service using Axum | Authenticate, save shared Drafts/Reviews, publish transactionally, serve snapshots |
+| PostgreSQL | The Server's relational database | Persist members, published content, proposals, reviews, and version history |
 
-## Write path
+The proxy and daemon use **one executable in the App bundle**, started in different modes. Ordinary startup runs the resident service; `mcp serve` runs the MCP proxy; `_agent agent-run-event` forwards lifecycle events. Proxies do not open business databases, load models, or run synchronization workers.
 
-```mermaid
-sequenceDiagram
-    participant C as Desktop or MCP
-    participant D as daemon
-    participant S as Server
-    participant P as PostgreSQL
+## Why these layers exist
 
-    C->>D: store(project_id, org memory ref, op, org base_commit_id)
-    D->>P: no direct access
-    D->>D: persist local draft and queued operation
-    D-->>C: local operation accepted
-    D->>S: create/reuse draft and append operation
-    S->>P: transaction
-    S-->>D: server draft/version
-    D->>D: mark operation synchronized
-```
+**Closing a window should not stop background work.** An agent may still read or edit the checklist after Desktop closes. Keeping drafts and queues in the daemon makes edits independent of a window and gives Desktop and agents one synchronization and retrieval implementation.
 
-The first response is local acceptance, not publication. Automatic sync retries
-failed operations. Desktop can inspect pending/failed sync separately from
-behind/conflicts coordination; neither coordination state blocks editing.
+**Local editing and organization publication need different permissions and availability.** Saved edits must survive temporary network failure, but one Mac cannot declare its version official for the organization. The Server checks membership, draft versions, and the current published state.
 
-## Review and merge path
+**A content snapshot and its search index have different responsibilities.** A published Commit is versioned content that must be verified. An index is a rebuildable structure derived from that content. Index failure must neither change published content nor make an outdated index appear current.
 
-```mermaid
-sequenceDiagram
-    participant Desktop
-    participant Daemon
-    participant Server
-    participant DB as PostgreSQL
+## Where data lives
 
-    Desktop->>Daemon: request candidate when Draft is behind
-    Daemon->>Server: compare Base / Current / Draft Result
-    Server->>DB: persist immutable candidate only
-    Desktop->>Daemon: confirm result and create or resubmit Review
-    Daemon->>Server: candidate + resolved state + If-Match
-    Server->>DB: save Draft revision, rebase and submit atomically
-    Desktop->>Daemon: merge with If-Match target Ref
-    Daemon->>Server: POST review merge
-    Server->>DB: lock Ref, check current Base and approval, write Blob/Tree/Commit, move Ref
-    Server-->>Desktop: new commit_id
-```
+Local state includes both unsynchronized edits and rebuildable caches. They must not be cleared indiscriminately.
 
-Organization is the sole Memory authority, so every publishable Draft targets
-the Organization Ref. A Project Ref is an independently versioned projection of
-that Project's selected Organization Memory and configuration; selection or
-Organization-authority changes rebuild affected Project projections. No Review
-merge publishes to a Project authority namespace.
+| Location | Contents | Ownership and durability |
+| --- | --- | --- |
+| Server PostgreSQL | Organizations/Projects, members, published Memory, Drafts/Reviews, Blob/Tree/Commit/Ref, audit | Shared server state; the Organization Ref identifies the published version |
+| Central daemon SQLite | Project bindings, local drafts and operation queues, cached objects/Refs, AgentRuns, retrieval history | Includes edits that may not have reached the Server; not a disposable cache |
+| Project Local Storage | Verified Commit file snapshots and Effective Memory search indexes | Rebuildable derived data, managed per Project |
+| macOS Keychain | Server access/refresh token pair | Credentials stored separately from content and SQLite |
+| Daemon model cache | Embedding and reranker model files | Local retrieval dependencies shared across Projects |
 
-## Authority read path
+Users may choose a custom Project Local Storage location. The Server never receives that local path or macOS bookmark. A move builds and verifies the destination before switching its registration; existing reads finish before old storage is cleaned up. See [Local runtime](/runtime).
 
-```mermaid
-sequenceDiagram
-    participant S as Server
-    participant D as daemon
-    participant DB as SQLite
-    participant F as generation files
-    participant P as clumsiesd MCP proxy
+## From published content to an agent's view
 
-    P->>D: verify runtime identity and resolve_project_binding(current directory)
-    P->>D: attach exact identity to every Agent-scoped dispatch
-    D-->>P: matching build + canonical project_id
-    D->>S: GET project commit-state(local_commit_id)
-    S-->>D: Ref, latest Commit, ETag, download URL
-    D->>S: GET Commit payload
-    D->>D: validate Commit, Tree, Blobs, ownership, paths
-    D->>F: build temporary generation and atomic rename
-    D->>DB: cache objects and move local Ref in one transaction
-    P->>D: activate_memory or load_memory over XPC
-    D->>F: read exact generation and overlay local Drafts
-    D-->>P: ranked fragments or complete resources
-```
+Suppose an organization publishes a deployment rollback checklist and a Project selects it.
 
-The Organization Ref is the mutable authority pointer. The locally installed
-Project Ref selects one immutable materialization generation; moving it does
-not move an Organization Draft Base. Search heads are local derived pointers
-bound to an Effective Memory hash. For Draft resources, that memory uses
-`Base + operations`; for all other resources it uses the latest installed
-Project projection. MCP never scans cache files or falls back to an old
-generation when daemon has no matching ready index.
+1. The **Organization Ref** points to the organization's current Commit. A Ref is a movable head pointer; a Commit is an immutable snapshot.
+2. A **Project selection** contains Memory IDs. The Server produces the Project's Commit and Ref from the selected content. This is a projection, not a separate authority for publishing organization content.
+3. The daemon downloads that Project Commit, validates its Tree, Blobs, paths, and ownership, then installs a local file snapshot called a generation.
+4. Resources without active drafts use the installed projection. For a resource with a draft, the daemon computes the full result from **that draft's Base snapshot + operations**, then overlays it onto the resource. This produces **Effective Memory**.
+5. `activate` searches an index matching the effective content hash; `load` reads complete current resources by ID or path.
 
-## Project Local Storage
+A creation Draft may have no existing resource, and its Base can be absent when the Organization has no snapshot yet. When upstream content changes, an existing Draft Base does not silently move. Otherwise the same operations might apply to different text. The system reports `behind` and uses three-way comparison so the user can confirm a new result.
 
-Project Local Storage controls where one installation keeps a Project's
-rebuildable generations and search index. Its registry key is:
+Each read uses an identifiable snapshot, but content can change between separate calls. Reload before editing and supply the returned `content_hash`; an earlier search is not a guarantee about the content at write time. See [Data structures](/data-model) for the different version fields.
 
-```text
-(normalized Server authority, canonical project_id)
-```
+## The boundaries of one edit
 
-The setting belongs to daemon even though Desktop presents it under Project
-settings. Server never receives the path or macOS bookmark. Central SQLite keeps
-Drafts, queued operations, cached authority objects, local Refs, storage move
-state, and the Project search-head registration. Shared retrieval models remain
-in the daemon cache.
+| Stage | Request and processing | What success proves |
+| --- | --- | --- |
+| Local save | Desktop or MCP → daemon; a SQLite transaction writes operations and the sync queue | This device has saved the edit |
+| Synchronization | daemon → Server HTTP; create/reuse a draft, append operations, pull changes | The Server has saved a shared proposal |
+| Review submission | Desktop → daemon → Server; ordered drafts, versions, and required reconciliation candidates | The draft set has entered review |
+| Publication | Desktop Approve calls merge; the Server checks roles, Review/Draft state, and Ref in a transaction | One result Commit contains the set; the Organization Ref advances |
+| Read readiness | The Server refreshes affected Project projections; the daemon downloads, verifies, installs, and prepares an index | This device can answer using the new version |
 
-```mermaid
-sequenceDiagram
-    participant UI as Desktop Settings
-    participant D as daemon
-    participant S as Source cache
-    participant T as Destination managed subtree
+A standalone HTTP `approved` decision does not publish. Desktop's current Approve action uses the merge route to publish. The Server can merge an `open` or `approved` Review. See [Domain interfaces](/reference/domain-api) and [End-to-end flows](/flows).
 
-    UI->>D: replace_project_storage(handoff_bookmark, expected_location_revision)
-    D->>D: resolve handoff and create daemon-owned security-scoped bookmark
-    D-->>UI: persistent move_id
-    D->>T: materialize staging generations and search index
-    D->>T: verify Commit markers, Ref generation, Effective Memory hash
-    D->>D: acquire storage write gate and CAS location revision
-    D->>T: promote staging atomically
-    D->>S: remove only the verified marker-owned subtree
-    D-->>UI: completed location
-```
+Local save, upload, Commit download, index preparation, and page rendering have separate completion conditions. A successful submission followed by a loading page needs measurements at those boundaries; one HTTP `200` does not establish readiness of the entire operation.
 
-Commit sync and storage moves share one sync mutex, so a local Ref cannot advance
-during the switch. Requests already reading the source hold a storage read gate;
-cleanup waits for them. If a custom volume is unavailable, daemon reports that
-location as unavailable and does not create an active cache elsewhere. Draft
-editing and Draft sync remain available because they do not live in Project
-Local Storage.
+## Domains inside the Server
 
-## Retrieval history and evaluation
+These are modules in one Server process, not separately deployed microservices.
 
-Every valid memory activation produces one local Retrieval Run. The daemon
-persists the exact/BM25, vector, RRF, reranker, and final rank values from the
-same candidate trace used to assemble the MCP response. It also records the
-Effective Memory and Index Revision identities, stage latency, stable exclusion
-reason, delta action, and bounded failure details.
+| Domain | Question it answers | Source directory |
+| --- | --- | --- |
+| Installation | How is initial configuration completed and authorized? | `installation/` |
+| Auth | Who is the user, and is the session valid? | `auth/` |
+| Organization | What are the members, roles, and Project permissions? | `organization/` |
+| Memory | What are the published content, selections, Bundles, and snapshots? | `memory/` |
+| Changes | How are drafts synchronized, reconciled, reviewed, and published? | `changes/` |
 
-Retrieval Runs and Evaluation Cases live in central local SQLite, while frozen
-resource bodies use a daemon-owned content-addressed blob store. They do not
-move with Project Local Storage and are never uploaded to Server. A user may
-pin a successful Run as a versioned Evaluation Case, label retrieved units or
-missed resources with relevance 0–3, and export a self-contained fixture with
-B1–B4 metrics. See `docs/retrieval-evaluation.md`.
+These directories live under `crates/server/src/`. HTTP code translates requests and responses; service/storage code implements use cases, authorization, and PostgreSQL transactions. `http.rs` assembles the routes. See [Codebase map](/repos) to navigate by operation.
 
-## Local Project binding
+## Identity and trust boundaries
 
-The Server connection, the Desktop-selected Project, and a local directory
-binding are separate state:
+- **Sign-in:** Desktop opens the organization's OIDC identity provider in a system browser. The Server verifies identity. Desktop exchanges the authorization code and passes the token pair to the daemon over XPC for Keychain storage. The daemon adds bearer credentials to normal Server requests.
+- **Project binding:** The daemon resolves the longest bound ancestor of the current directory within the normalized Server authority. Managed agent proxies recheck binding and runtime identity to avoid using a Project after its directory is rebound.
+- **Publication:** Project members can propose and submit edits; Organization owners/admins decide publication. Role checks do not replace version or `If-Match` concurrency checks.
+- **Local diagnostics:** AgentRun, retrieval history, and host Activity projections remain on the device. They are distinct from Draft content synchronized to the Server.
 
-```text
-Server authority + credentials
-Local canonical workspace root -> canonical project_id
-Desktop selected project_id (UI only)
-```
+Initial setup and administrator recovery when the daemon is unavailable use restricted direct HTTPS requests from Desktop to the trusted Server origin. These are exceptions to the diagram's normal data path. Admin APIs use bearer authentication; setup cookies/CSRF do not form a general browser administration session. See [Authentication and sessions](/reference/auth).
 
-Daemon persists bindings in SQLite under the normalized Server authority and
-resolves the longest canonical ancestor of the MCP working directory. Commit
-sync enumerates all bound Projects, so two MCP processes can use different
-Projects concurrently while Desktop is closed or displaying a third Project.
-Legacy `ws_id` configuration is only a one-time name-and-path migration source;
-it is not part of the runtime identity model.
+## What failures preserve
 
-## Authentication boundary
+| Failure | State preserved and recovery principle |
+| --- | --- |
+| Draft upload fails | Operations committed locally remain queued; repair connectivity or sign-in and retry |
+| Upstream, candidate, or version changes | Reject stale submission/merge; reread, compare, and confirm without overwriting concurrent publication |
+| Commit download or validation fails | Do not install a partial generation or advance its local Ref |
+| Index does not match effective content | Report preparation/failure rather than answering from the wrong index |
+| Custom storage volume is unavailable | Report unavailable storage; drafts and queues remain in central SQLite |
+| Agent proxy and resident versions differ | Return an explicit runtime mismatch; restart the relevant processes after updating |
 
-The native macOS App accepts one origin-only Server address, requires HTTPS for
-remote hosts, and persists the normalized authority. It checks setup state
-directly before daemon startup. A new installation uses a short-lived setup
-cookie plus CSRF token to save configuration, then uses the same App-owned
-loopback listener, state, and PKCE verifier for the first Owner's OIDC flow.
-Initialization and issuance of the PKCE-bound client authorization code happen
-in one Server transaction.
+See [Troubleshooting](/guides/troubleshooting). Commit downloads currently transfer a full payload rather than incremental objects, and the local runtime uses macOS launchd/XPC. Field compatibility and implementation gaps are documented in [Data structures](/data-model), [HTTP contracts](/reference/http-api), and the relevant subsystem pages.
 
-After code exchange and `/api/v1/me` succeed, the App sends the token pair
-directly to daemon over XPC. Organization owners and administrators then use
-the native Administration surface; its Server requests carry bearer
-credentials through daemon. Cached administrative reads are marked stale, and
-mutations remain disabled until a live refresh succeeds.
+## Continue into the implementation
 
-Daemon injects bearer tokens into Server requests. On `401`, it rotates the
-refresh token and retries exactly once.
-
-If daemon startup fails, the App's **Administrator Recovery** path runs OIDC
-directly against the same trusted origin. Recovery credentials remain only in
-App memory and are limited to direct health inspection, member access repair,
-and token revocation; they are neither written to disk nor converted into a
-browser session.
-
-## Platform boundary
-
-The current daemon transport is macOS launchd plus XPC. Its LaunchAgent label
-and Mach service are both `ai.clumsies.daemon`, under the `ai.clumsies` product
-namespace. The signed App bundle contains one Rust `clumsiesd` executable. With
-no proxy subcommand it runs as the resident service; `mcp serve` and `_agent
-agent-run-event` run as short-lived protocol proxies. Adapters pin that exact
-App-bundled path rather than searching `PATH` or copying another executable.
-
-Before forwarding any Agent traffic, a proxy compares its protocol revision and
-build identity with the resident daemon's health response. Every Agent-scoped
-dispatch then carries the same marker, which the resident validates before
-decoding the operation. A stale resident or proxy is rejected explicitly
-instead of mixing two releases. Windows is a later roadmap item and will need a
-native service manager and IPC transport behind the same daemon capability
-contract. It is not implemented as a degraded fallback.
-
-## Incomplete boundary
-
-Draft upload, remote projection, Commit download, atomic local materialization,
-Effective Memory Draft overlay, canonical three-way reconciliation, explicit
-rebase, Review freshness, hybrid retrieval, exact loading, activation delta, and
-macOS Keychain token storage, local Retrieval Run history, Evaluation Case
-labeling, B1–B4 metric calculation, and native Retrieval Diagnostics are
-operational. A representative human-reviewed retrieval query set and Windows
-service transport remain outside the implemented boundary.
+- [Server route assembly](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/http.rs): interfaces and authentication groups.
+- [Daemon startup](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/main.rs): resident/proxy modes and background workers.
+- [Draft synchronization](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/draft.rs), [Commit installation](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/commit_sync.rs), and [effective-content overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/search/overlay.rs): three separate processing stages.
+- Next: [Core data structures](/data-model), connecting the diagram's names to objects, fields, and relationships.

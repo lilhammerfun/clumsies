@@ -164,7 +164,7 @@
 
 .vp-doc table {
   border-radius: 10px;
-  overflow: hidden;
+  overflow-x: auto;
 }
 
 .vp-doc div[class*="language-"] {
@@ -419,5 +419,19 @@
 
   .VPHomeHero .text {
     font-size: 1.08rem;
+  }
+}
+
+/* Diagrams keep their authored contrast in either color theme. */
+.vp-doc img[src^="/diagrams/"] {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid var(--vp-c-divider);
+}
+
+@media (max-width: 640px) {
+  .vp-doc th,
+  .vp-doc td {
+    min-width: 9rem;
   }
 }

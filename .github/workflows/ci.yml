@@ -62,6 +62,9 @@ jobs:
       - name: Build docs
         run: bun run build
 
+      - name: Check Chinese and English documentation search
+        run: bun dev/check-docs-search.mjs
+
   rust:
     runs-on: ubuntu-latest
     steps:

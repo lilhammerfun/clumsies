@@ -1,41 +1,43 @@
-# Organization memory
+# Organization Memory
 
-Organization memory is the authority surface of the unified Memory model. This
-page keeps the former `/artifact` URL because `Artifact` was the retired name
-for this product surface, and the historical UI called the view **Hub**.
+Organization Memory is the team's published knowledge library. Several Projects can select the same Memory, while its identity and publication history are maintained once. The [core data model](/data-model) follows one document through proposal and Review publication.
 
-## Scope and authority
+This page retains the historical `/artifact` URL. Artifact and Hub are retired product names, not additional objects or services in the current system.
 
-Organization memory is shared across the organization and has the sole
-authority Ref and immutable Commit history. Projects consume selected
-Organization Memory and carry private Draft overlays, but they do not create a
-second authority namespace, unrelated copies, or path-based identities.
+## Organization owns content; Projects choose what to use
 
-Resource identity is stable while the display path may change. Blob, Tree,
-Commit, and Ref provide version history; Draft, Review, and merge provide the
-human coordination boundary.
+Suppose an Organization has coding conventions, payment API notes, and a deployment rollback checklist. Payments may select all three; Website may select the conventions and checklist. Both Projects reference the same Memory IDs instead of maintaining independent copies of the bodies.
 
-## Memory in organization scope
+The Organization Ref identifies the published Organization Commit. Each Project's selection produces its own Project Commit. When selected upstream resources change, Server refreshes affected projections and local daemons synchronize them.
 
-Every Memory object — whether it reads as a rule, a workflow, or reusable
-project context — uses a Markdown body, a required semantic `description`, and
-stable resource metadata. There are no closed Context / Rule / Workflow types;
-the active model stores one object in Organization authority. Editing in a
-Project creates an Organization-scoped Draft carried by that Project; it never
-mutates the authority Ref directly.
+| Action | What changes |
+|---|---|
+| Select / remove Memory in a Project | The Project's selection and projection |
+| Edit Memory | First creates an Organization Draft carried by that Project |
+| Submit Review | Presents one or more Drafts for human coordination |
+| Merge Review | Updates Organization publication and affected Project projections |
+| Rename Memory | Changes its published path; stable ID remains |
+| Delete Memory | Archives the current resource at publication; immutable snapshots retain history |
 
-## Bundles
+Ordinary members propose, submit, and comment within their permissions. Organization owners/admins hold publication decision permissions. Agent `memory.store` only saves proposals; MCP exposes no approval or merge tool. See [API reference](/reference/) for endpoint authorization.
 
-A Bundle is one member's Server-stored selection of shared memory resources
-(`resource_ids`). It supports reuse and discovery without becoming a new
-authority source:
+## Contents of a Memory
 
-- a resource may exist outside every Bundle;
-- the same resource may appear in multiple Bundles;
-- Bundle membership does not change resource identity;
-- a Project's selected-memory projection remains independent from the member's
-  Bundle selection.
+Each Memory has a stable ID, Organization-relative path, path-derived `name`, `description`, Markdown body, and status. See the [Memory field table](/data-model#memory-identity-path-and-content) for fields and nullability.
 
-See [Project](/workspace) for selection and Draft overlay semantics and
-[Architecture](/architecture) for the Organization authority / Project
-projection model.
+Bodies can describe rules, procedures, or background knowledge, but these are not three system content types. Paths and headings organize knowledge for people; they grant no additional permission and do not automatically turn documents into executable host Skills.
+
+Descriptions can currently be empty, and Server merge does not fully persist Draft descriptions. A description can help explain a resource, but clients cannot assume every published Memory has a reliable one. See [implementation boundaries](/unified-memory-model#current-implementation-boundaries).
+
+## Bundle: a personal collection of Memory
+
+A Bundle is a user's Server-stored set of Memory IDs for grouping, discovery, and reuse. A “New teammate onboarding” Bundle might contain coding conventions and the deployment rollback checklist.
+
+- Memory can belong to no Bundle or several Bundles.
+- Editing a Bundle changes the collection, not content, identity, or publication state.
+- Saving Memory in a Bundle does not automatically add it to a Project Org Selection.
+- Deleting a Bundle does not delete its Memory.
+
+The tables are `personal_bundles` and `personal_bundle_items`. Project selection uses a separate pair of tables; see the [storage mapping](/data-model#where-the-data-lives).
+
+Continue with [Project](/workspace) and [Unified Memory design](/unified-memory-model). Implementation sources: [Memory API](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/api.rs) and [resource/Bundle persistence](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/postgres.rs).

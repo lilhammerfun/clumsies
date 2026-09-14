@@ -1,6 +1,6 @@
 # Server
 
-> 文档属性：详细设计型｜L3 具体规范｜面向工程实现、运营保障与质量审计。
+本页面向需要部署或修改 Server 的开发者。先读[系统架构](/zh/architecture)和[领域接口](/zh/reference/domain-api)，再查这里的服务端职责与运行方式。
 
 Server 是 clumsies 可部署的共享权威服务。`Hub` 只是 Desktop 早期对 Organization 作用域的历史称呼，不是另一项服务；Rust 二进制和容器统一称为 Server。
 
@@ -22,8 +22,8 @@ Server 不负责本机工作目录、目录到 Project 的绑定、macOS bookmar
 权威图使用与 Git 相同的不可变对象关系：
 
 ```text
-Blob -> Tree -> Commit -> Ref
-                    ^
+Ref -> Commit -> Tree -> entries -> Blob
+         ^
 Draft(base_commit_id)
 ```
 
@@ -39,9 +39,9 @@ Organization 管理员可用 `GET /api/v1/admin/memory-export` 导出全部 Orga
 
 Draft 生命周期（`open`、`submitted`、`merged`、`discarded`）与 freshness（`current`、`behind`）以及 reconciliation（`unknown`、`clean`、`conflicts`）相互独立。Ref 前进时，Server 不修改 Draft Base 和操作。
 
-一个 Review 可以按顺序包含多个 Draft。创建或重新提交 Review 时，Server 校验每个 Draft 的所有者、状态、版本和候选；批准时在同一事务中按顺序应用全部 Draft，只生成一个结果 Commit 并推进目标 Ref。任何 Draft 不可发布都会使整次决定失败，不会留下部分合并。
+一个 Review 可以按顺序包含多个 Draft。创建或重新提交 Review 时，Server 校验每个 Draft 的所有者、状态、版本和候选；合并时在同一事务中按顺序应用全部 Draft，只生成一个结果 Commit 并推进目标 Ref。任何 Draft 不可发布都会使整次决定失败，不会留下部分合并。
 
-Project 成员可以创建、提交、查看和评论 Review。只有 Organization owner/admin 可以批准或拒绝 Organization 发布。批准记录决定并原子推进 Ref；历史 `Approved` Review 仍可走兼容 merge 路由。
+Project 成员可以创建、提交、查看和评论 Review。只有 Organization owner/admin 可以批准或拒绝 Organization 发布。Desktop 的 Approve 调用 merge 路由，记录批准并原子推进 Ref。独立 HTTP decision 的 `approved` 只记录决定，不发布；merge 路由支持 `open` 或 `approved` Review。
 
 reconciliation 候选绑定 Draft ID、Draft version、Base Commit 和 Current Commit：
 
@@ -95,14 +95,14 @@ bun run dev:infra:down
 
 ## 生产运行
 
-复制 `.env.example` 为 `.env`，配置 Organization OIDC，并启动 `compose.production.yml`。`CLUMSIES_PUBLIC_ORIGIN` 必须是 Server 的规范 HTTPS origin；在 IdP 注册由它派生的 `/login/oauth2/code/oidc`。同一 origin 提供 Public API、Admin API、Web Admin 和 OIDC callback。
+复制 `.env.example` 为 `.env`，配置 Organization OIDC，并启动 `compose.production.yml`。`CLUMSIES_PUBLIC_ORIGIN` 必须是 Server 的规范 HTTPS origin；在 IdP 注册由它派生的 `/login/oauth2/code/oidc`。同一 origin 提供 Public API、Admin API 和 OIDC callback。
 
 OIDC 变量为空时，Server 为基础设施诊断仍可启动，但 health 会把 OIDC 标为 `down`，登录不可用；这不是可用的生产状态。
 
 ## 验证
 
 ```bash
-bun run api:check
+cargo test -p server --lib axum_routes_match_public_and_admin_openapi
 cargo test -p server
 cargo test -p daemon
 ```

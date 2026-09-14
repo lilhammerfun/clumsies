@@ -1,97 +1,87 @@
-# Overview
+# Understand Clumsies
 
-Clumsies is external memory infrastructure for coding agents. It keeps durable
-Memory outside one model conversation, makes the relevant subset available to
-an agent, and turns changes into reviewable drafts instead of invisible local
-edits.
+Clumsies gives a team a shared library of knowledge that coding agents can find and use across tasks. A Memory is a Markdown document: a deployment checklist, a coding convention, or an explanation of a system. Changes go through drafts and human review before they become the team's published version.
 
-## Memory model
+You do not need to understand the database or MCP to start. This page introduces the few ideas used throughout the documentation.
 
-Memory is the single first-class content object. The former closed Context /
-Rule / Workflow types are unified into it: whether a Memory reads as a "rule",
-a "workflow", or project "context" is expressed by its content and path, not by
-a type discriminator.
+## Start with one document
 
-| Concept | Meaning |
+Imagine your team maintains **Deployment rollback checklist**, at `operations/deployment-rollback.md`.
+
+A developer working on the Payments repository needs that checklist. The team selects it for the Payments Project. When an agent starts a deployment task, Clumsies finds the relevant passages. The agent can then read the complete document.
+
+During the task, the developer discovers a missing verification step and asks the agent to update the checklist. The update is saved as a Draft. It can be tried in that Project before publication. An organization administrator reviews and approves the change. A successful merge creates a new published version, which reaches Projects that selected the checklist.
+
+That is the main product loop: **find knowledge → use it → propose an improvement → review → publish**. The [complete walkthrough](/flows) follows the data at each step.
+
+## The six ideas to learn first
+
+| Idea | Plain-language meaning | In the example |
+| --- | --- | --- |
+| **Memory** | One document with a stable identity, a path, a description, and Markdown content | Deployment rollback checklist |
+| **Organization** | The team and its shared, published Memory library | The company that owns the checklist |
+| **Project** | A working context with members, repository bindings, and a selection of organization Memory | Payments selects the checklist and coding conventions |
+| **Draft** | A proposed set of changes, carried by a Project and saved before publication | Add a rollback verification step |
+| **Review** | An ordered group of one or more Drafts for discussion and an authorized decision | Review the checklist and its related runbook together |
+| **Commit** | An immutable snapshot created when a change is published | The new published checklist version |
+
+A Project's selection refers to the original Memory IDs. It does not create independent copies. Updating a selected Memory later reaches the Projects that use it.
+
+A Memory's purpose comes from its content and path. A rule, workflow, and system explanation all use the same current content model; they are not separate publication systems.
+
+## Understand the three views
+
+The same checklist can appear in three forms:
+
+| View | What you are reading | Who owns it |
+| --- | --- | --- |
+| **Organization Memory** | The currently published checklist | Server |
+| **Project projection** | The published documents selected for Payments | Server builds it from the selection and organization content |
+| **Effective Memory** | The local Project projection with that Project's pending Draft changes applied | The resident daemon on this Mac |
+
+“Projection” means a view assembled from a larger source. “Effective” means the version currently used for local reading and retrieval.
+
+This distinction explains an otherwise surprising behavior: an agent may read your proposed checklist step before the organization has published it. The proposal changes the bound Project's local Effective Memory. It does not publish a change to every Project.
+
+## Know where work happens
+
+Clumsies has three long-running components:
+
+- **Desktop** is the macOS interface for people: sign in, choose a Project, read and edit Memory, and review changes.
+- **The daemon**, named `clumsiesd`, is a background process on the same Mac. It saves Draft operations, synchronizes with Server, and runs local retrieval.
+- **Server** stores shared identity, permissions, Drafts, Reviews, and published history in PostgreSQL.
+
+An agent reaches the daemon through a small **MCP proxy**. MCP is the tool protocol used by the agent host. The proxy forwards requests; it does not own another database or search engine.
+
+Read the [architecture](/architecture) for component diagrams and the [data model](/data-model) for object relationships.
+
+## “Saved” has three different meanings
+
+| Stage | What has succeeded | What has not happened yet |
+| --- | --- | --- |
+| **Accepted locally** | The daemon committed the Draft operation to its local SQLite database and queued synchronization | Server may not have received it |
+| **Synchronized** | Server has accepted the Draft and operations | The published checklist is unchanged |
+| **Published** | An authorized Review merge created an organization Commit and advanced its current-version pointer | Other Macs may still be downloading the new Project snapshot or preparing their index |
+
+The current-version pointer is called a **Ref**. A Commit stays unchanged; a Ref moves to the next Commit.
+
+The agent's `memory.store` success means **accepted locally**. It is not a publication acknowledgment. A member's ability to propose changes also does not grant permission to approve them.
+
+## Choose your next page
+
+| Your question | Read next |
 | --- | --- |
-| Memory | Markdown-backed Organization authority with stable `id`, `title`, `path`, `description`, `content`, `revision`, and `status` |
-| Organization authority | the sole publication namespace, with its own Ref and immutable Commit history |
-| Project | repository binding that selects Organization Memory, owns a projection Ref, and carries private pre-merge Draft overlays |
-| Bundle | a personal selection of shared memory resources (`resource_ids`) |
+| How do I use this with my repository? | [Member workflow](/guides/how-to-use-clumsies) |
+| What happens from retrieval through publication? | [End-to-end flows](/flows) |
+| Which components run where? | [Architecture](/architecture) |
+| What are the main records and version fields? | [Data model](/data-model) |
+| Which domain operations and interfaces exist? | [Domain API map](/reference/domain-api) |
+| Where should I start reading the source? | [Codebase map](/repos) |
 
-New Memory objects receive `mem_`-prefixed IDs. Legacy `ctx_` / `rul_` / `wfl_`
-IDs remain stable and opaque; they are never rewritten. `description` is a
-required, agent-generated semantic summary on create and an explicit retrieval
-field, chunked and indexed separately from `content`.
+## Scope of this explanation
 
-## Product surfaces
+These pages describe the current organization-authority model. Older Project-scoped records and Context / Rule / Workflow names still appear in compatibility code and some UI paths. They should not be treated as additional ways to publish new Memory.
 
-| Surface | Role |
-| --- | --- |
-| Desktop | primary human product for setup, sign-in, administration, Organization authority, each Project's selected/effective Memory, Drafts, Reviews, and merges |
-| resident `clumsiesd` | always-on Rust runtime for drafts, sync, retrieval, native transport, and client coordination |
-| Agent runtime | short-lived `clumsiesd mcp serve` and `_agent` proxies used by supported hosts |
-| Server | self-hosted authority service backed by PostgreSQL |
-| MCP | agent-facing `activate`, `load`, and `store` interface |
+Detailed contracts and known implementation differences belong in the [data model](/data-model) and [interface reference](/reference/domain-api). The entry pages explain the supported workflow first.
 
-Organization is the sole Memory authority. A Project view is a projection of
-selected Organization Memory plus Project-carried Organization Draft overlays;
-it is not a second authority scope. Historical Project-scoped rows remain
-parseable only so the authority cutover can archive or discard them safely.
-
-## Memory lifecycle
-
-```text
-task cue
-  -> activate ranked fragments
-  -> optionally load a known complete resource
-  -> use it in working context
-  -> store a local draft
-  -> daemon synchronizes the draft
-  -> review and merge
-  -> new Commit advances the target Ref
-```
-
-`store` never edits authoritative memory. Desktop and MCP both write to daemon,
-and daemon automatically sends queued operations to Server. Only an approved
-merge creates the next authority Commit.
-
-## Version model
-
-Clumsies uses Git terminology for Git-equivalent concepts:
-
-- Blob: immutable resource content
-- Tree: the indexed resource set for a version
-- Commit: an immutable authority version with a parent
-- Ref: a movable head; the Organization Ref is authoritative and a Project Ref
-  identifies that Project's current selected-memory projection
-
-HTTP `ETag` and `If-Match` protect Ref updates. They do not replace Commit
-history. An Organization Draft records its Organization `base_commit_id`; a
-merge is rejected if the Organization Ref has moved.
-
-## Current implementation boundary
-
-The unified Memory model (Server, daemon, OpenAPI, MCP, macOS), the Organization
-authority and Project-view endpoints (`/api/v1/org/memories` and
-`/api/v1/projects/{project_id}/memories`), description-aware retrieval, the
-org-admin `memory-export` migration endpoint, generic organization OIDC,
-complete Public/Admin contracts, native Server-origin validation and
-first-installation setup, in-App Administration, daemon-down administrator
-recovery, Desktop transport, local draft queue, refresh-token retry, macOS
-Keychain credential storage, reviewed Commit creation, daemon Commit
-synchronization, user-resolvable stale conflicts, and atomic MCP authority
-generations are implemented. Real PostgreSQL tests cover merge-to-Commit,
-two-daemon convergence, restart recovery, and failure without Ref advancement.
-
-The resident daemon composes the installed Commit generation with current local
-Draft operations into one Effective Memory view. It derives Markdown retrieval
-units, SQLite FTS5 BM25 rows, local dense vectors, RRF fusion, cross-encoder
-reranking, and activation delta state from that view. The App-bundled Rust
-`clumsiesd mcp serve` process is a thin stdio-to-XPC adapter for `activate`,
-`load`, and `store`; it owns no database, model, or background worker.
-The private `_agent agent-run-event` mode applies the same boundary to lifecycle
-Hooks.
-
-Automatic three-way conflict resolution and the versioned production retrieval
-query set remain incomplete.
+Implementation entry points: [MCP contract](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/agent_runtime/mcp_contract.rs), [local Draft persistence](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/state.rs), and [Review publication](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs).

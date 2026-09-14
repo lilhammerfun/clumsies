@@ -1,129 +1,127 @@
-# Use clumsies
+# Use Clumsies with your repository
 
-Desktop is the primary human client. The normal workflow does not require a
-separate command-line client or manual draft synchronization.
+This guide takes a team member from sign-in to a reviewed Memory change. It uses the **Deployment rollback checklist** example from the [overview](/overview).
 
-## Sign in
+You will need the macOS App, your organization's Server address, an admitted account, and access to a Project. An organization owner or administrator manages admission and Project access. If you are setting up a new Server, start with [deployment](/guides/deploy-for-an-org).
 
-Open the macOS App and enter your organization's Server origin. Remote Servers
-must use HTTPS; HTTP is accepted only for loopback development, and the App
-rejects addresses containing credentials, a path, query, or fragment. It saves
-the normalized origin and checks the Server's installation state before
-starting the local daemon.
+## 1. Sign in to your organization
 
-For an initialized Server, continue with SSO in the system browser. Desktop
-owns the ephemeral loopback callback, state, and `S256` PKCE verifier. Your
-email must already be admitted by an organization owner or admin.
+Open Desktop, enter the Server origin supplied by your administrator, and continue with SSO in the system browser.
 
-For a new Server, the same screen expands into native setup. Enter the
-deployment Setup Code, organization name, default Project, and optional allowed
-email domains, then continue in the browser. The first verified identity
-becomes Owner, the installation is locked, and the resulting token pair is
-installed in daemon without creating a browser session.
+A Server origin looks like `https://memory.example.com`: no extra page path, query, or embedded credentials. Remote connections require HTTPS; loopback HTTP is supported for local development.
 
-## Browse memory
+For a new installation, Desktop instead offers setup using the deployment Setup Code. The first verified identity becomes the organization owner. Normal members join the existing installation; they do not initialize another one.
 
-The unified **Memory** section shows two views of one Organization-authority
-model in a single navigator:
+After sign-in, confirm that Desktop shows the intended organization and account.
 
-- **Org** (organization scope, historically called Hub) contains
-  organization-shared Memory.
-- **Project** contains that Project's selected Organization resources plus its
-  private pre-merge Organization Draft overlays.
+## 2. Choose a Project and attach the repository
 
-There are no closed Context / Rule / Workflow types in the current domain
-model — a Memory's role is carried by its content and path. The navigator lists
-Memory by path; opening one shows its Markdown body and semantic description in
-the workbench. A non-empty description is the intended authoring rule, but the
-current write and merge paths do not yet enforce or preserve it consistently.
+Select the Project for your work. If no Project is available, an administrator must grant access or create one.
 
-## Edit and review
+In the Project's **Repositories** section, use **Add Repositories…** to attach your local repository. This creates a binding on this Mac. Other Macs need their own bindings because their repository paths may differ.
 
-Editing creates or reuses a local draft. The daemon persists each operation and
-automatically synchronizes it to Server. Saving a draft does not publish it.
+A Project and a repository are different things:
 
-The collaboration flow is:
+- The Project is the shared working context, membership, and Memory selection.
+- The binding tells the local daemon which Project applies to a repository directory.
+- Selecting a Project in Desktop controls what you are browsing. It does not replace the repository binding used by managed agent integrations.
 
-1. create a proposal or edit selected Organization Memory inside a Project
-2. keep editing normally while newer shared Commits synchronize
-3. review and explicitly merge the latest shared version when prompted
-4. submit one or more coordinated Drafts as an ordered Review
-5. an Organization owner/admin rejects it or approves and merges the complete Draft set atomically
-6. receive the new authority Commit
+## 3. Check the Memory selection
 
-When the target Ref advances, Desktop continuously shows **A shared update is available**.
-Viewing the candidate does not change the Draft. **Merge latest version** shows the
-Base/Current/Draft comparison and requires confirmation even when the result is
-clean. Conflicts use the same screen for manual resolution. The Draft remains
-editable throughout, and its old revision is retained when the result is
-applied.
+Open **Memory** and compare the two views:
 
-Creating or resubmitting a Review must use the latest Ref. If it moves again
-during confirmation, Clumsies recalculates instead of overwriting authority.
-An existing Review may remain behind and continue to receive comments, but it
-must be coordinated before approval. Approval uses `If-Match` as a final guard;
-if the Ref moves, the Review remains Open rather than stopping in a partially
-approved state. Historical Approved Reviews can still be merged.
+| View | What to expect |
+| --- | --- |
+| **Organization** | Published shared Memory |
+| **Your Project** | Selected organization Memory, with local pending Draft changes applied |
 
-## Agent workflow
+For the example, the Project should include `operations/deployment-rollback.md`. An organization owner/admin changes the Project's organization-Memory selection. A member can propose edits to selected Memory through a Project Draft.
 
-The MCP server exposes exactly one tool:
+If a shared document is missing from your Project, check the selection before troubleshooting search. Finding it in the organization library does not mean it is selected for every Project.
 
-- `memory`, with `activate`, `load`, and `store` operations
+A **Bundle** is a personal saved selection of shared Memory IDs. It helps reuse a set of documents; it does not publish another copy or override the Project's selection.
 
-Managed host-plugin processes resolve their Project from the current directory
-through the always-on daemon and fail closed if that binding is missing or
-changes. A manually launched plain `mcp serve` keeps a compatibility fallback
-to the Project currently selected in Desktop when no directory binding exists;
-the caller still cannot pass an arbitrary Project ID.
+## 4. Connect your agent host
 
-MCP `store` and Desktop editing use the same daemon queue, so a change created
-by an agent appears in Desktop for review. The Draft changes only the bound
-Project's Effective Memory before merge. Its publication target is Organization
-authority, but MCP cannot approve, merge, or publish it; an Org administrator
-must do that through the Review workflow. Organization is not represented as a
-Project.
+Use Desktop's agent integration settings to install the supported host integration. The [Agent runtime guide](/guides/agent-runtime) covers the host-specific details.
 
-## Bundles
+The integration launches the App-bundled MCP proxy. The resident daemon supplies the Project's Memory. The agent does not need a separate Clumsies database, Server token, or manually synchronized Markdown folder.
 
-Bundles are personal, Server-stored selections of shared memory. They help one
-user reuse a curated set without making that selection an organization-wide
-authority object.
+Start a task from the bound repository and ask the agent to find the team's deployment rollback guidance. The usual tool sequence is:
 
-## Manage Project local storage
+```text
+activate: find relevant Memory fragments for the task
+load: read the complete checklist when its details matter
+store: propose a change only when the user asks to maintain Memory
+```
 
-Open Settings and use **Project Local Storage** to inspect the selected Project's
-cache location, availability, and size. **Choose...** opens the native macOS
-directory picker. Clumsies creates its own hidden managed subtree below that
-directory; the directory itself remains yours and is never treated as a memory
-editing folder.
+The actual MCP surface is one tool named `memory`, with three operations. See [MCP](/mcp) for call syntax.
 
-Moving storage continues in the background daemon if Desktop closes. Do not edit
-files inside the managed subtree. **Reset** moves the cache back to the standard
-macOS location through the same verified migration. **Clear Cache...** removes
-only rebuildable Commit generations and the Project search index; Drafts,
-pending operations, settings, and unrelated files in the selected directory are
-preserved.
+Managed host-plugin runtimes stop if the binding is missing or changes during a task. Correct the binding, then start a new task. A manually launched plain `mcp serve` retains a compatibility fallback to the Project selected in Desktop; use the managed binding workflow for predictable project selection.
 
-If an external volume is disconnected or permission is revoked, the Project
-location shows **Unavailable**. Clumsies does not create a replacement cache in
-the default location. Draft editing and synchronization continue, while checkout
-and MCP retrieval resume after the configured location is accessible again.
+On first use, local retrieval models and the index may still be preparing. Inspect the reported progress and retry when ready.
 
-## Administration
+## 5. Make one proposed improvement
 
-After signing in as an organization owner or administrator, open
-**Administration** in the macOS App to manage organization settings, member
-admission, Projects, Project membership, tokens, audit events, identity-provider
-status, and Server health. It is not a second memory editor. Cached data is
-clearly marked, and changes remain disabled until a live Server refresh
-succeeds.
+Open the checklist in the Project's Memory view and add the missing verification step. Alternatively, explicitly ask the agent to update that Memory. For an agent edit, it must first load the current document and use the returned hash and exact text.
 
-If the local daemon cannot start, choose **Administrator Recovery** from the
-failure screen. The App signs in directly to the trusted Server and holds the
-recovery session only in memory so an administrator can inspect health, repair
-member access, or revoke tokens. Retry normal startup after recovery; ordinary
-product work still requires daemon.
+The change creates or reuses a **Draft**. Saving it sends an operation to the daemon's local durable queue. The daemon automatically synchronizes it to Server.
 
-See [Deployment](/guides/deploy-for-an-org) for Server configuration and
-[Architecture](/architecture) for component boundaries.
+Check the state instead of treating every success as publication:
+
+| State | Meaning |
+| --- | --- |
+| Locally saved / queued | The proposal is durable on this Mac; upload may still be pending |
+| Synchronized Draft | Server has the proposal; organization Memory is unchanged |
+| Merged Review | The proposal has become a new organization version |
+
+Changes are available through the Project's Effective Memory as the local read/index pipeline catches up. They are not shared published guidance yet.
+
+## 6. Resolve shared updates and request Review
+
+If Desktop shows **A shared update is available**, use **Merge latest version** to compare Base, Current, and Draft. Read the resulting content and confirm. Resolve overlapping edits in the same screen.
+
+Then use **Request Review** for one document, or **Request Review for All Project Changes…** to submit the relevant Project Drafts together. Check the file list, proposed results, and explanation before submitting.
+
+The submission flow synchronizes pending operations and coordinates behind Drafts using valid comparison candidates. If another update arrives during confirmation, refresh and inspect the new comparison.
+
+Once submitted, open the Review and discuss the changes. Submission success confirms the Review exists; the detail page still needs to fetch the data required to show its diffs.
+
+## 7. Have an authorized reviewer publish it
+
+An organization owner or administrator reviews the complete proposal:
+
+- **Approve and merge** publishes the ordered Draft set as one organization Commit.
+- **Reject** returns the Drafts for further editing and resubmission.
+
+The current Desktop approval action combines approval with merge. The API also supports a separate Approved state; a Review in that state is not published until it is merged.
+
+If the organization Ref has advanced, the reviewer must use an updated, coordinated proposal. Refreshing a stale screen is part of making a decision against the right version.
+
+After merge, the originating Project and other affected Projects receive new snapshots. Each Mac then synchronizes its snapshot and retrieval index. Ask the agent to retrieve again when the local state is ready; existing conversation text does not update itself.
+
+## When something does not work
+
+| Symptom | First action |
+| --- | --- |
+| No Project access | Have an organization administrator check membership |
+| Agent reports a missing or changed binding | Check the attached repository and restart the agent task |
+| Search is preparing | Check model/index progress rather than repeatedly submitting the same call |
+| Draft remains queued | Inspect synchronization status and sign-in, then retry the existing operation flow |
+| Content changed before an agent edit | Load again and rebuild the exact replacements |
+| Review says shared changes need attention | Inspect and confirm the latest Base/Current/Draft comparison |
+| Review merged but local content is old | Check Project synchronization and index readiness, then read again |
+
+A failed response can leave the outcome uncertain if the response was lost after Server processed the request. Refresh the existing Draft or Review before creating another proposal. The [end-to-end walkthrough](/flows) explains these boundaries in more detail.
+
+## Local storage and administration
+
+In Settings, the Project local-storage controls show the cache location, size, and availability. Use **Choose…** to relocate it or **Reset** to return to the standard location. Clumsies manages a hidden subtree under the chosen directory; it is not a folder for manually editing Memory.
+
+**Clear Cache…** removes rebuildable Commit generations and the Project search index. It preserves Drafts, pending operations, settings, and unrelated files. When an external location is unavailable, reconnect it or restore access. Clumsies does not silently create another cache elsewhere; checkout and MCP retrieval wait for the configured location.
+
+Owners/admins use **Administration** for members, Projects, tokens, audit, and health. If daemon startup fails, **Administrator Recovery** offers a temporary direct Server session for administrative repair. Normal Memory work still requires the daemon.
+
+## Implementation references
+
+The [Project interface](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/apps/macos/Sources/Features/ProjectManagementView.swift), [workspace actions](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/apps/macos/Sources/Domain/WorkspaceStore.swift), and [Server authorization handlers](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/http.rs) define this workflow. For the underlying design, continue to [architecture](/architecture) and [data model](/data-model).
