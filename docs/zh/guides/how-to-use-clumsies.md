@@ -2,13 +2,13 @@
 
 这篇指南带团队成员完成登录、使用 Memory、提出修改和 Review 发布。例子仍是[概览](/zh/overview)中的 **部署回滚检查单**。
 
-开始前需要 macOS App、组织的 Server 地址、已获准加入的账号，以及一个有权限访问的 Project。组织 owner 或 admin 负责成员准入和 Project 授权。首次部署 Server 请先读[组织部署指南](/zh/guides/deploy-for-an-org)。
+macOS App 已内置默认服务端地址 `https://app.clumsies.ai`，登录后会自动获取该服务端配置的组织信息。组织 owner 或 admin 负责成员准入和 Project 授权。首次部署 Server 请先读[组织部署指南](/zh/guides/deploy-for-an-org)。
 
 ## 1. 登录组织
 
-打开 Desktop，输入管理员提供的 Server origin，然后在系统浏览器中完成 SSO 登录。
+打开 Desktop，保留预填的 **Server address**，点击 **Continue in Browser**，在系统浏览器中完成 SSO 登录。已有安装会记住你之前使用的服务端地址。
 
-Server origin 类似 `https://memory.example.com`，不附带页面路径、查询参数或内嵌账号密码。远程连接要求 HTTPS；本地开发支持 loopback HTTP。
+只有接入其他部署时，才需要把地址改成该部署管理员提供的 Server origin。地址类似 `https://memory.example.com`，不附带页面路径、查询参数或内嵌账号密码。远程连接要求 HTTPS；本地开发支持 loopback HTTP。
 
 尚未初始化的 Server 会显示 Setup Code 设置流程，第一位验证成功的身份成为组织 owner。普通成员加入已有组织，不需要再初始化一套服务。
 

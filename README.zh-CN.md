@@ -56,31 +56,96 @@ AI 编程智能体（Coding Agents）正在彻底重构软件开发的控制面�
 
 ## 快速上手
 
-### 桌面端 macOS App（推荐）
+日常使用推荐从 `main` 源码安装。以下步骤会编译 Debug 版本，将它安装到
+**`~/Applications/Clumsies.app`** 并打开。Debug 只是编译配置；安装后使用常规的
+Clumsies 应用，长期保留账号、记忆和 Agent 集成。
 
-1. 在 [Releases 发布页面](https://github.com/lilhammerfun/clumsies/releases) 下载最新的安装包。
-2. 将 `Clumsies.app` 拖入 `/Applications` 或 `~/Applications` 目录。
-3. 打开 `Clumsies.app`，系统将自动配置常驻后台守护进程（`ai.clumsies.daemon`）并连接至组织服务器。
-4. 将仓库绑定到对应 Project。Codex 会自动使用全局 Plugin；需要写入仓库的其他 Agent 可在 **Settings → Agent** 中统一配置。
+应用已内置默认服务端地址 `https://app.clumsies.ai`，登录后会自动获取该服务端
+配置的组织信息。
 
-### 源码构建与本地开发
+### 让 Agent 帮你安装
 
-完整 Dev Instance 需要 Just、XcodeGen、Xcode、Rust、Bun 和 Docker Desktop。
+把下面这段提示词发给你的编程 Agent：
 
-```bash
-# 克隆代码仓库
-git clone https://github.com/lilhammerfun/clumsies.git
-cd clumsies
+```text
+请帮我在这台 Mac 安装日常使用的 Clumsies，仓库地址：
+https://github.com/lilhammerfun/clumsies
 
-# 启动完整、按 worktree 隔离的 Dev Instance
-just dev-macos
+按照 README 的“从源码安装”步骤，使用 main 分支。先检查并补齐适配当前
+macOS 的完整 Xcode 26 或更新版本、Rust stable、Just 和 XcodeGen。沿用
+已有可用工具，保留仓库中已有的修改，以及 Clumsies 的账号、记忆和配置。
+首次安装沿用应用内置的服务端地址和登录配置。
+
+在仓库根目录执行 just install-macos，将包含内置 daemon 的完整
+Debug 应用安装到 ~/Applications/Clumsies.app，并打开这个已安装的应用。
+不要创建 Dev Instance，也不要启动本地 Server。某一步失败时，请说明
+失败的命令和原因，不要自行换成另一种安装方式。登录或 macOS 授权需要
+我操作时，请告诉我具体步骤。
+
+完成后确认已安装的应用能够打开，再引导我登录组织、把实际工作的仓库
+绑定到 Project，并接入我使用的 Agent。
 ```
 
-启动本地后端与测试鉴权环境：
+### 从源码安装
 
-```bash
-# 启动 PostgreSQL 数据库、测试 OIDC 鉴权与 Rust Server
-bun run dev:server
+1. 安装**完整的 Xcode 26 或更新版本**，按照
+   [Apple 的系统要求](https://developer.apple.com/cn/xcode/system-requirements/)
+   选择适配当前 macOS 的版本。首次打开 Xcode，接受许可协议并安装所需组件。
+   然后选择这套工具链（若安装位置不同，请调整路径）：
+
+   ```sh
+   sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+   sudo xcodebuild -runFirstLaunch
+   xcodebuild -version
+   ```
+
+2. 如果尚未安装 [Homebrew](https://brew.sh/)，先完成安装，再安装
+   [Just](https://formulae.brew.sh/formula/just)、
+   [XcodeGen](https://formulae.brew.sh/formula/xcodegen) 和
+   [Rust](https://formulae.brew.sh/formula/rust)：
+
+   ```sh
+   brew install just xcodegen rust
+   ```
+
+   已有可用的 Rust stable 工具链时，可从命令中去掉 `rust`。
+   确保当前终端能直接运行 `cargo` 和 `rustc`。
+
+3. 编译并安装应用：
+
+   ```sh
+   git clone --branch main https://github.com/lilhammerfun/clumsies.git
+   cd clumsies
+   just install-macos
+   ```
+
+   首次构建需要下载依赖，可能耗时数分钟。命令会编译应用及其内置 daemon、
+   验证签名、安装到 `~/Applications/Clumsies.app`，然后打开应用。
+   覆盖已有应用时会保留账号、记忆和配置。
+
+### 登录并接入 Agent
+
+1. 打开应用，保留预填的 **Server address**，点击 **Continue in Browser**
+   完成登录。应用会自动加载组织信息。
+2. 选择 Project，通过 **Repositories → Add Repositories…** 添加你实际工作的仓库。
+3. 打开 **Settings → Agent**。Codex 由应用自动维护；按需启用其他支持的 Agent。
+   使用 Codex 时，等待状态显示 **Ready**，重启 Codex，在绑定的仓库中新建任务，
+   然后通过 `/hooks` 审查 Clumsies Hook。
+4. 等待首次模型下载和记忆索引完成后，可以这样提问：
+
+   ```text
+   请通过 Clumsies 读取这个仓库对应项目的记忆，概括当前任务应遵守的约定。
+   ```
+
+完整使用流程见[使用指南](https://docs.clumsies.ai/zh/guides/how-to-use-clumsies)。
+如果登录或 Project 访问被拒绝，再联系组织管理员处理权限。
+只有接入其他部署时，才需要修改服务端地址。
+
+后续更新时，在这份 `main` 分支的仓库目录中执行：
+
+```sh
+git pull --ff-only
+just install-macos
 ```
 
 ---

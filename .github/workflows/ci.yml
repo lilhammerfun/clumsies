@@ -102,6 +102,7 @@ jobs:
           just --dry-run test-macos
           just --dry-run test-macos-live
           just --dry-run test-macos-package
+          just --dry-run install-macos
           just --dry-run promote-debug-macos
           just --dry-run dev-macos
           just --dry-run dev-macos-status

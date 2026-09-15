@@ -56,32 +56,102 @@ Today, agent memory is trapped inside isolated model sessions or local markdown 
 
 ## Quick Start
 
-### macOS App (Recommended)
+Install from `main` for everyday use on your Mac. These steps build the Debug
+configuration, install **`~/Applications/Clumsies.app`**, and open it. Debug is
+the build configuration; this is the regular app installation with persistent
+accounts, Memory, and Agent integrations.
 
-1. Download the latest release from [Releases](https://github.com/lilhammerfun/clumsies/releases).
-2. Move `Clumsies.app` to `/Applications` or `~/Applications`.
-3. Open `Clumsies.app`. It automatically provisions the resident launchd daemon (`ai.clumsies.daemon`) and connects to your organization server.
-4. Bind a repository to its Project. Codex uses the global Plugin automatically; configure optional repository-writing hosts in **Settings → Agent**.
+The app includes the default Server address, `https://app.clumsies.ai`.
+Sign-in automatically loads the organization configured on that Server.
 
-### Development from Source
+### Ask an agent to install it
 
-The complete Dev Instance requires Just, XcodeGen, Xcode, Rust, Bun, and Docker
-Desktop.
+Copy this prompt to your coding agent:
 
-```bash
-# Clone repository
-git clone https://github.com/lilhammerfun/clumsies.git
-cd clumsies
+```text
+Install Clumsies for everyday use on this Mac from:
+https://github.com/lilhammerfun/clumsies
 
-# Launch a complete worktree-scoped Dev Instance
-just dev-macos
+Follow the README's source installation steps on the main branch. Check
+and install missing prerequisites: full Xcode 26 or newer compatible with
+this Mac, stable Rust, Just, and XcodeGen. Reuse working installations and
+preserve existing repository changes, Clumsies accounts, Memory, and configuration.
+For a first installation, use the app's built-in Server and sign-in defaults.
+
+Run just install-macos from the repository root to build and install
+the complete Debug app, including its daemon, at ~/Applications/Clumsies.app.
+Open that installed app. Do not create a Dev Instance or start a local Server.
+If a step fails, report the failing command and cause instead of switching
+installation methods. Tell me when login or macOS authorization needs my input.
+
+Confirm that the installed app opens, then guide me through organization
+sign-in, binding my working repository to a Project, and connecting my agent.
 ```
 
-For local server development:
+### Install from source
 
-```bash
-# Start PostgreSQL, fake OIDC provider, and the Rust Server
-bun run dev:server
+1. Install **full Xcode 26 or newer**, choosing a version compatible with your
+   macOS from [Apple's system requirements](https://developer.apple.com/xcode/system-requirements/).
+   Open Xcode once, accept its license, and install the requested components.
+   Select it as the active toolchain (adjust the path if installed elsewhere):
+
+   ```sh
+   sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+   sudo xcodebuild -runFirstLaunch
+   xcodebuild -version
+   ```
+
+2. Install [Homebrew](https://brew.sh/) if needed, then install
+   [Just](https://formulae.brew.sh/formula/just),
+   [XcodeGen](https://formulae.brew.sh/formula/xcodegen), and
+   [Rust](https://formulae.brew.sh/formula/rust):
+
+   ```sh
+   brew install just xcodegen rust
+   ```
+
+   If you already have a working stable Rust toolchain, omit `rust` from the
+   command. Both `cargo` and `rustc` must be available in your current shell.
+
+3. Build and install the app:
+
+   ```sh
+   git clone --branch main https://github.com/lilhammerfun/clumsies.git
+   cd clumsies
+   just install-macos
+   ```
+
+   The first build downloads dependencies and can take several minutes. The
+   command builds the app and its bundled daemon, verifies signing, installs
+   `~/Applications/Clumsies.app`, and opens it. Replacing an existing app keeps
+   your accounts, Memory, and configuration.
+
+### Sign in and connect your agent
+
+1. Open the app, keep the prefilled **Server address**, and click
+   **Continue in Browser** to sign in. The app loads your organization automatically.
+2. Select a Project and add your working repository through
+   **Repositories → Add Repositories…**.
+3. Open **Settings → Agent**. Codex is managed automatically; enable any other
+   supported agents you use. For Codex, wait for **Ready**, restart Codex, start
+   a new task in the bound repository, and review the Clumsies Hook in `/hooks`.
+4. Allow the initial model download and Memory indexing to finish, then ask:
+
+   ```text
+   Use Clumsies to read this repository's Project Memory and summarize the
+   guidelines that apply to my current task.
+   ```
+
+See the [usage guide](https://docs.clumsies.ai/guides/how-to-use-clumsies) for
+the full workflow. If sign-in or Project access is denied, contact your
+organization administrator. Change the Server address only when connecting
+to another deployment.
+
+To update later, run these commands in your `main` checkout:
+
+```sh
+git pull --ff-only
+just install-macos
 ```
 
 ---
