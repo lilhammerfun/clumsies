@@ -179,13 +179,14 @@ struct ProjectSettingsView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .task(id: projectId) { await store.loadAdministrationProject(id: projectId, force: true) }
+        .task(id: "\(projectId):\(store.administrationRefreshGeneration)") {
+            await store.loadAdministrationProject(id: projectId, force: true)
+        }
     }
 }
 
 struct OrganizationProjectsView: View {
     @ObservedObject var store: WorkspaceStore
-    @Environment(\.dismiss) private var dismiss
     @State private var path: [String] = []
 
     private var state: AdministrationPageState { store.administrationState(for: .projects) }
@@ -193,10 +194,10 @@ struct OrganizationProjectsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if let error = state.errorMessage {
-                    Text(error).foregroundStyle(.red)
-                }
                 if state.isLoading { ProgressView("Loading projects…") }
+                if store.administrationSnapshot?.projects.isEmpty == true, !state.isLoading {
+                    Text("No projects yet.").foregroundStyle(.secondary)
+                }
                 ForEach(store.administrationSnapshot?.projects ?? []) { project in
                     NavigationLink(value: project.id) {
                         HStack {
@@ -217,30 +218,8 @@ struct OrganizationProjectsView: View {
             .navigationDestination(for: String.self) { projectId in
                 ProjectSettingsView(store: store, projectId: projectId, onDeleted: { path = [] })
                     .navigationTitle(store.administrationProject(id: projectId)?.name ?? "Project")
-                    .toolbar {
-                        if store.projects.contains(where: { $0.id == projectId }) {
-                            Button("Open in Memory") {
-                                Task {
-                                    await store.selectProject(projectId)
-                                    store.showsProjectSettings = true
-                                    dismiss()
-                                }
-                            }
-                        }
-                    }
-            }
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                ToolbarItem {
-                    Button("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await store.loadAdministration(section: .projects, force: true) }
-                    }
-                    .disabled(state.isLoading)
-                }
             }
         }
-        .frame(width: 640, height: 580)
-        .task { await store.loadAdministration(section: .projects, force: true) }
     }
 }
 

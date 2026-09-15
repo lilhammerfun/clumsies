@@ -49,6 +49,8 @@ final class ProjectManagementTests: XCTestCase {
         )
 
         XCTAssertTrue(filter.contains("Button(\"New Project…\", systemImage: \"plus\")"))
+        XCTAssertFalse(filter.contains("All Organization Projects"))
+        XCTAssertFalse(workspace.contains("OrganizationProjectsView"))
         XCTAssertEqual(
             workspace.components(separatedBy: "onCreate: store.canCreateProject").count - 1,
             2
@@ -57,6 +59,14 @@ final class ProjectManagementTests: XCTestCase {
             workspace.components(separatedBy: "ProjectCreationSheet(store: store)").count - 1,
             1
         )
+    }
+
+    func testProjectCreationAcceptsMemberAndExistingAdministratorCapabilities() {
+        XCTAssertTrue(WorkspaceStore.projectCreationAllowed(capabilities: ["project:create"]))
+        XCTAssertTrue(WorkspaceStore.projectCreationAllowed(capabilities: ["admin:write"]))
+        XCTAssertTrue(WorkspaceStore.projectCreationAllowed(capabilities: ["project:create", "admin:write"]))
+        XCTAssertFalse(WorkspaceStore.projectCreationAllowed(capabilities: []))
+        XCTAssertFalse(WorkspaceStore.projectCreationAllowed(capabilities: ["memory:read"]))
     }
 
     func testProjectManagementUsesProjectRoleWithoutGrantingOrganizationAuthority() {

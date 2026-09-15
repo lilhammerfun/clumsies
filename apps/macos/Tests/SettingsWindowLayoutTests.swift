@@ -64,12 +64,14 @@ final class SettingsWindowLayoutTests: XCTestCase {
         XCTAssertFalse(navigation.canGoForward)
     }
 
-    func testSettingsSearchContainsOrganizationControlsWithoutProjectManagement() {
+    func testSettingsSearchIncludesProjectManagementOnlyForOrganizationAdministrators() {
         let destinations = SettingsDestination.search("", canAdminister: true)
-        XCTAssertFalse(destinations.contains(.organization(.projects)))
+        XCTAssertTrue(destinations.contains(.organization(.projects)))
         XCTAssertTrue(destinations.contains(.organization(.members)))
         XCTAssertTrue(destinations.contains(.organization(.access)))
-        XCTAssertTrue(SettingsDestination.search("project", canAdminister: true).isEmpty)
+        XCTAssertEqual(SettingsDestination.search("project", canAdminister: true), [.organization(.projects)])
+        XCTAssertTrue(SettingsDestination.search("project", canAdminister: false).isEmpty)
+        XCTAssertFalse(SettingsDestination.search("", canAdminister: false).contains(.organization(.projects)))
     }
 
     func testSettingsSearchFindsChildrenAndRespectsOrganizationPermission() {
