@@ -422,7 +422,31 @@ struct WorkspaceView: View {
                         }
 
                         if showsMemoryContentToolbar {
+                            Button {
+                                store.exportMemory()
+                            } label: {
+                                if store.isExportingMemory {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "square.and.arrow.down")
+                                }
+                            }
+                            .disabled(!store.canExportMemory(store.visibleMemoryItems))
+                            .help(store.activeProjectId == nil
+                                ? "Export Organization Memory as ZIP…"
+                                : "Export Project Memory as ZIP…")
+                            .accessibilityLabel(store.activeProjectId == nil
+                                ? "Export Organization Memory as ZIP"
+                                : "Export Project Memory as ZIP")
+
                             Menu {
+                                if let item = store.currentItem {
+                                    Button("Export File as ZIP…") {
+                                        store.exportMemory([item], name: item.document.title)
+                                    }
+                                    .disabled(!store.canExportMemory([item]))
+                                    Divider()
+                                }
                                 if let item = store.currentItem, hasDocumentActions(item) {
                                     if canRequestDocumentReview(item),
                                        let draft = item.draft,

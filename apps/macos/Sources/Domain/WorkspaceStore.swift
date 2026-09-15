@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import UniformTypeIdentifiers
 
 enum DocumentSessionCommand: Equatable, Sendable {
     case requestReview(sessionKey: MemoryDocumentSessionKey, draft: LocalDraft)
@@ -424,6 +425,7 @@ final class WorkspaceStore: ObservableObject {
     @Published private(set) var loadingProjectId: String?
     @Published private(set) var isSwitchingMemoryContext = false
     @Published private(set) var isPreparingWorkspaceIndex = false
+    @Published private(set) var isExportingMemory = false
     /// Project resources whose shared version moved forward after the app
     /// loaded its snapshot; they show a sync icon and can be refreshed.
     @Published private(set) var staleResourceIds: Set<String> = []
@@ -2680,6 +2682,72 @@ final class WorkspaceStore: ObservableObject {
             )
         }
         return nil
+    }
+
+    func canExportMemory(_ items: [MemoryListItem]) -> Bool {
+        phase == .ready && !isExportingMemory && !isSwitchingMemoryContext
+            && (activeProjectId == nil || activeProject?.isLoaded == true)
+            && (activeProjectId == nil || draftInventoryLoadState == .loaded)
+            && items.contains { $0.draft?.isDeletion != true }
+            && !items.contains { isSynchronizingDocument($0.id) }
+    }
+
+    func exportMemory(_ selection: [MemoryListItem]? = nil, name: String? = nil) {
+        let items = selection ?? visibleMemoryItems
+        guard canExportMemory(items) else { return }
+        // Capture the view and pending editor text before the save panel can change context.
+        let pendingDocuments = Dictionary(items.compactMap { item in
+            pendingDocument(for: item).map { (item.id, $0) }
+        }, uniquingKeysWith: { _, latest in latest })
+        let loader = WorkspaceLoader(daemon: daemon, bootstrap: bootstrap, server: server)
+        let panel = NSSavePanel()
+        panel.title = "Export Memory"
+        panel.prompt = "Export"
+        panel.message = "Export current files, including local draft edits. Deleted memories are excluded."
+        let baseName = name ?? (selection == nil ? activeProject?.name : nil) ?? "Memory"
+        panel.nameFieldStringValue = baseName.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-") + ".zip"
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        isExportingMemory = true
+        panel.begin { result in
+            Task { @MainActor in
+                defer { self.isExportingMemory = false }
+                guard result == .OK, let destination = panel.url else { return }
+                do {
+                    let documents = try await Self.memoryExportDocuments(
+                        items, pendingDocuments: pendingDocuments
+                    ) { try await loader.loadContent(for: $0) }
+                    try await Task.detached(priority: .userInitiated) {
+                        try MemoryArchive.write(documents, to: destination)
+                    }.value
+                    NSWorkspace.shared.activateFileViewerSelecting([destination])
+                } catch {
+                    self.errorMessage = "Could Not Export Memory: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    nonisolated static func memoryExportDocuments(
+        _ items: [MemoryListItem],
+        pendingDocuments: [String: EditableMemoryDocument] = [:],
+        loadContent: @escaping @Sendable (MemoryResource) async throws -> MemoryResource
+    ) async throws -> [EditableMemoryDocument] {
+        let files = items.filter { $0.draft?.isDeletion != true }
+        guard !files.isEmpty else { throw MemoryExportError.empty }
+        return try await concurrentMap(files) { item in
+            if let pending = pendingDocuments[item.id] { return pending }
+            if item.contentLoaded { return item.document }
+            guard item.draft == nil, let resource = item.resource else {
+                throw MemoryExportError.contentUnavailable(item.document.path)
+            }
+            let loaded = try await loadContent(resource)
+            guard loaded.contentLoaded else {
+                throw MemoryExportError.contentUnavailable(item.document.path)
+            }
+            return loaded.document
+        }
     }
 
     func loadContentIfNeeded(_ item: MemoryListItem) async {
