@@ -19,7 +19,7 @@ worktree
 
 稳定 Debug 安装不是临时开发实例。日常 `dev-macos*` 命令不得替换稳定 App、daemon、
 Application Support、Keychain 身份或全局 Codex Plugin；只有显式执行
-`just promote-debug-macos` 才会更新长期 Debug 安装。
+`just install-macos` 才会更新长期 Debug 安装。
 
 ## 2. 核心开发循环
 
@@ -104,7 +104,7 @@ Preview descriptor 只是连接凭据，不负责部署当前 worktree，也不�
 | `just dev-macos-down` | 停止当前实例，保留数据和凭据 |
 | `just dev-macos-reset` | 停止并删除当前实例拥有的数据、容器卷和测试凭据 |
 | `just test-dev-macos` | 测试实例身份、并行隔离、Preview 校验和 owned cleanup |
-| `just promote-debug-macos` | 显式更新长期 Debug App/daemon；不属于普通 worktree 循环 |
+| `just install-macos` | 编译、安装并打开日常使用的 Debug App；不属于普通 worktree 循环 |
 
 ## 6. 验证矩阵
 

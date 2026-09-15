@@ -829,7 +829,7 @@ final class DaemonContractTests: XCTestCase {
         )
 
         XCTAssertTrue(warning.contains("Archived integration inspection was skipped"))
-        XCTAssertTrue(warning.contains("just promote-debug-macos"))
+        XCTAssertTrue(warning.contains("just install-macos"))
         XCTAssertTrue(warning.contains("distributed Release"))
         XCTAssertFalse(warning.contains("archived Zig CLI integration store"))
     }

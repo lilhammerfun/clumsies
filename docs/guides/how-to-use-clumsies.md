@@ -2,13 +2,13 @@
 
 This guide takes a team member from sign-in to a reviewed Memory change. It uses the **Deployment rollback checklist** example from the [overview](/overview).
 
-You will need the macOS App, your organization's Server address, an admitted account, and access to a Project. An organization owner or administrator manages admission and Project access. If you are setting up a new Server, start with [deployment](/guides/deploy-for-an-org).
+The macOS App includes the default Server address, `https://app.clumsies.ai`. Sign-in automatically loads the organization configured on that Server. An organization owner or administrator manages account admission and Project access. If you are setting up a new Server, start with [deployment](/guides/deploy-for-an-org).
 
 ## 1. Sign in to your organization
 
-Open Desktop, enter the Server origin supplied by your administrator, and continue with SSO in the system browser.
+Open Desktop, keep the prefilled **Server address**, and click **Continue in Browser** to complete SSO sign-in. An existing installation remembers the Server address you previously used.
 
-A Server origin looks like `https://memory.example.com`: no extra page path, query, or embedded credentials. Remote connections require HTTPS; loopback HTTP is supported for local development.
+Change the address only when connecting to another deployment, using the Server origin supplied by its administrator. A Server origin looks like `https://memory.example.com`: no extra page path, query, or embedded credentials. Remote connections require HTTPS; loopback HTTP is supported for local development.
 
 For a new installation, Desktop instead offers setup using the deployment Setup Code. The first verified identity becomes the organization owner. Normal members join the existing installation; they do not initialize another one.
 

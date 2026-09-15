@@ -1,4 +1,4 @@
-# Show available development tasks.
+# Show available tasks.
 default:
     @just --list
 
@@ -19,9 +19,12 @@ test-macos-live:
 test-macos-package:
     sh apps/macos/Scripts/test-runtime-package.sh
 
-# Promote the long-lived Debug App and daemon; its App reconciles the global Plugin.
-promote-debug-macos:
+# Build, install, and open Clumsies.app for everyday use (Debug).
+install-macos:
     sh apps/macos/Scripts/promote-debug.sh
+
+# Compatibility alias for earlier installation instructions.
+alias promote-debug-macos := install-macos
 
 # Start the complete worktree-scoped Dev Instance.
 dev-macos:

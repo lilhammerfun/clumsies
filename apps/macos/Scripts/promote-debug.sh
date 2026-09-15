@@ -79,4 +79,5 @@ transaction_active=0
 trap - EXIT HUP INT TERM
 rm -rf -- "$previous_app"
 printf '%s\n' \
-  'Clumsies Debug promoted. The App reconciles the global Plugin after launch; restart Codex and create a new task when it finishes.'
+  "Clumsies.app installed at $installed_app." \
+  'The App reconciles the global Plugin after launch; restart Codex and create a new task when it finishes.'
