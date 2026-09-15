@@ -76,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(newProject(_:)) {
-            return store.canManageProjects && store.phase == .ready
+            return store.canCreateProject && store.phase == .ready
         }
         if menuItem.action == #selector(newMemory(_:)) {
             guard store.selectedSection == .memory else { return false }
@@ -210,12 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             WorkspaceView(
                 store: store,
                 onSignOut: { [weak self] in self?.signOut() },
-                onOpenSettings: { [weak self] in self?.presentSettingsWindow() },
-                onManageProject: { [weak self] id, name in
-                    guard let self else { return }
-                    self.settingsWindowController.navigation.navigate(to: .project(id: id, name: name))
-                    self.presentSettingsWindow()
-                }
+                onOpenSettings: { [weak self] in self?.presentSettingsWindow() }
             ),
             surface: .workspace,
             title: store.organization?.name ?? "Clumsies Lab"

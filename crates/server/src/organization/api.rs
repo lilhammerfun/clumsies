@@ -22,6 +22,13 @@ pub struct OrgRef {
 pub struct ProjectRef {
     pub project_id: String,
     pub name: String,
+    pub role: ProjectRole,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectMemberCandidateListResponse {
+    pub items: Vec<UserRef>,
+    pub page_info: PageInfo,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

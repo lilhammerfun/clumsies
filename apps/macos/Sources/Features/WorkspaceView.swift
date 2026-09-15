@@ -132,7 +132,6 @@ struct WorkspaceView: View {
     @ObservedObject var store: WorkspaceStore
     let onSignOut: () -> Void
     let onOpenSettings: () -> Void
-    let onManageProject: (String, String) -> Void
     let loadsReviewDetail: Bool
     @StateObject private var recallModel: RecallModel
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
@@ -154,13 +153,11 @@ struct WorkspaceView: View {
         store: WorkspaceStore,
         onSignOut: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
-        onManageProject: @escaping (String, String) -> Void,
         loadsReviewDetail: Bool = true
     ) {
         self.store = store
         self.onSignOut = onSignOut
         self.onOpenSettings = onOpenSettings
-        self.onManageProject = onManageProject
         self.loadsReviewDetail = loadsReviewDetail
         _recallModel = StateObject(wrappedValue: RecallModel(daemon: store.daemon))
     }
@@ -1023,8 +1020,8 @@ struct WorkspaceView: View {
         case .memory:
             if store.projects.isEmpty, !store.resources.contains(where: { $0.scope == .org }) {
                 ProjectUnavailableView(store: store)
-            } else if store.showsProjectSettings, store.activeProjectId != nil {
-                ProjectSettingsView(store: store, onManageProject: onManageProject)
+            } else if store.showsProjectSettings, let projectId = store.activeProjectId {
+                ProjectSettingsView(store: store, projectId: projectId)
             } else {
                 MemoryMainPane(store: store)
             }
@@ -1135,6 +1132,7 @@ struct WorkspaceView: View {
 
 private struct MemoryProjectFilter: View {
     @ObservedObject var store: WorkspaceStore
+    @State private var showsOrganizationProjects = false
 
     var body: some View {
         ProjectFilterMenu(
@@ -1144,13 +1142,17 @@ private struct MemoryProjectFilter: View {
             unscopedSystemImage: "building.2",
             isLoading: store.isSwitchingMemoryContext,
             help: "Filter Memory by Project",
-            onCreate: store.canManageProjects ? { store.presentProjectCreation() } : nil
+            onCreate: store.canCreateProject ? { store.presentProjectCreation() } : nil,
+            onBrowseOrganization: store.canAdministerOrganization ? { showsOrganizationProjects = true } : nil
         ) { projectId in
             if let projectId {
                 Task { await store.selectProject(projectId) }
             } else {
                 Task { await store.showOrgMemory() }
             }
+        }
+        .sheet(isPresented: $showsOrganizationProjects) {
+            OrganizationProjectsView(store: store)
         }
     }
 }
@@ -1167,7 +1169,7 @@ private struct ActivityProjectFilter: View {
             unscopedSystemImage: nil,
             isLoading: model.isLoading,
             help: "Filter Activity by Project",
-            onCreate: store.canManageProjects ? { store.presentProjectCreation() } : nil
+            onCreate: store.canCreateProject ? { store.presentProjectCreation() } : nil
         ) { projectId in
             Task { await model.selectProject(projectId) }
         }

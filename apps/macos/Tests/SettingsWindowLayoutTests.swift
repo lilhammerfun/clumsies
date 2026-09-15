@@ -54,19 +54,6 @@ final class SettingsWindowLayoutTests: XCTestCase {
         navigation.goForward()
         XCTAssertEqual(navigation.destination, .organization(.members))
         XCTAssertEqual(SettingsPane.restored(from: defaults), .organization)
-        navigation.navigate(to: .organization(.projects))
-        navigation.navigate(to: .project(id: "project-1", name: "Design"))
-        navigation.goBack()
-        XCTAssertEqual(navigation.destination, .organization(.projects))
-        navigation.goForward()
-        XCTAssertEqual(navigation.destination, .project(id: "project-1", name: "Design"))
-        navigation.didDeleteProject("project-1")
-        XCTAssertEqual(navigation.destination, .organization(.projects))
-        navigation.goBack()
-        XCTAssertEqual(navigation.destination, .organization(.members))
-        navigation.goForward()
-        XCTAssertEqual(navigation.destination, .organization(.projects))
-        XCTAssertFalse(navigation.canGoForward)
         navigation.isSaving = true
         navigation.navigate(to: .pane(.general))
         XCTAssertEqual(navigation.destination, .pane(.general), "A background membership update must not lock unrelated Settings panes")
@@ -77,19 +64,12 @@ final class SettingsWindowLayoutTests: XCTestCase {
         XCTAssertFalse(navigation.canGoForward)
     }
 
-    func testDeletingProjectDoesNotInterruptAnotherSettingsPage() {
-        let suite = "SettingsWindowLayoutTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let navigation = SettingsNavigation(defaults: defaults)
-        navigation.navigate(to: .project(id: "deleted", name: "Old project"))
-        navigation.navigate(to: .pane(.advanced))
-        navigation.didDeleteProject("deleted")
-        XCTAssertEqual(navigation.destination, .pane(.advanced))
-        navigation.goBack()
-        XCTAssertEqual(navigation.destination, .pane(.general))
-        navigation.goForward()
-        XCTAssertEqual(navigation.destination, .pane(.advanced))
+    func testSettingsSearchContainsOrganizationControlsWithoutProjectManagement() {
+        let destinations = SettingsDestination.search("", canAdminister: true)
+        XCTAssertFalse(destinations.contains(.organization(.projects)))
+        XCTAssertTrue(destinations.contains(.organization(.members)))
+        XCTAssertTrue(destinations.contains(.organization(.access)))
+        XCTAssertTrue(SettingsDestination.search("project", canAdminister: true).isEmpty)
     }
 
     func testSettingsSearchFindsChildrenAndRespectsOrganizationPermission() {

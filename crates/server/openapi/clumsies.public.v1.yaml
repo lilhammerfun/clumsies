@@ -153,6 +153,7 @@ paths:
     post:
       operationId: createProject
       summary: Create a project.
+      description: Any authenticated organization member can create a project. The creator becomes its project admin.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -193,6 +194,7 @@ paths:
     patch:
       operationId: updateProject
       summary: Update project metadata.
+      description: Requires project membership and either project admin or organization owner/admin authority.
       parameters:
         - $ref: "#/components/parameters/IfMatch"
       requestBody:
@@ -213,6 +215,7 @@ paths:
     delete:
       operationId: deleteProject
       summary: Delete a project.
+      description: Requires project membership and either project admin or organization owner/admin authority.
       parameters:
         - $ref: "#/components/parameters/IfMatch"
       responses:
@@ -417,6 +420,7 @@ paths:
     put:
       operationId: replaceProjectOrgSelection
       summary: Replace organization resources selected by a project.
+      description: Requires project membership and either project admin or organization owner/admin authority.
       parameters:
         - $ref: "#/components/parameters/IfMatch"
       requestBody:
@@ -1057,6 +1061,7 @@ components:
         org:
           $ref: "#/components/schemas/OrgRef"
         capabilities:
+          description: Includes project:create for organization members; admin:write remains restricted to organization owners/admins.
           type: array
           items:
             type: string
@@ -1110,29 +1115,33 @@ components:
         page_info:
           $ref: "#/components/schemas/PageInfo"
     Project:
-      allOf:
-        - $ref: "#/components/schemas/ProjectRef"
-        - type: object
-          required: [description, revision, created_at, updated_at]
-          properties:
-            description:
-              type: string
-            revision:
-              type: integer
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-    ProjectRef:
       type: object
-      required: [project_id, name]
+      required: [project_id, name, description, revision, created_at, updated_at]
       properties:
         project_id:
           type: string
         name:
           type: string
+        description:
+          type: string
+        revision:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProjectRef:
+      type: object
+      required: [project_id, name, role]
+      properties:
+        project_id:
+          type: string
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/ProjectRole"
     PersonalBundleRequest:
       type: object
       description: A personal selection of active Hub memory from the current organization.

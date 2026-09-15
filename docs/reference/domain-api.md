@@ -30,8 +30,13 @@ This domain answers **who is calling, and which actions may they perform?** A Pr
 | Sign in and refresh | `GET /oauth2/authorization/oidc`, `GET /login/oauth2/code/oidc`, `POST /api/v1/auth/token` | OIDC authorization code + PKCE, or rotating refresh token |
 | Read identity; sign out | `GET /api/v1/me`, `DELETE /api/v1/auth/session` | Current authenticated session |
 | Discover Projects and members | `GET /api/v1/projects`, `GET /api/v1/projects/{project_id}`, `GET /api/v1/projects/{project_id}/members` | Server filters/checks access |
-| Create/update/delete Projects | `POST /api/v1/projects`, `PATCH` / `DELETE /api/v1/projects/{project_id}` | Organization owner/admin; creation requires `Idempotency-Key`, updates/deletion require version `If-Match` |
+| Create Projects | `POST /api/v1/projects` | Authenticated organization members; requires `Idempotency-Key`; the creator becomes a Project admin |
+| Update/delete Projects | `PATCH` / `DELETE /api/v1/projects/{project_id}` | That Project's admin or an Organization owner/admin with membership access; requires version `If-Match` |
+| Configure Projects and membership | `/api/v1/admin/projects/{project_id}`, `/members`, and member subroutes | Project members can read; that Project's admin or an Organization owner/admin can mutate, including organization administrators managing projects they have not joined |
+| Find members to add | `GET /api/v1/admin/projects/{project_id}/member-candidates` | That Project's admin or an Organization owner/admin; supports `q`, `limit`, `cursor`; returns user profiles excluding disabled users and existing project members |
 | Administer the organization | `/api/v1/admin/org`, `/members`, `/projects`, `/tokens`, `/audit-events` | Organization owner/admin; each path here is under `/api/v1/admin` |
+
+`GET /api/v1/me` returns the caller’s membership role in `projects[].role`; organization members receive the `project:create` capability. The organization-wide directory `/api/v1/admin/projects` remains restricted to Organization owners/admins.
 
 A role in a Project is not automatically an Organization administrator role. Server checks publication authority independently of whether the caller can see a Project.
 
@@ -43,7 +48,7 @@ This domain answers **which published resources exist, and which ones does this 
 | --- | --- | --- |
 | Browse published Organization Memory | `GET /api/v1/org/memories` and `/{memory_id}` | Metadata list or complete resource |
 | Read historical Project-scoped Memory | `GET /api/v1/projects/{project_id}/memories` and `/{memory_id}` | Legacy `scope=project` records; these routes do not return the selected Organization projection |
-| Read/change Project selection | `GET` / `PUT /api/v1/projects/{project_id}/org-selections` | `resource_ids` input; replacement needs Organization owner/admin and selection revision `If-Match` |
+| Read/change Project selection | `GET` / `PUT /api/v1/projects/{project_id}/org-selections` | `resource_ids` input; replacement needs that Project’s admin or an Organization owner/admin with membership access, plus selection revision `If-Match` |
 | Save a personal selection Bundle | `GET` / `POST /api/v1/me/bundles`; `GET` / `PATCH` / `DELETE /api/v1/me/bundles/{bundle_id}` | Owned by the current user; editing/deletion uses Bundle revision `If-Match` |
 | Export managed organization data | `GET /api/v1/admin/memory-export` | Admin export of Memory, Drafts, selections and Bundles |
 

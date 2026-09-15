@@ -49,6 +49,64 @@ impl ServerRepository {
         postgres::load_admin_org(self.pool(), org_id).await
     }
 
+    pub async fn ensure_project_admin(
+        &self,
+        principal: &AuthPrincipal,
+        project_id: &str,
+    ) -> Result<(), ServerError> {
+        ensure_project_in_org(self.pool(), &principal.org_id, project_id).await?;
+        if matches!(principal.role.as_str(), "owner" | "admin") {
+            return Ok(());
+        }
+        let member = postgres::load_project_member(
+            self.pool(),
+            &principal.org_id,
+            project_id,
+            &principal.user_id,
+        )
+        .await?;
+        if member.role == ProjectRole::Admin {
+            Ok(())
+        } else {
+            Err(ServerError::Forbidden(
+                "project administrator role required".to_owned(),
+            ))
+        }
+    }
+
+    pub async fn ensure_project_member_or_org_admin(
+        &self,
+        principal: &AuthPrincipal,
+        project_id: &str,
+    ) -> Result<(), ServerError> {
+        if matches!(principal.role.as_str(), "owner" | "admin") {
+            ensure_project_in_org(self.pool(), &principal.org_id, project_id).await
+        } else {
+            self.ensure_project_member(principal, project_id).await
+        }
+    }
+
+    pub async fn list_project_member_candidates(
+        &self,
+        principal: &AuthPrincipal,
+        project_id: &str,
+        offset: i64,
+        limit: i64,
+        query: Option<&str>,
+    ) -> Result<ProjectMemberCandidateListResponse, ServerError> {
+        self.ensure_project_admin(principal, project_id).await?;
+        let items = postgres::list_project_member_candidates(
+            self.pool(),
+            project_id,
+            offset,
+            limit + 1,
+            query,
+        )
+        .await?;
+        let (items, page_info) = admin_page(items, offset, limit);
+        Ok(ProjectMemberCandidateListResponse { items, page_info })
+    }
+
     pub async fn update_admin_org(
         &self,
         principal: &AuthPrincipal,

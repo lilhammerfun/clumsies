@@ -85,19 +85,6 @@ define_routes!(admin_routes, ADMIN_OPERATIONS, {
         delete: crate::organization::http::delete_admin_member,
     };
     "/api/v1/admin/projects" => { get: crate::organization::http::list_admin_projects, post: crate::organization::http::create_admin_project };
-    "/api/v1/admin/projects/{project_id}" => {
-        get: crate::organization::http::get_admin_project,
-        patch: crate::organization::http::update_admin_project,
-        delete: crate::organization::http::delete_admin_project,
-    };
-    "/api/v1/admin/projects/{project_id}/members" => {
-        get: crate::organization::http::list_admin_project_members,
-        post: crate::organization::http::create_admin_project_member,
-    };
-    "/api/v1/admin/projects/{project_id}/members/{user_id}" => {
-        patch: crate::organization::http::update_admin_project_member,
-        delete: crate::organization::http::delete_admin_project_member,
-    };
     "/api/v1/admin/tokens" => { get: crate::organization::http::list_admin_tokens };
     "/api/v1/admin/tokens/{token_id}" => { delete: crate::organization::http::delete_admin_token };
     "/api/v1/admin/audit-events" => { get: crate::organization::http::list_admin_audit_events };
@@ -112,6 +99,20 @@ define_routes!(protected_routes, PROTECTED_OPERATIONS, {
         get: crate::organization::http::get_project,
         patch: crate::organization::http::update_project,
         delete: crate::organization::http::delete_project,
+    };
+    "/api/v1/admin/projects/{project_id}" => {
+        get: crate::organization::http::get_admin_project,
+        patch: crate::organization::http::update_admin_project,
+        delete: crate::organization::http::delete_admin_project,
+    };
+    "/api/v1/admin/projects/{project_id}/member-candidates" => { get: crate::organization::http::list_project_member_candidates };
+    "/api/v1/admin/projects/{project_id}/members" => {
+        get: crate::organization::http::list_admin_project_members,
+        post: crate::organization::http::create_admin_project_member,
+    };
+    "/api/v1/admin/projects/{project_id}/members/{user_id}" => {
+        patch: crate::organization::http::update_admin_project_member,
+        delete: crate::organization::http::delete_admin_project_member,
     };
     "/api/v1/projects/{project_id}/members" => { get: crate::organization::http::list_project_members };
     "/api/v1/me/bundles" => {

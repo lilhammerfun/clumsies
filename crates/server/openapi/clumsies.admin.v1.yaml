@@ -2,7 +2,11 @@ openapi: 3.1.0
 info:
   title: clumsies Admin API
   version: 1.0.0
-  summary: Admin Server API for native organization administration.
+  summary: Server API for organization administration and project configuration.
+  description: >-
+    Organization-wide operations require an organization owner or admin.
+    Project detail and member reads also allow that project's members; project
+    mutations and member candidate searches allow that project's admins.
 servers:
   - url: https://server.clumsies.local
 security:
@@ -257,6 +261,7 @@ paths:
     get:
       operationId: getAdminProject
       summary: Read project metadata for administration.
+      description: Requires project membership or an organization owner/admin.
       responses:
         "200":
           description: Project metadata.
@@ -269,6 +274,7 @@ paths:
     patch:
       operationId: updateAdminProject
       summary: Update project metadata.
+      description: Requires this project's admin or an organization owner/admin.
       parameters:
         - $ref: "#/components/parameters/IfMatch"
       requestBody:
@@ -289,6 +295,7 @@ paths:
     delete:
       operationId: deleteAdminProject
       summary: Delete a project and its governed content.
+      description: Requires this project's admin or an organization owner/admin.
       parameters:
         - $ref: "#/components/parameters/IfMatch"
       responses:
@@ -300,12 +307,37 @@ paths:
                 $ref: "#/components/schemas/DeleteResult"
         default:
           $ref: "#/components/responses/Error"
+  /api/v1/admin/projects/{project_id}/member-candidates:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProjectMemberCandidates
+      summary: Find existing organization users who can be added to this project.
+      description: Requires this project's admin or an organization owner/admin. Excludes disabled users and existing members.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive substring match against email and display name.
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Eligible user profiles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectMemberCandidateListResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /api/v1/admin/projects/{project_id}/members:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
     get:
       operationId: listAdminProjectMembers
       summary: List project members.
+      description: Requires project membership or an organization owner/admin.
       parameters:
         - name: role
           in: query
@@ -325,6 +357,7 @@ paths:
     post:
       operationId: createAdminProjectMember
       summary: Add an organization member to a project.
+      description: Requires this project's admin or an organization owner/admin.
       requestBody:
         required: true
         content:
@@ -347,6 +380,7 @@ paths:
     patch:
       operationId: updateAdminProjectMember
       summary: Update a project member role.
+      description: Requires this project's admin or an organization owner/admin.
       requestBody:
         required: true
         content:
@@ -365,6 +399,7 @@ paths:
     delete:
       operationId: deleteAdminProjectMember
       summary: Remove a member from a project.
+      description: Requires this project's admin or an organization owner/admin.
       responses:
         "200":
           description: Delete result.
@@ -754,6 +789,16 @@ components:
         description:
           type: string
           maxLength: 4000
+    ProjectMemberCandidateListResponse:
+      type: object
+      required: [items, page_info]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserRef"
+        page_info:
+          $ref: "#/components/schemas/PageInfo"
     ProjectMemberListResponse:
       type: object
       required: [items, page_info]

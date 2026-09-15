@@ -140,7 +140,10 @@ pub(crate) async fn get_admin_project(
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
 ) -> Result<Json<crate::api::AdminProject>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_member_or_org_admin(&principal, &project_id)
+        .await?;
     Ok(Json(
         state
             .repository
@@ -156,7 +159,10 @@ pub(crate) async fn update_admin_project(
     headers: HeaderMap,
     Json(request): Json<UpdateProjectRequest>,
 ) -> Result<Json<crate::api::AdminProject>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     let expected_revision = parse_if_match(&headers)?;
     Ok(Json(
         state
@@ -172,7 +178,10 @@ pub(crate) async fn delete_admin_project(
     Path(project_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<crate::api::DeleteResult>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     let expected_revision = parse_if_match(&headers)?;
     Ok(Json(
         state
@@ -195,12 +204,15 @@ pub(crate) async fn list_admin_project_members(
     Path(project_id): Path<String>,
     Query(query): Query<ListAdminProjectMembersQuery>,
 ) -> Result<Json<crate::api::ProjectMemberListResponse>, HttpError> {
-    require_org_admin(&principal)?;
     let role = parse_admin_project_role(query.role.as_deref())?;
     let page = parse_admin_page(AdminPageQuery {
         limit: query.limit,
         cursor: query.cursor,
     })?;
+    state
+        .repository
+        .ensure_project_member_or_org_admin(&principal, &project_id)
+        .await?;
     Ok(Json(
         state
             .repository
@@ -215,13 +227,37 @@ pub(crate) async fn list_admin_project_members(
     ))
 }
 
+pub(crate) async fn list_project_member_candidates(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Path(project_id): Path<String>,
+    Query(query): Query<AdminSearchQuery>,
+) -> Result<Json<crate::api::ProjectMemberCandidateListResponse>, HttpError> {
+    let page = parse_admin_page(query.page)?;
+    Ok(Json(
+        state
+            .repository
+            .list_project_member_candidates(
+                &principal,
+                &project_id,
+                page.offset,
+                page.limit,
+                query.q.as_deref(),
+            )
+            .await?,
+    ))
+}
+
 pub(crate) async fn create_admin_project_member(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
     Json(request): Json<CreateProjectMemberRequest>,
 ) -> Result<(StatusCode, Json<crate::api::ProjectMember>), HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     Ok((
         StatusCode::CREATED,
         Json(
@@ -239,7 +275,10 @@ pub(crate) async fn update_admin_project_member(
     Path((project_id, user_id)): Path<(String, String)>,
     Json(request): Json<UpdateProjectMemberRequest>,
 ) -> Result<Json<crate::api::ProjectMember>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     Ok(Json(
         state
             .repository
@@ -253,7 +292,10 @@ pub(crate) async fn delete_admin_project_member(
     Extension(principal): Extension<AuthPrincipal>,
     Path((project_id, user_id)): Path<(String, String)>,
 ) -> Result<Json<crate::api::DeleteResult>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     Ok(Json(
         state
             .repository
@@ -383,7 +425,6 @@ pub(crate) async fn create_project(
     ),
     HttpError,
 > {
-    require_org_admin(&principal)?;
     let idempotency_key = parse_idempotency_key(&headers)?;
     let project = state
         .repository
@@ -420,7 +461,10 @@ pub(crate) async fn update_project(
     headers: HeaderMap,
     Json(request): Json<UpdateProjectRequest>,
 ) -> Result<Json<crate::api::Project>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     state
         .repository
         .ensure_project_member(&principal, &project_id)
@@ -440,7 +484,10 @@ pub(crate) async fn delete_project(
     Path(project_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<crate::api::DeleteResult>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     state
         .repository
         .ensure_project_member(&principal, &project_id)

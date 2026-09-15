@@ -46,6 +46,7 @@ struct ProjectFilterMenu: View {
     let isLoading: Bool
     let help: String
     let onCreate: (() -> Void)?
+    var onBrowseOrganization: (() -> Void)? = nil
     let onSelect: (String?) -> Void
 
     private var selectionTitle: String {
@@ -93,6 +94,14 @@ struct ProjectFilterMenu: View {
                     }
                     .disabled(isLoading)
                 }
+            }
+
+            if let onBrowseOrganization {
+                Divider()
+                Button("All Organization Projects…", systemImage: "building.2") {
+                    onBrowseOrganization()
+                }
+                .disabled(isLoading)
             }
 
             if let onCreate {

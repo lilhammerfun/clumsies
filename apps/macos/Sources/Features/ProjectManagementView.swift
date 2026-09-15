@@ -13,8 +13,6 @@ enum ProjectMetadataValidation {
 
 struct ProjectCreationSheet: View {
     @ObservedObject var store: WorkspaceStore
-    var onCreated: ((String) async -> Void)? = nil
-    var onUnsavedChangesChange: (Bool) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @FocusState private var nameFocused: Bool
     @State private var name = ""
@@ -82,10 +80,6 @@ struct ProjectCreationSheet: View {
         .frame(width: 480, height: showsOptions ? 500 : 320)
         .interactiveDismissDisabled(isCreating)
         .onAppear { nameFocused = true }
-        .onChange(of: name.isEmpty && description.isEmpty && repositories.isEmpty && selectedBundleId == nil) { _, empty in
-            onUnsavedChangesChange(!empty)
-        }
-        .onDisappear { onUnsavedChangesChange(false) }
     }
 
     private func chooseRepositories() {
@@ -112,14 +106,9 @@ struct ProjectCreationSheet: View {
                     name: name, description: description, idempotencyKey: idempotencyKey,
                     repositoryPaths: repositories.map(\.path), bundleId: selectedBundleId
                 )
-                onUnsavedChangesChange(false)
-                if let onCreated {
-                    await onCreated(id)
-                } else {
-                    store.selectedSection = .memory
-                    store.showsProjectSettings = false
-                    await store.selectProject(id)
-                }
+                store.selectedSection = .memory
+                store.showsProjectSettings = false
+                await store.selectProject(id)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
@@ -136,13 +125,13 @@ struct ProjectUnavailableView: View {
         ContentUnavailableView {
             Label("No Projects", systemImage: "folder")
         } description: {
-            if store.canManageProjects {
+            if store.canCreateProject {
                 Text("Create a Project to start organizing local memory.")
             } else {
                 Text("Ask an organization administrator to grant you access to a Project.")
             }
         } actions: {
-            if store.canManageProjects {
+            if store.canCreateProject {
                 Button("New Project…") {
                     store.presentProjectCreation()
                 }
@@ -158,65 +147,451 @@ struct ProjectUnavailableView: View {
 
 struct ProjectSettingsView: View {
     @ObservedObject var store: WorkspaceStore
-    let onManageProject: (String, String) -> Void
-    @State private var project: ProjectRecord?
-    @State private var members: [ProjectMemberRecord] = []
-    @State private var errorMessage: String?
+    let projectId: String
+    var onDeleted: () -> Void = {}
 
     var body: some View {
         Form {
-            Section("Organization project") {
-                if let project {
-                    LabeledContent("Name", value: project.name)
-                    if !project.description.isEmpty {
-                        LabeledContent("Description", value: project.description)
+            if let project = store.administrationProject(id: projectId) {
+                ProjectConfigurationSections(
+                    store: store,
+                    project: project,
+                    allowsMutation: store.canMutateProject(projectId),
+                    onDeleted: {
+                        if store.activeProjectId == projectId { store.showsProjectSettings = false }
+                        onDeleted()
                     }
-                    if store.canManageProjects {
-                        Button("Manage Project…") { onManageProject(project.id, project.name) }
-                    }
-                } else if errorMessage == nil {
-                    ProgressView().controlSize(.small)
+                )
+                .id(project.id)
+                if projectId == store.activeProjectId {
+                    ProjectLocalSetupSettings(store: store)
+                    ProjectMemoryCacheSettings(store: store)
                 }
-                if let errorMessage {
-                    Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
-                    Button("Try Again") { Task { await load() } }
+            } else if let error = store.administrationProjectDetailStates[projectId]?.errorMessage {
+                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                Button("Try Again") {
+                    Task { await store.loadAdministrationProject(id: projectId, force: true) }
                 }
+            } else {
+                ProgressView("Loading project…")
             }
-            if !store.canManageProjects && !members.isEmpty {
-                Section("Members") {
-                    ForEach(members) { member in
-                        UserIdentityLabel(account: member.user, displayName: member.user.displayName ?? member.user.email)
-                    }
-                }
-            }
-            ProjectLocalSetupSettings(store: store)
-            ProjectMemoryCacheSettings(store: store)
         }
         .formStyle(.grouped)
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .task(id: store.activeProjectId) { await load() }
+        .task(id: projectId) { await store.loadAdministrationProject(id: projectId, force: true) }
+    }
+}
+
+struct OrganizationProjectsView: View {
+    @ObservedObject var store: WorkspaceStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var path: [String] = []
+
+    private var state: AdministrationPageState { store.administrationState(for: .projects) }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            List {
+                if let error = state.errorMessage {
+                    Text(error).foregroundStyle(.red)
+                }
+                if state.isLoading { ProgressView("Loading projects…") }
+                ForEach(store.administrationSnapshot?.projects ?? []) { project in
+                    NavigationLink(value: project.id) {
+                        HStack {
+                            Label(project.name, systemImage: "folder")
+                            Spacer()
+                            Text("\(project.memberCount) members").foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if state.nextCursor != nil {
+                    Button("Show More") {
+                        Task { await store.loadAdministration(section: .projects, loadMore: true) }
+                    }
+                    .disabled(state.isLoading)
+                }
+            }
+            .navigationTitle("Organization Projects")
+            .navigationDestination(for: String.self) { projectId in
+                ProjectSettingsView(store: store, projectId: projectId, onDeleted: { path = [] })
+                    .navigationTitle(store.administrationProject(id: projectId)?.name ?? "Project")
+                    .toolbar {
+                        if store.projects.contains(where: { $0.id == projectId }) {
+                            Button("Open in Memory") {
+                                Task {
+                                    await store.selectProject(projectId)
+                                    store.showsProjectSettings = true
+                                    dismiss()
+                                }
+                            }
+                        }
+                    }
+            }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem {
+                    Button("Refresh", systemImage: "arrow.clockwise") {
+                        Task { await store.loadAdministration(section: .projects, force: true) }
+                    }
+                    .disabled(state.isLoading)
+                }
+            }
+        }
+        .frame(width: 640, height: 580)
+        .task { await store.loadAdministration(section: .projects, force: true) }
+    }
+}
+
+private struct ProjectConfigurationSections: View {
+    @ObservedObject var store: WorkspaceStore
+    let project: AdminProjectRecord
+    let allowsMutation: Bool
+    let onDeleted: () -> Void
+    @State private var showsEdit = false
+    @State private var showsAddMember = false
+    @State private var pendingMemberRemoval: ProjectMemberRecord?
+    @State private var confirmsProjectDeletion = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Group {
+            if let state = store.administrationProjectDetailStates[project.id], state.isStale {
+                Section {
+                    Text(state.errorMessage ?? "These project details are cached. Refresh before making changes.")
+                        .foregroundStyle(.secondary)
+                    Button("Try Again") {
+                        Task { await store.loadAdministrationProject(id: project.id, force: true) }
+                    }
+                    .disabled(store.isMutatingAdministration || state.isLoading)
+                }
+            }
+            Section {
+                LabeledContent("Name") {
+                    Text(project.name).textSelection(.enabled)
+                    if store.canManageProject(project.id) {
+                        Button("Edit…") { showsEdit = true }
+                            .disabled(!allowsMutation)
+                    }
+                }
+                if !project.description.isEmpty {
+                    LabeledContent("Description") {
+                        Text(project.description)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            Section("Members") {
+                if store.administrationProjectDetailStates[project.id]?.isLoading == true
+                    || store.loadingAdministrationProjectIds.contains(project.id) {
+                    ProgressView("Loading members…")
+                        .controlSize(.small)
+                } else if projectMembers.isEmpty {
+                    Text("No project members.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(projectMembers) { member in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(member.user.displayName ?? member.user.email)
+                                    .lineLimit(1)
+                                if member.user.displayName != nil {
+                                    Text(member.user.email)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            if store.canManageProject(project.id) {
+                                Menu {
+                                    Button("Remove Member…", role: .destructive) { pendingMemberRemoval = member }
+                                        .disabled(!allowsMemberMutation)
+                                } label: {
+                                    Image(systemName: "ellipsis.circle")
+                                }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .fixedSize()
+                                .accessibilityLabel("Manage \(member.user.displayName ?? member.user.email)")
+                            }
+                        }
+                    }
+                }
+                if store.canManageProject(project.id) {
+                    Button("Add Member…") { showsAddMember = true }
+                        .disabled(!allowsMemberMutation)
+                }
+            }
+            Section {
+                if store.canManageProject(project.id) {
+                    Button("Delete Project…", role: .destructive) { confirmsProjectDeletion = true }
+                        .disabled(!allowsMutation)
+                }
+                if let errorMessage { AdministrationInlineError(message: errorMessage) }
+            }
+        }
+        .sheet(isPresented: $showsEdit) {
+            ProjectDetailsSheet(
+                store: store,
+                project: project
+            )
+        }
+        .sheet(isPresented: $showsAddMember) {
+            ProjectMemberSheet(store: store, projectId: project.id)
+        }
+        .confirmationDialog("Delete project?", isPresented: $confirmsProjectDeletion) {
+            Button("Delete \(project.name)", role: .destructive) {
+                mutate { try await store.deleteAdminProject(project, onDeleted: onDeleted) }
+            }
+        } message: {
+            Text("This permanently deletes the project and its project data.")
+        }
+        .confirmationDialog(
+            "Remove project member?",
+            isPresented: Binding(
+                get: { pendingMemberRemoval != nil },
+                set: { if !$0 { pendingMemberRemoval = nil } }
+            ),
+            presenting: pendingMemberRemoval
+        ) { member in
+            Button("Remove \(member.user.displayName ?? member.user.email)", role: .destructive) {
+                mutate {
+                    try await store.deleteAdminProjectMember(projectId: project.id, userId: member.id)
+                }
+                pendingMemberRemoval = nil
+            }
+        } message: { member in
+            Text("\(member.user.email) will lose access to this project.")
+        }
     }
 
-    private func load() async {
-        guard let id = store.activeProjectId else { return }
-        project = nil
-        members = []
+    private var projectMembers: [ProjectMemberRecord] {
+        store.administrationProjectMembers[project.id] ?? []
+    }
+
+    private var allowsMemberMutation: Bool {
+        allowsMutation && !store.loadingAdministrationProjectIds.contains(project.id)
+            && store.administrationProjectMembers[project.id] != nil
+    }
+
+    private func mutate(_ operation: @escaping () async throws -> Void) {
+        guard allowsMutation else { return }
         errorMessage = nil
-        do {
-            let result = try await store.projectRecord(id, refresh: true)
-            guard !Task.isCancelled, store.activeProjectId == id else { return }
-            project = result
-            if !store.canManageProjects {
-                let people = try await store.projectMemberDirectory(projectId: id)
-                guard !Task.isCancelled, store.activeProjectId == id else { return }
-                members = people
+        Task {
+            do { try await operation() }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+private struct ProjectDetailsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: WorkspaceStore
+    @State private var original: AdminProjectRecord
+    @State private var name: String
+    @State private var description: String
+    @State private var errorMessage: String?
+
+    init(
+        store: WorkspaceStore,
+        project: AdminProjectRecord
+    ) {
+        self.store = store
+        _original = State(initialValue: project)
+        _name = State(initialValue: project.name)
+        _description = State(initialValue: project.description)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section("Project details") {
+                    TextField("Name", text: $name)
+                    TextField("Description", text: $description, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+                .disabled(store.isMutatingAdministration)
+                if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
+            .formStyle(.grouped)
+            Divider()
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .disabled(store.isMutatingAdministration)
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+            }
+            .padding(12)
+        }
+        .frame(width: 460, height: 280)
+        .interactiveDismissDisabled(store.isMutatingAdministration)
+    }
+
+    private var hasChanges: Bool { name != original.name || description != original.description }
+    private var canSave: Bool {
+        let detail = store.administrationProjectDetailStates[original.id]
+        return store.canMutateProject(original.id) && detail?.isStale != true && detail?.isLoading != true
+            && hasChanges && ProjectMetadataValidation.isValid(name: name, description: description)
+    }
+
+    private func save() {
+        guard canSave else { return }
+        errorMessage = nil
+        Task {
+            do {
+                _ = try await store.updateAdminProject(
+                    original,
+                    name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                    description: description
+                )
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ProjectMemberSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: WorkspaceStore
+    let projectId: String
+    @State private var query = ""
+    @State private var members: [UserReference] = []
+    @State private var selectedId: String?
+    @State private var nextCursor: String?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var loadFailed = false
+    @State private var loadMoreTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add project member").font(.headline)
+            ClassicSearchField(text: $query, prompt: "Search members", width: 404,
+                accessibilityIdentifier: "project-member-search")
+                .frame(height: 24)
+                .disabled(store.isMutatingAdministration)
+            List(selection: $selectedId) {
+                ForEach(availableMembers) { member in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(member.displayName ?? member.email)
+                        if member.displayName != nil {
+                            Text(member.email).foregroundStyle(.secondary)
+                        }
+                    }
+                    .tag(member.id)
+                }
+            }
+            .overlay {
+                if availableMembers.isEmpty {
+                    if isLoading {
+                        ProgressView("Loading members…")
+                    } else if errorMessage == nil {
+                        Text("No available members.").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .disabled(store.isMutatingAdministration)
+            if let errorMessage {
+                HStack {
+                    AdministrationInlineError(message: errorMessage)
+                    if loadFailed {
+                        Button("Try Again") {
+                            loadMoreTask = Task { await loadMembers(cursor: members.isEmpty ? nil : nextCursor) }
+                        }
+                        .disabled(isLoading || store.isMutatingAdministration)
+                    }
+                }
+            }
+            HStack {
+                if let nextCursor {
+                    Button("Show More") {
+                        loadMoreTask = Task { await loadMembers(cursor: nextCursor) }
+                    }
+                    .disabled(isLoading || store.isMutatingAdministration)
+                }
+                if isLoading && !members.isEmpty { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .disabled(store.isMutatingAdministration)
+                Button("Add") { add() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canAdd)
+            }
+        }
+        .padding(18)
+        .frame(width: 440, height: 430)
+        .interactiveDismissDisabled(store.isMutatingAdministration)
+        .onChange(of: query) { _, _ in
+            loadMoreTask?.cancel()
+            members = []
+            selectedId = nil
+            nextCursor = nil
+            errorMessage = nil
+            loadFailed = false
+            isLoading = true
+        }
+        .task(id: query) {
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+                await loadMembers()
+            } catch {}
+        }
+        .onDisappear { loadMoreTask?.cancel() }
+    }
+
+    private var availableMembers: [UserReference] {
+        let existingIds = Set((store.administrationProjectMembers[projectId] ?? []).map(\.id))
+        return members.filter { !existingIds.contains($0.id) }
+    }
+
+    private var canAdd: Bool {
+        let detail = store.administrationProjectDetailStates[projectId]
+        return store.canMutateProject(projectId) && detail?.isStale != true && detail?.isLoading != true
+            && !store.loadingAdministrationProjectIds.contains(projectId)
+            && store.administrationProjectMembers[projectId] != nil
+            && availableMembers.contains { $0.id == selectedId }
+    }
+
+    private func loadMembers(cursor: String? = nil) async {
+        let requestedQuery = query
+        isLoading = true
+        errorMessage = nil
+        loadFailed = false
+        defer { if requestedQuery == query && !Task.isCancelled { isLoading = false } }
+        do {
+            let response = try await store.searchProjectMemberCandidates(projectId: projectId, query: requestedQuery, cursor: cursor)
+            try Task.checkCancellation()
+            guard requestedQuery == query else { return }
+            if cursor == nil { members = [] }
+            let existingIds = Set(members.map(\.id))
+            members.append(contentsOf: response.items.filter { !existingIds.contains($0.id) })
+            nextCursor = response.pageInfo.nextCursor
         } catch is CancellationError {
-            return
         } catch {
-            guard store.activeProjectId == id else { return }
-            errorMessage = error.localizedDescription
+            if requestedQuery == query && !Task.isCancelled {
+                errorMessage = error.localizedDescription
+                loadFailed = true
+            }
+        }
+    }
+
+    private func add() {
+        guard canAdd, let selectedId else { return }
+        errorMessage = nil
+        loadFailed = false
+        Task {
+            do {
+                try await store.addAdminProjectMember(projectId: projectId, userId: selectedId, role: .member)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
@@ -229,7 +604,10 @@ private struct ProjectLocalSetupSettings: View {
     @State private var bindingToRemove: DaemonProjectBinding?
 
     var body: some View {
-        Section("Repositories") {
+        Section {
+            Text("These repository bindings apply only on this Mac. Other members bind their own local folders.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if isLoading, bindings.isEmpty {
                 ProgressView()
                     .controlSize(.small)
@@ -281,8 +659,9 @@ private struct ProjectLocalSetupSettings: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        } header: {
+            Text("Repositories on This Mac")
         }
-
         .task(id: [store.activeProjectId ?? "", store.projectBindingsGeneration.uuidString]) {
             await load()
         }
@@ -312,6 +691,7 @@ private struct ProjectLocalSetupSettings: View {
             bindings = []
             return
         }
+        bindings = []
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }

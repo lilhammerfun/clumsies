@@ -1418,7 +1418,7 @@ final class DaemonContractTests: XCTestCase {
             "pendingBundleSaves.removeAll()",
             "account = nil",
             "organization = nil",
-            "projectMetadata.removeAll()",
+            "projectRoles.removeAll()",
             "clearAdministration()",
             "orgRefCommitId = nil",
             #"orgRefEtag = """#,

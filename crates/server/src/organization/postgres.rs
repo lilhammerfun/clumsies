@@ -72,7 +72,7 @@ pub(super) async fn list_project_refs(
     user_id: &str,
 ) -> Result<Vec<ProjectRef>, ServerError> {
     let rows = sqlx::query(
-        "SELECT p.project_id, p.name
+        "SELECT p.project_id, p.name, m.role
          FROM projects p
          JOIN project_members m ON m.project_id = p.project_id
          WHERE p.org_id = $1 AND m.user_id = $2
@@ -87,6 +87,7 @@ pub(super) async fn list_project_refs(
             Ok(ProjectRef {
                 project_id: row.try_get("project_id")?,
                 name: row.try_get("name")?,
+                role: project_role(row.try_get::<String, _>("role")?.as_str())?,
             })
         })
         .collect()
@@ -186,6 +187,34 @@ pub(super) async fn list_admin_members(
     .fetch_all(pool)
     .await?;
     rows.iter().map(member_from_row).collect()
+}
+
+pub(super) async fn list_project_member_candidates(
+    pool: &PgPool,
+    project_id: &str,
+    offset: i64,
+    limit: i64,
+    query: Option<&str>,
+) -> Result<Vec<UserRef>, ServerError> {
+    let rows = sqlx::query(
+        "SELECT u.user_id, u.email, u.display_name, u.avatar_url, u.role
+         FROM users u
+         WHERE u.status != 'disabled'
+           AND NOT EXISTS (
+               SELECT 1 FROM project_members m WHERE m.project_id = $1 AND m.user_id = u.user_id
+           )
+           AND ($4::text IS NULL
+               OR strpos(lower(concat_ws(' ', u.email, u.display_name)), lower($4)) > 0)
+         ORDER BY u.created_at, u.user_id
+         LIMIT $2 OFFSET $3",
+    )
+    .bind(project_id)
+    .bind(limit)
+    .bind(offset)
+    .bind(query)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(user_ref_from_row).collect()
 }
 
 pub(super) async fn load_allowed_email_domains(
