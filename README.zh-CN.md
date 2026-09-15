@@ -37,7 +37,7 @@ AI 编程智能体（Coding Agents）正在彻底重构软件开发的控制面�
 
 - **记忆即团队资产（Git 语义上下文管理）**：将架构规则、工作流规范与项目上下文收敛为统一的 Markdown 组织记忆。Project 只选择要使用的组织记忆并承载项目内可见的 Draft overlay；变更经过团队 Review 后原子合入组织 Commit 历史，杜绝静默覆盖。
 - **混合检索与按需精准激活**：深度融合 SQLite FTS5 BM25 全文检索、本地向量嵌入、倒数排名融合（RRF）与交叉编码器（Cross-Encoder）重排。Agent 通过 `activate` 按需动态召回最相关切片，避免上下文窗口浪费。
-- **MCP + 非阻塞生命周期集成**：原生支持 Google Antigravity、Claude Code、OpenAI Codex、opencode 与 DeepSeek Harness (dsh)，由统一签名的 Rust 守护进程（`clumsiesd`）提供代理。Codex 使用 App 自动维护的用户级 Plugin，项目维护的 Skill 留在 Memory Space 并按需加载；Plugin 变化后需重启 Codex 并新建 task，Plugin Hook 首次运行前还需要用户在 `/hooks` 中审查并信任。纳管适配器不安装正常根 `Stop` Hook；Issue 关闭由可选 skill 或人工维护的工作流显式决定。
+- **MCP + 非阻塞生命周期集成**：原生支持 Google Antigravity、Claude Code、OpenAI Codex、opencode 与 DeepSeek Harness (dsh)，由统一签名的 Rust 守护进程（`clumsiesd`）提供代理。所有适配器按本机用户全局安装；Codex 默认勾选，使用 App 维护的用户级 Plugin，项目维护的 Skill 留在 Memory Space 并按需加载；Plugin 变化后需重启 Codex 并新建 task，Plugin Hook 首次运行前还需要用户在 `/hooks` 中审查并信任。纳管适配器不安装正常根 `Stop` Hook；Issue 关闭由可选 skill 或人工维护的工作流显式决定。
 - **私有化权威部署**：在自有基础设施中运行 Rust Server 与 PostgreSQL（支持组织 OIDC 鉴权），本地守护进程独立管理高速本地缓存与 XPC 通信。
 
 ---
@@ -46,11 +46,11 @@ AI 编程智能体（Coding Agents）正在彻底重构软件开发的控制面�
 
 | 智能体宿主 | 协议表面 | 纳管文件 | 支持的生命周期 |
 | :--- | :--- | :--- | :--- |
-| **Google Antigravity** | MCP + 生命周期 Hook | `.mcp.json`, `.agents/hooks.json` | `PreInvocation`；无根 `Stop` |
-| **Claude Code** | MCP + 生命周期 Hook | `.mcp.json`, `.claude/settings.json` | prompt、subagent、失败与会话事件；无根 `Stop` |
+| **Google Antigravity** | MCP + 生命周期 Hook | `~/.gemini/config/mcp_config.json`, `~/.gemini/config/hooks.json` | `PreInvocation`；无根 `Stop` |
+| **Claude Code** | MCP + 生命周期 Hook | `~/.claude.json`, `~/.claude/settings.json` | prompt、subagent、失败与会话事件；无根 `Stop` |
 | **OpenAI Codex** | Plugin：MCP + Hook + 启动 Skill | App 纳管的用户级 Plugin；无项目文件 | Hook 获得信任后的 prompt、subagent 与会话事件；无根 `Stop` |
-| **opencode** | MCP + Plugin | `opencode.json`, `.opencode/plugins/clumsies.ts` | prompt、失败与会话事件；不转发正常根 `Stop` |
-| **DeepSeek Harness (dsh)** | MCP + Hook 桥接 | `.dsh/clumsies.json` | prompt、失败与会话事件；不转发正常根 `Stop` |
+| **opencode** | MCP + Plugin | `~/.config/opencode/opencode.json`, `~/.config/opencode/plugins/clumsies.ts` | prompt、失败与会话事件；不转发正常根 `Stop` |
+| **DeepSeek Harness (dsh)** | MCP + Hook 桥接 | `~/.dsh/clumsies.json` | prompt、失败与会话事件；不转发正常根 `Stop` |
 
 ---
 
@@ -127,10 +127,10 @@ Debug 应用安装到 ~/Applications/Clumsies.app，并打开这个已安装的�
 
 1. 打开应用，保留预填的 **Server address**，点击 **Continue in Browser**
    完成登录。应用会自动加载组织信息。
-2. 选择 Project，通过 **Repositories → Add Repositories…** 添加你实际工作的仓库。
-3. 打开 **Settings → Agent**。Codex 由应用自动维护；按需启用其他支持的 Agent。
-   使用 Codex 时，等待状态显示 **Ready**，重启 Codex，在绑定的仓库中新建任务，
-   然后通过 `/hooks` 审查 Clumsies Hook。
+2. 选择这台 Mac 上要接入的 Agent，默认勾选 Codex。适配器安装一次即可供所有项目使用，
+   之后在 **Settings → Agents** 修改。dsh 还需要[配置 profile](https://docs.clumsies.ai/zh/guides/dsh-integration)。
+3. 选择 Project，通过 **Repositories → Add Repositories…** 添加实际工作的仓库。
+   使用 Codex 时，重启 Codex，在绑定的仓库中新建任务，然后通过 `/hooks` 审查 Clumsies Hook。
 4. 等待首次模型下载和记忆索引完成后，可以这样提问：
 
    ```text

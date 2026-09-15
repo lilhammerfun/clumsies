@@ -108,6 +108,20 @@ struct DaemonXPCClient: Sendable {
         )
     }
 
+    func agentAdapterSettings() async throws -> [DaemonAgentAdapterSetting] {
+        let response: DaemonAgentAdapterSettings = try await call(
+            method: "agent_adapter_settings", payload: EmptyPayload()
+        )
+        return response.items
+    }
+
+    func setAgentAdapter(_ request: DaemonSetAgentAdapterRequest) async throws -> [DaemonAgentAdapterSetting] {
+        let response: DaemonAgentAdapterSettings = try await call(
+            method: "set_agent_adapter", payload: request, timeout: 130
+        )
+        return response.items
+    }
+
     func inspectCodexPlugin(_ request: DaemonCodexPluginRequest) async throws
         -> DaemonCodexPluginStatus {
         try await call(method: "inspect_codex_plugin", payload: request, timeout: 40)

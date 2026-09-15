@@ -3347,6 +3347,97 @@ async fn adapter_install_normalizes_an_empty_binding_after_a_workspace_symlink_m
 }
 
 #[tokio::test]
+async fn global_adapter_migrates_repository_files_and_persists_disabled_choice_offline() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.dev_instance_id = Some("global-adapter-test".to_owned());
+    config.project.server_url = "https://clumsies.example.test".to_owned();
+    let state =
+        common::initialize_daemon(config.clone(), common::TestCredentialStore::default()).await;
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", state.local_db_path().display()))
+        .await
+        .unwrap();
+    let workspace = std::fs::canonicalize(repo.path())
+        .unwrap()
+        .display()
+        .to_string();
+    sqlx::query("INSERT INTO project_bindings (server_url, workspace_root, project_id, revision) VALUES ($1, $2, 'prj_adapter', 1)")
+        .bind(state.project_config_status().server_url).bind(&workspace).execute(&pool).await.unwrap();
+    std::fs::write(
+        repo.path().join("opencode.json"),
+        r#"{"model":"user-model"}"#,
+    )
+    .unwrap();
+    let runtime = signed_runtime_binary(root.path());
+    let old_request = DaemonProjectAgentAdapterInstallRequest {
+        project_id: "prj_adapter".to_owned(),
+        workspace_root: workspace.clone(),
+        adapter: ProjectAgentAdapterKind::Opencode,
+        runtime_binary_path: runtime.display().to_string(),
+        host_binary_path: None,
+        expected_revision: None,
+    };
+    state
+        .install_project_agent_adapter(old_request.clone())
+        .await
+        .unwrap();
+    let mut request = daemon::DaemonSetAgentAdapterRequest {
+        adapter: ProjectAgentAdapterKind::Opencode,
+        enabled: true,
+        runtime_binary_path: runtime.display().to_string(),
+        host_binary_path: None,
+    };
+    let settings = state.set_agent_adapter(request.clone()).await.unwrap();
+    let selected = settings
+        .items
+        .iter()
+        .find(|item| item.adapter == request.adapter)
+        .unwrap();
+    assert!(selected.enabled && selected.installed && selected.configured);
+    assert_eq!(selected.legacy_repositories, 0);
+    let repository_config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(repo.path().join("opencode.json")).unwrap()).unwrap();
+    assert_eq!(repository_config, json!({"model": "user-model"}));
+    assert!(!repo.path().join(".opencode/plugins/clumsies.ts").exists());
+    assert!(
+        state
+            .install_project_agent_adapter(old_request)
+            .await
+            .is_err()
+    );
+    let global_config = root
+        .path()
+        .join("agent-host-home/.config/opencode/opencode.json");
+    assert!(global_config.exists());
+    state
+        .remove_project_binding(DaemonProjectBindingRemoveRequest {
+            workspace_root: workspace,
+            expected_revision: 1,
+        })
+        .await
+        .unwrap();
+    assert!(
+        global_config.exists(),
+        "Removing a repository must not uninstall a harness"
+    );
+    request.enabled = false;
+    state.set_agent_adapter(request.clone()).await.unwrap();
+    state.set_agent_adapter(request).await.unwrap();
+    assert!(!global_config.exists());
+    pool.close().await;
+    drop(state);
+    let reopened = common::initialize_daemon(config, common::TestCredentialStore::default()).await;
+    let settings = reopened.agent_adapter_settings().await.unwrap();
+    let selected = settings
+        .items
+        .iter()
+        .find(|item| item.adapter == ProjectAgentAdapterKind::Opencode)
+        .unwrap();
+    assert!(!selected.enabled && selected.configured);
+}
+
+#[tokio::test]
 async fn project_agent_adapter_install_is_reversible_and_repository_binding_can_then_be_removed() {
     let app = Router::new().route("/api/v1/projects/{project_id}", get(accessible_project));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

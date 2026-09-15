@@ -37,7 +37,7 @@ Today, agent memory is trapped inside isolated model sessions or local markdown 
 
 - **Memory as a Team Asset (Git-Semantic Context)**: Rules, workflows, and project context live as first-class Markdown-backed Organization Memory. A Project selects the Organization resources it uses and carries private Draft overlays; reviewed changes merge atomically into immutable Organization Commit history.
 - **Hybrid Retrieval & Precise Activation**: Combines SQLite FTS5 BM25 text search, local dense vector embeddings, Reciprocal Rank Fusion (RRF), and Cross-Encoder reranking. Agents retrieve task-relevant fragments on demand without exhausting token budgets.
-- **MCP & Non-Blocking Lifecycle Integration**: Out-of-the-box integration for Google Antigravity, Claude Code, OpenAI Codex, opencode, and DeepSeek Harness (dsh) via a single signed Rust daemon (`clumsiesd`). Codex is delivered as an automatically managed user-level plugin; project-maintained skills remain in Memory Space and are loaded on demand. Restart Codex and start a new task after plugin changes, then complete the one-time `/hooks` review before its plugin Hook runs.
+- **MCP & Non-Blocking Lifecycle Integration**: Out-of-the-box integration for Google Antigravity, Claude Code, OpenAI Codex, opencode, and DeepSeek Harness (dsh) via a single signed Rust daemon (`clumsiesd`). Adapters are installed per user for all projects. Codex is selected by default and delivered as a user-level plugin; project-maintained skills remain in Memory Space and are loaded on demand. Restart Codex and start a new task after plugin changes, then complete the one-time `/hooks` review before its plugin Hook runs.
 - **Self-Hosted Authority**: Run the Rust Server and PostgreSQL in your own infrastructure with organization OIDC, while the local resident daemon owns fast local state and XPC transport.
 
 ---
@@ -46,11 +46,11 @@ Today, agent memory is trapped inside isolated model sessions or local markdown 
 
 | Agent Host | Protocol Surface | Managed Files | Supported Lifecycle |
 | :--- | :--- | :--- | :--- |
-| **Google Antigravity** | MCP + Lifecycle Hook | `.mcp.json`, `.agents/hooks.json` | `PreInvocation`; no root `Stop` |
-| **Claude Code** | MCP + Lifecycle Hook | `.mcp.json`, `.claude/settings.json` | Prompt, subagent, failure, and session events; no root `Stop` |
+| **Google Antigravity** | MCP + Lifecycle Hook | `~/.gemini/config/mcp_config.json`, `~/.gemini/config/hooks.json` | `PreInvocation`; no root `Stop` |
+| **Claude Code** | MCP + Lifecycle Hook | `~/.claude.json`, `~/.claude/settings.json` | Prompt, subagent, failure, and session events; no root `Stop` |
 | **OpenAI Codex** | Plugin: MCP + Hook + bootstrap Skill | App-managed user plugin; no project files | Prompt, subagent, and session events after Hook trust; no root `Stop` |
-| **opencode** | MCP + Plugin | `opencode.json`, `.opencode/plugins/clumsies.ts` | Prompt, failure, and session events; no normal root `Stop` |
-| **DeepSeek Harness (dsh)** | MCP + Hook Bridge | `.dsh/clumsies.json` | Prompt, failure, and session events; no normal root `Stop` |
+| **opencode** | MCP + Plugin | `~/.config/opencode/opencode.json`, `~/.config/opencode/plugins/clumsies.ts` | Prompt, failure, and session events; no normal root `Stop` |
+| **DeepSeek Harness (dsh)** | MCP + Hook Bridge | `~/.dsh/clumsies.json` | Prompt, failure, and session events; no normal root `Stop` |
 
 ---
 
@@ -130,11 +130,12 @@ sign-in, binding my working repository to a Project, and connecting my agent.
 
 1. Open the app, keep the prefilled **Server address**, and click
    **Continue in Browser** to sign in. The app loads your organization automatically.
-2. Select a Project and add your working repository through
-   **Repositories → Add Repositories…**.
-3. Open **Settings → Agent**. Codex is managed automatically; enable any other
-   supported agents you use. For Codex, wait for **Ready**, restart Codex, start
-   a new task in the bound repository, and review the Clumsies Hook in `/hooks`.
+2. Choose which agents to connect on this Mac; Codex is selected by default.
+   These adapters are installed once for all projects. Change them later in
+   **Settings → Agents**. dsh also requires [profile setup](https://docs.clumsies.ai/guides/dsh-integration).
+3. Select a Project and add your working repository through
+   **Repositories → Add Repositories…**. For Codex, restart it, start a new task
+   in that repository, and review the Clumsies Hook in `/hooks`.
 4. Allow the initial model download and Memory indexing to finish, then ask:
 
    ```text

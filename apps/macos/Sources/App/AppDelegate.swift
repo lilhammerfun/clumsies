@@ -2,12 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-private enum MainWindowSurface: Equatable {
-    case loading
-    case workspace
-    case failure
-}
-
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let store = WorkspaceStore()
@@ -15,8 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let administratorRecoveryState = NativeAdministratorRecoveryState()
     private var phaseObservation: AnyCancellable?
     private var startupTask: Task<Void, Never>?
+    private var isChoosingAgents = false
     private var mainWindow: NSWindow?
-    private var authenticationWindow: NSWindow?
+    private let startupWindowController = StartupWindowController()
     private lazy var settingsWindowController = SettingsWindowController(
         store: store, softwareUpdateController: softwareUpdateController,
         onShowLogs: { [weak self] in self?.showLogsInFinder() }
@@ -24,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private lazy var statusMenu = makeStatusMenu()
     private var isFlushingForTermination = false
-    private var mainWindowSurface: MainWindowSurface?
     private var mainWorkspaceAccountID: String?
     private var mainWorkspaceOrganizationID: String?
 
@@ -118,12 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .launching:
             presentMainLoading()
         case .loading:
-            if authenticationWindow?.isVisible == true {
+            guard !isChoosingAgents else { return }
+            if startupWindowController.window?.isVisible == true {
                 presentAuthenticationContent(LaunchView())
-            } else if mainWindowSurface != .workspace {
+            } else if mainWindow == nil {
                 presentMainLoading()
             }
         case .authenticationRequired:
+            isChoosingAgents = false
             mainWindow?.orderOut(nil)
             presentNativeServerAccess(
                 purpose: .appSignIn,
@@ -133,10 +129,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 Task { await self.store.reload() }
             }
         case .ready:
-            let wasAuthenticating = authenticationWindow != nil
-            authenticationWindow?.orderOut(nil)
-            authenticationWindow = nil
-            if mainWindowSurface == .workspace,
+            guard UserDefaults.standard.bool(forKey: "ClumsiesAgentSetupCompleted") else {
+                guard !isChoosingAgents else {
+                    startupWindowController.showWindow(nil)
+                    return
+                }
+                isChoosingAgents = true
+                presentAuthenticationContent(AgentsSettingsView(store: store) { [weak self] in
+                    UserDefaults.standard.set(true, forKey: "ClumsiesAgentSetupCompleted")
+                    guard let self else { return }
+                    self.isChoosingAgents = false
+                    self.present(self.store.phase)
+                })
+                return
+            }
+            let wasAuthenticating = startupWindowController.window != nil
+            startupWindowController.window?.orderOut(nil)
+            startupWindowController.window = nil
+            if mainWindow != nil,
                mainWorkspaceAccountID == store.account?.userId,
                mainWorkspaceOrganizationID == store.organization?.orgId {
                 mainWindow?.title = store.organization?.name ?? "Clumsies Lab"
@@ -145,8 +155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 presentMainWindow()
             }
         case .failed(let message):
-            authenticationWindow?.orderOut(nil)
-            authenticationWindow = nil
+            isChoosingAgents = false
+            mainWindow?.orderOut(nil)
             presentMainFailure(message: message) { [weak store] in
                 Task { await store?.reload() }
             }
@@ -167,8 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     destination: .daemon(store.daemon, launchIfNeeded: true),
                     initialSetupStatus: status
                 ) { [weak self] in
-                    self?.authenticationWindow?.orderOut(nil)
-                    self?.authenticationWindow = nil
                     self?.store.start()
                 }
                 return
@@ -212,21 +220,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 onSignOut: { [weak self] in self?.signOut() },
                 onOpenSettings: { [weak self] in self?.presentSettingsWindow() }
             ),
-            surface: .workspace,
             title: store.organization?.name ?? "Clumsies Lab"
         )
     }
 
     private func presentMainLoading() {
-        presentMainContent(
-            LaunchView(),
-            surface: .loading,
-            title: ClumsiesIdentifiers.appDisplayName
-        )
+        presentAuthenticationContent(LaunchView())
     }
 
     private func presentMainFailure(message: String, retry: @escaping () -> Void) {
-        presentMainContent(
+        presentAuthenticationContent(
             FailureView(
                 message: message,
                 retry: retry,
@@ -234,15 +237,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     self?.presentAdministratorRecovery()
                 },
                 onShowLogs: { [weak self] in self?.showLogsInFinder() }
-            ),
-            surface: .failure,
-            title: ClumsiesIdentifiers.appDisplayName
+            )
         )
     }
 
     private func presentMainContent<Content: View>(
         _ content: Content,
-        surface: MainWindowSurface,
         title: String
     ) {
         let contentView = NSHostingView(rootView: content)
@@ -252,7 +252,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let mainWindow {
             mainWindow.title = title
             mainWindow.contentView = contentView
-            mainWindowSurface = surface
             mainWindow.makeKeyAndOrderFront(nil)
             return
         }
@@ -277,38 +276,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         window.makeKeyAndOrderFront(nil)
         mainWindow = window
-        mainWindowSurface = surface
     }
 
     private func presentAuthenticationContent<Content: View>(_ content: Content) {
-        let size = NSSize(width: 540, height: 690)
-        let controller = NSHostingController(
-            rootView: content.frame(width: size.width, height: size.height)
-        )
-        controller.preferredContentSize = size
-        if let window = authenticationWindow {
-            window.contentViewController = controller
-            window.contentMinSize = size
-            window.contentMaxSize = size
-            window.setContentSize(size)
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = ClumsiesIdentifiers.appDisplayName
-        window.contentViewController = controller
-        window.contentMinSize = size
-        window.contentMaxSize = size
-        window.setContentSize(size)
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        authenticationWindow = window
+        startupWindowController.show(content)
     }
 
     private func presentSettingsWindow() {
@@ -391,9 +362,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func restorePrimaryWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        if let authenticationWindow {
-            authenticationWindow.deminiaturize(nil)
-            authenticationWindow.makeKeyAndOrderFront(nil)
+        if let window = startupWindowController.window {
+            window.deminiaturize(nil)
+            window.makeKeyAndOrderFront(nil)
             return
         }
         if let mainWindow, mainWindow.isVisible {
@@ -669,8 +640,7 @@ private struct LaunchView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.ultraThinMaterial)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+        .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
             Task {
                 try? await Task.sleep(nanoseconds: 700_000_000)
@@ -713,7 +683,7 @@ private struct FailureView: View {
             )
             .frame(maxWidth: 520)
 
-            HStack(spacing: 12) {
+            VStack(spacing: 12) {
                 Button("Try Again", action: retry)
                     .buttonStyle(.borderedProminent)
 
@@ -763,6 +733,6 @@ private struct FailureView: View {
         }
         .padding(38)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
+        .background(Color(nsColor: .textBackgroundColor))
     }
 }

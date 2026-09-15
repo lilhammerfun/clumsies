@@ -21,7 +21,11 @@ use crate::{
 use crate::config::DAEMON_AGENT_LABEL;
 
 mod codex_plugin;
+pub(crate) mod global;
 mod legacy;
+pub use global::{
+    DaemonAgentAdapterSetting, DaemonAgentAdapterSettings, DaemonSetAgentAdapterRequest,
+};
 
 const ISSUE_RUN_EVENT_CODEX: &str =
     include_str!("../../../assets/adapters/codex/runtime/hooks/agent-run-event.sh.tpl");
@@ -354,8 +358,9 @@ impl AdapterFsAction {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct PreparedAdapterFsOp {
+    global: bool,
     operation_id: String,
     server_url: String,
     workspace_root: PathBuf,
@@ -404,6 +409,7 @@ fn journal_change_path(
     workspace_root: &Path,
     adapter: ProjectAgentAdapterKind,
     change: &JournalChange,
+    global: bool,
 ) -> Result<PathBuf, DaemonError> {
     let relative = Path::new(&change.relative_path);
     if relative.is_absolute()
@@ -417,7 +423,11 @@ fn journal_change_path(
     }
     let path = workspace_root.join(relative);
     validate_manifest_managed_path(workspace_root, &path, change.kind)?;
-    validate_adapter_journal_path(adapter, relative, change.kind)?;
+    if global {
+        global::validate_path(adapter, relative, change.kind)?;
+    } else {
+        validate_adapter_journal_path(adapter, relative, change.kind)?;
+    }
     Ok(path)
 }
 
@@ -515,6 +525,7 @@ struct DirectoryIdentity {
 }
 
 pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
+    global::migrate(pool).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS project_agent_adapters (
             server_url TEXT NOT NULL,
@@ -600,16 +611,24 @@ fn prepared_adapter_fs_op(
 fn validate_prepared_adapter_fs_op(operation: &PreparedAdapterFsOp) -> Result<(), DaemonError> {
     Uuid::parse_str(&operation.operation_id)
         .map_err(|_| DaemonError::InvalidConfig("adapter journal id is invalid".to_owned()))?;
-    let server_url = canonical_server_url(&operation.server_url)?;
-    if server_url != operation.server_url {
-        return Err(DaemonError::InvalidConfig(
-            "adapter journal server URL is not canonical".to_owned(),
-        ));
-    }
-    if operation.project_id.trim().is_empty() {
-        return Err(DaemonError::InvalidConfig(
-            "adapter journal project id is empty".to_owned(),
-        ));
+    if operation.global {
+        if !operation.server_url.is_empty() || !operation.project_id.is_empty() {
+            return Err(adapter_conflict(
+                "A global adapter journal cannot bind a Project or Server.",
+            ));
+        }
+    } else {
+        let server_url = canonical_server_url(&operation.server_url)?;
+        if server_url != operation.server_url {
+            return Err(DaemonError::InvalidConfig(
+                "adapter journal server URL is not canonical".to_owned(),
+            ));
+        }
+        if operation.project_id.trim().is_empty() {
+            return Err(DaemonError::InvalidConfig(
+                "adapter journal project id is empty".to_owned(),
+            ));
+        }
     }
     let workspace =
         canonical_workspace_directory(operation.workspace_root.to_str().ok_or_else(|| {
@@ -669,7 +688,7 @@ fn validate_prepared_adapter_fs_op(operation: &PreparedAdapterFsOp) -> Result<()
                 "adapter journal contains an invalid or duplicate path".to_owned(),
             ));
         }
-        journal_change_path(&workspace, operation.adapter, change)?;
+        journal_change_path(&workspace, operation.adapter, change, operation.global)?;
         validate_journal_stage_name(change)?;
         validate_journal_file_state(change.before_content.as_deref(), change.before_mode)?;
         validate_journal_file_state(change.after_content.as_deref(), change.after_mode)?;
@@ -943,6 +962,7 @@ fn prepared_adapter_fs_op_from_row(
         ));
     }
     let operation = PreparedAdapterFsOp {
+        global: false,
         operation_id: row.try_get("operation_id")?,
         server_url: row.try_get("server_url")?,
         workspace_root: PathBuf::from(row.try_get::<String, _>("workspace_root")?),
@@ -1481,7 +1501,12 @@ fn apply_journal_change_cas(
     index: usize,
     change: &JournalChange,
 ) -> Result<(), DaemonError> {
-    let path = journal_change_path(&operation.workspace_root, operation.adapter, change)?;
+    let path = journal_change_path(
+        &operation.workspace_root,
+        operation.adapter,
+        change,
+        operation.global,
+    )?;
     let directory = ManagedLeafDirectory::open(&path)?;
     let (old_name, new_name) = journal_transient_names(operation, index)?;
     let before = file_snapshot_from_journal(&change.before_content, change.before_mode);
@@ -1606,7 +1631,12 @@ fn cleanup_journal_change_cas(
     index: usize,
     change: &JournalChange,
 ) -> Result<(), DaemonError> {
-    let path = journal_change_path(&operation.workspace_root, operation.adapter, change)?;
+    let path = journal_change_path(
+        &operation.workspace_root,
+        operation.adapter,
+        change,
+        operation.global,
+    )?;
     let directory = ManagedLeafDirectory::open(&path)?;
     let (old_name, new_name) = journal_transient_names(operation, index)?;
     let before = file_snapshot_from_journal(&change.before_content, change.before_mode);
@@ -1789,6 +1819,7 @@ async fn recover_one_adapter_fs_op(
 }
 
 pub(crate) async fn recover_pending_fs_ops(pool: &SqlitePool) -> Result<(), DaemonError> {
+    global::recover(pool).await?;
     let operations = pending_adapter_fs_ops(pool).await?;
     for operation in operations {
         recover_one_adapter_fs_op(pool, &operation).await.map_err(|error| {
@@ -1915,6 +1946,22 @@ pub(crate) async fn require_runtime_delivery(
     binding: &crate::DaemonProjectBinding,
     required: crate::ProjectAgentAdapterRuntimeRequirement,
 ) -> Result<(), DaemonError> {
+    if let Some(enabled) = global::enabled(&state.inner.pool, required.adapter).await? {
+        let delivery_matches = required.delivery
+            == if required.adapter == ProjectAgentAdapterKind::Codex {
+                ProjectAgentAdapterDelivery::HostPlugin
+            } else {
+                ProjectAgentAdapterDelivery::LegacyFiles
+            };
+        return if enabled && delivery_matches {
+            Ok(())
+        } else {
+            Err(state_error(
+                "agent_adapter_disabled",
+                "This Agent integration is disabled on this Mac.",
+            ))
+        };
+    }
     if required.adapter == ProjectAgentAdapterKind::Codex
         && required.delivery == ProjectAgentAdapterDelivery::HostPlugin
     {
@@ -2008,6 +2055,15 @@ pub(crate) async fn install(
         ));
     }
     let _guard = state.inner.local_setup_lock.lock().await;
+    if global::enabled(&state.inner.pool, request.adapter)
+        .await?
+        .is_some()
+    {
+        return Err(DaemonError::InvalidRequest(
+            "This harness is managed globally; use Settings → Agents.".to_owned(),
+        ));
+    }
+
     let project_id = required_value("project_id", request.project_id)?;
     let workspace_root = canonical_workspace_directory(&request.workspace_root)?;
     let server_url = canonical_server_url(&state.project_config().server_url)?;
@@ -2088,6 +2144,7 @@ pub(crate) async fn install(
     let manifest_json = serde_json::to_string(&manifest)?;
     let operation = prepared_adapter_fs_op(
         PreparedAdapterFsOp {
+            global: false,
             operation_id: Uuid::new_v4().to_string(),
             server_url,
             workspace_root: workspace_root.clone(),
@@ -2119,8 +2176,16 @@ pub(crate) async fn remove(
     request: DaemonProjectAgentAdapterRemoveRequest,
 ) -> Result<DaemonProjectAgentAdapterRemoveResponse, DaemonError> {
     let _guard = state.inner.local_setup_lock.lock().await;
-    let workspace_root = canonical_workspace_directory(&request.workspace_root)?;
     let server_url = canonical_server_url(&state.project_config().server_url)?;
+    remove_from_server(state, request, server_url).await
+}
+
+async fn remove_from_server(
+    state: &DaemonState,
+    request: DaemonProjectAgentAdapterRemoveRequest,
+    server_url: String,
+) -> Result<DaemonProjectAgentAdapterRemoveResponse, DaemonError> {
+    let workspace_root = canonical_workspace_directory(&request.workspace_root)?;
     recover_pending_fs_op_for_adapter(
         &state.inner.pool,
         &server_url,
@@ -2156,6 +2221,7 @@ pub(crate) async fn remove(
     let changes = remove_plan(&existing.manifest, &workspace_root)?;
     let operation = prepared_adapter_fs_op(
         PreparedAdapterFsOp {
+            global: false,
             operation_id: Uuid::new_v4().to_string(),
             server_url,
             workspace_root: workspace_root.clone(),
@@ -2706,7 +2772,13 @@ fn remove_plan(
                 ManagedFileKind::OpencodeConfig => expected
                     .content
                     .as_deref()
-                    .map(|content| remove_opencode_config(content, helper))
+                    .map(|content| {
+                        if path == workspace_root.join(".config/opencode/opencode.json") {
+                            remove_opencode_config_for_scope(content, helper, false)
+                        } else {
+                            remove_opencode_config(content, helper)
+                        }
+                    })
                     .transpose()?
                     .flatten(),
                 ManagedFileKind::AntigravityHooks => expected
@@ -2764,12 +2836,20 @@ fn validate_manifest_managed_path(
         ManagedFileKind::CodexConfig => relative == Path::new(".codex/config.toml"),
         ManagedFileKind::CodexHooks => relative == Path::new(".codex/hooks.json"),
         ManagedFileKind::ClaudeMcp => {
-            relative == Path::new(".mcp.json") || relative == Path::new(".claude.json")
+            relative == Path::new(".mcp.json")
+                || relative == Path::new(".claude.json")
+                || relative == Path::new(".gemini/config/mcp_config.json")
         }
         ManagedFileKind::ClaudeSettings => relative == Path::new(".claude/settings.json"),
-        ManagedFileKind::OpencodeConfig => relative == Path::new("opencode.json"),
+        ManagedFileKind::OpencodeConfig => matches!(
+            relative.to_str(),
+            Some("opencode.json" | ".config/opencode/opencode.json")
+        ),
         ManagedFileKind::DshConfig => relative == Path::new(".dsh/clumsies.json"),
-        ManagedFileKind::AntigravityHooks => relative == Path::new(".agents/hooks.json"),
+        ManagedFileKind::AntigravityHooks => matches!(
+            relative.to_str(),
+            Some(".agents/hooks.json" | ".gemini/config/hooks.json")
+        ),
         // The retired thin-skill paths stay accepted so that manifests and
         // pending journal ops written before the thin-skills retirement
         // (ISSUE-064) remain removable and recoverable. New plans never
@@ -2786,6 +2866,9 @@ fn validate_manifest_managed_path(
             ".claude/skills/activate/SKILL.md",
             ".claude/skills/ntmd/SKILL.md",
             ".opencode/plugins/clumsies.ts",
+            ".config/opencode/plugins/clumsies.ts",
+            ".gemini/config/hooks/resolve-binary.sh",
+            ".gemini/config/hooks/agent-run-event.sh",
             ".agents/hooks/resolve-binary.sh",
             ".agents/hooks/agent-run-event.sh",
         ]
@@ -3554,6 +3637,15 @@ fn render_opencode_config(
     runtime_binary: &str,
     previous_runtime_binary: Option<&str>,
 ) -> Result<Vec<u8>, DaemonError> {
+    render_opencode_config_for_scope(existing, runtime_binary, previous_runtime_binary, true)
+}
+
+fn render_opencode_config_for_scope(
+    existing: Option<&[u8]>,
+    runtime_binary: &str,
+    previous_runtime_binary: Option<&str>,
+    repository: bool,
+) -> Result<Vec<u8>, DaemonError> {
     let mut root = match existing {
         Some(content) => serde_json::from_slice::<Value>(content)
             .map_err(|_| adapter_conflict("The existing opencode config is not valid JSON."))?,
@@ -3580,17 +3672,19 @@ fn render_opencode_config(
     }
     mcp.insert("clumsies".to_owned(), opencode_mcp_entry(runtime_binary));
 
-    const PLUGIN_SPEC: &str = "./.opencode/plugins/clumsies.ts";
-    let plugins = root
-        .entry("plugin")
-        .or_insert_with(|| Value::Array(Vec::new()))
-        .as_array_mut()
-        .ok_or_else(|| adapter_conflict("opencode `plugin` must be an array."))?;
-    if !plugins
-        .iter()
-        .any(|item| item.as_str() == Some(PLUGIN_SPEC))
-    {
-        plugins.push(Value::String(PLUGIN_SPEC.to_owned()));
+    if repository {
+        const PLUGIN_SPEC: &str = "./.opencode/plugins/clumsies.ts";
+        let plugins = root
+            .entry("plugin")
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| adapter_conflict("opencode `plugin` must be an array."))?;
+        if !plugins
+            .iter()
+            .any(|item| item.as_str() == Some(PLUGIN_SPEC))
+        {
+            plugins.push(Value::String(PLUGIN_SPEC.to_owned()));
+        }
     }
 
     let mut rendered = serde_json::to_vec_pretty(&Value::Object(root.clone()))?;
@@ -3609,6 +3703,14 @@ fn opencode_mcp_entry(runtime_binary: &str) -> Value {
 fn remove_opencode_config(
     content: &[u8],
     runtime_binary: &str,
+) -> Result<Option<Vec<u8>>, DaemonError> {
+    remove_opencode_config_for_scope(content, runtime_binary, true)
+}
+
+fn remove_opencode_config_for_scope(
+    content: &[u8],
+    runtime_binary: &str,
+    repository: bool,
 ) -> Result<Option<Vec<u8>>, DaemonError> {
     let mut root = serde_json::from_slice::<Value>(content)
         .map_err(|_| adapter_conflict("The existing opencode config is not valid JSON."))?;
@@ -3631,7 +3733,7 @@ fn remove_opencode_config(
         }
     }
 
-    if let Some(plugins) = root.get_mut("plugin").and_then(Value::as_array_mut) {
+    if repository && let Some(plugins) = root.get_mut("plugin").and_then(Value::as_array_mut) {
         plugins.retain(|item| item.as_str() != Some("./.opencode/plugins/clumsies.ts"));
         if plugins.is_empty() {
             root.remove("plugin");
@@ -3890,6 +3992,17 @@ fn validate_absolute_normal_path(path: &Path) -> Result<(), DaemonError> {
 
 fn inferred_managed_anchor(path: &Path) -> Result<PathBuf, DaemonError> {
     validate_absolute_normal_path(path)?;
+    for ancestor in path.ancestors().skip(1) {
+        if matches!(
+            ancestor.file_name().and_then(OsStr::to_str),
+            Some(".config" | ".gemini")
+        ) {
+            return ancestor
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| adapter_conflict("The global harness directory has no home."));
+        }
+    }
     if matches!(
         path.file_name().and_then(OsStr::to_str),
         Some(".mcp.json" | ".claude.json" | "opencode.json")
@@ -6154,6 +6267,7 @@ name: legacy
         };
         let operation = prepared_adapter_fs_op(
             PreparedAdapterFsOp {
+                global: false,
                 operation_id: Uuid::new_v4().to_string(),
                 server_url,
                 workspace_root: workspace_root.clone(),
@@ -6244,6 +6358,7 @@ name: legacy
         };
         prepared_adapter_fs_op(
             PreparedAdapterFsOp {
+                global: false,
                 operation_id: Uuid::new_v4().to_string(),
                 server_url: "https://app.clumsies.ai".to_owned(),
                 workspace_root,
@@ -6298,6 +6413,7 @@ name: legacy
         let manifest = manifest_for_changes(&changes, runtime, "a".repeat(64));
         prepared_adapter_fs_op(
             PreparedAdapterFsOp {
+                global: false,
                 operation_id: Uuid::new_v4().to_string(),
                 server_url,
                 workspace_root: workspace_root.to_path_buf(),
@@ -6458,6 +6574,7 @@ name: legacy
         ];
         let remove = prepared_adapter_fs_op(
             PreparedAdapterFsOp {
+                global: false,
                 operation_id: Uuid::new_v4().to_string(),
                 server_url,
                 workspace_root: PathBuf::from(&workspace_root),

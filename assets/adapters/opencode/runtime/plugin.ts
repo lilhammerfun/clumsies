@@ -49,7 +49,7 @@ async function forward(
   cwd: string,
   payload: Record<string, unknown>,
 ): Promise<string | null> {
-  const input = JSON.stringify(payload)
+  const input = JSON.stringify({ ...payload, cwd })
   try {
     const result =
       await ctx`printf '%s' ${input} | ${clumsiesRuntime()} _agent agent-run-event --host ${HOST}`.quiet()

@@ -12,3 +12,9 @@ clumsiesd _agent agent-run-event --host <host>
 - Adapter 固定使用 App 内路径，不搜索 `PATH`、worktree 构建产物或旧 helper。
 - MCP 只提供 `memory` 工具，包含 `activate` / `load` / `store` 操作。
 - AgentRun 只记录 lifecycle，不向 Agent 注入工作管理协议。
+
+## 本机适配器选择
+
+首次启动时选择 Harness，默认勾选 Codex；之后在 Settings → Agents 修改。
+适配器全局安装，项目仅绑定本地目录。所有 MCP 入口都要求目录已有绑定，
+每次工具调用都会复核绑定，未绑定时不会读取 App 当前选中的项目。

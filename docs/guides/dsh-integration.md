@@ -31,46 +31,34 @@ Register the Clumsies MCP server in the dsh profile patch layer
 see. The tool appears as `mcp__clumsies__memory` and does not require an
 AgentRun.
 
-## Agent adapter (global settings)
+## Agent adapter on this Mac
 
-dsh is a first-class Agent adapter. In the macOS app, **Settings → Agent**
-lists **DeepSeek Harness (dsh)** next to Claude Code, opencode, and Antigravity
-for every bound repository. Enabling the toggle installs a workspace marker the
-dsh side reads:
+Select **DeepSeek Harness (dsh)** during first launch or in **Settings → Agents**.
+The App installs `~/.dsh/clumsies.json` with the signed runtime path. There is
+no Project ID, Server URL, or repository-local marker in this configuration.
 
-```json
-{
-  "server_url": "https://clumsies.example.com",
-  "project_id": "prj_…",
-  "runtime": "/Applications/Clumsies.app/Contents/Resources/clumsiesd"
-}
+Copy `dev/dsh/clumsies-hook.mjs` to `~/.dsh/clumsies-hook.mjs` (replace an older
+copy when migrating from repository adapters). Register that bridge once in the dsh profile patch layer, using your
+home directory's absolute path:
+
+```yaml
+- insert:
+    - id: clumsies-hook
+      name: /Users/your-name/.dsh/clumsies-hook.mjs
 ```
 
-The marker lives at `.dsh/clumsies.json` in the repository and is fully
-managed (installed, updated, and removed) by the daemon's adapter journal,
-like the other adapters' files. Disabling the toggle removes it.
+Keep the MCP registration from the previous section in the same profile. Its
+`cwd` must identify a bound repository. Profile registration is a separate dsh
+step; the App does not overwrite your profile configuration.
 
-The marker is per-machine state (the App-bundled clumsiesd path and the
-daemon's server URL), so repositories using the dsh adapter should ignore it
-in git, like the other repository-scoped Agent files:
+The bridge reads the user-level runtime path and preserves each session's cwd.
+The daemon resolves that directory to its Project. Disabling dsh removes the
+managed runtime config; the separately registered bridge becomes inactive. It
+never removes a Project binding or changes the dsh profile.
 
-```gitignore
-.dsh/
-```
-
-The dsh hook plugin (`dev/dsh/clumsies-hook.mjs`) resolves the marker by
-walking up from the session cwd: the marker's workspace root is forwarded as
-the event `cwd` (so the daemon binds the run to the adapter-managed
-Project even when `dsh web` was launched from a parent directory) and the
-marker's `runtime` pins the clumsiesd binary that forwards events (no
-machine-specific path in the plugin). Sessions without a marker fall back to
-the session cwd and the environment/default runtime, so manual setups keep
-working. `dev/dsh/agent-run-event.sh` does the same lookup for shell-driven
-forwarding.
-
-The MCP side remains a one-time profile registration (below): the static
-`cwd` pins the spawned `clumsiesd mcp serve` to one workspace, so the
-profile patch targets the workspace whose Memory the dsh sessions should see.
+Old daemon-owned repository markers are removed when the integration is
+configured. Unreachable directories stay recorded for later cleanup. Changed
+files produce a conflict and are left intact.
 
 ## AgentRun lifecycle hook
 
@@ -121,8 +109,8 @@ export function apply(ctx: Context) {
 }
 ```
 
-The shipped plugin (`dev/dsh/clumsies-hook.mjs`) also resolves the
-`.dsh/clumsies.json` marker described above; a shell wrapper
+The shipped plugin (`dev/dsh/clumsies-hook.mjs`) reads the
+user-level `~/.dsh/clumsies.json` described above; a shell wrapper
 (`dev/dsh/agent-run-event.sh`) drives the same contract from any event
 source. A normal successful turn does not emit root `Stop`. The invariant to
 preserve is **one `turn_id` per user prompt, reused for a failure event**, and

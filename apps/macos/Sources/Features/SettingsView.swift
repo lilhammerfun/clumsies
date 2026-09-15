@@ -55,283 +55,169 @@ struct GeneralSettingsView: View {
 
 struct AgentsSettingsView: View {
     @ObservedObject var store: WorkspaceStore
-    @State private var status: DaemonCodexPluginStatus?
+    var onCompleted: (() -> Void)?
+    @State private var settings: [DaemonAgentAdapterSetting] = []
+    @State private var selected: Set<ProjectAgentAdapterKind> = [.codex]
+    @State private var codexStatus: DaemonCodexPluginStatus?
     @State private var isWorking = false
+    @State private var hasLoaded = false
     @State private var errorMessage: String?
-    @State private var repairMessage: String?
 
     var body: some View {
-        Form {
-            Section {
-                LabeledContent("Status") {
-                    if isWorking {
-                        ProgressView().controlSize(.small)
-                    } else if errorMessage != nil {
-                        Text("Unavailable").foregroundStyle(.secondary)
-                    } else if let status {
-                        Label(
-                            status.ready ? "Ready" : "Needs repair",
-                            systemImage: status.ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
-                        )
-                        .foregroundStyle(status.ready ? Color.green : Color.orange)
-                    } else {
-                        Text("Checking…").foregroundStyle(.secondary)
-                    }
-                }
-                LabeledContent("Version", value: status?.installedVersion ?? (status == nil ? "—" : "Not installed"))
-                LabeledContent("Codex integration") {
-                    Button("Repair") { Task { await repair() } }
-                        .disabled(isWorking || status?.hostInstalled == false)
-                }
-
-                if let status {
-                    DisclosureGroup("Installation details") {
-                        LabeledContent("Host", value: status.hostInstalled ? "Installed" : "Not installed")
-                        LabeledContent("Marketplace", value: marketplaceLabel(status))
-                        LabeledContent("Plugin installed", value: status.pluginInstalled ? "Yes" : "No")
-                        LabeledContent("Plugin enabled", value: status.pluginEnabled ? "Yes" : "No")
-                        LabeledContent("Expected version", value: status.expectedVersion)
-                    }
-                }
-                DisclosureGroup("After plugin changes") {
-                    Text("Restart Codex and start a new task, then review Clumsies in /hooks. Plugin readiness does not confirm hook trust or AgentRun readiness.")
-                        .font(.caption)
+        VStack(spacing: 0) {
+            if onCompleted != nil {
+                VStack(spacing: 10) {
+                    BrandLogoView(size: 52)
+                    Text("Connect Your Agents")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text("Choose the agents you use on this Mac. You can change this later in Settings.")
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.center)
                 }
-                if let errorMessage {
-                    Text(errorMessage)
-                        .textSelection(.enabled)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let repairMessage {
-                    Text(repairMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } header: {
-                Text("Codex")
-            } footer: {
-                Text("Clumsies maintains this integration automatically. Repository bindings determine which project’s Memory is used.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .padding(.horizontal, 36)
+                .padding(.top, 36)
             }
+            Form {
+                Section {
+                    ForEach(ProjectAgentAdapterKind.allCases) { adapter in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Toggle(adapter.title, isOn: Binding(
+                                get: { selected.contains(adapter) },
+                                set: { enabled in
+                                    if enabled { selected.insert(adapter) }
+                                    else { selected.remove(adapter) }
+                                    if onCompleted == nil {
+                                        Task { await save(adapter, enabled: enabled) }
+                                    }
+                                }
+                            ))
+                            .disabled(isWorking || !hasLoaded)
+                            if adapter == .codex {
+                                Text(codexDescription)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if onCompleted == nil,
+                                      let setting = settings.first(where: { $0.adapter == adapter }),
+                                      setting.enabled {
+                                Text(setting.installed
+                                    ? (adapter == .dsh ? "Runtime configured; profile bridge required" : "Installed for this Mac")
+                                    : "Ready to install")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let setting = settings.first(where: { $0.adapter == adapter }),
+                               setting.configured, setting.legacyRepositories > 0 {
+                                Text("\(setting.legacyRepositories) old repository configuration(s) still need cleanup. Reconnect missing folders and retry.")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Agents on This Mac")
+                } footer: {
+                    Text("Install once for all projects. The repository binding selects which project’s Memory each agent uses.")
+                }
 
-            RepositoryAgentSettingsView(store: store)
+                if onCompleted == nil {
+                    Section {
+                        Button("Repair Selected Integrations") { Task { await saveSelection() } }
+                            .disabled(isWorking || !hasLoaded)
+                    }
+                }
+                Section {
+                    Text("After changing Codex, restart it and start a new task, then review Clumsies in /hooks.")
+                    if selected.contains(.dsh) {
+                        Text("dsh also needs its MCP and lifecycle bridge registered in your dsh profile.")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
+                        Button("Retry") { Task { await load() } }.disabled(isWorking)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(onCompleted == nil ? .visible : .hidden)
+            .font(.system(size: 13))
+            .toggleStyle(.switch)
+
+            if onCompleted != nil {
+                HStack {
+                    Button("Set Up Later") { onCompleted?() }
+                        .disabled(isWorking)
+                    if isWorking { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Button(selected.isEmpty ? "Continue Without Adapters" : "Install and Continue") {
+                        Task { await saveSelection() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isWorking || !hasLoaded)
+                }
+                .padding(24)
+            }
         }
-        .formStyle(.grouped)
-        .font(.system(size: 13))
-        .toggleStyle(.switch)
         .task { await load() }
     }
 
-    private func marketplaceLabel(_ status: DaemonCodexPluginStatus) -> String {
-        if status.marketplaceConflict { return "Conflict" }
-        return status.marketplaceInstalled ? "Installed" : "Not installed"
+    private var codexDescription: String {
+        if !selected.contains(.codex) { return "Disabled" }
+        guard let codexStatus else { return "Selected by default" }
+        if !codexStatus.hostInstalled { return "Will install when Codex is available" }
+        if codexStatus.ready { return "Plugin installed and enabled" }
+        return codexStatus.pluginInstalled ? "Plugin needs repair" : "Plugin not installed"
     }
 
     private func load() async {
         isWorking = true
-        errorMessage = nil
         defer { isWorking = false }
         do {
-            status = try await store.codexPluginStatus()
-        } catch is CancellationError {
-            return
-        } catch {
-            guard !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func repair() async {
-        isWorking = true
-        errorMessage = nil
-        repairMessage = nil
-        defer { isWorking = false }
-        do {
-            status = try await store.repairCodexPlugin()
-            repairMessage = "Repair completed. Restart Codex and start a new task."
-        } catch is CancellationError {
-            return
-        } catch {
-            guard !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
-        }
-    }
-}
-
-private struct AgentRepositoryProject: Identifiable {
-    let id: String
-    let name: String
-    let repositories: [DaemonProjectBinding]
-}
-
-private struct RepositoryAgentSettingsView: View {
-    @ObservedObject var store: WorkspaceStore
-    @State private var projects: [AgentRepositoryProject] = []
-    @State private var adapters: [DaemonProjectAgentAdapter] = []
-    @State private var pendingValues: [String: Bool] = [:]
-    @State private var workingKeys: Set<String> = []
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-
-    var body: some View {
-        Group {
-            if projects.isEmpty || errorMessage != nil {
-                Section("Repository Integrations") {
-                    if isLoading, projects.isEmpty {
-                        LabeledContent("Repositories") {
-                            ProgressView().controlSize(.small)
-                        }
-                    } else if store.projects.isEmpty {
-                        Text("Create a project and bind a repository to configure these agents.")
-                            .foregroundStyle(.secondary)
-                    } else if projects.isEmpty {
-                        Text("Add a repository in Project Settings to configure these agents.")
-                            .foregroundStyle(.secondary)
-                    }
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .textSelection(.enabled)
-                            .foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-
-            ForEach(projects) { project in
-                ForEach(project.repositories) { repository in
-                    Section {
-                        ForEach(ProjectAgentAdapterKind.repositoryIntegrationCases) { adapter in
-                            Toggle(
-                                adapter.title,
-                                isOn: adapterBinding(adapter, repository: repository)
-                            )
-                            .toggleStyle(.switch)
-                            .disabled(!workingKeys.isEmpty)
-                            .accessibilityLabel(
-                                "\(adapter.title) for \(URL(fileURLWithPath: repository.workspaceRoot).lastPathComponent) in \(project.name)"
-                            )
-                        }
-                    } header: {
-                        Text("\(project.name) · \(URL(fileURLWithPath: repository.workspaceRoot).lastPathComponent)")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(repository.workspaceRoot)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .help(repository.workspaceRoot)
-                                .textSelection(.enabled)
-                            Text("Changes update Clumsies-managed configuration in this repository.")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .task(id: [store.projectBindingsGeneration.uuidString]
-            + store.projects.map { "\($0.id):\($0.name)" }) {
-            await load()
-        }
-    }
-
-    private func load() async {
-        isLoading = true
-        errorMessage = nil
-        defer {
-            if !Task.isCancelled {
-                isLoading = false
-            }
-        }
-        do {
-            try await reload()
-        } catch is CancellationError {
-            return
-        } catch {
-            guard !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func reload() async throws {
-        var nextProjects: [AgentRepositoryProject] = []
-        async let nextAdapters = store.allProjectAgentAdapters()
-        for project in store.projects {
+            let loaded = try await store.daemon.agentAdapterSettings()
             try Task.checkCancellation()
-            let repositories = try await store.projectBindings(project.id)
-            if !repositories.isEmpty {
-                nextProjects.append(.init(
-                    id: project.id,
-                    name: project.name,
-                    repositories: repositories
-                ))
-            }
-        }
-        let loadedAdapters = try await nextAdapters
-        try Task.checkCancellation()
-        projects = nextProjects
-        adapters = loadedAdapters
-    }
-
-    private func adapterBinding(
-        _ adapter: ProjectAgentAdapterKind,
-        repository: DaemonProjectBinding
-    ) -> Binding<Bool> {
-        let key = adapterKey(adapter, repository)
-        return Binding(
-            get: {
-                pendingValues[key]
-                    ?? (currentAdapter(adapter, repository) != nil)
-            },
-            set: { enabled in
-                guard workingKeys.isEmpty else { return }
-                pendingValues[key] = enabled
-                workingKeys.insert(key)
-                let current = currentAdapter(adapter, repository)
-                Task {
-                    do {
-                        try await store.setProjectAgentAdapter(
-                            adapter,
-                            enabled: enabled,
-                            projectId: repository.projectId,
-                            workspaceRoot: repository.workspaceRoot,
-                            current: current
-                        )
-                        try await reload()
-                        errorMessage = nil
-                    } catch {
-                        let message = error.localizedDescription
-                        try? await reload()
-                        errorMessage = message
-                    }
-                    pendingValues.removeValue(forKey: key)
-                    workingKeys.remove(key)
-                }
-            }
-        )
-    }
-
-    private func currentAdapter(
-        _ adapter: ProjectAgentAdapterKind,
-        _ repository: DaemonProjectBinding
-    ) -> DaemonProjectAgentAdapter? {
-        adapters.first {
-            $0.adapter == adapter
-                && $0.serverUrl == repository.serverUrl
-                && $0.projectId == repository.projectId
-                && $0.workspaceRoot == repository.workspaceRoot
+            settings = loaded
+            selected = Set(loaded.filter(\.enabled).map(\.adapter))
+            hasLoaded = true
+            errorMessage = nil
+            codexStatus = try await store.codexPluginStatus()
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
-    private func adapterKey(
-        _ adapter: ProjectAgentAdapterKind,
-        _ repository: DaemonProjectBinding
-    ) -> String {
-        "\(repository.serverUrl):\(repository.workspaceRoot):\(adapter.rawValue)"
+    private func save(_ adapter: ProjectAgentAdapterKind, enabled: Bool) async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            settings = try await store.setAgentAdapter(adapter, enabled: enabled)
+            selected = Set(settings.filter(\.enabled).map(\.adapter))
+            errorMessage = nil
+            if adapter == .codex { codexStatus = try await store.codexPluginStatus() }
+        } catch {
+            if let actual = try? await store.daemon.agentAdapterSettings() {
+                settings = actual
+                selected = Set(actual.filter(\.enabled).map(\.adapter))
+            }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func saveSelection() async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            for adapter in ProjectAgentAdapterKind.allCases {
+                try Task.checkCancellation()
+                settings = try await store.setAgentAdapter(adapter, enabled: selected.contains(adapter))
+            }
+            errorMessage = nil
+            if let onCompleted { onCompleted() }
+            else { codexStatus = try await store.codexPluginStatus() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

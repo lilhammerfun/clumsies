@@ -191,7 +191,39 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
         "project_ref_not_synced"
     );
 
+    let unbound = tempfile::tempdir().unwrap();
+    let unbound_output = run_proxy(
+        &binary,
+        &["mcp", "serve"],
+        unbound.path(),
+        &service_name,
+        "",
+        &[],
+    );
+    assert!(
+        !unbound_output.status.success(),
+        "An unbound global MCP must not use the App's selected Project"
+    );
+
+    let mut direct_mcp = spawn_proxy(&binary, &["mcp", "serve"], &workspace, &service_name, &[]);
+    let mut direct_stdin = direct_mcp.stdin.take().unwrap();
+    let mut direct_stdout = BufReader::new(direct_mcp.stdout.take().unwrap());
+    direct_stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"initialize\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").unwrap();
+    direct_stdin.flush().unwrap();
+    assert_eq!(read_proxy_json_line(&mut direct_stdout)["id"], 30);
+
     rebind_project(&daemon_root.join("local.db")).await;
+
+    direct_stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"tools/call\",\"params\":{\"name\":\"memory\",\"arguments\":{\"op\":{\"activate\":{\"query\":\"binding check\"}}}}}\n").unwrap();
+    direct_stdin.flush().unwrap();
+    let direct_rebind = read_proxy_json_line(&mut direct_stdout);
+    assert_eq!(
+        direct_rebind["result"]["structuredContent"]["error"]["code"],
+        "project_binding_changed"
+    );
+    drop(direct_stdin);
+    drop(direct_stdout);
+    assert_process_succeeded("direct global MCP", &direct_mcp.wait_with_output().unwrap());
     plugin_stdin
         .write_all(
             b"{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"memory\",\"arguments\":{\"op\":{\"activate\":{\"query\":\"binding check\"}}}}}\n",

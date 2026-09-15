@@ -53,20 +53,17 @@ struct DeliveryCheckedBackend {
 
 impl AgentRuntimeBackend for DeliveryCheckedBackend {
     fn execute(&self, request: AgentRuntimeRequest) -> Result<DaemonIpcResponse, DaemonError> {
-        if let Some(required_adapter) = self.required_adapter {
-            let binding =
-                self.client
-                    .resolve_project_binding(DaemonProjectBindingResolveRequest {
-                        workspace_path: self.workspace_path.clone(),
-                        required_adapter: Some(required_adapter),
-                    })?;
-            if binding.project_id != self.project_id {
-                return Err(DaemonError::State {
-                    code: "project_binding_changed",
-                    message: "The Project binding changed after this Agent runtime started; start a new Agent task."
-                        .to_owned(),
-                });
-            }
+        let binding = self
+            .client
+            .resolve_project_binding(DaemonProjectBindingResolveRequest {
+                workspace_path: self.workspace_path.clone(),
+                required_adapter: self.required_adapter,
+            })?;
+        if binding.project_id != self.project_id {
+            return Err(DaemonError::State {
+                code: "project_binding_changed",
+                message: "The Project binding changed after this Agent runtime started; start a new Agent task.".to_owned(),
+            });
         }
         self.client.execute(request)
     }
@@ -76,7 +73,7 @@ impl AgentRuntimeBackend for DeliveryCheckedBackend {
     }
 
     fn active_project_id(&self) -> Result<Option<String>, DaemonError> {
-        self.client.active_project_id()
+        Ok(Some(self.project_id.clone()))
     }
 }
 
@@ -220,16 +217,8 @@ fn run_mcp_proxy(
     let binding = client.resolve_project_binding(DaemonProjectBindingResolveRequest {
         workspace_path: workspace_path.clone(),
         required_adapter,
-    });
-    let project_id = match (binding, required_adapter) {
-        (Ok(binding), _) => binding.project_id,
-        (Err(error), Some(_)) => return Err(error.into()),
-        (Err(_), None) => client
-            .project_config()
-            .ok()
-            .and_then(|cfg| cfg.project_id)
-            .unwrap_or_default(),
-    };
+    })?;
+    let project_id = binding.project_id;
     // The debug-only test seam changes the backend identity only after the
     // startup health and binding requests. This models a resident replacement
     // between MCP initialize and the next tools/call over real XPC.
