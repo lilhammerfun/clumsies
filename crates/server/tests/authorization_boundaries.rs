@@ -279,9 +279,10 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
                 .method("POST")
                 .uri("/api/v1/projects")
                 .header("content-type", "application/json")
+                .header("idempotency-key", "member-create-project")
                 .body(Body::from(
                     serde_json::to_vec(&CreateProjectRequest {
-                        name: "Forbidden".to_owned(),
+                        name: "Member Project".to_owned(),
                         description: None,
                     })
                     .unwrap(),
@@ -290,7 +291,172 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
         )
         .await
         .unwrap();
-    assert_eq!(create_project.status(), StatusCode::FORBIDDEN);
+    assert_eq!(create_project.status(), StatusCode::CREATED);
+    let created: server::api::Project = serde_json::from_slice(
+        &to_bytes(create_project.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let project_id = &created.project_id;
+    let (_, me) = project_request(&member_app, "GET", "/api/v1/me", None).await;
+    assert!(
+        me["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "project:create")
+    );
+    assert!(
+        !me["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "admin:write")
+    );
+    assert!(
+        me["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["project_id"] == *project_id && p["role"] == "admin")
+    );
+
+    // A project creator can use both project editing routes, but gains no authority over other projects.
+    for prefix in ["/api/v1/projects", "/api/v1/admin/projects"] {
+        let (status, _) = project_request(
+            &member_app,
+            "PATCH",
+            &format!("{prefix}/{project_id}"),
+            Some(serde_json::json!({"description": "Owned by a member"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    for (method, path, body) in [
+        (
+            "PATCH",
+            format!("/api/v1/projects/{}", bootstrap.project_id),
+            serde_json::json!({"name":"Not allowed"}),
+        ),
+        (
+            "DELETE",
+            format!("/api/v1/admin/projects/{}", bootstrap.project_id),
+            serde_json::json!({}),
+        ),
+        (
+            "POST",
+            format!("/api/v1/admin/projects/{}/members", bootstrap.project_id),
+            serde_json::json!({"user_id":bootstrap.user_id,"role":"admin"}),
+        ),
+        (
+            "PATCH",
+            format!(
+                "/api/v1/admin/projects/{}/members/{member_id}",
+                bootstrap.project_id
+            ),
+            serde_json::json!({"role":"admin"}),
+        ),
+        (
+            "PUT",
+            format!("/api/v1/projects/{}/org-selections", bootstrap.project_id),
+            serde_json::json!({"resource_ids":[]}),
+        ),
+        (
+            "GET",
+            "/api/v1/admin/projects".to_owned(),
+            serde_json::json!({}),
+        ),
+        (
+            "GET",
+            "/api/v1/admin/members".to_owned(),
+            serde_json::json!({}),
+        ),
+        (
+            "PATCH",
+            "/api/v1/admin/org".to_owned(),
+            serde_json::json!({"name":"Not allowed"}),
+        ),
+        (
+            "GET",
+            format!(
+                "/api/v1/admin/projects/{}/member-candidates",
+                bootstrap.project_id
+            ),
+            serde_json::json!({}),
+        ),
+    ] {
+        let (status, _) = project_request(&member_app, method, &path, Some(body)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
+    }
+    let (status, _) = project_request(
+        &member_app,
+        "GET",
+        &format!("/api/v1/admin/projects/{private_project_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let memory_id = repo
+        .create_org_context(
+            &bootstrap.org_id,
+            "context/member-project.md",
+            "# Initial memory",
+        )
+        .await
+        .unwrap();
+    let (status, selection) = project_request(
+        &member_app,
+        "PUT",
+        &format!("/api/v1/projects/{project_id}/org-selections"),
+        Some(serde_json::json!({"resource_ids":[memory_id]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(selection["memories"].as_array().unwrap().len(), 1);
+
+    let (status, candidates) = project_request(
+        &member_app,
+        "GET",
+        &format!("/api/v1/admin/projects/{project_id}/member-candidates?q=owner"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(candidates["items"][0]["user_id"], bootstrap.user_id);
+    assert!(
+        candidates["items"][0]
+            .get("external_identity_bound")
+            .is_none()
+    );
+    let (status, _) = project_request(
+        &member_app,
+        "POST",
+        &format!("/api/v1/admin/projects/{project_id}/members"),
+        Some(serde_json::json!({"user_id":bootstrap.user_id,"role":"member"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = project_request(
+        &member_app,
+        "DELETE",
+        &format!(
+            "/api/v1/admin/projects/{project_id}/members/{}",
+            bootstrap.user_id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = project_request(
+        &member_app,
+        "DELETE",
+        &format!("/api/v1/admin/projects/{project_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     let administer_project_members = member_app
         .oneshot(
@@ -304,5 +470,45 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
         )
         .await
         .unwrap();
-    assert_eq!(administer_project_members.status(), StatusCode::FORBIDDEN);
+    assert_eq!(administer_project_members.status(), StatusCode::OK);
+}
+
+async fn project_request(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json");
+    if matches!(method, "PATCH" | "PUT" | "DELETE") && !path.contains("/members/") {
+        let current = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        if current.status() == StatusCode::OK {
+            let value: serde_json::Value =
+                serde_json::from_slice(&to_bytes(current.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            request = request.header("if-match", value["revision"].as_i64().unwrap().to_string());
+        }
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            request
+                .body(Body::from(
+                    body.unwrap_or(serde_json::json!({})).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    (status, body)
 }

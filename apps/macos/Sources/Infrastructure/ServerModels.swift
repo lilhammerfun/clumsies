@@ -1,6 +1,7 @@
 import Foundation
 
-struct UserReference: Codable, Hashable, Sendable {
+struct UserReference: Codable, Identifiable, Hashable, Sendable {
+    var id: String { userId }
     let userId: String
     let email: String
     let displayName: String?
@@ -18,6 +19,7 @@ struct ProjectReference: Codable, Identifiable, Hashable, Sendable {
 
     let projectId: String
     let name: String
+    var role: ProjectMemberRole? = nil
 }
 
 struct ProjectRecord: Codable, Identifiable, Hashable, Sendable {

@@ -822,12 +822,13 @@ private struct FileTreeView: View {
                         Button("Add to \(project.name)") {
                             addToProject(addableItems, projectId: project.id)
                         }
+                        .disabled(!store.canManageProject(project.id))
                     }
                 }
             }
             .disabled(
                 directoryOperationProgress != nil
-                    || !store.canManageOrgSelection
+                    || !store.projects.contains(where: { store.canManageProject($0.id) })
                     || store.projects.isEmpty
                     || selectionContainsSynchronizingDocument
             )
@@ -838,7 +839,7 @@ private struct FileTreeView: View {
             }
             .disabled(
                 directoryOperationProgress != nil
-                    || !store.canManageOrgSelection
+                    || store.activeProjectId.map { !store.canManageProject($0) } != false
                     || selectionContainsSynchronizingDocument
             )
         }

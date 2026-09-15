@@ -183,7 +183,10 @@ pub(crate) async fn replace_project_org_selection(
     headers: HeaderMap,
     Json(request): Json<ReplaceProjectOrgSelectionRequest>,
 ) -> Result<Json<crate::api::ProjectOrgSelection>, HttpError> {
-    require_org_admin(&principal)?;
+    state
+        .repository
+        .ensure_project_admin(&principal, &project_id)
+        .await?;
     state
         .repository
         .ensure_project_member(&principal, &project_id)

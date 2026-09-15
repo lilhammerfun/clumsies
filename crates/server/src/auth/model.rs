@@ -95,6 +95,7 @@ pub(crate) fn user_capabilities(role: &str) -> Vec<String> {
         "memory:read".to_owned(),
         "draft:write".to_owned(),
         "review:write".to_owned(),
+        "project:create".to_owned(),
     ];
     if role == "owner" || role == "admin" {
         capabilities.push("review:decide".to_owned());

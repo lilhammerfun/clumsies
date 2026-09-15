@@ -17,6 +17,14 @@ This page retains the historical `/workspace` URL. Current APIs use `project_id`
 
 Membership authorization and content selection are separate concerns. Selecting a Memory puts it in the baseline; a personal Bundle, directory binding, or Agent request does not change membership permissions.
 
+## Create and configure in Memory
+
+Use **New Project…** in the Memory project selector. Organization members can create projects; the creator becomes a project administrator and can edit its details, add or remove existing organization members, select Memory, and delete the project. These permissions do not grant organization administration or publication authority.
+
+Open **Project Settings** beside the selector to configure the current project. **Repositories on This Mac** and cache settings apply locally; other members bind their own directories. Organization administrators can open **All Organization Projects…** from the selector to configure projects they have not joined. Reading their Memory still requires project membership.
+
+App Settings contains global app, Agent, and organization controls. Project configuration stays in Memory.
+
 ## From selection to readable content
 
 ```text

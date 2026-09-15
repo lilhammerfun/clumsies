@@ -30,8 +30,13 @@ Clumsies 有四类接口边界，分别服务于不同调用方。即使它们�
 | 登录和刷新令牌 | `GET /oauth2/authorization/oidc`、`GET /login/oauth2/code/oidc`、`POST /api/v1/auth/token` | OIDC 授权码 + PKCE，或轮换的 refresh token |
 | 读取当前身份、退出登录 | `GET /api/v1/me`、`DELETE /api/v1/auth/session` | 当前已认证会话 |
 | 查找 Project 和成员 | `GET /api/v1/projects`、`GET /api/v1/projects/{project_id}`、`GET /api/v1/projects/{project_id}/members` | Server 按权限过滤或检查 |
-| 创建、修改、删除 Project | `POST /api/v1/projects`、`PATCH` / `DELETE /api/v1/projects/{project_id}` | Organization owner/admin；创建要求 `Idempotency-Key`，修改和删除要求版本 `If-Match` |
+| 创建 Project | `POST /api/v1/projects` | 已登录的组织成员；要求 `Idempotency-Key`；创建者成为 Project admin |
+| 修改、删除 Project | `PATCH` / `DELETE /api/v1/projects/{project_id}` | 该 Project admin 或具备成员访问权限的 Organization owner/admin；要求版本 `If-Match` |
+| 配置 Project 和成员 | `/api/v1/admin/projects/{project_id}`、`/members` 及成员子路由 | Project 成员可读；该 Project admin 或 Organization owner/admin 可修改，组织管理员也可管理未加入的项目 |
+| 查找待添加的成员 | `GET /api/v1/admin/projects/{project_id}/member-candidates` | 该 Project admin 或 Organization owner/admin；支持 `q`、`limit`、`cursor`，仅返回未加入项目且未禁用的用户资料 |
 | 管理组织 | `/api/v1/admin/org`、`/members`、`/projects`、`/tokens`、`/audit-events` | Organization owner/admin；此行所有路径均以 `/api/v1/admin` 开头 |
+
+`GET /api/v1/me` 的 `projects[].role` 返回当前用户在各 Project 中的角色；组织成员拥有 `project:create` capability。组织全部项目列表 `/api/v1/admin/projects` 仍仅供 Organization owner/admin 使用。
 
 Project 内的角色不会自动变成 Organization 管理员。Server 会分别检查“能看到这个 Project”和“能发布组织内容”。
 
@@ -43,7 +48,7 @@ Project 内的角色不会自动变成 Organization 管理员。Server 会分别
 | --- | --- | --- |
 | 浏览已发布的 Organization Memory | `GET /api/v1/org/memories` 及其 `/{memory_id}` | 元数据列表或完整资源 |
 | 读取历史 Project scope Memory | `GET /api/v1/projects/{project_id}/memories` 及其 `/{memory_id}` | 历史 `scope=project` 记录；这两个路由不返回已选 Organization Memory 的投影 |
-| 读取、替换 Project 选择集合 | `GET` / `PUT /api/v1/projects/{project_id}/org-selections` | 输入 `resource_ids`；替换要求 Organization owner/admin 和 selection revision `If-Match` |
+| 读取、替换 Project 选择集合 | `GET` / `PUT /api/v1/projects/{project_id}/org-selections` | 输入 `resource_ids`；替换要求该 Project admin 或具备成员访问权限的 Organization owner/admin，以及 selection revision `If-Match` |
 | 保存个人 Bundle | `GET` / `POST /api/v1/me/bundles`；`GET` / `PATCH` / `DELETE /api/v1/me/bundles/{bundle_id}` | 属于当前用户；修改和删除使用 Bundle revision `If-Match` |
 | 导出组织受管数据 | `GET /api/v1/admin/memory-export` | 管理员导出 Memory、Draft、选择集合与 Bundle |
 

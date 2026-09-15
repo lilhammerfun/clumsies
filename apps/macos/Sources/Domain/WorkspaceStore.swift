@@ -85,6 +85,7 @@ struct WorkspaceSnapshot: Sendable {
     let organization: OrganizationReference
     let capabilities: Set<String>
     let projects: [ProjectState]
+    var projectRoles: [String: ProjectMemberRole] = [:]
     let activeProjectId: String?
     let orgRefCommitId: String?
     let orgRefEtag: String
@@ -369,8 +370,8 @@ final class WorkspaceStore: ObservableObject {
     @Published private(set) var organization: OrganizationReference?
     @Published private(set) var capabilities: Set<String> = []
     @Published private(set) var projects: [ProjectState] = []
+    @Published private(set) var projectRoles: [String: ProjectMemberRole] = [:]
     @Published private(set) var projectBindingsGeneration = UUID()
-    @Published private(set) var projectMetadata: [String: ProjectRecord] = [:]
     @Published private(set) var administrationSnapshot: AdministrationSnapshot?
     @Published private(set) var administrationProjectMembers: [String: [ProjectMemberRecord]] = [:]
     @Published private(set) var administrationProjectDetails: [String: AdminProjectRecord] = [:]
@@ -602,12 +603,29 @@ final class WorkspaceStore: ObservableObject {
         presentedBackgroundError = nil
     }
 
-    var canManageOrgSelection: Bool {
-        capabilities.contains("admin:write")
+    var canCreateProject: Bool {
+        capabilities.contains("project:create")
     }
 
-    var canManageProjects: Bool {
-        capabilities.contains("admin:write")
+    func canManageProject(_ projectId: String) -> Bool {
+        Self.projectManagementAllowed(capabilities: capabilities, role: projectRoles[projectId])
+    }
+
+    nonisolated static func projectManagementAllowed(
+        capabilities: Set<String>, role: ProjectMemberRole?
+    ) -> Bool {
+        capabilities.contains("admin:write") || role == .admin
+    }
+
+    func canAccessProjectSettings(_ projectId: String) -> Bool {
+        canAdministerOrganization || projects.contains { $0.id == projectId }
+    }
+
+    func canMutateProject(_ projectId: String) -> Bool {
+        let state = administrationProjectDetailStates[projectId]
+        return phase == .ready && canManageProject(projectId)
+            && state?.isLoaded == true && state?.isStale == false && state?.isLoading == false
+            && !isMutatingAdministration
     }
 
     var canAdministerOrganization: Bool {
@@ -1464,7 +1482,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func presentProjectCreation() {
-        guard canManageProjects else { return }
+        guard canCreateProject else { return }
         showsProjectCreation = true
     }
 
@@ -1475,7 +1493,7 @@ final class WorkspaceStore: ObservableObject {
         repositoryPaths: [String],
         bundleId: String?
     ) async throws -> String {
-        guard canManageProjects else { throw AdministrationError.forbidden }
+        guard canCreateProject else { throw AdministrationError.forbidden }
         guard phase == .ready else { throw AdministrationError.unavailable }
         guard !isMutatingAdministration else { throw AdministrationError.busy }
         let generation = UUID()
@@ -1495,13 +1513,13 @@ final class WorkspaceStore: ObservableObject {
             )
         )
         try ensureCurrentAdministrationMutation(generation)
+        projectRoles[created.id] = .admin
         let initialSelection = try await initializeProjectMemory(
             projectId: created.id,
             bundleId: bundleId,
             generation: generation
         )
         try ensureCurrentAdministrationMutation(generation)
-        projectMetadata[created.id] = created
         let project = ProjectState(
             id: created.id,
             name: created.name,
@@ -1531,28 +1549,6 @@ final class WorkspaceStore: ObservableObject {
         return created.id
     }
 
-    func projectRecord(_ projectId: String, refresh: Bool = false) async throws -> ProjectRecord {
-        if !refresh, let cached = projectMetadata[projectId] {
-            return cached
-        }
-        let accountID = account?.userId
-        let organizationID = organization?.orgId
-        let project: ProjectRecord = try await server.get("/api/v1/projects/\(projectId)")
-        try Task.checkCancellation()
-        guard account?.userId == accountID, organization?.orgId == organizationID else {
-            throw CancellationError()
-        }
-        projectMetadata[projectId] = project
-        return project
-    }
-
-    func projectMemberDirectory(projectId: String) async throws -> [ProjectMemberRecord] {
-        let response: ListResponse<ProjectMemberRecord> = try await server.get(
-            "/api/v1/projects/\(projectId)/members"
-        )
-        return response.items
-    }
-
     func loadAdministration(
         section: AdministrationSection,
         force: Bool = false,
@@ -1560,10 +1556,7 @@ final class WorkspaceStore: ObservableObject {
         query: String? = nil
     ) async {
         guard !Task.isCancelled else { return }
-        guard canAdministerOrganization, phase != .authenticationRequired else {
-            clearAdministration()
-            return
-        }
+        guard canAdministerOrganization, phase != .authenticationRequired else { return }
         var previous = administrationState(for: section)
         let nextQuery = (query ?? previous.query).trimmingCharacters(in: .whitespacesAndNewlines)
         let queryChanged = previous.query != nextQuery
@@ -1731,32 +1724,35 @@ final class WorkspaceStore: ObservableObject {
         return result
     }
 
-    func searchAdministrationMembers(
-        query: String,
-        cursor: String? = nil
-    ) async throws -> ListResponse<AdminOrganizationMemberRecord> {
-        guard canAdministerOrganization else { throw AdministrationError.forbidden }
+    func searchProjectMemberCandidates(
+        projectId: String, query: String, cursor: String? = nil
+    ) async throws -> ListResponse<UserReference> {
+        guard canManageProject(projectId) else { throw AdministrationError.forbidden }
         guard phase == .ready else { throw AdministrationError.unavailable }
         let generation = workspaceReloadGeneration
-        let client = server
-        let page = try await Self.loadAdministrationPage(section: .members, cursor: cursor, query: query) { path, query in
-            try await client.raw(method: "GET", path: path, query: query)
-        }
+        var parameters = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: "50")]
+        if let cursor { parameters.append(URLQueryItem(name: "cursor", value: cursor)) }
+        let result: (value: ListResponse<UserReference>, response: DaemonServerResponse) =
+            try await server.getWithMetadata("/api/v1/admin/projects/\(projectId)/member-candidates", query: parameters)
         try Task.checkCancellation()
-        guard generation == workspaceReloadGeneration, phase == .ready, canAdministerOrganization else {
+        guard generation == workspaceReloadGeneration, phase == .ready, canManageProject(projectId) else {
             throw CancellationError()
         }
-        guard !page.isStale else { throw AdministrationError.stale }
-        return ListResponse(items: page.snapshot.members,
-            pageInfo: PageInfo(nextCursor: page.nextCursor, hasMore: page.nextCursor != nil))
+        guard !result.response.isStaleCache else { throw AdministrationError.stale }
+        if result.value.pageInfo.hasMore {
+            guard let next = result.value.pageInfo.nextCursor, !next.isEmpty, next != cursor else {
+                throw ServerClientError.invalidResponse("Member pagination returned an invalid next cursor.")
+            }
+        }
+        return result.value
     }
 
     func administrationProject(id: String) -> AdminProjectRecord? {
-        administrationSnapshot?.projects.first(where: { $0.id == id }) ?? administrationProjectDetails[id]
+        administrationProjectDetails[id] ?? administrationSnapshot?.projects.first(where: { $0.id == id })
     }
 
     func loadAdministrationProject(id: String, force: Bool = false) async {
-        guard canAdministerOrganization, phase != .authenticationRequired else { return }
+        guard canAccessProjectSettings(id), phase != .authenticationRequired else { return }
         let previous = administrationProjectDetailStates[id] ?? AdministrationPageState()
         guard !previous.isLoading, force || administrationProject(id: id) == nil else { return }
         let generation = UUID()
@@ -1777,17 +1773,18 @@ final class WorkspaceStore: ObservableObject {
             }
             guard administrationProjectDetailLoadGenerations[id] == generation,
                   administrationRefreshGeneration == refreshGeneration,
-                  canAdministerOrganization, phase != .authenticationRequired else { return }
+                  canAccessProjectSettings(id), phase != .authenticationRequired else { return }
             administrationProjectDetails[id] = result.project
             administrationProjectDetailStates[id] = AdministrationPageState(
                 isLoaded: true, isLoading: true, isStale: result.isStale
             )
+            await loadAdministrationProjectMembers(projectId: id)
         } catch is CancellationError {
             return
         } catch {
             guard administrationProjectDetailLoadGenerations[id] == generation,
                   administrationRefreshGeneration == refreshGeneration,
-                  canAdministerOrganization, phase != .authenticationRequired else { return }
+                  canAccessProjectSettings(id), phase != .authenticationRequired else { return }
             administrationProjectDetailStates[id, default: .init()].isStale = true
             administrationProjectDetailStates[id, default: .init()].errorMessage = error.localizedDescription
         }
@@ -1811,7 +1808,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func loadAdministrationProjectMembers(projectId: String) async {
-        guard canAdministerOrganization,
+        guard canAccessProjectSettings(projectId),
               administrationProject(id: projectId) != nil else {
             administrationProjectMembers[projectId] = nil
             return
@@ -1838,10 +1835,10 @@ final class WorkspaceStore: ObservableObject {
             try Task.checkCancellation()
             guard administrationProjectMemberLoadGenerations[projectId] == generation,
                   administrationRefreshGeneration == refreshGeneration,
-                  canAdministerOrganization else { return }
+                  canAccessProjectSettings(projectId) else { return }
             administrationProjectMembers[projectId] = members.items
             if members.hasStaleServerResponse {
-                administrationPageStates[.projects, default: .init()].isStale = true
+                administrationProjectDetailStates[projectId, default: .init()].isStale = true
             }
         } catch is CancellationError {
             return
@@ -1849,8 +1846,8 @@ final class WorkspaceStore: ObservableObject {
             guard administrationProjectMemberLoadGenerations[projectId] == generation,
                   administrationRefreshGeneration == refreshGeneration else { return }
             administrationProjectMembers[projectId] = nil
-            administrationPageStates[.projects, default: .init()].isStale = true
-            administrationPageStates[.projects, default: .init()].errorMessage = error.localizedDescription
+            administrationProjectDetailStates[projectId, default: .init()].isStale = true
+            administrationProjectDetailStates[projectId, default: .init()].errorMessage = error.localizedDescription
         }
     }
 
@@ -1959,14 +1956,6 @@ final class WorkspaceStore: ObservableObject {
             body: UpdateProjectRequest(name: name, description: description)
         )
         try ensureCurrentAdministrationMutation(generation)
-        projectMetadata[updated.id] = ProjectRecord(
-            projectId: updated.id,
-            name: updated.name,
-            description: updated.description,
-            revision: updated.revision,
-            createdAt: updated.createdAt,
-            updatedAt: updated.updatedAt
-        )
         let isInDirectory = administrationSnapshot?.projects.contains(where: { $0.id == updated.id }) == true
         administrationProjectDetails[updated.id] = updated
         if isInDirectory { administrationSnapshot?.updateProject(updated) }
@@ -1990,7 +1979,7 @@ final class WorkspaceStore: ObservableObject {
             body: EmptyPayload()
         )
         try ensureCurrentAdministrationMutation(generation)
-        projectMetadata[project.id] = nil
+        projectRoles[project.id] = nil
         let isInDirectory = administrationSnapshot?.projects.contains(where: { $0.id == project.id }) == true
         administrationSnapshot?.projects.removeAll { $0.id == project.id }
         administrationProjectDetails[project.id] = nil
@@ -2066,31 +2055,31 @@ final class WorkspaceStore: ObservableObject {
                 administrationSnapshot?.updateProject(result.value)
             }
             if result.response.isStaleCache {
-                administrationPageStates[.projects, default: .init()].isStale = true
+                administrationProjectDetailStates[projectId, default: .init()].isStale = true
             }
             await loadAdministrationProjectMembers(projectId: projectId)
             try ensureCurrentAdministrationMutation(generation)
         } catch {
             try ensureCurrentAdministrationMutation(generation)
-            administrationPageStates[.projects, default: .init()].isStale = true
-            administrationPageStates[.projects, default: .init()].errorMessage = error.localizedDescription
+            administrationProjectDetailStates[projectId, default: .init()].isStale = true
+            administrationProjectDetailStates[projectId, default: .init()].errorMessage = error.localizedDescription
             throw error
         }
     }
 
     private func beginAdministrationMutation(_ section: AdministrationSection, projectId: String? = nil) throws -> UUID {
-        guard canAdministerOrganization else { throw AdministrationError.forbidden }
         guard phase == .ready else { throw AdministrationError.unavailable }
-        let state = administrationState(for: section)
+        let state: AdministrationPageState
+        if let projectId {
+            guard canManageProject(projectId) else { throw AdministrationError.forbidden }
+            state = administrationProjectDetailStates[projectId] ?? AdministrationPageState()
+        } else {
+            guard canAdministerOrganization else { throw AdministrationError.forbidden }
+            state = administrationState(for: section)
+        }
         guard state.isLoaded else { throw AdministrationError.unavailable }
         guard !state.isStale else { throw AdministrationError.stale }
-        if let projectId, let detail = administrationProjectDetailStates[projectId] {
-            guard !detail.isStale else { throw AdministrationError.stale }
-            guard !detail.isLoading else { throw AdministrationError.busy }
-        }
-        guard !state.isLoading, administrationLoadTasks[section] == nil, !isMutatingAdministration else {
-            throw AdministrationError.busy
-        }
+        guard !state.isLoading, !isMutatingAdministration else { throw AdministrationError.busy }
         administrationPageStates[section, default: .init()].errorMessage = nil
         let generation = UUID()
         administrationMutationGeneration = generation
@@ -2100,7 +2089,7 @@ final class WorkspaceStore: ObservableObject {
 
     private func ensureCurrentAdministrationMutation(_ generation: UUID) throws {
         guard administrationMutationGeneration == generation,
-              phase == .ready, canAdministerOrganization else {
+              phase == .ready else {
             throw CancellationError()
         }
     }
@@ -2129,7 +2118,7 @@ final class WorkspaceStore: ObservableObject {
             await reload()
             try ensureCurrentAdministrationMutation(generation)
         }
-        if refreshesPage {
+        if refreshesPage, canAdministerOrganization {
             await loadAdministration(section: section, force: true)
             try ensureCurrentAdministrationMutation(generation)
         }
@@ -4720,8 +4709,8 @@ final class WorkspaceStore: ObservableObject {
         resourceIds: Set<String>,
         mutation: ProjectOrgSelectionMutation
     ) async throws {
-        guard canManageOrgSelection else {
-            throw ServerClientError.forbidden("Only Organization owners and admins can manage project memory.")
+        guard canManageProject(projectId) else {
+            throw ServerClientError.forbidden("Project administrator access is required to manage project memory.")
         }
         guard !hasDocumentSynchronization(in: projectId) else {
             throw DocumentSyncError.mutationWhileSynchronizing
@@ -4731,9 +4720,9 @@ final class WorkspaceStore: ObservableObject {
         }
         try validateOrgResourceIds(resourceIds)
         try await withProjectOrgSelectionMutation {
-            guard canManageOrgSelection else {
+            guard canManageProject(projectId) else {
                 throw ServerClientError.forbidden(
-                    "Only Organization owners and admins can manage project memory."
+                    "Project administrator access is required to manage project memory."
                 )
             }
             guard projects.contains(where: { $0.id == projectId }) else {
@@ -4781,9 +4770,9 @@ final class WorkspaceStore: ObservableObject {
                 await applyProjectOrgSelection(current, toProject: projectId)
                 return
             }
-            guard canManageOrgSelection else {
+            guard canManageProject(projectId) else {
                 throw ServerClientError.forbidden(
-                    "Only Organization owners and admins can manage project memory."
+                    "Project administrator access is required to manage project memory."
                 )
             }
             guard projects.contains(where: { $0.id == projectId }) else {
@@ -5513,8 +5502,8 @@ final class WorkspaceStore: ObservableObject {
         account = nil
         organization = nil
         capabilities.removeAll()
+        projectRoles.removeAll()
         projects.removeAll()
-        projectMetadata.removeAll()
         clearAdministration()
         orgRefCommitId = nil
         orgRefEtag = ""
@@ -5590,15 +5579,17 @@ final class WorkspaceStore: ObservableObject {
         documentSynchronizationGenerations.removeAll()
         account = snapshot.account
         organization = snapshot.organization
+        let lostOrganizationAuthority = canAdministerOrganization && !snapshot.capabilities.contains("admin:write")
         capabilities = snapshot.capabilities
-        if !canAdministerOrganization {
-            clearAdministration()
-        }
+        if lostOrganizationAuthority { clearAdministration() }
         projects = snapshot.projects
-        projectMetadata = projectMetadata.filter { projectId, _ in
-            projects.contains { $0.id == projectId }
-        }
+        projectRoles = snapshot.projectRoles
         let accessibleProjectIds = Set(projects.map(\.id))
+        if !canAdministerOrganization {
+            administrationProjectDetails = administrationProjectDetails.filter { accessibleProjectIds.contains($0.key) }
+            administrationProjectMembers = administrationProjectMembers.filter { accessibleProjectIds.contains($0.key) }
+            administrationProjectDetailStates = administrationProjectDetailStates.filter { accessibleProjectIds.contains($0.key) }
+        }
         drafts = Self.retainingAccessibleProjectRecords(
             drafts,
             accessibleProjectIds: accessibleProjectIds,
@@ -6397,6 +6388,9 @@ struct WorkspaceLoader: Sendable {
             organization: me.org,
             capabilities: Set(me.capabilities),
             projects: projectStates,
+            projectRoles: Dictionary(uniqueKeysWithValues: me.projects.compactMap { project in
+                project.role.map { (project.id, $0) }
+            }),
             activeProjectId: activeProjectId,
             orgRefCommitId: orgCommit.value.ref.commitId,
             orgRefEtag: etag(from: orgCommit.response),

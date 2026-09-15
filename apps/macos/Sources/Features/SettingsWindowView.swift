@@ -46,13 +46,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 enum SettingsDestination: Hashable, Identifiable {
     case pane(SettingsPane)
     case organization(AdministrationSection)
-    case project(id: String, name: String)
 
     var id: Self { self }
     var pane: SettingsPane {
         switch self {
         case .pane(let pane): pane
-        case .organization, .project: .organization
+        case .organization: .organization
         }
     }
     var title: String {
@@ -61,28 +60,25 @@ enum SettingsDestination: Hashable, Identifiable {
         case .organization(.organization): "Organization Details"
         case .organization(.audit): "Audit Log"
         case .organization(let section): section.title
-        case .project(_, let name): name
         }
     }
     var subtitle: String {
         switch self {
         case .pane(.general): "Version and software updates"
         case .pane(.agent): "Codex and repository integrations"
-        case .pane(.organization): "Organization name, members, and projects"
+        case .pane(.organization): "Organization name, members, and sign-in"
         case .pane(.advanced): "Troubleshooting logs"
         case .organization(.organization): "Organization name"
         case .organization(.members): "Invitations, roles, and membership"
         case .organization(.projects): "Projects and project members"
         case .organization(.access): "Single sign-on and allowed email domains"
         case .organization(.audit): "Organization activity and changes"
-        case .project: "Project details and members"
         }
     }
     var symbol: String {
         switch self {
         case .pane(let pane): pane.systemImage
         case .organization(let section): section.symbol
-        case .project: "folder"
         }
     }
 
@@ -94,7 +90,7 @@ enum SettingsDestination: Hashable, Identifiable {
         case .pane(.advanced): "diagnostics logs help troubleshooting"
         case .organization(.organization): "name rename"
         case .organization(.members): "add roles disable users"
-        case .organization(.projects), .project: "create delete project members"
+        case .organization(.projects): "create delete project members"
         case .organization(.access): "SSO login sign-in email domains identity provider"
         case .organization(.audit): "events activity history"
         }
@@ -103,7 +99,7 @@ enum SettingsDestination: Hashable, Identifiable {
     static func search(_ query: String, canAdminister: Bool) -> [Self] {
         let destinations = SettingsPane.allCases
             .filter { $0 != .organization || canAdminister }.map(Self.pane)
-            + (canAdminister ? AdministrationSection.allCases.filter { $0 != .organization }.map(Self.organization) : [])
+            + (canAdminister ? AdministrationSection.allCases.filter { $0 != .organization && $0 != .projects }.map(Self.organization) : [])
         let words = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         return destinations.filter { destination in
             let text = "\(destination.title) \(destination.subtitle) \(destination.pane.title) \(destination.keywords)"
@@ -164,32 +160,6 @@ final class SettingsNavigation: ObservableObject {
         pendingHistoryIndex = nil
     }
 
-    func didDeleteProject(_ id: String) {
-        let deletedCurrentProject: Bool
-        if case .project(let currentID, _) = destination { deletedCurrentProject = currentID == id }
-        else { deletedCurrentProject = false }
-        let keep: (SettingsDestination) -> Bool = {
-            if case .project(let projectID, _) = $0 { return projectID != id }
-            return true
-        }
-        let prefix = Array(history.prefix(historyIndex + 1)).filter(keep)
-        history = history.filter(keep)
-        historyIndex = max(0, prefix.count - 1)
-        if !deletedCurrentProject {
-            if let pendingDestination, !keep(pendingDestination) { self.pendingDestination = nil }
-            if let pendingDestination { pendingHistoryIndex = history.firstIndex(of: pendingDestination) }
-            return
-        }
-        pendingDestination = nil
-        pendingHistoryIndex = nil
-        hasUnsavedChanges = false
-        if history.indices.contains(historyIndex), history[historyIndex] == .organization(.projects) {
-            destination = .organization(.projects)
-        } else {
-            apply(.organization(.projects), historyIndex: nil)
-        }
-    }
-
     func resetForAuthorityChange() {
         hasUnsavedChanges = false
         isSaving = false
@@ -241,13 +211,7 @@ struct SettingsWindowView: View {
         store.canAdministerOrganization && store.phase != .authenticationRequired
     }
 
-    private var pageTitle: String {
-        if case .project(let id, _) = navigation.destination,
-           let project = store.administrationProject(id: id) {
-            return project.name
-        }
-        return navigation.destination.title
-    }
+    private var pageTitle: String { navigation.destination.title }
 
     var body: some View {
         NavigationSplitView {
@@ -401,23 +365,10 @@ struct SettingsWindowView: View {
         case .organization(let section):
             if canShowOrganization {
                 AdministrationView(store: store, section: section,
-                    onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 },
-                    onOpenProject: openProject)
+                    onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 })
                     .id(section)
             }
-        case .project(let id, _):
-            if canShowOrganization {
-                AdministrationView(store: store, section: .projects, projectId: id,
-                    onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 },
-                    onOpenProject: openProject,
-                    onDeletedProject: { navigation.didDeleteProject(id) })
-                    .id(id)
-            }
         }
-    }
-
-    private func openProject(_ project: AdminProjectRecord) {
-        navigation.navigate(to: .project(id: project.id, name: project.name))
     }
 
     private var organizationLanding: some View {
@@ -425,7 +376,6 @@ struct SettingsWindowView: View {
             OrganizationNameSection(store: store, onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 })
             Section {
                 organizationLink(.members, color: .blue)
-                organizationLink(.projects, color: .indigo)
                 organizationLink(.access, color: .green)
             }
             Section {

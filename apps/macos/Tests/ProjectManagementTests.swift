@@ -79,13 +79,30 @@ final class ProjectManagementTests: XCTestCase {
 
         XCTAssertTrue(filter.contains("Button(\"New Project…\", systemImage: \"plus\")"))
         XCTAssertEqual(
-            workspace.components(separatedBy: "onCreate: store.canManageProjects").count - 1,
+            workspace.components(separatedBy: "onCreate: store.canCreateProject").count - 1,
             2
         )
         XCTAssertEqual(
             workspace.components(separatedBy: "ProjectCreationSheet(store: store)").count - 1,
             1
         )
+    }
+
+    func testProjectManagementUsesProjectRoleWithoutGrantingOrganizationAuthority() {
+        XCTAssertTrue(WorkspaceStore.projectManagementAllowed(capabilities: [], role: .admin))
+        XCTAssertFalse(WorkspaceStore.projectManagementAllowed(capabilities: ["project:create"], role: .member))
+        XCTAssertFalse(WorkspaceStore.projectManagementAllowed(capabilities: ["project:create"], role: nil))
+        XCTAssertTrue(WorkspaceStore.projectManagementAllowed(capabilities: ["admin:write"], role: nil))
+        XCTAssertFalse(WorkspaceStore.administrationMutationAllowed(
+            capabilities: ["project:create"], hasSnapshot: true, isStale: false
+        ))
+    }
+
+    func testProjectReferenceDecodesMembershipRole() throws {
+        let reference = try JSONCoding.decoder().decode(ProjectReference.self, from: Data(
+            #"{"project_id":"project-1","name":"My project","role":"admin"}"#.utf8
+        ))
+        XCTAssertEqual(reference.role, .admin)
     }
 
     func testProjectCreationKeepsLocalSetupOutOfTheServerRequest() throws {
