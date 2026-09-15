@@ -350,8 +350,7 @@ struct NativeServerAccessView: View {
             .padding(36)
             .frame(maxWidth: .infinity)
         }
-        .background(.ultraThinMaterial)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+        .background(Color(nsColor: .textBackgroundColor))
     }
 
     private var serverField: some View {

@@ -3,35 +3,6 @@ import XCTest
 @testable import Clumsies
 
 final class ProjectManagementTests: XCTestCase {
-    func testRepositoryIntegrationsExcludeGlobalCodexPlugin() {
-        XCTAssertEqual(
-            ProjectAgentAdapterKind.repositoryIntegrationCases,
-            [.claudeCode, .opencode, .dsh, .antigravity]
-        )
-    }
-
-    func testAgentConfigurationLivesInGlobalSettings() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let settings = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Features/SettingsView.swift"),
-            encoding: .utf8
-        )
-        let projectManagement = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Features/ProjectManagementView.swift"),
-            encoding: .utf8
-        )
-
-        XCTAssertTrue(settings.contains("Section(\"Repository Integrations\")"))
-        XCTAssertTrue(settings.contains("ProjectAgentAdapterKind.repositoryIntegrationCases"))
-        XCTAssertGreaterThanOrEqual(
-            settings.components(separatedBy: "try Task.checkCancellation()").count - 1,
-            2
-        )
-        XCTAssertFalse(projectManagement.contains("Section(\"Agent\")"))
-    }
-
     func testProjectMetadataRequiresANonEmptyName() {
         XCTAssertFalse(ProjectMetadataValidation.isValid(name: "   ", description: "Description"))
         XCTAssertTrue(ProjectMetadataValidation.isValid(name: " Project ", description: "Description"))

@@ -155,6 +155,13 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
         migrate_local_schema_39_to_40(pool).await?;
         existing_schema_version = 40;
     }
+    if existing_schema_version == 40 {
+        agent_adapter::global::migrate(pool).await?;
+        sqlx::query("UPDATE daemon_meta SET value = '41' WHERE key = 'schema_version'")
+            .execute(pool)
+            .await?;
+        existing_schema_version = 41;
+    }
     if existing_schema_version != 0 && existing_schema_version != CURRENT_LOCAL_SCHEMA_VERSION {
         return Err(DaemonError::InvalidConfig(format!(
             "local database schema version {existing_schema_version} is incompatible with version {CURRENT_LOCAL_SCHEMA_VERSION}; recreate the daemon database"
@@ -2222,7 +2229,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(schema_version, "40");
+        assert_eq!(schema_version, CURRENT_LOCAL_SCHEMA_VERSION.to_string());
         for table in [
             "retrieval_run_candidates",
             "retrieval_run_resources",

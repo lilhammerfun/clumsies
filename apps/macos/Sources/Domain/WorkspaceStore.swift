@@ -2239,44 +2239,13 @@ final class WorkspaceStore: ObservableObject {
         )
     }
 
-    func repairCodexPlugin() async throws -> DaemonCodexPluginStatus {
-        let hostBinaryPath = try WorkspaceLoader.installedCodexHostBinaryPath()
-        return try await daemon.reconcileCodexPlugin(
-            .init(
-                runtimeBinaryPath: try bundledAgentRuntimePath(),
-                hostBinaryPath: hostBinaryPath
-            )
-        )
-    }
-
-    func setProjectAgentAdapter(
-        _ adapter: ProjectAgentAdapterKind,
-        enabled: Bool,
-        projectId: String,
-        workspaceRoot: String,
-        current: DaemonProjectAgentAdapter?
-    ) async throws {
-        guard adapter != .codex else { return }
-        if enabled {
-            _ = try await daemon.installProjectAgentAdapter(
-                .init(
-                    projectId: projectId,
-                    workspaceRoot: workspaceRoot,
-                    adapter: adapter,
-                    runtimeBinaryPath: try bundledAgentRuntimePath(),
-                    hostBinaryPath: nil,
-                    expectedRevision: current?.revision
-                )
-            )
-        } else if let current {
-            _ = try await daemon.removeProjectAgentAdapter(
-                .init(
-                    workspaceRoot: workspaceRoot,
-                    adapter: adapter,
-                    expectedRevision: current.revision
-                )
-            )
-        }
+    func setAgentAdapter(_ adapter: ProjectAgentAdapterKind, enabled: Bool) async throws -> [DaemonAgentAdapterSetting] {
+        try await daemon.setAgentAdapter(.init(
+            adapter: adapter,
+            enabled: enabled,
+            runtimeBinaryPath: try bundledAgentRuntimePath(),
+            hostBinaryPath: adapter == .codex ? try? WorkspaceLoader.installedCodexHostBinaryPath() : nil
+        ))
     }
 
     func showOrgMemory() async {
@@ -5887,14 +5856,6 @@ final class WorkspaceStore: ObservableObject {
         return warnings.isEmpty ? nil : warnings.joined(separator: "\n")
     }
 
-    nonisolated static func codexPluginInspectionWarning(for error: any Error) -> String {
-        "Clumsies could not inspect the global Codex plugin. Open Settings > Agent to try again. \(error.localizedDescription)"
-    }
-
-    nonisolated static func codexPluginRepairWarning(for error: any Error) -> String {
-        "Clumsies could not repair the global Codex plugin. Open Settings > Agent to try again. \(error.localizedDescription)"
-    }
-
     private func refreshDraft(_ draftId: String) async throws {
         let detail = try await daemon.draft(draftId)
         let mapped = WorkspaceLoader.mapDraft(detail, resources: resources)
@@ -6679,35 +6640,21 @@ struct WorkspaceLoader: Sendable {
         -> LocalAgentAdapterReconciliationResult {
         let runtimePath = try Self.bundledAgentRuntimePath()
         let codexHostPath = await MainActor.run { try? Self.installedCodexHostBinaryPath() }
-        var codexWarning: String?
-        if let codexHostPath {
-            let request = DaemonCodexPluginRequest(
-                runtimeBinaryPath: runtimePath,
-                hostBinaryPath: codexHostPath
-            )
+        var warnings: [String] = []
+        let settings = try await daemon.agentAdapterSettings()
+        for setting in settings where setting.configured {
             do {
-                let status = try await daemon.inspectCodexPlugin(request)
-                if !status.ready {
-                    do {
-                        _ = try await daemon.reconcileCodexPlugin(request)
-                    } catch {
-                        codexWarning = WorkspaceStore.codexPluginRepairWarning(for: error)
-                    }
-                }
+                _ = try await daemon.setAgentAdapter(.init(
+                    adapter: setting.adapter,
+                    enabled: setting.enabled,
+                    runtimeBinaryPath: runtimePath,
+                    hostBinaryPath: setting.adapter == .codex ? codexHostPath : nil
+                ))
             } catch {
-                codexWarning = WorkspaceStore.codexPluginInspectionWarning(for: error)
+                warnings.append("\(setting.adapter.title): \(error.localizedDescription)")
             }
         }
-        let installed = try await daemon.allProjectAgentAdapters()
-        let requests = Self.agentAdapterReconciliationPlan(
-            installed: installed,
-            runtimePath: runtimePath,
-            workspaceExists: { FileManager.default.fileExists(atPath: $0) }
-        )
-        for request in requests {
-            _ = try await daemon.installProjectAgentAdapter(request)
-        }
-        return .init(conflicts: [], inspectionWarning: codexWarning)
+        return .init(conflicts: [], inspectionWarning: warnings.isEmpty ? nil : warnings.joined(separator: "\n"))
     }
 
     func inspectLegacyAgentAdapters() async -> LocalAgentAdapterReconciliationResult {
@@ -6769,31 +6716,6 @@ struct WorkspaceLoader: Sendable {
             localAgentAdapters,
             currentUser.hasStaleServerResponse
         )
-    }
-
-    static func agentAdapterReconciliationPlan(
-        installed: [DaemonProjectAgentAdapter],
-        runtimePath: String,
-        workspaceExists: (String) -> Bool
-    ) -> [DaemonProjectAgentAdapterInstallRequest] {
-        installed
-            .filter { $0.adapter != .codex && workspaceExists($0.workspaceRoot) }
-            .sorted {
-                if $0.workspaceRoot != $1.workspaceRoot {
-                    return $0.workspaceRoot < $1.workspaceRoot
-                }
-                return $0.adapter.rawValue < $1.adapter.rawValue
-            }
-            .map {
-                .init(
-                    projectId: $0.projectId,
-                    workspaceRoot: $0.workspaceRoot,
-                    adapter: $0.adapter,
-                    runtimeBinaryPath: runtimePath,
-                    hostBinaryPath: nil,
-                    expectedRevision: $0.revision
-                )
-            }
     }
 
     static func bundledAgentRuntimePath(

@@ -65,7 +65,7 @@ enum SettingsDestination: Hashable, Identifiable {
     var subtitle: String {
         switch self {
         case .pane(.general): "Version and software updates"
-        case .pane(.agent): "Codex and repository integrations"
+        case .pane(.agent): "Agent integrations for this Mac"
         case .pane(.organization): "Organization name, members, and sign-in"
         case .pane(.advanced): "Troubleshooting logs"
         case .organization(.organization): "Organization name"

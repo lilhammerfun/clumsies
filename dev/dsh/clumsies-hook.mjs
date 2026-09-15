@@ -10,12 +10,9 @@
 //       - id: clumsy-hook
 //         name: /Users/weiwang/.dsh/profiles/web/clumsies-hook.mjs
 //
-// Workspace marker: when a workspace carries the dsh Coding Agent adapter
-// (workspace/.dsh/clumsies.json, installed from the Clumsies app's project
-// settings), each session resolves the marker by walking up from the session
-// cwd and forwards the marker's workspace root + pinned clumsiesd runtime.
-// Sessions without a marker fall back to the session cwd and the
-// environment/default runtime, matching manual setups.
+// The App installs one user-level ~/.dsh/clumsies.json. Each session keeps
+// its own cwd; the daemon resolves the Project binding from that directory.
+// Disabling the adapter removes the config and stops lifecycle forwarding.
 //
 // Root sessions only: subagent/child sessions (origin 'subagent' or
 // delegationDepth > 0) are skipped so one user prompt maps to one root run.
@@ -30,40 +27,21 @@
 
 import { spawn } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, normalize } from 'node:path'
+import { isAbsolute, join, normalize } from 'node:path'
+import { homedir } from 'node:os'
 
-const DEFAULT_BIN = '/Users/weiwang/Applications/Clumsies.app/Contents/Resources/clumsiesd'
 const FALLBACK_CWD = process.env.CLUMSIES_HOOK_CWD || process.cwd()
 const LOG = process.env.CLUMSIES_HOOK_LOG || ''
-const MARKER_REL = join('.dsh', 'clumsies.json')
-const MAX_WALK = 32
-
-/**
- * Resolve the dsh-managed workspace and its clumsiesd runtime for a session
- * cwd by walking up to the nearest `.dsh/clumsies.json` marker installed by
- * the Clumsies dsh Coding Agent adapter. Returns null when no marker exists
- * (manual setups keep the environment/default behavior).
- */
-function resolveWorkspace(start) {
-  let dir = normalize(start)
-  if (!isAbsolute(dir)) dir = join(FALLBACK_CWD, dir)
-  for (let depth = 0; depth < MAX_WALK; depth++) {
-    try {
-      const raw = readFileSync(join(dir, MARKER_REL), 'utf8')
-      const config = JSON.parse(raw)
-      if (typeof config.runtime !== 'string' || !config.runtime) {
-        log('marker at ' + dir + ' has no runtime; ignoring')
-        return null
-      }
-      log('marker at ' + dir + ' runtime=' + config.runtime)
-      return { workspace: dir, runtime: config.runtime }
-    } catch {
-      const parent = dirname(dir)
-      if (parent === dir) break
-      dir = parent
-    }
+export function resolveWorkspace(start, home = homedir()) {
+  try {
+    const config = JSON.parse(readFileSync(join(home, '.dsh/clumsies.json'), 'utf8'))
+    if (typeof config.runtime !== 'string' || !isAbsolute(config.runtime)
+        || !config.runtime.endsWith('/Contents/Resources/clumsiesd')) return null
+    const workspace = normalize(isAbsolute(start) ? start : join(FALLBACK_CWD, start))
+    return { workspace, runtime: config.runtime }
+  } catch {
+    return null
   }
-  return null
 }
 
 function log(line) {
@@ -73,7 +51,7 @@ function log(line) {
 
 function forward(payload, runtime) {
   return new Promise((resolve) => {
-    const bin = runtime || process.env.CLUMSIES_BIN || DEFAULT_BIN
+    const bin = runtime
     const input = JSON.stringify(payload)
     log('forward ' + input.slice(0, 140))
     let child
@@ -119,7 +97,7 @@ function forward(payload, runtime) {
 export default {
   name: 'clumsies-hook',
   apply(ctx) {
-    log('plugin loaded, bin=' + (process.env.CLUMSIES_BIN || DEFAULT_BIN))
+    log('plugin loaded')
 
     // Preserve lifecycle order within one dsh session. Each forward remains
     // fail-open, while unrelated sessions can still make progress in parallel.
@@ -143,13 +121,9 @@ export default {
         return
       }
       const sessionId = header.id ?? 'unknown'
-      // The dsh adapter marker (workspace/.dsh/clumsies.json) pins the
-      // workspace the daemon should bind the run to and the clumsiesd runtime
-      // that forwards events. Without a marker the session cwd and the
-      // environment/default runtime are used, matching manual setups.
       const resolved = resolveWorkspace(header.cwd ?? FALLBACK_CWD)
-      const cwd = resolved ? resolved.workspace : (header.cwd ?? FALLBACK_CWD)
-      const runtime = resolved ? resolved.runtime : undefined
+      if (!resolved) return
+      const { workspace: cwd, runtime } = resolved
       switch (event?.type) {
         case 'turn/start': {
           const turn = event.data?.turn ?? '?'
@@ -188,8 +162,8 @@ export default {
       }
       const sessionId = header.id ?? 'unknown'
       const resolved = resolveWorkspace(header.cwd ?? FALLBACK_CWD)
-      const cwd = resolved ? resolved.workspace : (header.cwd ?? FALLBACK_CWD)
-      const runtime = resolved ? resolved.runtime : undefined
+      if (!resolved) return
+      const { workspace: cwd, runtime } = resolved
       enqueue(sessionId, {
         hook_event_name: 'SessionEnd',
         session_id: sessionId,

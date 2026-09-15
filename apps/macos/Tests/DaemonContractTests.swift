@@ -173,55 +173,16 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertTrue(response.conflicts.isEmpty)
     }
 
-    func testWorkspaceStartupPlansOnlyReachableProjectScopedAdapterUpgrades() {
-        let adapters = [
-            DaemonProjectAgentAdapter(
-                serverUrl: "https://app.clumsies.ai",
-                projectId: "project-2",
-                workspaceRoot: "/repos/missing",
-                adapter: .opencode,
-                delivery: .legacyFiles,
-                revision: 4,
-                managedFiles: [],
-                createdAt: "2026-08-01T00:00:00Z",
-                updatedAt: "2026-08-01T00:00:00Z"
-            ),
-            DaemonProjectAgentAdapter(
-                serverUrl: "https://app.clumsies.ai",
-                projectId: "project-1",
-                workspaceRoot: "/repos/active",
-                adapter: .codex,
-                delivery: .hostPlugin,
-                revision: 7,
-                managedFiles: [],
-                createdAt: "2026-08-01T00:00:00Z",
-                updatedAt: "2026-08-01T00:00:00Z"
-            ),
-            DaemonProjectAgentAdapter(
-                serverUrl: "https://app.clumsies.ai",
-                projectId: "project-1",
-                workspaceRoot: "/repos/active",
-                adapter: .claudeCode,
-                delivery: .legacyFiles,
-                revision: 3,
-                managedFiles: [],
-                createdAt: "2026-08-01T00:00:00Z",
-                updatedAt: "2026-08-01T00:00:00Z"
-            ),
-        ]
-
-        let planned = WorkspaceLoader.agentAdapterReconciliationPlan(
-            installed: adapters,
-            runtimePath: "/Applications/Clumsies.app/Contents/Resources/clumsiesd",
-            workspaceExists: { $0 == "/repos/active" }
+    func testGlobalAdapterRequestContainsNoProjectOrRepository() throws {
+        let request = DaemonSetAgentAdapterRequest(
+            adapter: .claudeCode, enabled: true,
+            runtimeBinaryPath: "/Applications/Clumsies.app/Contents/Resources/clumsiesd", hostBinaryPath: nil
         )
-
-        XCTAssertEqual(planned.map(\.adapter), [.claudeCode])
-        XCTAssertEqual(planned.map(\.expectedRevision), [3])
-        XCTAssertTrue(planned.allSatisfy {
-            $0.runtimeBinaryPath == "/Applications/Clumsies.app/Contents/Resources/clumsiesd"
-        })
-        XCTAssertNil(planned.first?.hostBinaryPath)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONCoding.encoder().encode(request)) as? [String: Any])
+        XCTAssertEqual(payload["adapter"] as? String, "claude-code")
+        XCTAssertNil(payload["project_id"])
+        XCTAssertNil(payload["workspace_root"])
+        XCTAssertNil(payload["server_url"])
     }
 
     func testWorkspaceCoreReconcilesManagedAdaptersWithoutLegacyInspection() async {
@@ -791,18 +752,6 @@ final class DaemonContractTests: XCTestCase {
             ),
             "Next adapter warning"
         )
-    }
-
-    func testCodexPluginWarningsDistinguishInspectionFromRepair() {
-        let error = DaemonXPCError.requestTimedOut(timeout: 40)
-        let inspection = WorkspaceStore.codexPluginInspectionWarning(for: error)
-        let repair = WorkspaceStore.codexPluginRepairWarning(for: error)
-
-        XCTAssertTrue(inspection.contains("could not inspect"))
-        XCTAssertFalse(inspection.contains("could not repair"))
-        XCTAssertTrue(repair.contains("could not repair"))
-        XCTAssertTrue(inspection.contains("within 40.0s"))
-        XCTAssertTrue(repair.contains("within 40.0s"))
     }
 
     func testLegacyInspectionDoesNotClearManagedPluginWarning() {

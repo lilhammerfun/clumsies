@@ -118,8 +118,9 @@ Codex plugin proxies identify both `host=codex` and `delivery=host-plugin`.
 The Plugin is installed and enabled globally, but it can operate only inside a
 repository with a canonical Project binding. The resident daemon resolves that
 binding at startup and before every `tools/call`; removing or changing the
-binding makes an already running plugin proxy fail its next call closed. There
-is no per-Project Codex enable/disable row. Plugin installation does not grant
+binding makes an already running plugin proxy fail its next call closed. Every harness has one user-level choice in Settings → Agents, independent of
+Project bindings. Unbound directories are rejected by every MCP entry point;
+no proxy falls back to the Project selected in the App. Plugin installation does not grant
 Hook trust: the user must review the current
 Clumsies Hook in `/hooks` before AgentRun observation becomes available.
 Installation also does not hot-load the plugin into an

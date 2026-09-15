@@ -4,7 +4,7 @@
 
 Adapter 是 daemon 管理的宿主集成层，让 Codex、Claude Code、opencode、dsh 与
 Antigravity 使用同一套 Clumsies Agent runtime。Codex 使用全局 Clumsies Plugin；其余
-宿主保留仓库级 direct-file 集成。两种交付方式都只注册 MCP 与非阻塞生命周期桥，不
+宿主使用用户级配置文件集成。两种交付方式都只注册 MCP 与非阻塞生命周期桥，不
 创建第二套 Memory 或运行时实现。
 
 ## 运行边界
@@ -38,14 +38,19 @@ build identity。替换 App 会更新之后启动的 proxy；若 resident 仍是
 | Host | MCP 注册 | 生命周期接入 |
 | --- | --- | --- |
 | Codex | `clumsies@clumsies-local` 全局 Plugin 注册 pinned MCP | Plugin Hook；仓库内不写文件 |
-| Claude Code | `.mcp.json` 的 `mcpServers.clumsies` | `.claude/settings.json` 与受管 shell Hook |
-| opencode | `opencode.json` 的 `mcp.clumsies` | `.opencode/plugins/clumsies.ts` |
-| dsh | profile 中单独注册 MCP | `.dsh/clumsies.json` 为已安装 client bridge 提供路由 |
-| Antigravity | `.mcp.json` 的 `mcpServers.clumsies` | `.agents/hooks.json` 与受管 shell Hook |
+| Claude Code | `~/.claude.json` 的 `mcpServers.clumsies` | `~/.claude/settings.json` 与受管 shell Hook |
+| opencode | `~/.config/opencode/opencode.json` 的 `mcp.clumsies` | `~/.config/opencode/plugins/clumsies.ts` |
+| dsh | profile 中单独注册 MCP | `~/.dsh/clumsies.json`；桥接与 MCP 仍需在 profile 注册 |
+| Antigravity | `~/.gemini/config/mcp_config.json` 的 `mcpServers.clumsies` | `~/.gemini/config/hooks.json` 与受管 shell Hook |
 
-Codex 集成由 **Settings → Agent** 管理为用户级 Plugin，不创建 Project Adapter 行或仓库
-文件。其他宿主以 `(Server authority, workspace root, host)` 保存带 revision 的 Adapter
-记录，并只修改明确归属的配置段和文件。
+首次打开 App 时选择要安装的适配器，默认勾选 Codex。之后在 **Settings → Agents**
+修改同一组本机配置。适配器按 macOS 用户全局安装，与账号、Server、Project 无关；
+项目只绑定本地目录，用于定位 Memory。移除项目绑定不会卸载全局适配器。
+
+`host_agent_adapters` 按 Harness 保存启用状态和受管 manifest；`host_adapter_fs_ops`
+复用原有文件事务机制。用户关闭的适配器不会在下一次启动时自动装回来。启用或关闭时，
+安装器精确清理各 Server 下 daemon 管理的旧仓库配置；用户改过的内容会报冲突，暂时
+不可达的目录保留记录，之后再重试。
 
 所有宿主直接消费 `memory` MCP 工具。Codex Plugin 只附带一个很薄的 bootstrap Skill，
 用于说明何时 `memory.activate`、如何加载 Project skill。`skills/**` 中的项目技能仍是普通 Memory，由 bootstrap 在相关时通过
@@ -68,9 +73,9 @@ mcp serve --host codex --delivery host-plugin
 binding，并在每次 `tools/call` 前重新解析；缺少绑定、绑定改变或 delivery 不匹配都会
 关闭式失败。全局 Plugin 不要求仓库级 Codex Adapter 行，也不回退 Desktop 当前选中项。
 
-direct-file 宿主继续使用各自 Adapter 记录和普通 `mcp serve` 命令。普通入口保留运行时
-兼容行为：目录没有绑定时可使用 daemon 当前选中的 Project；该行为不适用于
-host-plugin，调用方也不能在请求参数中指定任意 `project_id`。
+所有 MCP proxy 都要求当前目录已有 Project 绑定，并在每次工具调用前重新校验。
+未绑定目录不会回退到 App 当前选中的项目。生命周期桥检查本机 Harness 开关，不要求
+仓库级 Adapter 记录。
 
 ## 生命周期桥
 
@@ -114,10 +119,11 @@ manifest 独占管理。manifest 记录每个文件的安装 hash；更新会删
 
 Codex `host_plugin` 使用独立流程：
 
-1. App 只读检查 Codex host、App-owned local marketplace、安装/启用状态与期望版本；
-2. 缺失或过期时，通过签名 Codex CLI 物化 marketplace 并安装/更新 Plugin；
-3. **Repair** 执行同一 reconciliation；
-4. 不写 `project_agent_adapters` 或仓库文件。
+1. 用户保存适配器选择后，App 只读检查 Codex host、App-owned local marketplace、安装/启用状态与期望版本；
+2. 已选中的 Plugin 缺失或过期时，通过签名 Codex CLI 物化 marketplace 并安装/更新 Plugin；
+3. **Repair Selected Integrations** 执行同一 reconciliation；
+4. 关闭时通过签名 Codex CLI 卸载 Plugin，并保存禁用状态；
+5. 不写 `project_agent_adapters` 或仓库文件。
 
 “已安装并启用”只证明 Plugin 交付，不证明 Hook 已受信任或当前 task 已加载新快照。因此
 Settings 仍需提示 `/hooks` 信任、Codex 重启和新 task。
@@ -143,6 +149,7 @@ LaunchAgent 和宿主配置。
 
 | 关注点 | 当前路径 |
 | --- | --- |
+| 全局开关、安装与仓库配置迁移 | `crates/daemon/src/agent_adapter/global.rs` |
 | direct-file 安装、合并与 legacy 发现 | `crates/daemon/src/agent_adapter.rs` |
 | Codex Plugin 物化和 CLI reconciliation | `crates/daemon/src/agent_adapter/codex_plugin.rs` |
 | Codex Plugin 源包 | `packages/clumsies/` |

@@ -749,6 +749,19 @@ impl DaemonState {
         agent_adapter::inspect_legacy(self, request).await
     }
 
+    pub async fn agent_adapter_settings(
+        &self,
+    ) -> Result<crate::DaemonAgentAdapterSettings, DaemonError> {
+        agent_adapter::global::list(self).await
+    }
+
+    pub async fn set_agent_adapter(
+        &self,
+        request: crate::DaemonSetAgentAdapterRequest,
+    ) -> Result<crate::DaemonAgentAdapterSettings, DaemonError> {
+        agent_adapter::global::set(self, request).await
+    }
+
     pub async fn inspect_codex_plugin(
         &self,
         request: DaemonCodexPluginRequest,
@@ -1891,6 +1904,12 @@ impl DaemonIpcService {
             "inspect_legacy_agent_adapters" => {
                 dispatch_async!(self, request.payload, inspect_legacy_agent_adapters)
             }
+            "agent_adapter_settings" => {
+                dispatch_result_async!(self, agent_adapter_settings)
+            }
+            "set_agent_adapter" => {
+                dispatch_async!(self, request.payload, set_agent_adapter)
+            }
             "inspect_codex_plugin" => {
                 dispatch_async!(self, request.payload, inspect_codex_plugin)
             }
@@ -2270,6 +2289,72 @@ mod tests {
         let (root, state) = test_state(store).await;
         assert!(state.project_config().access_token.is_none());
         (root, state)
+    }
+
+    #[tokio::test]
+    async fn global_adapter_choices_apply_to_every_bound_project_and_keep_binding_required() {
+        let (root, state) =
+            unauthenticated_test_state(Arc::new(DeferredCredentialStore::new())).await;
+        let choices = state.agent_adapter_settings().await.unwrap();
+        assert_eq!(
+            choices
+                .items
+                .iter()
+                .filter(|item| item.enabled)
+                .map(|item| item.adapter)
+                .collect::<Vec<_>>(),
+            vec![ProjectAgentAdapterKind::Codex]
+        );
+        assert!(choices.items.iter().all(|item| !item.configured));
+        sqlx::query("INSERT INTO host_agent_adapters VALUES ('claude-code', 1, 1, NULL)")
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        let required = ProjectAgentAdapterRuntimeRequirement {
+            adapter: ProjectAgentAdapterKind::ClaudeCode,
+            delivery: ProjectAgentAdapterDelivery::LegacyFiles,
+        };
+        for project in ["one", "two"] {
+            let workspace = root.path().join(project);
+            std::fs::create_dir_all(&workspace).unwrap();
+            let workspace = std::fs::canonicalize(workspace)
+                .unwrap()
+                .display()
+                .to_string();
+            sqlx::query("INSERT INTO project_bindings (server_url, workspace_root, project_id, revision) VALUES ($1, $2, $3, 1)")
+                .bind(canonical_server_url(&state.project_config().server_url).unwrap()).bind(&workspace).bind(project)
+                .execute(&state.inner.pool).await.unwrap();
+            let binding = state
+                .resolve_project_binding(DaemonProjectBindingResolveRequest {
+                    workspace_path: workspace,
+                    required_adapter: Some(required),
+                })
+                .await
+                .unwrap();
+            assert_eq!(binding.project_id, project);
+        }
+        assert!(
+            state
+                .resolve_project_binding(DaemonProjectBindingResolveRequest {
+                    workspace_path: root.path().display().to_string(),
+                    required_adapter: Some(required),
+                })
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE host_agent_adapters SET enabled = 0 WHERE adapter = 'claude-code'")
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        assert!(
+            state
+                .resolve_project_binding(DaemonProjectBindingResolveRequest {
+                    workspace_path: root.path().join("one").display().to_string(),
+                    required_adapter: Some(required),
+                })
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

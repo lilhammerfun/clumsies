@@ -94,6 +94,20 @@ pub(super) async fn ensure_installed(
     ensure_plugin(&codex, &plugin.version).await
 }
 
+pub(super) async fn remove(host_binary_path: &str) -> Result<(), DaemonError> {
+    let codex = canonical_codex_cli(host_binary_path)?;
+    verify_codex_cli(&codex).await?;
+    if plugin_list(&codex)
+        .await?
+        .installed
+        .iter()
+        .any(|plugin| plugin.plugin_id == PLUGIN_ID && plugin.installed)
+    {
+        run_cli_json(&codex, &["plugin", "remove", PLUGIN_ID, "--json"]).await?;
+    }
+    Ok(())
+}
+
 pub(super) async fn inspect(
     daemon_root: &Path,
     runtime_binary: &Path,
