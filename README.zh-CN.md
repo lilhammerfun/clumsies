@@ -1,7 +1,7 @@
 # Clumsies
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lilhammerfun/clumsies/main/docs/public/logo.svg" width="72" height="72" alt="Clumsies Logo" />
+  <img src="docs/public/logo.png" width="72" height="72" alt="Clumsies Logo" />
 </p>
 
 <p align="center">
