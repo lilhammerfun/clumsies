@@ -687,6 +687,10 @@ private struct FileTreeView: View {
     @ViewBuilder
     private func fileTreeMenu(for nodeIds: Set<String>) -> some View {
         let targetItems = FileTreeNode.items(in: roots, selectedNodeIds: nodeIds)
+        let exportItems = FileTreeNode.items(
+            in: FileTreeNode.build(store.visibleMemoryItems),
+            selectedNodeIds: nodeIds
+        )
         let selectedDirectory = FileTreeNode.selectedDirectory(
             in: roots,
             selectedNodeIds: nodeIds
@@ -792,6 +796,16 @@ private struct FileTreeView: View {
                         || trashSelectionContainsSynchronizingDocument
                 )
             }
+        }
+
+        if !exportItems.isEmpty {
+            Button("Export as ZIP…") {
+                store.exportMemory(
+                    exportItems,
+                    name: selectedDirectory?.name ?? singleItem?.document.title
+                )
+            }
+            .disabled(directoryOperationProgress != nil || !store.canExportMemory(exportItems))
         }
 
         // ---- domain operations (Memory scope relationships and drafts) ----

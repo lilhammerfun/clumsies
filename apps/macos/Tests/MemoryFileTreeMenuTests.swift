@@ -97,6 +97,46 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         )
     }
 
+    func testMemoryExportLoadsBodiesAndPreservesDraftAndPendingEdits() async throws {
+        var renamedDraft = localDraft("draft", scope: .org, targetId: "renamed", path: "new/name.md")
+        renamedDraft.document.body = "Draft body\n"
+        let items = [
+            resourceItem("unloaded", scope: .org, inherited: true),
+            resourceItem("renamed", scope: .org, inherited: true, draft: renamedDraft),
+            draftItem("created", scope: .org, path: "new/empty.md"),
+            draftItem("deleted", scope: .org, isDeletion: true),
+            resourceItem("pending", scope: .org, inherited: true),
+        ]
+        let pending = EditableMemoryDocument(title: "Pending", path: "pending.md", body: "Latest editor text")
+        let documents = try await WorkspaceStore.memoryExportDocuments(
+            items, pendingDocuments: ["pending": pending]
+        ) { resource in
+            XCTAssertEqual(resource.id, "unloaded")
+            var loaded = resource
+            loaded.contentLoaded = true
+            loaded.document.body = "Loaded body\n"
+            return loaded
+        }
+        XCTAssertEqual(documents.map(\.path), ["unloaded.md", "new/name.md", "new/empty.md", "pending.md"])
+        XCTAssertEqual(documents.map(\.body), ["Loaded body\n", "Draft body\n", "", pending.body])
+    }
+
+    func testMemoryExportFailsOnUnavailableBodiesInsteadOfWritingPlaceholders() async {
+        var draft = localDraft("orphan", scope: .org, targetId: "missing")
+        draft.documentBaselineAvailable = false
+        let orphan = MemoryListItem(id: "missing", resource: nil, draft: draft, inherited: false)
+        for items in [[orphan], [resourceItem("unloaded", scope: .org, inherited: true)]] {
+            do {
+                _ = try await WorkspaceStore.memoryExportDocuments(items) { _ in
+                    throw CocoaError(.fileReadNoPermission)
+                }
+                XCTFail("Export must fail when a complete body cannot be read")
+            } catch {
+                XCTAssertFalse(error.localizedDescription.isEmpty)
+            }
+        }
+    }
+
     // MARK: - Org view
 
     func testOrgViewAddableIncludesPublishedOrgItems() {

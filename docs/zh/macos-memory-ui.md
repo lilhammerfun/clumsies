@@ -40,6 +40,24 @@ Delete Folder 属于文件树层；Add/Remove Project、Request Review、Discard
 Shared Changes 属于领域层。删除共享资源始终创建 Organization deletion Draft，不在客户
 端直接删除权威。
 
+### ZIP 导出
+
+顶部导出按钮导出当前 Project 或 Organization 视图的全部记忆，不受搜索过滤影响。
+文件树右键菜单支持单文件、多选和目录递归导出。目录导出包含被搜索隐藏的文件；文件与
+目录混选时去重后放入同一个 ZIP。Memory Actions 菜单也可导出当前文件。
+系统保存对话框选择 ZIP 的保存位置，完成后在 Finder 中显示。
+
+ZIP 保留原有相对路径、文件扩展名和 UTF-8 正文，包含当前 Draft 的创建、改名、编辑以及
+尚在等待自动保存的编辑文本；删除 Draft 不生成文件。导出捕获点击时的工作区内容，
+不会发布草稿或自动更新到较新的共享版本。
+
+尚未加载的正文复用现有版本与哈希校验；正文不可用、路径不安全或文件路径冲突时，整次
+导出失败，避免悄悄漏文件。草稿清单未加载完成、文档正在同步时禁用导出。压缩在后台
+调用 macOS 自带的 `ditto`，完整 ZIP 生成后才原子写入目标文件。
+
+这里导出的是文件快照。管理员 `/api/v1/admin/memory-export` 仍提供包含 Draft 操作、
+Project 选择和 Bundle 的迁移用 JSON。
+
 ## 3. Project 选择
 
 Organization 视图可把单个、多个或一个目录下的资源加入任意 Project；Project 视图可把
