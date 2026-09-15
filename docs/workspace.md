@@ -21,9 +21,9 @@ Membership authorization and content selection are separate concerns. Selecting 
 
 Use **New Project…** in the Memory project selector. Organization members can create projects; the creator becomes a project administrator and can edit its details, add or remove existing organization members, select Memory, and delete the project. These permissions do not grant organization administration or publication authority.
 
-Open **Project Settings** beside the selector to configure the current project. **Repositories on This Mac** and cache settings apply locally; other members bind their own directories. Organization administrators can open **All Organization Projects…** from the selector to configure projects they have not joined. Reading their Memory still requires project membership.
+Open **Project Settings** beside the selector to configure the current project. **Repositories on This Mac** and cache settings apply locally; other members bind their own directories. The selector ends with **New Project…** for both members and organization administrators.
 
-App Settings contains global app, Agent, and organization controls. Project configuration stays in Memory.
+Organization administrators can open **Settings → Organization → Projects** to view all organization projects and manage their details and members, including projects they have not joined. Reading their Memory still requires project membership.
 
 ## From selection to readable content
 
@@ -51,12 +51,7 @@ Normalized Server URL + canonical local directory → Server project_id
 
 The daemon stores bindings in central SQLite `project_bindings`. From a subdirectory, it chooses the longest bound ancestor. An unbound Git worktree can also resolve through the main checkout's repository root. Moving or rebinding a directory changes local resolution, not Server Project identity.
 
-Two Agent entry points have different rules:
-
-| Entry point | Project resolution |
-|---|---|
-| Managed host-plugin | Must resolve a working-directory binding; validates at startup and every `tools/call`, failing if the binding disappears or changes |
-| Manually started plain `mcp serve` | Resolves the directory first; without a binding, can fall back to the Desktop-selected Project stored by daemon |
+Both managed host-plugins and manually started `mcp serve` require a working-directory binding. They validate it at startup and every `tools/call`, failing if the binding disappears or changes. Unbound directories cannot fall back to the Desktop-selected Project.
 
 Two bound Agent processes can therefore serve different repositories concurrently. Switching the Desktop selection does not redirect managed processes. A tool request cannot choose an arbitrary `project_id` to bypass binding.
 

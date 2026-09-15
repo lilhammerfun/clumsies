@@ -21,9 +21,9 @@ Project 把一个项目的成员、使用的知识和待发布修改组织在一
 
 通过 Memory 顶部项目选择器的 **New Project…** 创建项目。普通组织成员也能创建；创建者成为项目管理员，可以修改资料、添加或移除已有组织成员、选择 Memory、删除项目。这些权限不会授予组织管理或组织内容发布权限。
 
-点击选择器旁的 **Project Settings** 配置当前项目。**Repositories on This Mac** 和缓存设置仅在本机生效，其他成员分别绑定自己的目录。组织管理员可从选择器打开 **All Organization Projects…**，配置尚未加入的项目；读取这些项目的 Memory 仍需成员权限。
+点击选择器旁的 **Project Settings** 配置当前项目。**Repositories on This Mac** 和缓存设置仅在本机生效，其他成员分别绑定自己的目录。普通成员和组织管理员的选择器末尾都显示 **New Project…**。
 
-应用 Settings 保留全局应用、Agent 和组织设置。项目配置统一在 Memory 中完成。
+组织管理员可通过 **Settings → Organization → Projects** 查看组织全部项目，并管理项目信息和成员，包括尚未加入的项目。读取这些项目的 Memory 仍需成员权限。
 
 ## 选择怎样变成当前可读内容
 
@@ -51,12 +51,7 @@ Organization 当前 Memory + Project Org Selection
 
 daemon 把关系保存在中心 SQLite 的 `project_bindings` 中。调用者位于子目录时，优先匹配最长的已绑定祖先目录；Git worktree 没有自身绑定时，还可以通过主 checkout 的仓库根解析。移动或重新绑定目录改变的是本机定位关系，不改变 Server Project 身份。
 
-两种 Agent 入口的规则不同：
-
-| 入口 | 选择 Project 的方式 |
-|---|---|
-| 纳管 host-plugin | 必须从工作目录解析绑定；启动及每次 `tools/call` 校验绑定，丢失或改变时请求失败 |
-| 手工普通 `mcp serve` | 先解析工作目录；无绑定时可兼容使用 daemon 中 Desktop 当前选中的 Project |
+纳管 host-plugin 和手工启动的 `mcp serve` 都必须从工作目录解析绑定，并在启动及每次 `tools/call` 时校验。绑定丢失或改变时请求失败，无绑定目录不能回退到 Desktop 当前选中的 Project。
 
 因此，两个已经绑定的 Agent 进程可以同时服务不同仓库，切换 Desktop 选中项不会重定向纳管进程。工具请求本身不能随意指定另一个 `project_id` 来绕过绑定。
 

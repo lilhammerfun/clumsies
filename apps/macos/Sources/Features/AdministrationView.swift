@@ -72,7 +72,7 @@ struct AdministrationView: View {
                 }
                 .formStyle(.grouped)
             case .projects:
-                EmptyView()
+                OrganizationProjectsView(store: store)
             case .access:
                 AdministrationAccessView(
                     store: store,

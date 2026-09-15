@@ -1132,7 +1132,6 @@ struct WorkspaceView: View {
 
 private struct MemoryProjectFilter: View {
     @ObservedObject var store: WorkspaceStore
-    @State private var showsOrganizationProjects = false
 
     var body: some View {
         ProjectFilterMenu(
@@ -1142,17 +1141,13 @@ private struct MemoryProjectFilter: View {
             unscopedSystemImage: "building.2",
             isLoading: store.isSwitchingMemoryContext,
             help: "Filter Memory by Project",
-            onCreate: store.canCreateProject ? { store.presentProjectCreation() } : nil,
-            onBrowseOrganization: store.canAdministerOrganization ? { showsOrganizationProjects = true } : nil
+            onCreate: store.canCreateProject ? { store.presentProjectCreation() } : nil
         ) { projectId in
             if let projectId {
                 Task { await store.selectProject(projectId) }
             } else {
                 Task { await store.showOrgMemory() }
             }
-        }
-        .sheet(isPresented: $showsOrganizationProjects) {
-            OrganizationProjectsView(store: store)
         }
     }
 }

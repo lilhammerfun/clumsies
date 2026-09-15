@@ -99,7 +99,7 @@ enum SettingsDestination: Hashable, Identifiable {
     static func search(_ query: String, canAdminister: Bool) -> [Self] {
         let destinations = SettingsPane.allCases
             .filter { $0 != .organization || canAdminister }.map(Self.pane)
-            + (canAdminister ? AdministrationSection.allCases.filter { $0 != .organization && $0 != .projects }.map(Self.organization) : [])
+            + (canAdminister ? AdministrationSection.allCases.filter { $0 != .organization }.map(Self.organization) : [])
         let words = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         return destinations.filter { destination in
             let text = "\(destination.title) \(destination.subtitle) \(destination.pane.title) \(destination.keywords)"
@@ -376,6 +376,7 @@ struct SettingsWindowView: View {
             OrganizationNameSection(store: store, onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 })
             Section {
                 organizationLink(.members, color: .blue)
+                organizationLink(.projects, color: .orange)
                 organizationLink(.access, color: .green)
             }
             Section {

@@ -604,7 +604,11 @@ final class WorkspaceStore: ObservableObject {
     }
 
     var canCreateProject: Bool {
-        capabilities.contains("project:create")
+        Self.projectCreationAllowed(capabilities: capabilities)
+    }
+
+    nonisolated static func projectCreationAllowed(capabilities: Set<String>) -> Bool {
+        capabilities.contains("project:create") || capabilities.contains("admin:write")
     }
 
     func canManageProject(_ projectId: String) -> Bool {
