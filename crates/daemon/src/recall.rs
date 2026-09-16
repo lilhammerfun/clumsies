@@ -770,26 +770,15 @@ fn filter_bindings(
     workspace_root: Option<&str>,
     project_id: Option<&str>,
 ) -> Vec<(String, String)> {
-    if let Some(root) = workspace_root {
-        let canonical = crate::util::canonical_binding_root(root);
-        let canonical = canonical.display().to_string();
-        let bound_project = bindings
-            .iter()
-            .find(|(bound, _)| {
-                crate::util::canonical_binding_root(bound)
-                    == crate::util::canonical_binding_root(&canonical)
-            })
-            .map(|(_, project)| project.clone())
-            .unwrap_or_default();
-        return vec![(canonical, bound_project)];
-    }
-    match project_id {
-        Some(project_id) => bindings
-            .into_iter()
-            .filter(|(_, bound_project)| bound_project == project_id)
-            .collect(),
-        None => bindings,
-    }
+    bindings
+        .into_iter()
+        .filter(|(root, bound_project)| {
+            workspace_root.is_none_or(|requested| {
+                crate::util::canonical_binding_root(root)
+                    == crate::util::canonical_binding_root(requested)
+            }) && project_id.is_none_or(|requested| requested == bound_project)
+        })
+        .collect()
 }
 
 fn codex_recall_session(session: codex::CodexSession, workspace_root: String) -> RecallSession {
@@ -1082,6 +1071,17 @@ mod tests {
                 ("/repo-a".to_owned(), "project-a".to_owned()),
                 ("/repo-b".to_owned(), "project-a".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn explicit_workspace_stays_within_bindings_and_project() {
+        let bindings = vec![("/repo-a".to_owned(), "project-a".to_owned())];
+        assert!(filter_bindings(bindings.clone(), Some("/unbound"), None).is_empty());
+        assert!(filter_bindings(bindings.clone(), Some("/repo-a"), Some("project-b")).is_empty());
+        assert_eq!(
+            filter_bindings(bindings.clone(), Some("/repo-a"), Some("project-a")),
+            bindings
         );
     }
 
