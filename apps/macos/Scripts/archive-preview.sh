@@ -35,8 +35,8 @@ CARGO_PROFILE_DEV_DEBUG=0 xcodebuild \
 
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
-lipo -verify_arch arm64 "$app/Contents/MacOS/Clumsies"
-lipo -verify_arch arm64 "$app/Contents/Resources/clumsiesd"
+lipo "$app/Contents/MacOS/Clumsies" -verify_arch arm64
+lipo "$app/Contents/Resources/clumsiesd" -verify_arch arm64
 sh apps/macos/Scripts/create-dmg.sh "$app" "$output_dir/$image_name"
 sh apps/macos/Scripts/test-distribution-package.sh "$app" "$output_dir/$image_name"
 (cd "$output_dir" && shasum -a 256 "$image_name" > "$image_name.sha256")
