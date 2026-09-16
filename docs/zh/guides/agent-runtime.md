@@ -22,9 +22,9 @@ Codex 下方应显示 **Plugin installed and enabled**。如果显示 **Will ins
 
 安装或更新 Codex 插件后，重启 Codex，从绑定的仓库开始新任务。已有任务仍使用之前的插件快照。
 
-在 Codex 的 `/hooks` 中审查并信任 Clumsies Hook，以启用 Agent 活动记录。这项信任与 Memory 检索分开：Hook 记录活动，MCP 工具负责检索和修改 Memory。
+Activity 直接读取 Codex 和 DSH 会话日志，将 Memory 调用关联到本地检索历史，不需要生命周期 Hook。
 
-Clumsies 会在任务启动时和每次工具调用时检查目录绑定。未绑定目录不能使用 App 窗口里当前选中的 Project。Git worktree 可以通过主仓库的绑定解析 Project。切换目录后，应确认任务使用的是预期项目。
+Clumsies 会在任务启动时和每次工具调用时检查目录绑定。未绑定目录不能使用 App 窗口里当前选中的 Project。Git worktree 可以通过主仓库的绑定解析 Project。MCP 连接保留启动目录，Shell 中的 `cd` 不会切换它。路由和升级细节见[工作目录绑定](/zh/guides/workspace-binding)。
 
 ## 确认连接成功
 
@@ -42,12 +42,12 @@ Clumsies 会在任务启动时和每次工具调用时检查目录绑定。未�
 | 提示仓库未绑定 | 把当前任务实际使用的目录绑定到目标 Project。 |
 | 更新后提示运行时版本不匹配 | 重启 Clumsies 和 Agent 宿主，让 App 内运行时与常驻 daemon 使用同一版本。 |
 | 检索仍在准备，或找不到某篇文档 | 检查模型准备、同步状态，以及 Project 是否选中了该 Memory。 |
-| 检索成功，但没有活动记录 | 单独检查宿主 Hook 的配置和信任状态。 |
+| 检索成功，但没有活动记录 | 检查绑定目录是否有受支持的 Codex 或 DSH 会话日志，且其中包含 Clumsies 检索调用。 |
 
 仍然失败时，按[排查问题](/zh/guides/troubleshooting)收集对应诊断信息。
 
 ## 其他宿主
 
-Settings 也提供 Claude Code、opencode、Antigravity 和 dsh。它们的接入方式和活动记录支持有所不同。dsh 显示 **Runtime configured; profile bridge required** 时，还需要配置 profile bridge。
+Settings 也提供 Claude Code、opencode、Antigravity 和 dsh。dsh 显示 **Enabled; MCP profile setup required** 时，还需要在用户维护的 profile 中注册 MCP，详见 [DSH 集成](/zh/guides/dsh-integration)。
 
-[适配器参考](/zh/adapter)列出了各宿主的文件、Hook 支持和 profile 要求；维护集成时查阅该页。Memory 工具本身的契约见 [MCP 参考](/zh/mcp)。
+[适配器参考](/zh/adapter)列出了各宿主的 MCP 配置和 profile 要求；维护集成时查阅该页。Memory 工具本身的契约见 [MCP 参考](/zh/mcp)。

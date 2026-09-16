@@ -99,7 +99,7 @@ struct AgentsSettingsView: View {
                                       let setting = settings.first(where: { $0.adapter == adapter }),
                                       setting.enabled {
                                 Text(setting.installed
-                                    ? (adapter == .dsh ? "Runtime configured; profile bridge required" : "Installed for this Mac")
+                                    ? (adapter == .dsh ? "Enabled; MCP profile setup required" : "Installed for this Mac")
                                     : "Ready to install")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -123,9 +123,9 @@ struct AgentsSettingsView: View {
                     }
                 }
                 Section {
-                    Text("After changing Codex, restart it and start a new task, then review Clumsies in /hooks.")
+                    Text("After changing Codex, restart it and start a new task.")
                     if selected.contains(.dsh) {
-                        Text("dsh also needs its MCP and lifecycle bridge registered in your dsh profile.")
+                        Text("Register the dsh MCP entry in your dsh profile.")
                     }
                 }
                 .font(.caption)

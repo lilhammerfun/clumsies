@@ -15,7 +15,7 @@ Server 负责：
 - 不可变 Blob、Tree、Commit、Organization 权威 Ref 与 Project 投影 Ref；
 - 管理配置、token 撤销、审计事件和健康检查。
 
-Server 不负责本机工作目录、目录到 Project 的绑定、macOS bookmark、检索模型、AgentRun 和 Project Local Storage。这些状态属于 daemon。Desktop 和 MCP 只能先把 Draft 写入 daemon，再由 daemon 同步；客户端不能绕过 Draft/Review 直接修改 Memory 权威。
+Server 不负责本机工作目录、目录到 Project 的绑定、macOS bookmark、检索模型、检索历史和 Project Local Storage。这些状态属于 daemon。Desktop 和 MCP 只能先把 Draft 写入 daemon，再由 daemon 同步；客户端不能绕过 Draft/Review 直接修改 Memory 权威。
 
 ## Memory 权威与版本模型
 

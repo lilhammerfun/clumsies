@@ -12,7 +12,7 @@ use crate::{DEV_INSTANCE_ID_ENV, DaemonError};
 
 #[cfg(target_os = "macos")]
 use super::parse_code_signature_info;
-use super::{DaemonCodexPluginStatus, is_executable, shell_single_quote, state_error};
+use super::{DaemonCodexPluginStatus, ManagedPathGuard, is_executable, state_error};
 
 const MARKETPLACE_NAME: &str = "clumsies-local";
 const PLUGIN_ID: &str = "clumsies@clumsies-local";
@@ -26,10 +26,6 @@ const MAX_CLI_OUTPUT_BYTES: usize = 1024 * 1024;
 const PLUGIN_MANIFEST: &str =
     include_str!("../../../../packages/clumsies/.codex-plugin/plugin.json");
 const MCP_TEMPLATE: &str = include_str!("../../../../packages/clumsies/.mcp.json.tpl");
-const HOOKS: &str = include_str!("../../../../packages/clumsies/hooks/hooks.json");
-const HOOK_SCRIPT_TEMPLATE: &str =
-    include_str!("../../../../packages/clumsies/scripts/agent-run-event.sh.tpl");
-const HOOK_DEV_ENV_PLACEHOLDER: &str = "__CLUMSIES_DEV_INSTANCE_ENV_REQUIRED__";
 const BOOTSTRAP_SKILL: &str =
     include_str!("../../../../packages/clumsies/skills/clumsies/SKILL.md");
 
@@ -200,8 +196,6 @@ fn materialize(
     for directory in [
         marketplace_root.join(".agents/plugins"),
         plugin_root.join(".codex-plugin"),
-        plugin_root.join("hooks"),
-        plugin_root.join("scripts"),
         plugin_root.join("skills/clumsies"),
     ] {
         ensure_private_directory(&directory)?;
@@ -221,32 +215,16 @@ fn materialize(
         });
     }
     write_json(&plugin_root.join(".mcp.json"), &mcp)?;
-    write_private_file(&plugin_root.join("hooks/hooks.json"), HOOKS.as_bytes())?;
-    let hook_dev_env = dev_instance_id
-        .map(|instance_id| {
-            format!(
-                "export {DEV_INSTANCE_ID_ENV}={}",
-                shell_single_quote(instance_id)
-            )
-        })
-        .unwrap_or_default();
-    let hook_script = HOOK_SCRIPT_TEMPLATE
-        .replace(
-            "__CLUMSIESD_SHELL_LITERAL_REQUIRED__",
-            &shell_single_quote(runtime_path),
-        )
-        .replace(HOOK_DEV_ENV_PLACEHOLDER, &hook_dev_env);
-    if hook_script.contains("__CLUMSIESD_SHELL_LITERAL_REQUIRED__")
-        || hook_script.contains(HOOK_DEV_ENV_PLACEHOLDER)
-    {
-        return Err(DaemonError::InvalidConfig(
-            "Codex plugin Hook template was not materialized".to_owned(),
-        ));
+    // These two files belong to the App's materialized plugin, not host configuration.
+    for relative in ["hooks/hooks.json", "scripts/agent-run-event.sh"] {
+        let path = plugin_root.join(relative);
+        ManagedPathGuard::capture_under(&plugin_root, &path)?;
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
-    write_private_file(
-        &plugin_root.join("scripts/agent-run-event.sh"),
-        hook_script.as_bytes(),
-    )?;
     write_private_file(
         &plugin_root.join("skills/clumsies/SKILL.md"),
         BOOTSTRAP_SKILL.as_bytes(),
@@ -278,13 +256,11 @@ fn materialize(
 fn plugin_version(runtime_path: &str, runtime_hash: &str, dev_instance_id: Option<&str>) -> String {
     let mut digest = Sha256::new();
     for component in [
-        b"clumsies-codex-plugin-v1".as_slice(),
+        b"clumsies-codex-plugin-v2".as_slice(),
         runtime_hash.as_bytes(),
         runtime_path.as_bytes(),
         PLUGIN_MANIFEST.as_bytes(),
         MCP_TEMPLATE.as_bytes(),
-        HOOKS.as_bytes(),
-        HOOK_SCRIPT_TEMPLATE.as_bytes(),
         BOOTSTRAP_SKILL.as_bytes(),
     ] {
         digest.update((component.len() as u64).to_be_bytes());
@@ -521,6 +497,7 @@ async fn verify_codex_cli(_path: &Path) -> Result<(), DaemonError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::shell_single_quote;
     use super::*;
 
     #[cfg(unix)]
@@ -588,14 +565,23 @@ mod tests {
         let skill = fs::read_to_string(plugin_root.join("skills/clumsies/SKILL.md")).unwrap();
         assert!(skill.contains("skill stored in Memory as ordinary Memory content"));
         assert!(!plugin_root.join("skills/coding").exists());
-        let hooks = fs::read_to_string(plugin_root.join("hooks/hooks.json")).unwrap();
-        assert!(hooks.contains("${PLUGIN_ROOT}/scripts/agent-run-event.sh"));
-        let hook = fs::read_to_string(plugin_root.join("scripts/agent-run-event.sh")).unwrap();
-        assert!(!hook.contains(DEV_INSTANCE_ID_ENV));
+        assert!(!plugin_root.join("hooks/hooks.json").exists());
+        assert!(!plugin_root.join("scripts/agent-run-event.sh").exists());
+        fs::create_dir(plugin_root.join("hooks")).unwrap();
+        fs::create_dir(plugin_root.join("scripts")).unwrap();
+        fs::write(plugin_root.join("hooks/hooks.json"), "legacy hook").unwrap();
+        fs::write(
+            plugin_root.join("scripts/agent-run-event.sh"),
+            "legacy script",
+        )
+        .unwrap();
+        materialize(root.path(), runtime, &"a".repeat(64), None).unwrap();
+        assert!(!plugin_root.join("hooks/hooks.json").exists());
+        assert!(!plugin_root.join("scripts/agent-run-event.sh").exists());
     }
 
     #[test]
-    fn dev_plugin_routes_mcp_and_hooks_to_its_daemon_instance() {
+    fn dev_plugin_routes_mcp_to_its_daemon_instance() {
         let root = tempfile::tempdir().unwrap();
         let runtime = Path::new("/Applications/Clumsies Dev.app/Contents/Resources/clumsiesd");
         let instance_id = "a1b2c3d4e5f6";
@@ -607,8 +593,7 @@ mod tests {
             mcp["mcpServers"]["clumsies"]["env"],
             json!({ DEV_INSTANCE_ID_ENV: instance_id })
         );
-        let hook = fs::read_to_string(plugin_root.join("scripts/agent-run-event.sh")).unwrap();
-        assert!(hook.contains(&format!("export {DEV_INSTANCE_ID_ENV}='a1b2c3d4e5f6'")));
+        assert!(!plugin_root.join("hooks/hooks.json").exists());
     }
 
     #[test]

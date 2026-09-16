@@ -85,19 +85,15 @@ daemon 是本机常驻后台进程，负责持久化、同步和检索；proxy �
 
 ## Server
 
-共享 HTTP 服务，负责身份授权、Organization Memory、Project 选择、Draft/Review 和版本快照。PostgreSQL 保存服务端状态。本机目录绑定、检索模型与 AgentRun 不属于 Server Memory 发布数据。
+共享 HTTP 服务，负责身份授权、Organization Memory、Project 选择、Draft/Review 和版本快照。PostgreSQL 保存服务端状态。本机目录绑定、检索模型和检索历史不属于 Server Memory 发布数据。
 
 ## Adapter / Agent Host
 
-Agent Host 是运行编码 Agent 的产品。Adapter 是让 Clumsies 在这个宿主中可用的集成层，负责安装 MCP 配置及相应生命周期桥。Codex 使用纳管全局 Plugin；其他支持的宿主采用各自集成方式，见 [Adapter](/zh/adapter)。
+Agent Host 是运行编码 Agent 的产品。Adapter 是让 Clumsies 在这个宿主中可用的集成层，负责安装 MCP 配置。Codex 使用纳管全局 Plugin；其他支持的宿主采用各自集成方式，见 [Adapter](/zh/adapter)。
 
 ## MCP
 
 Agent 调用工具的协议。Clumsies 当前只暴露一个 `memory` 工具，支持 `activate`、`load`、`store` 三种 action。它不暴露 Review 审批、merge 或任意 Server 请求。
-
-## AgentRun
-
-本机记录的一次 root turn 或 subagent 执行，包含父子关系、版本、租约和 outcome。用于 Activity 与诊断，不是 Server Review，也不发布 Memory。
 
 ## Retrieval Run / Evaluation Case / Corpus
 
@@ -105,7 +101,7 @@ Retrieval Run 是一次 `memory.activate` 的本地检索记录，保存 query�
 
 ## Issue / Assignee / Claim
 
-这些词出现在早期任务协作设计和数据库迁移中：Issue 表示工作事项，assignee 表示负责人，claim 表示临时执行租约。当前 Server 路由没有提供对应的共享 Issue API，不能仅因历史表仍存在就当成可用领域能力。当前本机执行跟踪以 AgentRun 为主。
+这些词出现在早期任务协作设计和数据库迁移中：Issue 表示工作事项，assignee 表示负责人，claim 表示临时执行租约。当前 Server 路由没有提供对应的共享 Issue API，不能仅因历史表仍存在就当成可用领域能力。
 
 ## Rule / Workflow / Context 与历史名称
 

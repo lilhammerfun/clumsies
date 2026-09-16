@@ -174,7 +174,6 @@ pub(crate) struct DaemonInner {
     pub(crate) retrieval_history_lock: Mutex<()>,
     pub(crate) draft_mutation_lock: Mutex<()>,
     pub(crate) local_setup_lock: Mutex<()>,
-    pub(crate) agent_run_lock: Mutex<()>,
     pub(crate) storage_access: tokio::sync::RwLock<()>,
 }
 
@@ -269,7 +268,6 @@ impl DaemonState {
         reset_memory_cache_if_required(&pool, &config.cache_dir).await?;
         recover_interrupted_operations(&pool).await?;
         retrieval_history::recover_interrupted_runs(&pool).await?;
-        work_tracking::recover_stale_runs(&pool).await?;
         let daemon_installation_id = load_or_create_installation_id(&pool).await?;
         let credentials =
             load_startup_credentials(credential_store.clone(), STARTUP_CREDENTIAL_LOAD_TIMEOUT)
@@ -303,7 +301,6 @@ impl DaemonState {
                 retrieval_history_lock: Mutex::new(()),
                 draft_mutation_lock: Mutex::new(()),
                 local_setup_lock: Mutex::new(()),
-                agent_run_lock: Mutex::new(()),
                 storage_access: tokio::sync::RwLock::new(()),
             }),
         };
@@ -1197,14 +1194,6 @@ impl DaemonState {
         search::load_memory(self, request).await
     }
 
-    pub async fn record_agent_run_event(
-        &self,
-        request: RecordAgentRunEventRequest,
-    ) -> Result<RecordAgentRunEventResponse, DaemonError> {
-        let _guard = self.inner.agent_run_lock.lock().await;
-        work_tracking::record_agent_run_event(&self.inner.pool, request).await
-    }
-
     pub async fn search_index_status(
         &self,
         request: SearchIndexProjectRequest,
@@ -1704,23 +1693,6 @@ impl DaemonState {
         }
     }
 
-    /// Periodically persists the lease-expired and Done-bound run
-    /// transitions so Activity never shows a permanently Running or
-    /// Unknown run (see work_tracking::recover_stale_runs).
-    pub fn start_run_reaper(&self) -> JoinHandle<()> {
-        let state = self.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            let mut failures = (0, String::new());
-            interval.tick().await;
-            loop {
-                interval.tick().await;
-                let result = work_tracking::recover_stale_runs(&state.inner.pool).await;
-                crate::diagnostics::worker_result("run_reaper", &mut failures, &result);
-            }
-        })
-    }
-
     async fn run_sync_cycle(&self, retry_transient_failures: bool) -> Result<(), DaemonError> {
         self.run_sync_channels(true, true, retry_transient_failures, None)
             .await
@@ -1943,9 +1915,6 @@ impl DaemonIpcService {
             "project_checkout" => dispatch_async!(self, request.payload, project_checkout),
             "activate_memory" => dispatch_async!(self, request.payload, activate_memory),
             "load_memory" => dispatch_async!(self, request.payload, load_memory),
-            "record_agent_run_event" => {
-                dispatch_async!(self, request.payload, record_agent_run_event)
-            }
             "search_index_status" => {
                 dispatch_async!(self, request.payload, search_index_status)
             }

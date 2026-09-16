@@ -38,7 +38,7 @@ Write "None" when not applicable. -->
 
 ## Risk, security, and privacy
 
-<!-- Cover trust boundaries, permissions, private Memory or Hook payloads,
+<!-- Cover trust boundaries, permissions, private Memory or session payloads,
 reliability, performance, cancellation, concurrency, and platform risks.
 Write "None" when not applicable. -->
 

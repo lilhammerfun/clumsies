@@ -18,7 +18,7 @@ preparing 或明确的构建失败，而不是查询半成品索引。
 
 Project Local Storage 只保存可重建的 index revision；中心 `local.db` 保存 Retrieval Run
 与 Evaluation Case。移动或清理 Project Local Storage 不等于清除评测历史。
-当前中心 SQLite schema 为 40，Project search-index SQLite 是独立的 schema 7；两者的
+当前中心 SQLite schema 为 42，Project search-index SQLite 是独立的 schema 7；两者的
 版本号和迁移职责不能混用。
 
 ## 2. 资源、检索单元与索引

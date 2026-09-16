@@ -27,6 +27,7 @@ The first four entries also appear in the tutorial. They link to the same instru
 | Sign in to an organization | [Connect](/quickstart/connect) |
 | Create a Project and associate a local repository | [Create a project](/quickstart/create-project) |
 | Configure an agent integration | [Agent integration](/guides/agent-runtime) |
+| Understand how MCP selects project Memory | [Workspace binding](/guides/workspace-binding) |
 | Connect DeepSeek Harness | [DSH integration](/guides/dsh-integration) |
 | Investigate missing content, sync problems, or slow Review loading | [Troubleshooting](/guides/troubleshooting) |
 

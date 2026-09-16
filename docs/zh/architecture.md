@@ -9,20 +9,34 @@ Clumsies 把两件事放在不同的地方完成：**在开发者的 Mac 上保�
 
 ## 一张图看清组件
 
-[![Clumsies 正常数据路径：Desktop 经 XPC、Agent 经 MCP 代理和 XPC 进入常驻 daemon；daemon 使用本地 SQLite、Project storage 和 Keychain，通过 HTTPS 访问 Server；Server 使用 PostgreSQL。](/diagrams/system-architecture.png)](/diagrams/system-architecture.png)
+```mermaid
+flowchart LR
+  subgraph Mac[macOS device]
+    Desktop -->|typed XPC| Daemon[Resident clumsiesd]
+    Host[Agent host] -->|MCP stdio| Proxy[Runtime proxy]
+    Proxy -->|typed XPC| Daemon
+    Daemon --> SQLite
+    Daemon --> Storage[Project storage]
+    Daemon --> Keychain
+  end
+  subgraph Org[Organization deployment]
+    Server[Rust Server] --> PostgreSQL
+  end
+  Daemon -->|Authenticated HTTPS| Server
+```
 
-图中左侧是用户的 macOS 设备，右侧是组织部署的服务。点击图片可查看原图。登录、首次配置和管理员恢复使用独立路径，见下文。
+图中左侧是用户的 macOS 设备，右侧是组织部署的服务。登录、首次配置和管理员恢复使用独立路径，见下文。
 
 | 组件 | 它是什么 | 在部署回滚清单示例中负责什么 |
 | --- | --- | --- |
 | Desktop | Swift 原生 macOS 应用 | 展示清单、编辑正文、审阅差异、确认发布 |
 | Agent host | 用户运行编码 Agent 的宿主 | 在任务中调用 `memory` 工具 |
-| Runtime proxy | App 内 `clumsiesd` 的协议代理进程 | 把 MCP 或生命周期 Hook 转成有类型的本地请求 |
+| Runtime proxy | App 内 `clumsiesd` 的协议代理进程 | 把 MCP 转成有类型的本地请求 |
 | Resident daemon | 由 launchd 管理的常驻 Rust `clumsiesd` | 保存 Draft、同步、准备有效内容、执行检索 |
 | Server | 使用 Axum 的 Rust HTTP 服务 | 鉴权、保存共享 Draft/Review、事务发布、提供版本快照 |
 | PostgreSQL | Server 使用的关系数据库 | 持久化成员、正式内容、提案、Review 和版本历史 |
 
-proxy 和 daemon 使用 App 内**同一份可执行文件**，只是启动方式不同。普通启动运行常驻服务，`mcp serve` 运行 MCP 代理，`_agent agent-run-event` 转发生命周期事件。代理不打开业务数据库、不加载模型，也不运行同步 worker。
+proxy 和 daemon 使用 App 内**同一份可执行文件**，只是启动方式不同。普通启动运行常驻服务，`mcp serve` 运行 MCP 代理。代理不打开业务数据库、不加载模型，也不运行同步 worker。
 
 ## 为什么拆成这几层
 
@@ -39,7 +53,7 @@ proxy 和 daemon 使用 App 内**同一份可执行文件**，只是启动方式
 | 位置 | 保存什么 | 数据性质 |
 | --- | --- | --- |
 | Server PostgreSQL | Organization/Project、成员、正式 Memory、Draft/Review、Blob/Tree/Commit/Ref、审计 | 多人共享的服务端状态；Organization Ref 决定当前正式版本 |
-| daemon 中心 SQLite | 本机 Project 绑定、Draft 与操作队列、同步对象和 Ref 副本、AgentRun、检索历史 | 包含尚未上传的编辑；不是可随意删除的缓存 |
+| daemon 中心 SQLite | 本机 Project 绑定、Draft 与操作队列、同步对象和 Ref 副本、检索历史 | 包含尚未上传的编辑；不是可随意删除的缓存 |
 | Project Local Storage | 已验证 Commit 的文件快照、有效内容的检索索引 | 按 Project 管理、可重建的派生数据 |
 | macOS Keychain | Server access/refresh token pair | 凭据；与正文和 SQLite 分开存储 |
 | daemon 模型缓存 | embedding、reranker 模型文件 | 多个 Project 共用的本机检索依赖 |
@@ -93,7 +107,7 @@ HTTP 的独立 `approved` 决定本身不发布内容；当前 Desktop 的 Appro
 - **用户登录：** Desktop 通过系统浏览器进入组织 OIDC 身份提供方。Server 验证身份，Desktop 交换授权码后经 XPC 把 token pair 交给 daemon，由 Keychain 保存。普通 Server 请求由 daemon 注入 bearer token。
 - **Project 绑定：** daemon 用规范化 Server 地址和当前目录的最长已绑定祖先解析 Project。纳管 Agent 代理重新验证绑定和运行版本，避免继续操作已经换绑的项目。
 - **发布授权：** 普通 Project 成员可以提出和提交修改；Organization owner/admin 决定组织发布。角色检查通过后仍须通过版本和 `If-Match` 并发检查。
-- **本地诊断：** AgentRun、检索历史和宿主 Activity 投影留在本机；这与要同步到 Server 的 Draft 正文是两类数据。
+- **本地诊断：** 检索历史和宿主 Activity 投影留在本机；这与要同步到 Server 的 Draft 正文是两类数据。
 
 首次配置和 daemon 故障时的管理员恢复，由 Desktop 对可信 Server origin 直接发起受限 HTTPS 请求。这是图中普通数据路径之外的例外。Admin API 使用 bearer 鉴权；首次安装的 setup cookie/CSRF 不能被理解为一个通用浏览器管理会话。详见[认证与会话](/zh/reference/auth)。
 

@@ -14,9 +14,7 @@ use crate::{
     CredentialStore, CredentialStoreError, DaemonConfig, DaemonError, ProjectConfig,
     RuntimeProjectConfig, ServerCredentials,
 };
-use crate::{
-    agent_adapter, commit_sync, project_storage, retrieval_history, search, work_tracking,
-};
+use crate::{agent_adapter, commit_sync, project_storage, retrieval_history, search};
 
 pub(crate) fn prepare_directories(config: &DaemonConfig) -> Result<(), DaemonError> {
     project_storage::ensure_private_directory(&config.root_dir)?;
@@ -162,6 +160,10 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
             .await?;
         existing_schema_version = 41;
     }
+    if existing_schema_version == 41 {
+        retire_agent_run_tables(pool).await?;
+        existing_schema_version = 42;
+    }
     if existing_schema_version != 0 && existing_schema_version != CURRENT_LOCAL_SCHEMA_VERSION {
         return Err(DaemonError::InvalidConfig(format!(
             "local database schema version {existing_schema_version} is incompatible with version {CURRENT_LOCAL_SCHEMA_VERSION}; recreate the daemon database"
@@ -279,7 +281,6 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
     project_storage::migrate(pool).await?;
     search::migrate(pool).await?;
     retrieval_history::migrate(pool).await?;
-    work_tracking::migrate(pool).await?;
     sqlx::query(
         "INSERT INTO daemon_meta (key, value)
          VALUES ('schema_version', $1)
@@ -313,24 +314,124 @@ pub(crate) async fn migrate_local_schema_20_to_21(pool: &SqlitePool) -> Result<(
     Ok(())
 }
 
+// Historical upgrade steps only; fresh databases do not create AgentRun tables.
+async fn migrate_legacy_agent_runs(pool: &SqlitePool) -> Result<(), DaemonError> {
+    for statement in [
+        "CREATE TABLE IF NOT EXISTS agent_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            host TEXT NOT NULL CHECK (host IN (
+                'codex', 'claude-code', 'manual', 'zed', 'opencode', 'dsh', 'antigravity'
+            )),
+            host_run_key TEXT NOT NULL,
+            host_session_id TEXT,
+            parent_run_id TEXT REFERENCES agent_runs(run_id),
+            kind TEXT NOT NULL CHECK (kind IN ('root', 'subagent')),
+            phase TEXT NOT NULL CHECK (phase IN ('running', 'ended')),
+            outcome TEXT CHECK (outcome IN (
+                'completed', 'blocked', 'failed', 'cancelled', 'unknown'
+            )),
+            end_reason TEXT,
+            display_label TEXT,
+            summary TEXT,
+            revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+            start_observed INTEGER NOT NULL DEFAULT 1 CHECK (start_observed IN (0, 1)),
+            started_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            lease_expires_at TEXT NOT NULL,
+            ended_at TEXT,
+            UNIQUE (project_id, host, host_run_key)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_running_lease
+         ON agent_runs (phase, lease_expires_at)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_project_session
+         ON agent_runs (project_id, host, host_session_id, phase)",
+        "CREATE TABLE IF NOT EXISTS agent_run_events (
+            event_id TEXT PRIMARY KEY,
+            event_fingerprint TEXT NOT NULL,
+            run_id TEXT REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+            host_session_id TEXT,
+            event_type TEXT NOT NULL CHECK (event_type IN (
+                'started', 'heartbeat', 'ended', 'session_ended'
+            )),
+            source TEXT NOT NULL CHECK (source IN ('hook', 'recovery')),
+            outcome TEXT CHECK (outcome IN (
+                'completed', 'blocked', 'failed', 'cancelled', 'unknown'
+            )),
+            summary TEXT,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL DEFAULT (
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ),
+            CHECK (
+                run_id IS NOT NULL
+                OR (event_type = 'session_ended' AND host_session_id IS NOT NULL)
+            )
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_occurred
+         ON agent_run_events (run_id, occurred_at DESC, event_id DESC)",
+    ] {
+        sqlx::query(statement).execute(pool).await?;
+    }
+
+    let event_columns = sqlx::query("PRAGMA table_info(agent_run_events)")
+        .fetch_all(pool)
+        .await?;
+    if !event_columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "event_fingerprint")
+    {
+        sqlx::query(
+            "ALTER TABLE agent_run_events
+             ADD COLUMN event_fingerprint TEXT NOT NULL DEFAULT 'legacy'",
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+// Keep historical records and foreign-key relationships without an active runtime schema.
+async fn retire_agent_run_tables(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut tx = pool.begin().await?;
+    for table in ["agent_runs", "agent_run_events"] {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $1)",
+        )
+        .bind(table)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            sqlx::query(&format!("ALTER TABLE {table} RENAME TO retired_{table}"))
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    sqlx::query("UPDATE daemon_meta SET value = '42' WHERE key = 'schema_version'")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub(crate) async fn migrate_local_schema_21_to_22(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_22_to_23(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_23_to_24(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_24_to_25(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_25_to_26(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_27_to_28(pool: &SqlitePool) -> Result<(), DaemonError> {
@@ -433,11 +534,11 @@ pub(crate) async fn migrate_local_schema_27_to_28(pool: &SqlitePool) -> Result<(
 }
 
 pub(crate) async fn migrate_local_schema_26_to_27(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_28_to_29(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 /// Widen the agent_runs host CHECK constraint to accept the opencode plugin
@@ -580,15 +681,15 @@ pub(crate) async fn migrate_local_schema_30_to_31(pool: &SqlitePool) -> Result<(
 }
 
 pub(crate) async fn migrate_local_schema_31_to_32(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_32_to_33(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_33_to_34(pool: &SqlitePool) -> Result<(), DaemonError> {
-    work_tracking::migrate(pool).await
+    migrate_legacy_agent_runs(pool).await
 }
 
 pub(crate) async fn migrate_local_schema_34_to_35(pool: &SqlitePool) -> Result<(), DaemonError> {
@@ -1826,6 +1927,60 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn agent_run_retirement_preserves_history_and_foreign_keys() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate_legacy_agent_runs(&pool).await.unwrap();
+        for statement in [
+            "CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            "INSERT INTO daemon_meta VALUES ('schema_version', '41')",
+            "INSERT INTO agent_runs (run_id, project_id, host, host_run_key, kind, phase, revision, start_observed, started_at, last_seen_at, lease_expires_at) VALUES ('arun_old', 'p', 'codex', 'turn', 'root', 'running', 1, 1, 't', 't', 't')",
+            "CREATE TABLE historical_issue_link (run_id TEXT REFERENCES agent_runs(run_id))",
+            "INSERT INTO historical_issue_link VALUES ('arun_old')",
+            "CREATE TABLE retrieval_runs (run_id TEXT PRIMARY KEY)",
+            "INSERT INTO retrieval_runs VALUES ('run_keep')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        retire_agent_run_tables(&pool).await.unwrap();
+        retire_agent_run_tables(&pool).await.unwrap();
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == "agent_runs" || name == "agent_run_events")
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT run_id FROM retired_agent_runs")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "arun_old"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT run_id FROM retrieval_runs")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "run_keep"
+        );
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     async fn test_pool_with_v35_runs() -> SqlitePool {
         let pool = SqlitePoolOptions::new()

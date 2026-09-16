@@ -6,10 +6,41 @@ use sqlx::Row;
 
 use crate::retrieval_history::{RetrievalCandidate, RetrievalRunRequest, RetrievalRunStatus};
 use crate::util::home_dir;
-use crate::work_tracking::AgentRunHost;
 use crate::{DaemonError, DaemonState, SourceScope};
 
 mod codex;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum AgentHost {
+    #[serde(rename = "codex")]
+    Codex,
+    #[serde(rename = "claude-code")]
+    ClaudeCode,
+    #[serde(rename = "manual")]
+    Manual,
+    #[serde(rename = "zed")]
+    Zed,
+    #[serde(rename = "opencode")]
+    Opencode,
+    #[serde(rename = "dsh")]
+    Dsh,
+    #[serde(rename = "antigravity")]
+    Antigravity,
+}
+
+impl AgentHost {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+            Self::Manual => "manual",
+            Self::Zed => "zed",
+            Self::Opencode => "opencode",
+            Self::Dsh => "dsh",
+            Self::Antigravity => "antigravity",
+        }
+    }
+}
 
 fn run_status_str(status: RetrievalRunStatus) -> &'static str {
     match status {
@@ -64,7 +95,7 @@ pub struct GetRecallFragmentResponse {
 pub struct RecallSession {
     /// Harness that produced this session log. Different providers normalize
     /// into the same session -> task -> memory-activation projection.
-    pub host: AgentRunHost,
+    pub host: AgentHost,
     pub session_id: String,
     pub title: Option<String>,
     pub workspace_root: String,
@@ -650,7 +681,7 @@ fn parse_session_text(text: &str, workspace_root: &str) -> Option<RecallSession>
     let root = cwd.unwrap_or_else(|| workspace_root.to_owned());
 
     Some(RecallSession {
-        host: AgentRunHost::Dsh,
+        host: AgentHost::Dsh,
         session_id,
         title,
         workspace_root: root,
@@ -792,7 +823,7 @@ fn codex_recall_session(session: codex::CodexSession, workspace_root: String) ->
         tasks,
     } = session;
     RecallSession {
-        host: AgentRunHost::Codex,
+        host: AgentHost::Codex,
         session_id,
         title,
         workspace_root,

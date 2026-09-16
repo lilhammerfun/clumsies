@@ -22,7 +22,7 @@ Codex 下方应显示 **Plugin installed and enabled**。如果显示尚未安�
 
 ## 1. 从绑定的仓库开始任务
 
-Plugin 首次安装或更新后，重启 Codex，再从 `clumsies-demo` 开始一个新任务。在 `/hooks` 中审查并信任 Clumsies Hook，以启用活动记录。
+Plugin 首次安装或更新后，重启 Codex，再从 `clumsies-demo` 开始一个新任务。
 
 集成按本机用户安装一次，各个仓库的绑定决定使用哪个 Project。仅在 Clumsies 窗口里选中 Payments，不会把任意 Codex 任务都切换到这个项目。
 
@@ -34,7 +34,7 @@ Plugin 首次安装或更新后，重启 Codex，再从 `clumsies-demo` 开始�
 
 Clumsies 集成附带的使用说明会要求 Codex 在开始实质任务时调用 `memory.activate`，按任务检索相关段落；需要完整上下文时再调用 `memory.load`。你不需要先复制整份知识库到对话中，也不需要手写工具参数。
 
-这里的“自动检索”指 Agent 按集成说明调用工具。是否已经检索，应以实际工具调用为准；Hook 的活动记录不会代替这个步骤。
+这里的“自动检索”指 Agent 按集成说明调用工具。是否已经检索，应以实际工具调用及其结果为准。
 
 ## 3. 确认它使用了已有知识
 

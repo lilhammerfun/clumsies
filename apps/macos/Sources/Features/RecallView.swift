@@ -513,7 +513,7 @@ extension RecallSession {
     }
 }
 
-private extension AgentRunHost {
+private extension AgentHost {
     var activityTitle: String {
         switch self {
         case .codex: "Codex"

@@ -4,21 +4,6 @@ Generated with the built-in imagegen tool for the Clumsies documentation.
 The adjacent documentation supplies the accessible text equivalent.
 These diagrams describe the normal path, not every setup or recovery endpoint.
 
-## system-architecture.png
-
-Use case: infographic-diagram
-Asset type: production technical documentation architecture diagram, Clumsies, raster illustration.
-Primary request: A technically precise software architecture diagram in the style of ByteDance / Volcengine engineering documents: clean white canvas, restrained cyan and cobalt blue, flat pale blue grouping containers, crisp dark text, simple rectangles, thin orthogonal directional arrows, generous space, no logos, no gradients, no 3D. Landscape high resolution 2400 x 1500 or similar.
-Text in English only, exact spelling. Title "Clumsies system architecture".
-Two large clearly separated containers: left wider container "macOS device", right container "Organization deployment".
-Inside macOS: top row two boxes "Desktop" and "Agent host". Desktop has arrow down labelled "typed XPC" to wide middle box "Resident clumsiesd". Agent host has arrow down labelled "MCP stdio / Hook" to small box "Runtime proxy", then arrow to Resident clumsiesd labelled "typed XPC". Arrange proxy above resident so no crossing arrows.
-Resident subtitle "Draft queue · Sync · Retrieval".
-Bottom row inside device three boxes: "SQLite" subtitle "Drafts / queues / local records", "Project storage" subtitle "Generations / search index", "Keychain" subtitle "Tokens". Resident connects downward separately to each bottom box. Thin neutral lines for local storage access.
-Inside right deployment: box "Rust Server" subtitle "Auth · Memory · Reviews"; beneath it arrow to cylinder "PostgreSQL" subtitle "Shared authority".
-ONE long solid blue arrow from Resident clumsiesd to Rust Server labelled "Authenticated HTTPS". Align these boxes horizontally.
-Below or at bottom right inside deployment small note "Organization Ref = published head". Bottom footer full width outside containers: "Normal data path · Sign-in and recovery omitted".
-Constraints: this is the exact normal data topology; no Desktop/Agent arrows directly to database or Server, no local SQLite to Postgres connection. No arrows between bottom storage boxes. All labels legible, no invented components, no extra paths. Clearly separated device/deployment boundaries. Keep labels short and large at documentation width. No Chinese labels; prose caption will localize.
-
 ## memory-lifecycle.png
 
 Use case: infographic-diagram

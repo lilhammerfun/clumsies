@@ -2,18 +2,17 @@
 
 本页解释 daemon 的持久状态、同步、检索和恢复边界。初次阅读建议先看[系统架构](/zh/architecture)与[完整流程](/zh/flows)；遇到故障可直接查[排查问题](/zh/guides/troubleshooting)。
 
-`clumsiesd` 是当前用户作用域的 macOS launchd 常驻服务。Desktop 负责原生交互；daemon 在 Desktop 关闭后继续持久化 Draft、同步 Commit、构建检索索引并服务 Agent。Agent Host 启动同一个 App 内签名二进制的短进程 `mcp serve` 或 `_agent agent-run-event` 代理，再通过 XPC 调用常驻 daemon。
+`clumsiesd` 是当前用户作用域的 macOS launchd 常驻服务。Desktop 负责原生交互；daemon 在 Desktop 关闭后继续持久化 Draft、同步 Commit、构建检索索引并服务 Agent。Agent Host 启动同一个 App 内签名二进制的短进程 `mcp serve` 代理，再通过 XPC 调用常驻 daemon。
 
 ## 本地状态所有权
 
-daemon 使用一个中心 SQLite 数据库；当前 schema version 为 `40`。它保存：
+daemon 使用一个中心 SQLite 数据库；当前 schema version 为 `42`。它保存：
 
 - 安装身份、schema version、Server URL 和 Desktop 当前选中的 Project；
 - 规范化的工作目录到 `project_id` 绑定；
 - 本地 Draft、有序操作、同步状态和 Server Draft 身份；
 - Blob、Tree、Commit 元数据以及已安装的 Organization / Project Ref；
 - Project Local Storage 位置、revision 和 move 状态；
-- `native_issues` 本地看板副本、依赖/阻塞事实、AgentRun 与生命周期事件；
 - Retrieval Run、Evaluation Case 和相关诊断状态。
 
 每个 Project 的派生检索数据库位于该 Project 的活动 Local Storage 中，保存 Effective Memory、Markdown unit、FTS5 行、vector 和 search revision。embedding/reranking 模型只保存在 daemon 共享缓存，不按 Project 复制。
@@ -30,7 +29,7 @@ daemon 在第一次 MCP 请求之前，就开始后台准备模型。当前使�
 
 ```text
 Desktop (Swift) -> typed XPC -> resident daemon -> HTTPS -> Server
-Agent Host -> stdio MCP / Hook -> signed short proxy -> typed XPC -> resident daemon
+Agent Host -> stdio MCP -> signed short proxy -> typed XPC -> resident daemon
 ```
 
 短进程只负责有界 framing、`memory` MCP tool、Project 选择与 XPC 转发。它不初始化 `DaemonState`，不打开 SQLite，不加载模型，也不启动后台 worker。启动时，代理必须验证自身协议 revision 和 build identity 与常驻 daemon 一致。
@@ -148,10 +147,6 @@ Project Local Storage 是由规范 Server authority 和 `project_id` 定位的�
 Desktop 通过 `NSOpenPanel` 交付普通 bookmark；daemon 在自身签名身份下生成并持久化 security-scoped bookmark。它拒绝网络文件系统、符号链接、不安全嵌套、无效 marker、容量不足或不可写路径，目录/文件权限分别为 `0700`/`0600`。
 
 自定义位置不可用时，daemon 不回退默认缓存，也不在 generation 不完整时推进 Ref。Draft 和同步队列仍在中心 SQLite 运行，但 `activate`、`load` 和 checkout 返回明确的 storage/search readiness 错误。Clear Cache 只删除 marker 所属 generation、search 数据和 staging，不删除 Draft、设置、模型或管理子树外的文件。
-
-## AgentRun
-
-AgentRun 与 lifecycle event 只保存在 daemon 本机，用于 Activity 与诊断。Host Hook 创建、续租和结束 run；过期 lease 会恢复为 ended。生命周期数据不上传 Server，也不改变 Memory。
 
 ## Activity / Recall 隐私边界
 

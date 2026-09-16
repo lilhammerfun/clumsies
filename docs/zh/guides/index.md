@@ -27,6 +27,7 @@ description: 按具体任务查找 Memory、Agent 接入、组织管理和开发
 | 登录组织 | [连接组织](/zh/quickstart/connect) |
 | 创建 Project 并关联本地仓库 | [创建项目](/zh/quickstart/create-project) |
 | 配置 Agent 集成 | [Agent 接入](/zh/guides/agent-runtime) |
+| 理解 MCP 如何选择项目记忆 | [工作目录绑定](/zh/guides/workspace-binding) |
 | 接入 DeepSeek Harness | [DSH 集成](/zh/guides/dsh-integration) |
 | 排查内容缺失、同步问题或 Review 加载慢 | [排查问题](/zh/guides/troubleshooting) |
 

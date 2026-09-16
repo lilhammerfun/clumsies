@@ -85,19 +85,15 @@ The daemon is the resident local process that persists data, synchronizes, and r
 
 ## Server
 
-The shared HTTP service governing identity, Organization Memory, Project selection, Drafts/Reviews, and snapshots. PostgreSQL holds its state. Local directory bindings, retrieval models, and AgentRuns are not Server Memory publication data.
+The shared HTTP service governing identity, Organization Memory, Project selection, Drafts/Reviews, and snapshots. PostgreSQL holds its state. Local directory bindings, retrieval models, and retrieval history are not Server Memory publication data.
 
 ## Adapter / Agent Host
 
-An Agent Host is the product running the coding Agent. An Adapter makes Clumsies available in that host by installing MCP configuration and lifecycle integration. Codex uses a managed global Plugin; other supported hosts have their own integration mechanisms. See [Adapter](/adapter).
+An Agent Host is the product running the coding Agent. An Adapter makes Clumsies available in that host by installing MCP configuration. Codex uses a managed global Plugin; other supported hosts have their own integration mechanisms. See [Adapter](/adapter).
 
 ## MCP
 
 The protocol Agents use to invoke tools. Clumsies exposes one `memory` tool with `activate`, `load`, and `store` actions. It exposes no Review approval, merge, or arbitrary Server request tool.
-
-## AgentRun
-
-A local record of a root turn or subagent execution, including parent relationship, version, lease, and outcome. It supports Activity and diagnostics; it is neither a Server Review nor a Memory publication.
 
 ## Retrieval Run / Evaluation Case / Corpus
 
@@ -105,7 +101,7 @@ A Retrieval Run records a local `memory.activate` query, data/index identity, ca
 
 ## Issue / Assignee / Claim
 
-These terms occur in earlier work-coordination designs and migrations: Issue means a work item, assignee its owner, and claim a temporary execution lease. Current Server routes expose no corresponding shared Issue API. Historical tables alone do not establish an available domain capability. Current local execution tracking centers on AgentRun.
+These terms occur in earlier work-coordination designs and migrations: Issue means a work item, assignee its owner, and claim a temporary execution lease. Current Server routes expose no corresponding shared Issue API. Historical tables alone do not establish an available domain capability.
 
 ## Rule / Workflow / Context and historical names
 

@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use daemon::{
-    ActivateMemoryRequest, AgentRunPhase, CURRENT_LOCAL_SCHEMA_VERSION, DAEMON_AGENT_LABEL,
+    ActivateMemoryRequest, CURRENT_LOCAL_SCHEMA_VERSION, DAEMON_AGENT_LABEL,
     DAEMON_MACH_SERVICE_NAME, DaemonConfig, DaemonContentDraftUpdate, DaemonCreateDraftOperation,
     DaemonDeleteDraftOperation, DaemonDiscardDraftOperation, DaemonDraftContent,
     DaemonDraftListQuery, DaemonDraftOperation, DaemonDraftOperationRecordSource,
@@ -27,8 +27,8 @@ use daemon::{
     DaemonProjectSyncStatusRequest, DaemonServerRequest, DaemonState, DaemonSyncRetryRequest,
     DaemonUpdateDraftOperation, DraftOperationSyncStatus, IDENTIFIER_NAMESPACE, LaunchAgentConfig,
     LaunchAgentController, LaunchAgentRuntimeStatus, ProjectAgentAdapterDelivery,
-    ProjectAgentAdapterKind, ProjectAgentAdapterRuntimeRequirement, RecordAgentRunEventResponse,
-    ServerCredentials, SyncRetryChannel, SyncState,
+    ProjectAgentAdapterKind, ProjectAgentAdapterRuntimeRequirement, ServerCredentials,
+    SyncRetryChannel, SyncState,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -187,6 +187,12 @@ async fn health_initializes_local_database_and_stable_installation_id() {
     assert!(health.local_db.path.ends_with("local.db"));
     assert!(health.log_dir.ends_with("logs"));
     assert!(root.path().join("logs").is_dir());
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", health.local_db.path))
+        .await
+        .unwrap();
+    let agent_tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('agent_runs', 'agent_run_events', 'retired_agent_runs', 'retired_agent_run_events')").fetch_one(&pool).await.unwrap();
+    assert_eq!(agent_tables, 0);
+    pool.close().await;
 
     let restarted = common::initialize_daemon(
         DaemonConfig::for_root(root.path()),
@@ -1430,7 +1436,7 @@ async fn schema_17_migration_adds_retrieval_history_and_restart_recovers_running
 }
 
 #[tokio::test]
-async fn schema_20_migration_adds_draft_change_flag_before_agent_run_tracking() {
+async fn schema_20_migration_preserves_drafts_and_retires_agent_runs() {
     let root = tempfile::tempdir().unwrap();
     let database_path = root.path().join("local.db");
     std::fs::File::create(&database_path).unwrap();
@@ -1488,11 +1494,11 @@ async fn schema_20_migration_adds_draft_change_flag_before_agent_run_tracking() 
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(agent_runs_count, 1);
+    assert_eq!(agent_runs_count, 0);
 }
 
 #[tokio::test]
-async fn schema_21_migration_adds_local_agent_run_tracking_without_an_issue_table() {
+async fn schema_21_migration_retires_agent_run_tracking_without_an_issue_table() {
     let root = tempfile::tempdir().unwrap();
     let database_path = root.path().join("local.db");
     std::fs::File::create(&database_path).unwrap();
@@ -1528,7 +1534,7 @@ async fn schema_21_migration_adds_local_agent_run_tracking_without_an_issue_tabl
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(count, 1, "{table} was not created");
+        assert_eq!(count, 0, "{table} was not retired");
     }
     let issue_table_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'issues'",
@@ -2368,32 +2374,6 @@ async fn ipc_dispatch_routes_the_complete_daemon_api() {
         .await;
     assert!(!activation.ok);
     assert_eq!(activation.error.unwrap().code, "project_ref_not_synced");
-
-    let observed: RecordAgentRunEventResponse = service
-        .dispatch(DaemonIpcRequest::new(
-            "record_agent_run_event",
-            json!({
-                "event_id": "hook_dispatch_start",
-                "project_id": "prj_test",
-                "host": "codex",
-                "host_run_key": "root:dispatch-turn",
-                "event_type": "started",
-                "source": "hook",
-                "host_session_id": "session-dispatch",
-                "parent_run_id": null,
-                "parent_host_run_key": null,
-                "kind": "root",
-                "outcome": null,
-                "display_label": null,
-                "summary": null,
-                "occurred_at": null
-            }),
-        ))
-        .await
-        .into_payload()
-        .unwrap();
-    let observed_run = observed.run.unwrap();
-    assert_eq!(observed_run.phase, AgentRunPhase::Running);
 
     let project_checkout: DaemonProjectCheckout = service
         .dispatch(DaemonIpcRequest::new(
@@ -3303,7 +3283,7 @@ async fn adapter_install_normalizes_an_empty_binding_after_a_workspace_symlink_m
         .install_project_agent_adapter(DaemonProjectAgentAdapterInstallRequest {
             project_id: "prj_moved_adapter".to_owned(),
             workspace_root: bound_root.display().to_string(),
-            adapter: ProjectAgentAdapterKind::Dsh,
+            adapter: ProjectAgentAdapterKind::ClaudeCode,
             runtime_binary_path: helper.display().to_string(),
             host_binary_path: None,
             expected_revision: None,
@@ -3331,7 +3311,7 @@ async fn adapter_install_normalizes_an_empty_binding_after_a_workspace_symlink_m
     service
         .remove_project_agent_adapter(DaemonProjectAgentAdapterRemoveRequest {
             workspace_root: bound_root.display().to_string(),
-            adapter: ProjectAgentAdapterKind::Dsh,
+            adapter: ProjectAgentAdapterKind::ClaudeCode,
             expected_revision: installed.revision,
         })
         .await
@@ -3425,6 +3405,30 @@ async fn global_adapter_migrates_repository_files_and_persists_disabled_choice_o
     state.set_agent_adapter(request.clone()).await.unwrap();
     state.set_agent_adapter(request).await.unwrap();
     assert!(!global_config.exists());
+    for enabled in [true, true, false] {
+        let settings = state
+            .set_agent_adapter(daemon::DaemonSetAgentAdapterRequest {
+                adapter: ProjectAgentAdapterKind::Dsh,
+                enabled,
+                runtime_binary_path: runtime.display().to_string(),
+                host_binary_path: None,
+            })
+            .await
+            .unwrap();
+        let dsh = settings
+            .items
+            .iter()
+            .find(|item| item.adapter == ProjectAgentAdapterKind::Dsh)
+            .unwrap();
+        assert_eq!(dsh.enabled, enabled);
+        assert!(dsh.configured);
+        assert!(
+            !root
+                .path()
+                .join("agent-host-home/.dsh/clumsies.json")
+                .exists()
+        );
+    }
     pool.close().await;
     drop(state);
     let reopened = common::initialize_daemon(config, common::TestCredentialStore::default()).await;
@@ -3741,31 +3745,19 @@ async fn opencode_project_agent_adapter_install_is_reversible_and_preserves_user
             .iter()
             .any(|file| file.ends_with("opencode.json"))
     );
-    assert!(
-        installed
-            .managed_files
-            .iter()
-            .any(|file| file.ends_with(".opencode/plugins/clumsies.ts"))
-    );
+    assert_eq!(installed.managed_files.len(), 1);
 
     let rendered: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
     assert_eq!(rendered["model"], "deepseek/deepseek-chat");
     assert_eq!(rendered["$schema"], "https://opencode.ai/config.json");
     assert_eq!(rendered["mcp"]["clumsies"]["type"], "local");
+    assert!(rendered.get("plugin").is_none());
     assert!(
-        rendered["plugin"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::Value::String(
-                "./.opencode/plugins/clumsies.ts".to_owned()
-            ))
-    );
-    assert!(
-        repository_root
+        !repository_root
             .path()
             .join(".opencode/plugins/clumsies.ts")
-            .is_file()
+            .exists()
     );
 
     let idempotent = service
