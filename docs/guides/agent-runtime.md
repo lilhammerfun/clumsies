@@ -1,139 +1,53 @@
-# Agent runtime
+# Connect a coding agent
 
-This page describes the host runtime path, not the human member workflow.
+Use this guide to enable or repair an agent integration on your Mac. To try the complete workflow with Codex, follow [Use project Memory in Codex](/quickstart/use-with-agent).
 
-## Entrypoint
+An integration makes the Clumsies tools available to the agent. A repository binding determines which Project those tools can access. You need both.
 
-Direct-file adapters register the App-bundled runtime as:
+## Before you start
 
-```bash
-/path/to/Clumsies.app/Contents/Resources/clumsiesd mcp serve
-```
+- Open Clumsies and sign in to your organization.
+- Install the agent host you want to use. The Codex integration requires the macOS Codex App.
+- [Bind your repository to a Project](/quickstart/create-project), then [select its organization Memory](/quickstart/select-memory).
 
-Codex receives the same runtime through the App-managed global Clumsies plugin:
+## Enable the integration
 
-```bash
-/path/to/Clumsies.app/Contents/Resources/clumsiesd \
-  mcp serve --host codex --delivery host-plugin
-```
+Open **Settings → Agents**. Under **Agents on This Mac**, enable the hosts you use. Clumsies installs each integration for your macOS user; you do not install it again for every Project.
 
-These are adapter-managed commands, not a general-purpose CLI. The repository
-must already have a daemon-owned Project binding, the resident macOS daemon must
-be running, and the matching Project Commit generation must be ready. A
-direct-file Hook invokes the private lifecycle bridge as:
+On first launch, the **Connect Your Agents** screen offers the same choice, with Codex selected by default. Choose **Install and Continue**, or **Set Up Later** to return through Settings.
 
-```bash
-/path/to/Clumsies.app/Contents/Resources/clumsiesd \
-  _agent agent-run-event --host codex|claude-code|opencode
-```
+For Codex, look for **Plugin installed and enabled**. If it says **Will install when Codex is available**, install the Codex App first. If it says **Plugin needs repair** or **Plugin not installed**, choose **Repair Selected Integrations** and check the status again.
 
-The Codex plugin Hook invokes the host-plugin form:
+## Start a fresh task
 
-```bash
-/path/to/Clumsies.app/Contents/Resources/clumsiesd \
-  _agent agent-run-event --host codex --delivery host-plugin
-```
+After installing or updating the Codex plugin, restart Codex and start a new task from the bound repository. Existing tasks keep their previous plugin snapshot.
 
-Both modes are short-lived proxies. They are parsed before daemon
-initialization and never open local databases or start models and workers.
+In Codex, review and trust the Clumsies Hook in `/hooks` to enable Agent activity records. This trust is separate from Memory retrieval: the Hook observes activity, while the MCP tool retrieves and changes Memory.
 
-## Runtime path
+Clumsies checks the task's directory at startup and on every tool call. An unbound directory cannot use the Project merely selected in the App. Git worktrees can resolve through the main checkout's binding. When you change directories, verify that the task resolves to the intended Project.
 
-```text
-agent host
-  -> App-bundled Rust proxy (`clumsiesd mcp serve`)
-  -> resident Rust clumsiesd over macOS XPC
-  -> Effective Memory (installed Commit + current local Draft overlay)
-  -> SQLite FTS/vector index and local ONNX models
-```
+## Verify the connection
 
-The proxy first compares its runtime protocol revision and build identity with
-the resident daemon, then asks daemon to resolve the current directory to a
-canonical Project. Every later Agent-scoped XPC request carries that identity;
-the resident rejects a missing or mismatched marker before decoding the
-operation. This is a release-compatibility fence, not an authorization
-boundary. Unmarked `health` remains available for Desktop startup discovery,
-and the few Desktop operations that share domain handlers use reserved
-`desktop_*` method names. MCP does not crawl the repository or read a second
-cache. The resident daemon is the single owner of the current local read and
-write model.
+Ask the agent a concrete question about a document selected for the Project. Check the actual Clumsies **memory** tool result for the document's path and relevant content.
 
-## Model preparation
+The integration instructs Codex to retrieve relevant context at the start of substantive work. If no retrieval occurs, explicitly ask it to use Clumsies, then inspect the tool call. A statement that it “used memory” is not sufficient evidence. The [Codex tutorial](/quickstart/use-with-agent) provides an example and expected results.
 
-The daemon starts model preparation in the background before the first MCP
-request. It downloads a pinned int8
-[`multilingual-e5-small`](https://huggingface.co/intfloat/multilingual-e5-small)
-embedding model and a pinned int8
-[`bge-reranker-base`](https://huggingface.co/Xenova/bge-reranker-base)
-conversion. The complete payload is 431,831,479 bytes.
+The first use downloads local search models and prepares the Project index. While preparation is in progress, retrieval can return `search_model_preparing`; allow preparation to finish, then retry. Models are cached locally for later use.
 
-Every repository revision and artifact SHA-256 is fixed in the daemon. Files
-are downloaded into the model cache with resume support, verified before ONNX
-loading, and reused offline afterward. Search index status reports `preparing`
-with downloaded and total bytes while this work is in progress. Activation
-returns `search_model_preparing` immediately during that state; it never blocks
-an MCP request on an unreported download and never falls back to a weaker
-retrieval path.
+## If the connection fails
 
-## Tool loop
+| What you see | What to check |
+| --- | --- |
+| No Clumsies tool in a Codex task | Check the plugin status, restart Codex, and create a new task. |
+| Repository is not bound | Bind the actual directory used by this task to the intended Project. |
+| Runtime version mismatch after an update | Restart Clumsies and the agent host so the bundled runtime and resident daemon use the same build. |
+| Retrieval is preparing or a document is missing | Check model preparation, synchronization, and the Project's selected Memory. |
+| Retrieval works but activity records are absent | Check the host's Hook setup and trust separately. |
 
-The current MCP surface contains exactly one tool:
+If a failure persists, use [Troubleshooting](/guides/troubleshooting) to collect the relevant diagnostics.
 
-- `memory`: dispatches three Memory operations:
-  - `activate`: send a natural-language task cue and receive ranked fragments
-  ready for the current reasoning context.
-  - `load`: read complete resources by known stable ID or exact path.
-  - `store`: persist an explicit user-requested Memory Draft.
+## Other supported hosts
 
-Typical use is:
+Settings also lists Claude Code, opencode, Antigravity, and dsh. Their integration and lifecycle support differ. For dsh, **Runtime configured; profile bridge required** means the profile bridge still needs configuration.
 
-```text
-memory.activate(query, optional state)
-  -> use returned fragments
-  -> optionally memory.load known complete resources
-  -> memory.store only for explicit memory maintenance
-```
-
-For an update, `memory.load` is mandatory: use the returned complete-resource hash and
-exact source text in one or more atomic `memory.store.update` replacements. The agent
-does not send a reconstructed complete document.
-
-There is no setup call, host-session binding, or `META_PROMPT.md` bootstrap.
-Protocol guidance comes from the MCP initialization instructions and tool
-descriptions. The `state` returned by `memory.activate` is only a bounded fragment
-delta token; pass it again only while earlier fragments remain in model
-context.
-
-## Adapter boundary
-
-Adapters make a concrete host launch the MCP server. Codex receives one thin
-bootstrap Skill inside the plugin; it coordinates `memory.activate`, loads
-relevant project-maintained skills from Memory Space with `memory.load`. The project skills themselves remain
-ordinary Memory resources and are never installed into a host skill directory.
-Other hosts consume the MCP tools directly. Host-specific Hooks observe
-lifecycle outside the MCP memory contract and must not reimplement retrieval or
-inject a second bootstrap protocol.
-
-Codex plugin proxies identify both `host=codex` and `delivery=host-plugin`.
-The Plugin is installed and enabled globally, but it can operate only inside a
-repository with a canonical Project binding. The resident daemon resolves that
-binding at startup and before every `tools/call`; removing or changing the
-binding makes an already running plugin proxy fail its next call closed. Every harness has one user-level choice in Settings → Agents, independent of
-Project bindings. Unbound directories are rejected by every MCP entry point;
-no proxy falls back to the Project selected in the App. Plugin installation does not grant
-Hook trust: the user must review the current
-Clumsies Hook in `/hooks` before AgentRun observation becomes available.
-Installation also does not hot-load the plugin into an
-existing Codex task; restart Codex after install or update, then start a new
-task with the new plugin snapshot.
-
-The native daemon installer writes the exact code-signed App-bundled
-`clumsiesd` path into host configuration and its managed resolver. It does not
-copy a helper into `~/.clumsies`, consult a checkout's build output, or fall back
-to `PATH`. Updating the App therefore updates the executable used by every new
-MCP or Hook proxy; the release-identity check detects a resident that still
-needs to be restarted.
-
-Members configure and select Projects through product clients. Agents consume
-the selected Project through MCP. Keeping those roles separate prevents host
-integration details from becoming a second memory system.
+The [adapter reference](/adapter) describes each host's files, Hook support, and profile requirements. Use that page when maintaining an integration; the [MCP reference](/mcp) defines the Memory tool itself.

@@ -1,36 +1,43 @@
-# Guides
+---
+title: Task guides
+description: Choose a specific Memory, integration, administration, or development task.
+---
+# Task guides
 
-Start with the outcome you want. Each guide covers an operating task; the architecture and reference pages explain the design behind it.
+Use these guides when you know what you want to achieve. Each entry gives a starting condition and a result. If you are learning the workflow for the first time, follow the [five-step quickstart](/quickstart/) instead.
 
-## New to the project?
+## Work with team knowledge
 
-Follow this route before reading source code:
-
-1. [Understand Clumsies](/overview): the problem it solves and the six core concepts.
-2. [Architecture](/architecture): where Desktop, daemon, Server, and agent integrations run.
-3. [Data model](/data-model): how Memory, Draft, Review, and version snapshots relate.
-4. [End-to-end flows](/flows): follow the deployment rollback checklist from retrieval to publication.
-5. [Domain API map](/reference/domain-api): connect product operations to MCP, XPC, and HTTP.
-6. [Codebase map](/repos): choose the implementation entry point for your question.
-
-If you want to try the product first, go directly to the member workflow below and return to the design pages as needed.
-
-## Choose a task
-
-| I want to… | Guide | Expected result |
+| Task | Start here when… | Result |
 | --- | --- | --- |
-| Use Memory in my repository and propose a change | [Member workflow](/guides/how-to-use-clumsies) | A bound repository and a Draft ready for Review |
-| Deploy a Server for my team | [Organization deployment](/guides/deploy-for-an-org) | A configured installation and first owner |
-| Connect an agent host | [Agent runtime](/guides/agent-runtime) | A host-managed path to the resident daemon |
-| Understand agent lifecycle events | [AgentRun lifecycle](/guides/agent-run-injection) | Know which events are recorded and what they do |
-| Connect DeepSeek Harness | [DSH integration](/guides/dsh-integration) | MCP registration and lifecycle forwarding |
-| Develop Clumsies locally | [Development workflow](/guides/development-workflow) | An isolated worktree and Dev Instance |
-| Understand local caches and Draft overlays | [Memory storage boundary](/guides/rule-store-unification) | Know which data is authoritative and which is derived |
+| [Select existing organization Memory](/quickstart/select-memory) | The shared document exists but your Project does not use it yet | The Project references the selected Memory |
+| [Use selected Memory with Codex](/quickstart/use-with-agent) | Your repository is bound to a Project | Codex retrieves the knowledge relevant to its task |
+| [Ask Codex to propose an update](/quickstart/update-memory) | A shared document needs a specific correction | A Draft contains the authorized change |
+| [Review and publish a proposal](/quickstart/review-and-publish) | A Draft is ready for human review | A reviewed update becomes the shared version |
+| [Create a new Memory](/guides/create-memory) | The organization does not yet have the knowledge you need | A new document is proposed and published |
+| [Find a recurring member task](/guides/how-to-use-clumsies) | You want a shortcut to a familiar part of the workflow | The relevant instructions, without repeating the tutorial |
 
-The [archived CLI page](/guides/cli-commands) explains historical commands. It is not the current onboarding path.
+The first four entries also appear in the tutorial. They link to the same instructions so fixes do not drift between copies. Creating a new Memory is a separate task; selecting an existing one never requires copying its content.
 
-## Know which role you need
+## Set up or troubleshoot a workspace
 
-Members with Project access can use its Memory, create their own Drafts, submit Reviews, and participate in allowed Review discussions. Organization owners/admins manage Projects and organization-Memory selections and authorize publication. Installing an agent integration does not grant additional Server permissions.
+| Task | Guide |
+| --- | --- |
+| Obtain the current App | [Availability and installation](/quickstart/install) |
+| Sign in to an organization | [Connect](/quickstart/connect) |
+| Create a Project and associate a local repository | [Create a project](/quickstart/create-project) |
+| Configure an agent integration | [Agent integration](/guides/agent-runtime) |
+| Connect DeepSeek Harness | [DSH integration](/guides/dsh-integration) |
+| Investigate missing content, sync problems, or slow Review loading | [Troubleshooting](/guides/troubleshooting) |
 
-The [member guide](/guides/how-to-use-clumsies) shows where these roles meet in one workflow. The [domain API map](/reference/domain-api) describes the enforcement boundaries.
+## Administer or develop the service
+
+| Task | Guide |
+| --- | --- |
+| Deploy a Server for a team | [Organization deployment](/guides/deploy-for-an-org) |
+| Check authentication and account access | [Authentication and sessions](/reference/auth) |
+| Run a development instance or change the implementation | [Development workflow](/guides/development-workflow) |
+| Locate a component's source and tests | [Codebase map](/repos) |
+| Investigate a performance observation | [Performance evidence](/performance/) |
+
+For explanations of why the system works this way, use the [design reading route](/#understand-the-design). For exact fields, permissions, and errors, use [Interface reference](/reference/).

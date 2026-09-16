@@ -4,165 +4,72 @@
   <img src="docs/public/logo.png" width="72" height="72" alt="Clumsies Logo" />
 </p>
 
-<p align="center">
-  <b>The Collaborative Memory Platform for Agent Coding</b><br>
-  <i>Share, review, and evolve organizational memory assets across engineering teams and coding agents.</i>
-</p>
+[English](README.md) · [简体中文](README.zh-CN.md) · [Documentation](https://docs.clumsies.ai)
 
-<p align="center">
-  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
-</p>
+[![CI](https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml/badge.svg)](https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/lilhammerfun/clumsies?label=License)](LICENSE)
 
-<p align="center">
-  <a href="https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml"><img src="https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/lilhammerfun/clumsies/blob/main/LICENSE"><img src="https://img.shields.io/github/license/lilhammerfun/clumsies?label=License" alt="License: MIT"></a>
-  <a href="https://github.com/lilhammerfun/clumsies/releases"><img src="https://img.shields.io/github/v/release/lilhammerfun/clumsies?label=Release" alt="Release"></a>
-</p>
+> **WIP — the native macOS App is under active development.** Public GitHub Releases contain the older CLI, not an installer for the current App. Follow the [installation guide](https://docs.clumsies.ai/quickstart/install) to build and install the App from source.
 
----
+Clumsies helps teams maintain shared Markdown guidance for coding agents: architecture decisions, project constraints, and procedures. The organization keeps published **Memory**; each **Project** selects the Memory it uses and connects it to local repositories. Agents retrieve relevant guidance while they work and can propose changes when a user asks.
 
-## The Paradigm Shift
+## How you use it
 
-AI coding agents are changing the control plane of software development.
+The [quickstart](https://docs.clumsies.ai/quickstart/) follows one workflow:
 
-Engineering organizations used to manage only code in Git repositories. In the agentic era, teams must also manage the **architectural rules, domain constraints, and project context** that steer how AI agents write and refactor code.
+1. Create a Project and bind your working repository.
+2. Select the Memory that Project needs from the organization.
+3. Work in Codex with the Clumsies integration enabled; it retrieves relevant Memory as part of the task.
+4. Explicitly ask Codex to update Memory when a rule or procedure needs to change.
+5. Inspect the resulting Draft in Clumsies and submit a Review. An organization owner or administrator approves and publishes it.
 
-Today, agent memory is trapped inside isolated model sessions or local markdown files. It cannot be peer-reviewed, shared across teammates, or synchronized across agent runs. When context limits hit, critical project guidelines are silently dropped.
+Retrieval does not automatically rewrite Memory. A saved Draft is a proposal, and publication requires human review. Drafts can affect that Project's local Memory view before publication.
 
-**Clumsies is the collaborative memory platform for agent coding.** It treats agent memory as a first-class, versioned organizational asset — enabling human engineers and autonomous agents to build, review, and activate shared knowledge seamlessly.
+## Install and get started
 
----
+The App runs on **macOS 14 or later**. Source installation requires a compatible full Xcode 26 or newer, stable Rust, Just, and XcodeGen; building has stricter macOS requirements than running the App. Check the [installation guide](https://docs.clumsies.ai/quickstart/install) for prerequisites, updates, and troubleshooting.
 
-## Key Features
-
-- **Memory as a Team Asset (Git-Semantic Context)**: Rules, workflows, and project context live as first-class Markdown-backed Organization Memory. A Project selects the Organization resources it uses and carries private Draft overlays; reviewed changes merge atomically into immutable Organization Commit history.
-- **Hybrid Retrieval & Precise Activation**: Combines SQLite FTS5 BM25 text search, local dense vector embeddings, Reciprocal Rank Fusion (RRF), and Cross-Encoder reranking. Agents retrieve task-relevant fragments on demand without exhausting token budgets.
-- **MCP & Non-Blocking Lifecycle Integration**: Out-of-the-box integration for Google Antigravity, Claude Code, OpenAI Codex, opencode, and DeepSeek Harness (dsh) via a single signed Rust daemon (`clumsiesd`). Adapters are installed per user for all projects. Codex is selected by default and delivered as a user-level plugin; project-maintained skills remain in Memory Space and are loaded on demand. Restart Codex and start a new task after plugin changes, then complete the one-time `/hooks` review before its plugin Hook runs.
-- **Self-Hosted Authority**: Run the Rust Server and PostgreSQL in your own infrastructure with organization OIDC, while the local resident daemon owns fast local state and XPC transport.
-
----
-
-## Supported Agent Ecosystem
-
-| Agent Host | Protocol Surface | Managed Files | Supported Lifecycle |
-| :--- | :--- | :--- | :--- |
-| **Google Antigravity** | MCP + Lifecycle Hook | `~/.gemini/config/mcp_config.json`, `~/.gemini/config/hooks.json` | `PreInvocation`; no root `Stop` |
-| **Claude Code** | MCP + Lifecycle Hook | `~/.claude.json`, `~/.claude/settings.json` | Prompt, subagent, failure, and session events; no root `Stop` |
-| **OpenAI Codex** | Plugin: MCP + Hook + bootstrap Skill | App-managed user plugin; no project files | Prompt, subagent, and session events after Hook trust; no root `Stop` |
-| **opencode** | MCP + Plugin | `~/.config/opencode/opencode.json`, `~/.config/opencode/plugins/clumsies.ts` | Prompt, failure, and session events; no normal root `Stop` |
-| **DeepSeek Harness (dsh)** | MCP + Hook Bridge | `~/.dsh/clumsies.json` | Prompt, failure, and session events; no normal root `Stop` |
-
----
-
-## Quick Start
-
-Install from `main` for everyday use on your Mac. These steps build the Debug
-configuration, install **`~/Applications/Clumsies.app`**, and open it. Debug is
-the build configuration; this is the regular app installation with persistent
-accounts, Memory, and Agent integrations.
-
-The app includes the default Server address, `https://app.clumsies.ai`.
-Sign-in automatically loads the organization configured on that Server.
-
-### Ask an agent to install it
-
-Copy this prompt to your coding agent:
-
-```text
-Install Clumsies for everyday use on this Mac from:
-https://github.com/lilhammerfun/clumsies
-
-Follow the README's source installation steps on the main branch. Check
-and install missing prerequisites: full Xcode 26 or newer compatible with
-this Mac, stable Rust, Just, and XcodeGen. Reuse working installations and
-preserve existing repository changes, Clumsies accounts, Memory, and configuration.
-For a first installation, use the app's built-in Server and sign-in defaults.
-
-Run just install-macos from the repository root to build and install
-the complete Debug app, including its daemon, at ~/Applications/Clumsies.app.
-Open that installed app. Do not create a Dev Instance or start a local Server.
-If a step fails, report the failing command and cause instead of switching
-installation methods. Tell me when login or macOS authorization needs my input.
-
-Confirm that the installed app opens, then guide me through organization
-sign-in, binding my working repository to a Project, and connecting my agent.
-```
-
-### Install from source
-
-1. Install **full Xcode 26 or newer**, choosing a version compatible with your
-   macOS from [Apple's system requirements](https://developer.apple.com/xcode/system-requirements/).
-   Open Xcode once, accept its license, and install the requested components.
-   Select it as the active toolchain (adjust the path if installed elsewhere):
-
-   ```sh
-   sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-   sudo xcodebuild -runFirstLaunch
-   xcodebuild -version
-   ```
-
-2. Install [Homebrew](https://brew.sh/) if needed, then install
-   [Just](https://formulae.brew.sh/formula/just),
-   [XcodeGen](https://formulae.brew.sh/formula/xcodegen), and
-   [Rust](https://formulae.brew.sh/formula/rust):
-
-   ```sh
-   brew install just xcodegen rust
-   ```
-
-   If you already have a working stable Rust toolchain, omit `rust` from the
-   command. Both `cargo` and `rustc` must be available in your current shell.
-
-3. Build and install the app:
-
-   ```sh
-   git clone --branch main https://github.com/lilhammerfun/clumsies.git
-   cd clumsies
-   just install-macos
-   ```
-
-   The first build downloads dependencies and can take several minutes. The
-   command builds the app and its bundled daemon, verifies signing, installs
-   `~/Applications/Clumsies.app`, and opens it. Replacing an existing app keeps
-   your accounts, Memory, and configuration.
-
-### Sign in and connect your agent
-
-1. Open the app, keep the prefilled **Server address**, and click
-   **Continue in Browser** to sign in. The app loads your organization automatically.
-2. Choose which agents to connect on this Mac; Codex is selected by default.
-   These adapters are installed once for all projects. Change them later in
-   **Settings → Agents**. dsh also requires [profile setup](https://docs.clumsies.ai/guides/dsh-integration).
-3. Select a Project and add your working repository through
-   **Repositories → Add Repositories…**. For Codex, restart it, start a new task
-   in that repository, and review the Clumsies Hook in `/hooks`.
-4. Allow the initial model download and Memory indexing to finish, then ask:
-
-   ```text
-   Use Clumsies to read this repository's Project Memory and summarize the
-   guidelines that apply to my current task.
-   ```
-
-See the [usage guide](https://docs.clumsies.ai/guides/how-to-use-clumsies) for
-the full workflow. If sign-in or Project access is denied, contact your
-organization administrator. Change the Server address only when connecting
-to another deployment.
-
-To update later, run these commands in your `main` checkout:
+With those prerequisites ready:
 
 ```sh
-git pull --ff-only
+git clone --branch main https://github.com/lilhammerfun/clumsies.git
+cd clumsies
 just install-macos
 ```
 
----
+This builds the Debug configuration, installs the complete App and bundled daemon at **`~/Applications/Clumsies.app`**, and opens it. It uses the regular application's persistent accounts, Memory, and settings. The default Server address is **`https://app.clumsies.ai`**; signing in requires an account admitted by that organization. Use your team's Server address when connecting to another deployment.
 
-## Documentation
+Continue with [Connect to your organization](https://docs.clumsies.ai/quickstart/connect), then the [quickstart](https://docs.clumsies.ai/quickstart/).
 
-Full documentation is available at [docs.clumsies.ai](https://docs.clumsies.ai).
+### Ask an agent to install it
 
----
+```text
+Install Clumsies for everyday use on this Mac from the main branch of:
+https://github.com/lilhammerfun/clumsies
+
+Follow docs/quickstart/install.md in that checkout. Check prerequisites and
+reuse working tools. Preserve repository changes, Clumsies accounts, Memory,
+and settings. Run just install-macos to install ~/Applications/Clumsies.app.
+Use the built-in Server address for a first installation unless I provide
+another one. Do not create a Dev Instance or start a local Server.
+
+If a command fails, report its error instead of changing installation methods.
+Tell me when sign-in or macOS authorization requires my input. Confirm that
+the installed App opens, then guide me to the documentation quickstart.
+```
+
+## Agent support and limits
+
+Clumsies includes integrations for the macOS Codex App, Claude Code, opencode, DeepSeek Harness (`dsh`), and Google Antigravity. Install the agent host separately. Adapters are configured once per Mac user for all projects; Codex is selected by default during first-time setup. Repository bindings determine which Project's Memory an agent can use.
+
+After changing the Codex integration, restart Codex and start a new task. To enable Agent activity recording, review and trust Clumsies in `/hooks`; MCP Memory retrieval does not require Hook trust. Retrieval needs the local daemon and a ready index; first use downloads the retrieval models. Host-specific requirements are documented in [Agent integration](https://docs.clumsies.ai/guides/agent-runtime).
+
+Teams can deploy the Rust Server and PostgreSQL with their own OIDC identity provider. See [organization deployment](https://docs.clumsies.ai/guides/deploy-for-an-org).
+
+## Understand the project
+
+[Overview](https://docs.clumsies.ai/overview) · [Architecture](https://docs.clumsies.ai/architecture) · [Data model](https://docs.clumsies.ai/data-model) · [Domain interfaces](https://docs.clumsies.ai/reference/domain-api) · [Development workflow](https://docs.clumsies.ai/guides/development-workflow)
 
 ## License
 
-[MIT License](LICENSE) © 2026 Clumsies Lab
+[MIT](LICENSE) © 2026 Clumsies Lab

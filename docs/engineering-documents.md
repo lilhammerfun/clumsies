@@ -1,41 +1,80 @@
 # Writing documentation
 
-The acceptance test is a reader encountering Clumsies for the first time: **they can follow the reading path to understand the product, design, data, and interfaces, then find implementation evidence when needed.** Accuracy and completeness do not require presenting every internal detail on the first page.
+A new reader should be able to choose a useful reading route, understand the system, and find reliable instructions or contracts without reading the source first. Completing a tutorial and understanding the architecture are different needs; the documentation must serve both.
 
 ## Organize around readers' questions
 
-| Content type | Question | Entry point |
-| --- | --- | --- |
-| Introduction | What is it, and why is it designed this way? | [Overview](/overview), [Architecture](/architecture) |
-| Structures and principles | What are the entities, fields, relationships, and invariants? | [Data structures](/data-model), [Flows](/flows) |
-| Task guide | How do I complete a task and confirm success? | [Guides](/guides/) |
-| Interface reference | What are the inputs, outputs, permissions, preconditions, errors, and version rules? | [Domain interfaces](/reference/domain-api), [HTTP](/reference/http-api), [MCP](/mcp) |
-| Design detail | How does a subsystem implement these behaviors? | Server, Runtime, Memory, Review, and retrieval pages |
-| History and evidence | What changed previously? What did a measurement establish? | Historical pages, [Performance](/performance/) |
+Give each page one primary purpose. A short explanation can support an action, and an example can clarify a contract, but an extended topic belongs on its own page.
 
-Keep one current detailed explanation per topic. Introductory pages explain the necessary concepts and link to it rather than duplicating the specification. English and Chinese use matching routes with equivalent main-path depth and facts.
+| Page type | What belongs here | Clumsies entry |
+| --- | --- | --- |
+| Tutorial | A defined starting point, one guided learning exercise, small steps, and visible results | [Quickstart](/quickstart/) |
+| Task guide | A specific goal, required access, relevant choices, actions, verification, and recovery | [Task guides](/guides/) |
+| Concept or design explanation | The problem, relationships, ownership, reasons for decisions, tradeoffs, and limits | [Overview](/overview), [Architecture](/architecture), [Data model](/data-model), [Flows](/flows) |
+| Reference | Precise operations, fields, types, permissions, preconditions, errors, and version rules | [Domain interfaces](/reference/domain-api), [MCP](/mcp), [HTTP](/reference/http-api) |
+| Index | Who a route serves, its reading order, prerequisites, and expected result | [Home](/), [Guide index](/guides/), [Reference index](/reference/) |
+
+Development and maintenance are reader groups, not exceptions to these page responsibilities. A development setup page is a task guide; a runtime ownership page is an explanation. Mark historical material with its date or applicable version and link to the current behavior.
+
+## Maintain the reading routes
+
+The home page serves three groups: team members using Memory, technical readers learning the design, and people integrating, operating, or developing Clumsies. Each route names what a reader should be able to do or explain afterward.
+
+Keep the five tutorial steps in this order: create a Project → select existing organization Memory → use it with Codex → explicitly ask Codex to propose an update → human Review and publication, followed by verification in Codex. Installation and sign-in are preparation, without step numbers.
+
+Use Payments, `clumsies-demo`, and `deployment-rollback.md` consistently. The document must already exist in Organization Memory; it is not built-in sample data. Link an empty organization to [Create Memory](/guides/create-memory), then return to the tutorial. Selection references a shared document; it does not copy its content.
+
+Check these relationships whenever navigation changes:
+
+- Previous and Next links agree with the intended reading order in both languages.
+- A page that requires a previous result links to the page that produces it.
+- Subsystem details and history remain behind clear, collapsed groups.
+- Published URLs and useful heading anchors remain reachable. Move their readers to the current explanation instead of retaining another complete tutorial.
+- English and Chinese describe equivalent prerequisites, examples, roles, and outcomes.
 
 ## Write each page for its purpose
 
-1. Start with what the page helps a reader understand or do, and any necessary prerequisites.
-2. Explain concepts through a concrete scenario before introducing entity and field names. Use the fictional deployment rollback checklist example, never a user's private data.
-3. Describe identity, ownership, key fields, nullable values, relationships, and version boundaries. Distinguish database rows, HTTP responses, and local derived objects.
-4. Group interfaces by domain and use case. Label complete requests versus excerpts and explain where placeholder IDs, hashes, and ETags come from.
-5. Show persistence points, completion conditions, failure results, and recovery across processes. Separate local acceptance, synchronization, and publication.
-6. Use diagrams to explain relationships. Supply equivalent prose, image alt text, and a full-size link. Check entities, arrows, and states against implementation.
-7. End with a few precise source or test links. Preserve historical URLs where useful, but clearly identify retired behavior at the top of those pages.
+**Tutorials:** state what the reader will complete and how to recognize progress. Introduce terms where they become necessary. Move installation alternatives, full API payloads, and design discussions to linked pages.
+
+**Task guides:** start with the actual problem, such as selecting shared knowledge or recovering a failed synchronization. State the required starting condition and any decisions that change the steps. End with a check of the result and a useful recovery path. Do not repeat the entire first-use sequence.
+
+**Explanations:** connect concepts before listing implementation names. Explain what is authoritative, what is derived, why a boundary exists, and what that choice costs. Use a concrete example and an accurate diagram where it helps; include equivalent prose. A table of entity names alone does not explain a data model.
+
+**References:** use a consistent structure so a reader can find an input, permission, error, or concurrency rule directly. Distinguish a database row from an HTTP response or local object. Mark excerpts and placeholders, and explain how callers obtain real IDs, hashes, or versions.
+
+**Indexes:** link to the maintained detail. If an index grows into a second explanation or tutorial, shorten it. The published [member workflow URL](/guides/how-to-use-clumsies) is now a task index.
 
 ## Verify the facts
 
-Implementation evidence includes code, database migrations, HTTP routes, Rust/Swift types, and executable tests. OpenAPI route coverage does not establish that every schema field matches runtime behavior; known differences belong in [HTTP contracts](/reference/http-api).
+| Claim | Evidence to check |
+| --- | --- |
+| An action exists and a role may perform it | Current action code, authorization handlers, and relevant tests |
+| A field or response has a particular meaning | Types or migrations together with the handler or serializer that uses them |
+| Saving, synchronization, or publication has completed | Transaction boundaries, queue handling, state transitions, and failure tests |
+| A caller can recover or retry safely | Error paths, idempotency or version checks, and documented limits |
+| An App installer is available | Actual release assets and the supported installation route |
 
-Do not describe design goals as implemented guarantees or local measurements as production performance promises. Current pages explain implemented behavior; dated performance evidence states its scope and limitations. This documentation reorganization was checked against code baseline `5d038ff`; evidence links can pin that revision. Update explanations and links when the corresponding implementation changes.
+A design proposal or an old document is context, not proof of current behavior. Route coverage alone does not establish schema accuracy. Record what revision and evidence were checked in the change description or the relevant page; do not imply that an old baseline verifies every page after the implementation changes.
+
+Use current implementation names only where they help the reader. Keep local saved state, Server synchronization, and shared publication distinct. Check Project roles separately from organization roles. Explain whether a retrieval result is a fragment or a full document.
+
+Label planned behavior as planned. Scope performance evidence to its environment and date. Do not describe a static source review as a completed App test, or refer to an illustration or other asset that is absent.
+
+## Review as a first-time reader
+
+A reviewer should be able to answer these questions from the relevant pages:
+
+| Reader | Acceptance questions |
+| --- | --- |
+| Team member | Where do I start? What must already exist? Does selection copy a document? When may Codex propose a change? Who publishes it, and how do I verify the result? |
+| Technical reader | What belongs to the App, daemon, and Server? Which objects represent content and proposals? What changes when a version is published? What can fail between those steps? |
+| Integrator or maintainer | Which interface serves my operation? What access and version conditions apply? Where are errors, recovery rules, implementation, and tests documented? |
+
+Also check whether each unfamiliar term is explained or linked before it becomes necessary, whether the example stays consistent across pages, and whether the next link answers the reader's likely next question.
 
 ## Check before submission
 
-- Walk the main path from the [documentation home](/). Are terms explained before use? Does the next page answer the questions raised by this one?
-- Compare examples, state transitions, permissions, and errors with code; verify the two languages describe the same behavior.
-- Build the site and check navigation, content links, images, and JSON examples:
+Review the facts and both reading routes first. Then run the relevant existing checks:
 
 ```sh
 bun install --frozen-lockfile
@@ -43,14 +82,23 @@ bun run build
 bun dev/check-docs-search.mjs
 ```
 
-- For HTTP contracts, run the existing route-coverage test:
+For HTTP route changes, also run:
 
 ```sh
 cargo test -p server --lib axum_routes_match_public_and_admin_openapi
 ```
 
-- Check desktop and narrow-screen reading. Tables should scroll horizontally and diagrams should open at full size. A successful build does not replace editorial review or API behavior tests.
+Check internal links, heading anchors, language counterparts, example requests, and referenced assets. Choose behavior tests according to the claim being changed. A successful site build confirms that pages can be generated; it does not prove that instructions or API behavior are correct.
 
 ## Publish to the documentation site
 
-VitePress sources live in `docs/`, static images in `docs/public/`, and build output in `docs/.vitepress/dist/`. The existing Site Delivery workflow builds and deploys documentation changes that land on `main` to docs.clumsies.ai. See the [Site Delivery workflow](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/.github/workflows/site-delivery.yml). A local preview does not mean the live site has changed.
+VitePress sources live in `docs/`, static assets in `docs/public/`, and build output in `docs/.vitepress/dist/`. Follow the repository's [Site Delivery workflow](https://github.com/lilhammerfun/clumsies/blob/main/.github/workflows/site-delivery.yml) for publication. Distinguish local preview, completed delivery, and verification of the live site.
+
+## Sources for this structure
+
+- [Diátaxis](https://diataxis.fr/) distinguishes learning, completing work, understanding, and looking up information. Its pages on [tutorials](https://diataxis.fr/tutorials/), [task guides](https://diataxis.fr/how-to-guides/), [explanation](https://diataxis.fr/explanation/), and [reference](https://diataxis.fr/reference/) inform the page responsibilities above.
+- [Kubernetes documentation](https://kubernetes.io/docs/home/) provides separate Concepts, Tasks, Tutorials, and Reference entrances. Clumsies likewise keeps explanations and contracts independently accessible.
+- [Docker Get started](https://docs.docker.com/get-started/) separates installation from choosing a tutorial by goal. Clumsies places installation and sign-in before the five-step exercise.
+- [GitHub Get started](https://docs.github.com/en/get-started) offers quickstart, overview, and specific topics together. Clumsies uses distinct routes for first use, understanding the project, and finding a task.
+
+These are methods for organizing the material. Clumsies examples, roles, operations, and guarantees must come from this project's current behavior.
