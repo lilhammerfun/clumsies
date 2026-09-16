@@ -14,6 +14,7 @@ extension ToolbarItemPlacement {
 
 enum SyncToolbarPresentation: Equatable {
     case syncing(changeCount: Int)
+    case inReview(changeCount: Int)
     case failed(changeCount: Int, message: String?)
     case unavailable(message: String?)
     case stale
@@ -21,7 +22,8 @@ enum SyncToolbarPresentation: Equatable {
     static func resolve(
         status: DaemonSyncStatus?,
         isAvailable: Bool,
-        serverDataSource: String?
+        serverDataSource: String?,
+        submittedDraftCount: Int = 0
     ) -> Self? {
         guard isAvailable else { return .unavailable(message: nil) }
 
@@ -50,6 +52,9 @@ enum SyncToolbarPresentation: Equatable {
         }
 
         if serverDataSource == "stale" { return .stale }
+        if status.commitSync.state == "idle", submittedDraftCount > 0 {
+            return .inReview(changeCount: submittedDraftCount)
+        }
         return nil
     }
 
@@ -61,6 +66,7 @@ enum SyncToolbarPresentation: Equatable {
     var symbolName: String {
         switch self {
         case .syncing: "arrow.triangle.2.circlepath"
+        case .inReview: "checkmark.bubble"
         case .failed: "cloud.exclamationmark"
         case .unavailable(let message): message == nil ? "questionmark.circle" : "cloud.exclamationmark"
         case .stale: "clock.arrow.circlepath"
@@ -71,6 +77,8 @@ enum SyncToolbarPresentation: Equatable {
         switch self {
         case .syncing(let count):
             count == 1 ? "Syncing 1 change" : count > 1 ? "Syncing \(count) changes" : "Syncing changes"
+        case .inReview(let count):
+            count == 1 ? "Synced · 1 change in review" : "Synced · \(count) changes in review"
         case .failed:
             "Changes haven't synced"
         case .unavailable(let message):
@@ -84,6 +92,8 @@ enum SyncToolbarPresentation: Equatable {
         switch self {
         case .syncing:
             return "Your changes are syncing in the background."
+        case .inReview:
+            return "These changes have synced. Review and merge them to publish."
         case .failed(let count, _):
             return count == 1
                 ? "One change couldn't be synced. Try again."
@@ -103,7 +113,7 @@ enum SyncToolbarPresentation: Equatable {
         let message: String?
         switch self {
         case .failed(_, let value), .unavailable(let value): message = value
-        case .syncing, .stale: message = nil
+        case .syncing, .inReview, .stale: message = nil
         }
         return message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? message : nil
     }
@@ -307,12 +317,11 @@ struct WorkspaceView: View {
                                     .frame(width: 24, height: 24)
                                     .help(syncToolbarPresentation.label)
                                     .accessibilityLabel(syncToolbarPresentation.label)
-                            case .failed, .unavailable, .stale:
+                            case .failed, .unavailable, .stale, .inReview:
                                 Button {
                                     showsSyncIssuePopover.toggle()
                                 } label: {
-                                    Image(systemName: syncToolbarPresentation.symbolName)
-                                        .foregroundStyle(syncToolbarPresentation.tint)
+                                    syncToolbarPresentation.icon
                                 }
                                 .help(syncToolbarPresentation.label)
                                 .accessibilityLabel(syncToolbarPresentation.label)
@@ -445,10 +454,16 @@ struct WorkspaceView: View {
                                     Divider()
                                 }
                                 if let item = store.currentItem, hasDocumentActions(item) {
+                                    if let draft = item.draft, draft.status == .submitted {
+                                        Button("View Review") {
+                                            Task { await store.openReview(for: draft) }
+                                        }
+                                        Divider()
+                                    }
                                     if canRequestDocumentReview(item),
                                        let draft = item.draft,
                                        let sessionKey = store.documentSessionKey(for: item) {
-                                        Button("Request Review") {
+                                        Button("Request Review…") {
                                             store.pendingDocumentCommand = .requestReview(
                                                 sessionKey: sessionKey,
                                                 draft: draft
@@ -471,7 +486,7 @@ struct WorkspaceView: View {
                                     if canProposeOrganizationDeletion(item),
                                        let sessionKey = store.documentSessionKey(for: item) {
                                         Button(
-                                            "Propose Organization Deletion",
+                                            "Delete…",
                                             role: .destructive
                                         ) {
                                             store.pendingDocumentCommand = .moveToTrash(
@@ -616,8 +631,8 @@ struct WorkspaceView: View {
                !store.reviews.contains(where: { $0.id == routedReviewId }) {
                 reviewNavigationPath.removeAll()
             }
-            if reviewNavigationPath.isEmpty,
-               let reviewId = store.selectedReviewId,
+            if let reviewId = store.selectedReviewId,
+               reviewNavigationPath.last?.reviewId != reviewId,
                store.reviews.contains(where: { $0.id == reviewId }) {
                 reviewNavigationPath = [ReviewRoute(reviewId: reviewId)]
             }
@@ -822,12 +837,11 @@ struct WorkspaceView: View {
                         .help(syncToolbarPresentation.label)
                         .accessibilityLabel(syncToolbarPresentation.label)
                         .accessibilityIdentifier("review-toolbar-sync")
-                case .failed, .unavailable, .stale:
+                case .failed, .unavailable, .stale, .inReview:
                     Button {
                         showsSyncIssuePopover.toggle()
                     } label: {
-                        Image(systemName: syncToolbarPresentation.symbolName)
-                            .foregroundStyle(syncToolbarPresentation.tint)
+                        syncToolbarPresentation.icon
                     }
                     .help(syncToolbarPresentation.label)
                     .accessibilityLabel(syncToolbarPresentation.label)
@@ -1124,7 +1138,9 @@ struct WorkspaceView: View {
         return SyncToolbarPresentation.resolve(
             status: store.runtime?.sync,
             isAvailable: store.syncStatusAvailable,
-            serverDataSource: store.runtime?.serverDataSource
+            serverDataSource: store.runtime?.serverDataSource,
+            submittedDraftCount: store.draftInventoryLoadState == .loaded
+                ? store.submittedProjectDrafts.count : 0
         )
     }
 
@@ -1172,9 +1188,20 @@ private struct ActivityProjectFilter: View {
 }
 
 private extension SyncToolbarPresentation {
+    @ViewBuilder
+    var icon: some View {
+        if case .inReview = self {
+            DraftReviewIcon()
+        } else {
+            Image(systemName: symbolName)
+                .foregroundStyle(tint)
+        }
+    }
+
     var tint: Color {
         switch self {
         case .syncing: .secondary
+        case .inReview: Color(nsColor: .systemGreen)
         case .failed: .red
         case .unavailable: .secondary
         case .stale: .secondary
@@ -1226,12 +1253,12 @@ private struct SyncIssuePopover: View {
     let presentation: SyncToolbarPresentation
     @ObservedObject var store: WorkspaceStore
     @State private var isReloading = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: presentation.symbolName)
-                    .foregroundStyle(presentation.tint)
+                presentation.icon
                 Text(presentation.label)
                     .font(.headline)
             }
@@ -1239,6 +1266,25 @@ private struct SyncIssuePopover: View {
             Text(presentation.detail)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if case .inReview = presentation {
+                let reviewIds = Set(store.submittedProjectDrafts.compactMap {
+                    store.review(for: $0)?.id
+                })
+                ForEach(store.reviews.filter { reviewIds.contains($0.id) }) { review in
+                    Button(review.title) {
+                        dismiss()
+                        store.openReview(review)
+                    }
+                    .help("View Review")
+                }
+                ForEach(store.submittedProjectDrafts.filter { store.review(for: $0) == nil }) { draft in
+                    Button("View Review for \(draft.document.title)") {
+                        dismiss()
+                        Task { await store.openReview(for: draft) }
+                    }
+                }
+            }
 
             if store.syncRetryErrorMessage != nil {
                 Label("Sync still couldn't finish. You can try again.", systemImage: "exclamationmark.triangle")
@@ -1290,7 +1336,7 @@ private struct SyncIssuePopover: View {
                     }
                     .disabled(isReloading)
                     .keyboardShortcut(.defaultAction)
-                case .syncing:
+                case .syncing, .inReview:
                     EmptyView()
                 }
             }

@@ -560,6 +560,34 @@ final class FileTreeSelectionTests: XCTestCase {
         XCTAssertEqual(MemoryFileTreeRowAccessory.resolve(item: item), .none)
     }
 
+    func testDraftLifecycleSeparatesReviewStateFromUnpublishedChanges() {
+        let cases: [(DaemonLocalDraftStatus, MemoryFileTreeRowAccessory, MemoryFileTreeTitleTone)] = [
+            (.open, .draft, .modifiedDraft),
+            (.submitted, .inReview, .modifiedDraft),
+            (.merged, .none, .primary),
+            (.discarded, .none, .primary),
+        ]
+        for (status, accessory, tone) in cases {
+            let draft = draft(targetId: "memory", status: status)
+            let item = MemoryListItem(id: "memory", resource: nil, draft: draft, inherited: true)
+            XCTAssertEqual(MemoryFileTreeRowAccessory.resolve(item: item), accessory)
+            XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: item), tone)
+            let visible = WorkspaceStore.memoryTreeDrafts([draft], activeProjectId: "project")
+            XCTAssertEqual(visible.isEmpty, status == .merged || status == .discarded)
+        }
+    }
+
+    @MainActor
+    func testDraftReviewIconsAreBundledAndReadable() throws {
+        for name in ["git-pull-request-16", "git-pull-request-draft-16"] {
+            let url = try XCTUnwrap(Bundle.main.url(
+                forResource: name, withExtension: "svg", subdirectory: "Octicons"
+            ))
+            let image = try XCTUnwrap(NSImage(contentsOf: url))
+            XCTAssertEqual(image.size, NSSize(width: 16, height: 16))
+        }
+    }
+
     func testThreeWayLocalChangeShowsRemovalThenInsertion() {
         let lines = ThreeWayDiff.lines(base: "a\nb", local: "a\nB", remote: "a\nb")
         XCTAssertEqual(lines.map(\.kind), [.context, .removal, .insertion])
@@ -767,7 +795,8 @@ final class FileTreeSelectionTests: XCTestCase {
 
     private func draft(
         targetId: String?,
-        isDeletion: Bool = false
+        isDeletion: Bool = false,
+        status: DaemonLocalDraftStatus = .open
     ) -> LocalDraft {
         LocalDraft(
             id: "draft-\(targetId ?? "new")",
@@ -783,7 +812,7 @@ final class FileTreeSelectionTests: XCTestCase {
             scope: .project,
             kind: .context,
             targetId: targetId,
-            status: .open,
+            status: status,
             origin: .desktop,
             syncStatus: .synced,
             updatedAt: "2026-08-05T00:00:00Z",

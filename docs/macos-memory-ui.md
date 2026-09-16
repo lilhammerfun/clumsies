@@ -15,6 +15,12 @@ Project selection controls effective Memory, Drafts, and Review context. A proje
 
 The UI restores a selection only when it remains valid. Loading, conflict, offline, selection, and error states do not rely on color alone, and keyboard navigation remains available.
 
+File-name colors describe unpublished additions, modifications, and deletions. A gray Draft icon marks unsubmitted edits; a green pull-request icon marks submitted Drafts. Its tooltip identifies the Review, and clicking it or choosing **View Review** opens that Review, including for files in a multi-Draft Review. Merged and discarded Drafts have no file-tree status marker.
+
+When synchronization is idle and changes are submitted, the sync status reports **Synced · N changes in review** and links to the Reviews. Synchronization does not submit or merge a Review. Failures and stale data take priority over this completion message.
+
+File menus use **Rename…** and **Delete…**. Their confirmations explain that the change is saved as a Draft and affects every project referencing the file after review and merge. **Remove from Project** only removes that project's reference.
+
 ## Review requests
 
 Directory and multi-selection Review requests include open Organization Drafts carried by the selected Project. Every Draft must be synced and have a Server ID; directory operations and document synchronization also block the entry point.

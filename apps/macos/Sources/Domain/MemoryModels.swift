@@ -192,6 +192,7 @@ struct ReviewRecord: Identifiable, Hashable, Sendable {
     let reconciliationCandidateId: String?
     let currentCommitId: String?
     let updatedAt: String
+    var draftIds: [String] = []
 }
 
 struct ReviewChangeSources: Sendable {

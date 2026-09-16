@@ -579,8 +579,8 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         )
 
         let organization = MemoryFileTreeAlert.organizationDeletion(items: [shared])
-        XCTAssertEqual(organization.title, "Propose Organization Deletion?")
-        XCTAssertEqual(organization.confirmationTitle, "Propose Deletion")
+        XCTAssertEqual(organization.title, "Delete File?")
+        XCTAssertEqual(organization.confirmationTitle, "Delete")
         XCTAssertTrue(organization.message.contains("every project"))
 
         let discard = MemoryFileTreeAlert.directoryDiscard(

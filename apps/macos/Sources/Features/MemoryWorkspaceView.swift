@@ -247,13 +247,13 @@ enum MemoryFileTreeAlert: Identifiable {
     var title: String {
         switch self {
         case .itemRename(let item):
-            item.resource == nil ? "Rename Draft" : "Propose Organization Rename"
+            "Rename \(item.document.path.split(separator: "/").last ?? "File")"
         case .directoryRename:
             "Rename Folder"
         case .organizationDeletion(let items):
             items.count == 1
-                ? "Propose Organization Deletion?"
-                : "Propose \(items.count) Organization Deletions?"
+                ? "Delete File?"
+                : "Delete \(items.count) Files?"
         case .directoryDiscard(let name, let drafts):
             drafts.count == 1
                 ? "Discard Draft in \(name)?"
@@ -265,12 +265,10 @@ enum MemoryFileTreeAlert: Identifiable {
 
     var confirmationTitle: String {
         switch self {
-        case .itemRename(let item):
-            item.resource == nil ? "Rename" : "Propose Rename"
-        case .directoryRename(_, let items):
-            items.contains { $0.resource != nil } ? "Propose Renames" : "Rename"
-        case .organizationDeletion(let items):
-            items.count == 1 ? "Propose Deletion" : "Propose Deletions"
+        case .itemRename, .directoryRename:
+            "Rename"
+        case .organizationDeletion:
+            "Delete"
         case .directoryDiscard:
             "Discard Drafts"
         case .directoryDeletion:
@@ -284,8 +282,8 @@ enum MemoryFileTreeAlert: Identifiable {
             if item.resource == nil {
                 return "This changes the path in the current Project-carried Draft."
             }
-            return "This creates a draft proposal. If it is reviewed and merged, "
-                + "the organization memory will be renamed for every project that includes it."
+            return "The rename is saved as a draft. After review and merge, "
+                + "the file will be renamed in every project that includes it."
         case .directoryRename(_, let items):
             let sharedCount = items.filter { $0.resource != nil }.count
             let draftCount = items.count - sharedCount
@@ -471,10 +469,17 @@ private struct FileTreeView: View {
     }
 
     private func fileTreeRow(for entry: VisibleFileTreeNode) -> some View {
-        FileTreeRow(
+        let review = entry.node.item?.draft.flatMap { store.review(for: $0) }
+        return FileTreeRow(
             entry: entry,
             isExpanded: expandedDirectoryIds.contains(entry.id),
             isStale: resourceIsStale(for: entry.node.item),
+            review: review,
+            onOpenReview: {
+                if let draft = entry.node.item?.draft {
+                    Task { await store.openReview(for: draft) }
+                }
+            },
             onDirectoryClick: { modifierFlags in
                 handleDirectoryClick(entry.id, modifierFlags: modifierFlags)
             }
@@ -774,13 +779,11 @@ private struct FileTreeView: View {
                 Button("Open Source") { store.open(singleItem, mode: .source) }
             }
             if singleRenameable {
-                Button(
-                    singleItem.resource == nil ? "Rename…" : "Propose Organization Rename…"
-                ) { beginRenaming(singleItem) }
+                Button("Rename…") { beginRenaming(singleItem) }
                     .disabled(directoryOperationProgress != nil || singleSynchronizing)
             }
             if singleTrashable {
-                Button("Propose Organization Deletion", role: .destructive) {
+                Button("Delete…", role: .destructive) {
                     proposeOrganizationDeletion([singleItem])
                 }
                 .disabled(directoryOperationProgress != nil || singleSynchronizing)
@@ -842,6 +845,7 @@ private struct FileTreeView: View {
                     || store.activeProjectId.map { !store.canManageProject($0) } != false
                     || selectionContainsSynchronizingDocument
             )
+            .help("Remove the reference from this project. The shared file is kept.")
         }
         if !isOrgView, !reviewDrafts.isEmpty {
             Button(reviewRequestTitle(count: reviewDrafts.count)) {
@@ -855,6 +859,11 @@ private struct FileTreeView: View {
                     || !reviewSelectionIsReady
                     || selectionContainsSynchronizingDocument
             )
+        }
+        if !isOrgView, let draft = singleItem?.draft, draft.status == .submitted {
+            Button("View Review") {
+                Task { await store.openReview(for: draft) }
+            }
         }
         if let selectedDirectory, !directoryDrafts.isEmpty {
             Button(
@@ -966,9 +975,7 @@ private struct FileTreeView: View {
     }
 
     private func organizationDeletionTitle(count: Int) -> String {
-        count == 1
-            ? "Propose Organization Deletion"
-            : "Propose \(count) Organization Deletions"
+        count == 1 ? "Delete…" : "Delete \(count) Files…"
     }
 
     private func reviewRequestTitle(count: Int) -> String {
@@ -1114,6 +1121,7 @@ enum MemoryFileTreeTitleTone: Equatable {
     static func resolve(item: MemoryListItem?) -> Self {
         guard let item else { return .primary }
         guard let draft = item.draft else { return .primary }
+        guard draft.status == .open || draft.status == .submitted else { return .primary }
         if draft.isDeletion { return .deletedDraft }
         if draft.targetId == nil { return .newDraft }
         return .modifiedDraft
@@ -1132,15 +1140,24 @@ enum MemoryFileTreeTitleTone: Equatable {
 enum MemoryFileTreeRowAccessory: Equatable {
     case none
     case legacyProjectReadOnly
+    case draft
+    case inReview
 
     static func resolve(item: MemoryListItem?) -> Self {
-        item?.resource?.scope == .project ? .legacyProjectReadOnly : .none
+        if item?.resource?.scope == .project { return .legacyProjectReadOnly }
+        switch item?.draft?.status {
+        case .open: return .draft
+        case .submitted: return .inReview
+        default: return .none
+        }
     }
 
     var help: String? {
         switch self {
         case .none: nil
         case .legacyProjectReadOnly: "Legacy Project memory — read-only"
+        case .draft: "Draft — not submitted for review"
+        case .inReview: "In Review — awaiting review and merge"
         }
     }
 }
@@ -1149,6 +1166,8 @@ private struct FileTreeRow: View {
     let entry: VisibleFileTreeNode
     let isExpanded: Bool
     let isStale: Bool
+    let review: ReviewRecord?
+    let onOpenReview: () -> Void
     let onDirectoryClick: (NSEvent.ModifierFlags) -> Void
 
     private var item: MemoryListItem? { entry.node.item }
@@ -1183,7 +1202,21 @@ private struct FileTreeRow: View {
                     reconciliation: item?.draft?.reconciliation,
                     isStale: isStale
                 )
-                if let help = rowAccessory.help {
+                if rowAccessory == .inReview {
+                    Button(action: onOpenReview) {
+                        DraftReviewIcon()
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(review.map { "In Review: \($0.title). Click to view Review." }
+                        ?? "In Review. Click to load and view Review.")
+                    .accessibilityLabel("View Review for \(entry.node.name)")
+                } else if rowAccessory == .draft {
+                    DraftReviewIcon(submitted: false)
+                        .help(rowAccessory.help ?? "Draft")
+                        .accessibilityLabel("Draft — not submitted for review")
+                } else if let help = rowAccessory.help {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -1201,6 +1234,35 @@ private struct FileTreeRow: View {
 
     private var rowAccessory: MemoryFileTreeRowAccessory {
         MemoryFileTreeRowAccessory.resolve(item: item)
+    }
+}
+
+struct DraftReviewIcon: View {
+    var submitted = true
+
+    private static let openImage = load("git-pull-request-16")
+    private static let draftImage = load("git-pull-request-draft-16")
+
+    private static func load(_ name: String) -> NSImage? {
+        Bundle.main.url(forResource: name, withExtension: "svg", subdirectory: "Octicons")
+            .flatMap { NSImage(contentsOf: $0) }
+    }
+
+    var body: some View {
+        Group {
+            if let image = submitted ? Self.openImage : Self.draftImage {
+                Image(nsImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "checkmark.bubble")
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+        .frame(width: 14, height: 14)
+        .foregroundStyle(submitted ? Color(nsColor: .systemGreen) : .secondary)
     }
 }
 
@@ -1510,9 +1572,9 @@ private struct DocumentSessionView: View {
                 )
             }
         }
-        .alert("Propose Organization Deletion?", isPresented: $confirmsOrganizationDeletion) {
+        .alert("Delete File?", isPresented: $confirmsOrganizationDeletion) {
             Button("Cancel", role: .cancel) {}
-            Button("Propose Deletion", role: .destructive) {
+            Button("Delete", role: .destructive) {
                 moveToTrash()
             }
         } message: {
