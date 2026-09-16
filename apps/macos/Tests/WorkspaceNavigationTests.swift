@@ -191,6 +191,32 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertEqual(all.count, 4)
     }
 
+    func testSubmittedMemoryOpensItsBatchReviewUsingServerDraftIdentity() async throws {
+        let store = WorkspaceStore()
+        var review = reviewRecord(status: "open", id: "batch-review", projectId: "project")
+        review.draftIds = ["draft", "server-second"]
+        store.replaceReview(with: review)
+        let submitted = localDraft(
+            id: "second", targetId: "memory", scope: .org, status: .submitted
+        )
+
+        let linked = try XCTUnwrap(store.review(for: submitted))
+        XCTAssertEqual(linked.id, "batch-review")
+        store.selectedReviewId = "previous-review"
+        await store.openReview(for: submitted)
+        XCTAssertEqual(store.selectedReviewId, "batch-review")
+        XCTAssertEqual(store.selectedSection, .reviews)
+        XCTAssertNil(store.review(for: localDraft(
+            id: "second", targetId: "memory", projectId: "other", scope: .org, status: .submitted
+        )))
+        XCTAssertNil(store.review(for: localDraft(id: "second", targetId: "memory", scope: .org)))
+
+        var merged = reviewRecord(status: "merged", id: "batch-review", projectId: "project")
+        merged.draftIds = review.draftIds
+        store.replaceReview(with: merged)
+        XCTAssertNil(store.review(for: submitted))
+    }
+
     func testReviewListFiltersDefaultToOpenAndCombineAuthorAndProject() {
         let reviews = [
             reviewRecord(status: "open", id: "alice-p1", projectId: "p1", authorId: "alice"),
@@ -2170,6 +2196,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         targetId: String?,
         projectId: String = "project",
         scope: MemoryScope = .project,
+        status: DaemonLocalDraftStatus = .open,
         updatedAt: String = "2026-08-19T00:00:00Z"
     ) -> LocalDraft {
         LocalDraft(
@@ -2186,7 +2213,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             scope: scope,
             kind: .context,
             targetId: targetId,
-            status: .open,
+            status: status,
             origin: .desktop,
             syncStatus: .synced,
             updatedAt: updatedAt,

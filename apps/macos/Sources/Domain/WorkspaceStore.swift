@@ -1079,6 +1079,56 @@ final class WorkspaceStore: ObservableObject {
         reviews.first { $0.id == selectedReviewId } ?? reviews.first
     }
 
+    func review(for draft: LocalDraft) -> ReviewRecord? {
+        guard draft.status == .submitted, let serverId = draft.serverId else { return nil }
+        return reviews.first {
+            $0.projectId == draft.projectId
+                && ($0.status == "open" || $0.status == "approved")
+                && ($0.draftId == serverId || $0.draftIds.contains(serverId))
+        }
+    }
+
+    func openReview(_ review: ReviewRecord) {
+        selectedReviewId = review.id
+        selectedSection = .reviews
+    }
+
+    func openReview(for draft: LocalDraft) async {
+        let generation = workspaceReloadGeneration
+        let projectId = activeProjectId
+        let section = selectedSection
+        do {
+            if review(for: draft) == nil {
+                let baseline = reviews
+                let loaded = try await WorkspaceLoader(
+                    daemon: daemon, bootstrap: bootstrap, server: server
+                ).loadReviews()
+                guard workspaceReloadGeneration == generation,
+                      activeProjectId == projectId,
+                      selectedSection == section, !Task.isCancelled else { return }
+                reviews = Self.mergeDeferredRecords(
+                    baseline: baseline, current: reviews, loaded: loaded.records
+                )
+                reviewLoadState = .loaded
+            }
+            guard let review = review(for: draft) else {
+                errorMessage = "The Review for this draft is unavailable. It may have already been closed."
+                return
+            }
+            openReview(review)
+        } catch {
+            guard workspaceReloadGeneration == generation,
+                  activeProjectId == projectId,
+                  selectedSection == section, !Task.isCancelled else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    var submittedProjectDrafts: [LocalDraft] {
+        guard let activeProjectId else { return [] }
+        return drafts.filter { $0.projectId == activeProjectId && $0.status == .submitted }
+    }
+
     func canPerformReviewMenuAction(_ action: ReviewMenuAction) -> Bool {
         guard phase == .ready,
               selectedSection == .reviews,
@@ -6928,7 +6978,8 @@ struct WorkspaceLoader: Sendable {
             reconciliation: metadata.coordination.reconciliation,
             reconciliationCandidateId: metadata.coordination.candidateId,
             currentCommitId: metadata.coordination.currentCommitId,
-            updatedAt: metadata.updatedAt
+            updatedAt: metadata.updatedAt,
+            draftIds: metadata.draftIds ?? [metadata.draftId]
         )
     }
 

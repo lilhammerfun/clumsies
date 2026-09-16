@@ -40,6 +40,16 @@ Delete Folder 属于文件树层；Add/Remove Project、Request Review、Discard
 Shared Changes 属于领域层。删除共享资源始终创建 Organization deletion Draft，不在客户
 端直接删除权威。
 
+文件菜单使用 `Rename…` 和 `Delete…`，确认框说明修改先保存为草稿，审核合并后影响所有
+引用该文件的项目。`Remove from Project` 只移除当前项目的引用。
+
+文件名颜色表示尚未发布的新增、修改或删除。未提交草稿在右侧显示灰色 Draft 图标；
+已提交草稿显示绿色 PR 图标，悬停显示 Review 标题，点击图标或选择 `View Review` 打开
+对应审核。批量 Review 中的每个文件都能关联到同一审核；合并或放弃后清除草稿标记。
+
+同步完成后仍有待审核修改时，状态提示为 `Synced · N changes in review`，并提供对应
+Review 的入口。同步失败或数据过期时优先显示问题；同步本身不会提交或合并 Review。
+
 ### ZIP 导出
 
 顶部导出按钮导出当前 Project 或 Organization 视图的全部记忆，不受搜索过滤影响。

@@ -2227,6 +2227,10 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertNil(metadata.decidedAt)
         XCTAssertNil(record.decidedBy)
         XCTAssertNil(record.decidedAt)
+        XCTAssertEqual(record.draftIds, ["draft-1"])
+        var batch = metadata
+        batch.draftIds = ["draft-1", "draft-2"]
+        XCTAssertEqual(WorkspaceLoader.mapReview(batch).draftIds, ["draft-1", "draft-2"])
     }
 
     func testReviewChangeSourcesUseCommitTreeAndDraftOperation() throws {
@@ -2885,6 +2889,29 @@ final class DaemonContractTests: XCTestCase {
             ),
             .syncing(changeCount: 2)
         )
+    }
+
+    func testSyncCompletionKeepsPendingReviewsDistinctFromTransportProblems() {
+        let pending = SyncToolbarPresentation.resolve(
+            status: syncStatus(), isAvailable: true, serverDataSource: "live", submittedDraftCount: 1
+        )
+        XCTAssertEqual(pending, .inReview(changeCount: 1))
+        XCTAssertEqual(pending?.label, "Synced · 1 change in review")
+        XCTAssertNil(pending?.errorDetails)
+        XCTAssertEqual(SyncToolbarPresentation.resolve(
+            status: syncStatus(draftState: "queued", pendingCount: 2),
+            isAvailable: true, serverDataSource: "live", submittedDraftCount: 1
+        ), .syncing(changeCount: 2))
+        XCTAssertEqual(SyncToolbarPresentation.resolve(
+            status: syncStatus(commitState: "failed", commitError: "Unavailable"),
+            isAvailable: true, serverDataSource: "live", submittedDraftCount: 1
+        ), .unavailable(message: "Unavailable"))
+        XCTAssertEqual(SyncToolbarPresentation.resolve(
+            status: syncStatus(), isAvailable: true, serverDataSource: "stale", submittedDraftCount: 1
+        ), .stale)
+        XCTAssertNil(SyncToolbarPresentation.resolve(
+            status: syncStatus(), isAvailable: true, serverDataSource: "live", submittedDraftCount: 0
+        ))
     }
 
     func testSyncToolbarSurfacesCommitChannelFailureWithoutFailedDrafts() {
