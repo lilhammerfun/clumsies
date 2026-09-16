@@ -27,9 +27,9 @@ Retrieval does not automatically rewrite Memory. A saved Draft is a proposal, an
 
 ## Install and get started
 
-Supports **macOS 14 or later on Apple Silicon and Intel Macs**. No Xcode, Rust, or other build tools are needed to install the DMG.
+Supports **macOS 14 or later on Apple Silicon Macs (M1 or newer)**. No Xcode, Rust, or other build tools are needed to install the DMG.
 
-1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) and download `Clumsies-*-macos-universal.dmg` from the newest **Clumsies macOS Preview**.
+1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) and download `Clumsies-*-macos-arm64.dmg` from the newest **Clumsies macOS Preview**.
 2. Open the DMG, drag **Clumsies.app** into **Applications**, eject the disk image, and open the installed App.
 3. The preview is not notarized by Apple. If macOS blocks the first launch, confirm the file came from this repository, then use **System Settings → Privacy & Security → Open Anyway**. Managed Macs may restrict this exception. [Apple's instructions](https://support.apple.com/102445)
 4. Keep the default Server address **`https://app.clumsies.ai`** and sign in with an account admitted by that organization. Use your team's Server address for another deployment.

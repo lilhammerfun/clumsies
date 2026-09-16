@@ -98,10 +98,12 @@ and matching workflow/source refs. For example, after merging into `main`:
 gh workflow run release.yml --ref main -f distribution=preview -f ref=main
 ```
 
-CI builds a universal App and daemon, ad-hoc signs them, creates and mounts
-the DMG, verifies its contents, signing, and architectures, then publishes
+CI builds an Apple Silicon App and daemon, ad-hoc signs them, creates and mounts
+the DMG, verifies its contents, signing, and architecture, then publishes
 a GitHub pre-release tagged `macos-preview-<run-number>` with a DMG and SHA-256
-checksum. Preview builds need no Apple or Sparkle secrets. They do not change
+checksum. Preview builds need no Apple or Sparkle secrets. Intel previews are not
+available because the current ONNX Runtime dependency has no prebuilt
+`x86_64-apple-darwin` library. They do not change
 the latest stable release or publish an automatic-update feed. Users update
 by downloading another DMG.
 

@@ -12,9 +12,9 @@ next:
 
 ## 下载并安装
 
-支持 **macOS 14 及以上版本、Apple Silicon 和 Intel Mac**，无需安装编译工具。
+支持 **macOS 14 及以上版本、Apple Silicon Mac（M1 及更新机型）**，无需安装编译工具。
 
-1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases)，选择最新 **Clumsies macOS Preview** 中的 `Clumsies-*-macos-universal.dmg`。
+1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases)，选择最新 **Clumsies macOS Preview** 中的 `Clumsies-*-macos-arm64.dmg`。
 2. 打开 DMG，将 `Clumsies.app` 拖入 `Applications`，然后推出磁盘映像。
 3. 打开应用。当前体验版尚未经过 Apple 公证；若 macOS 拦截，确认下载来源可信后，到 **系统设置 → 隐私与安全 → 仍要打开**。[Apple 说明](https://support.apple.com/zh-cn/102445)
 4. 继续[连接组织](/zh/quickstart/connect)。默认 Server 地址为 `https://app.clumsies.ai`，登录需要组织准入的账号。首次使用会联网下载检索模型。

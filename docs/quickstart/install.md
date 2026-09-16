@@ -12,9 +12,9 @@ next:
 
 ## Download and install
 
-Supports **macOS 14 or later on Apple Silicon and Intel Macs**, without build tools.
+Supports **macOS 14 or later on Apple Silicon Macs (M1 or newer)**, without build tools.
 
-1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) and download `Clumsies-*-macos-universal.dmg` from the newest **Clumsies macOS Preview**.
+1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) and download `Clumsies-*-macos-arm64.dmg` from the newest **Clumsies macOS Preview**.
 2. Open the DMG, drag `Clumsies.app` into `Applications`, and eject the disk image.
 3. Open the App. The preview is not notarized by Apple. If macOS blocks it, verify that you trust the download, then use **System Settings → Privacy & Security → Open Anyway**. [Apple's instructions](https://support.apple.com/102445)
 4. Continue to [Connect to your organization](/quickstart/connect). The default Server is `https://app.clumsies.ai`; sign-in requires an admitted account. First use downloads the retrieval models.
