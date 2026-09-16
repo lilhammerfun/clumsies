@@ -84,6 +84,14 @@ changed-file navigator | Review 元数据 + 当前文件 diff
 不继承 Memory 的重命名、删除、编辑或 Project selection 操作。每个 terminal 节点来自一
 条 Draft 的最终 path，稳定 ID 优先使用资源 ID，没有资源 ID 时退回 Review/Draft 组合。
 
+收到 Review 的 `drafts[]` 元数据后立即展示文件树。只有选中文件才加载快照并在后台计算
+diff；同一 Review 版本内，共享已完成和进行中的 commit 请求。文件加载状态、失败与重试
+都在详情区展示，目录仍可切换。Review 版本变化或离开页面时取消该加载器，迟到的响应
+不能覆盖当前选中文件。
+
+当前 commit 接口仍返回整份快照，首个 diff 需要等待这一次下载，文件树无需等待。
+客户端日志分别记录目录就绪与单个文件的加载耗时。
+
 主内容按顺序显示：
 
 1. 标题和朴素状态；

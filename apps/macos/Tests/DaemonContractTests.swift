@@ -1126,9 +1126,9 @@ final class DaemonContractTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(reviewSource.contains(
-            "$0.detail.draft.draftId == candidate.draftId"
+            "$0.draft.draftId == candidate.draftId"
         ))
-        XCTAssertTrue(reviewSource.contains("}?.detail.draft.projectId"))
+        XCTAssertTrue(reviewSource.contains("}?.draft.projectId"))
     }
 
     func testDraftUploadBarrierRechecksAfterRetryPastDeadline() throws {
@@ -2376,6 +2376,112 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(sources.proposedPath, "notes/b.md")
     }
 
+    func testReviewDirectoryIsAvailableWhileSelectedFileWaitsForItsSnapshot() async throws {
+        let resource = ServerDraftResourceReference(scope: "org", id: "memory-1", path: "notes/a.md")
+        let review = reviewDetail(resource: resource, operations: [
+            .init(action: "rename", resource: resource, content: nil, newPath: "guides/b.md",
+                  operationId: "op-1", createdAt: timestamp),
+            .init(action: "update", resource: resource, content: .init(description: nil, content: "New body"),
+                  newPath: nil, operationId: "op-2", createdAt: timestamp)
+        ])
+        let draft = ReviewDraftDetail(draft: review.draft, operations: review.operations)
+        let payload = commit(id: "commit-base", resource: resource, body: "Base body")
+        let started = DaemonContractTestLatch()
+        let release = DaemonContractTestLatch()
+        let probe = ReviewCommitProbe(payload: payload)
+        let loader = ReviewFileLoader { id in
+            await started.open()
+            await release.wait()
+            return try await probe.fetch(id)
+        }
+        let oldSelection = Task { try await loader.load(draft) }
+        await started.wait()
+        let descriptor = ReviewFileDescriptor.resolve(reviewId: review.review.reviewId, detail: draft)
+        XCTAssertEqual(descriptor.path, "guides/b.md")
+        XCTAssertEqual(descriptor.id, "memory-1")
+        oldSelection.cancel()
+        let newSelection = Task { try await loader.load(draft) }
+        await release.open()
+        do {
+            _ = try await oldSelection.value
+            XCTFail("A cancelled file selection must not publish its content")
+        } catch is CancellationError {}
+        let content = try await newSelection.value
+        XCTAssertEqual(content.sources.baseContent, "Base body")
+        XCTAssertEqual(content.sources.draftContent, "New body")
+        XCTAssertNotNil(content.diff)
+        let requests = await probe.requests
+        XCTAssertEqual(requests, ["commit-base"], "Switching files must reuse the in-flight base/current snapshot")
+    }
+
+    func testReviewFilesShareOneSnapshotAndDoNotFetchUnselectedCommits() async throws {
+        let resources = (0..<12).map {
+            ServerDraftResourceReference(scope: "org", id: "memory-\($0)", path: "notes/\($0).md")
+        }
+        let drafts = resources.map {
+            let review = reviewDetail(resource: $0, operations: [])
+            return ReviewDraftDetail(draft: review.draft, operations: review.operations)
+        }
+        let snapshots = resources.map { commit(id: "commit-base", resource: $0, body: "Base body") }
+        let payload = CommitPayload(
+            commit: snapshots[0].commit,
+            tree: .init(treeId: "tree-commit-base", entries: snapshots.flatMap { $0.tree.entries }),
+            blobs: snapshots[0].blobs
+        )
+        let probe = ReviewCommitProbe(payload: payload)
+        let loader = ReviewFileLoader { try await probe.fetch($0) }
+        let beforeSelection = await probe.requests
+        XCTAssertTrue(beforeSelection.isEmpty)
+        let descriptors = drafts.map {
+            ReviewFileDescriptor.resolve(reviewId: "review-1", detail: $0)
+        }
+        XCTAssertEqual(Set(descriptors.map(\.path)).count, 12)
+        try await withThrowingTaskGroup(of: ReviewFileContent.self) { group in
+            for draft in drafts { group.addTask { try await loader.load(draft) } }
+            for try await content in group { XCTAssertEqual(content.sources.baseContent, "Base body") }
+        }
+        _ = try await loader.load(drafts[0])
+        let requests = await probe.requests
+        XCTAssertEqual(requests, ["commit-base"])
+    }
+
+    func testReviewSnapshotFailureCanRetryAndInvalidatedLoaderRejectsLateResults() async throws {
+        let resource = ServerDraftResourceReference(scope: "org", id: "memory-1", path: "notes/a.md")
+        let review = reviewDetail(resource: resource, operations: [])
+        let draft = ReviewDraftDetail(draft: review.draft, operations: review.operations)
+        let payload = commit(id: "commit-base", resource: resource, body: "Base body")
+        let probe = ReviewCommitProbe(payload: payload)
+        await probe.setFailing(true)
+        let loader = ReviewFileLoader { try await probe.fetch($0) }
+        do {
+            _ = try await loader.load(draft)
+            XCTFail("Failed snapshots must stay errors, not become empty diffs")
+        } catch is CancellationError { XCTFail("Expected the server error") }
+        catch {}
+        let failedRequests = await probe.requests.count
+        await probe.setFailing(false)
+        let recovered = try await loader.load(draft)
+        XCTAssertEqual(recovered.sources.baseContent, "Base body")
+        let requestCount = await probe.requests.count
+        XCTAssertEqual(requestCount, failedRequests + 1)
+
+        let started = DaemonContractTestLatch()
+        let release = DaemonContractTestLatch()
+        let oldRevision = ReviewFileLoader { _ in
+            await started.open()
+            await release.wait()
+            return payload
+        }
+        let pending = Task { try await oldRevision.load(draft) }
+        await started.wait()
+        await oldRevision.cancel()
+        await release.open()
+        do {
+            _ = try await pending.value
+            XCTFail("A replaced Review revision must not publish late content")
+        } catch is CancellationError {}
+    }
+
     func testMemoryDraftRenderingPreservesMarkdown() {
         let content = DaemonDraftContent(
             description: nil,
@@ -3198,6 +3304,21 @@ private actor RetryingDaemonHealthProbe {
 
     func attemptCount() -> Int {
         attempts
+    }
+}
+
+private actor ReviewCommitProbe {
+    private let payload: CommitPayload
+    private var failing = false
+    private(set) var requests: [String] = []
+
+    init(payload: CommitPayload) { self.payload = payload }
+    func setFailing(_ value: Bool) { failing = value }
+
+    func fetch(_ id: String) throws -> CommitPayload {
+        requests.append(id)
+        if failing { throw DaemonContractTestError.unexpectedServerRequest }
+        return payload
     }
 }
 

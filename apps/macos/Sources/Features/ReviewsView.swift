@@ -764,9 +764,15 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     static func resolve(
         reviewId: String,
         detail: ReviewDraftDetail,
-        sources: ReviewChangeSources
+        loadedPath: String? = nil
     ) -> ReviewFileDescriptor {
-        let path = sources.proposedPath ?? detail.draft.resource.path ?? "Untitled"
+        let initialPath = detail.operations.first?.resource.path ?? detail.draft.resource.path
+        let proposedPath = detail.operations.reduce(initialPath) { path, operation in
+            if let newPath = operation.newPath { return newPath }
+            if operation.action == "create", let createdPath = operation.resource.path { return createdPath }
+            return path
+        }
+        let path = loadedPath ?? proposedPath ?? detail.draft.resource.id ?? "Untitled"
         let id = detail.draft.resource.id ?? "review-file:\(reviewId):\(detail.draft.draftId)"
         return .init(id: id, path: path)
     }
@@ -778,7 +784,11 @@ struct ReviewDetailPage: View {
     let loadsRemoteContent: Bool
 
     @State private var detail: ReviewDetail?
-    @State private var fileChanges: [ReviewFileChange] = []
+    @State private var fileLoader: ReviewFileLoader?
+    @State private var fileLoadTask: Task<Void, Never>?
+    @State private var loadedPaths: [String: String] = [:]
+    @State private var loadingFile = false
+    @State private var fileLoadError: String?
     @State private var changeSources: ReviewChangeSources?
     @State private var diffModel: SplitDiffModel?
     @State private var loading = true
@@ -810,24 +820,25 @@ struct ReviewDetailPage: View {
         store.reviews.first { $0.id == reviewId }.map(ReviewDecisionReadiness.init)
     }
 
+    private var draftDetails: [ReviewDraftDetail] {
+        guard let detail else { return [] }
+        return detail.drafts ?? [ReviewDraftDetail(draft: detail.draft, operations: detail.operations)]
+    }
+
     private var fileDescriptors: [ReviewFileDescriptor] {
-        fileChanges.map {
+        draftDetails.map {
             ReviewFileDescriptor.resolve(
                 reviewId: reviewId,
-                detail: $0.detail,
-                sources: $0.sources
+                detail: $0,
+                loadedPath: loadedPaths[$0.draft.draftId]
             )
         }
     }
 
-    private var selectedFileChange: ReviewFileChange? {
-        guard let selectedFileId else { return fileChanges.first }
-        return fileChanges.first {
-            ReviewFileDescriptor.resolve(
-                reviewId: reviewId,
-                detail: $0.detail,
-                sources: $0.sources
-            ).id == selectedFileId
+    private var selectedDraftDetail: ReviewDraftDetail? {
+        guard let selectedFileId else { return draftDetails.first }
+        return draftDetails.first {
+            ReviewFileDescriptor.resolve(reviewId: reviewId, detail: $0).id == selectedFileId
         }
     }
 
@@ -874,9 +885,9 @@ struct ReviewDetailPage: View {
                         draftId: candidate.draftId,
                         candidate: candidate,
                         resolvedState: resolvedState,
-                        projectId: fileChanges.first {
-                            $0.detail.draft.draftId == candidate.draftId
-                        }?.detail.draft.projectId
+                        projectId: draftDetails.first {
+                            $0.draft.draftId == candidate.draftId
+                        }?.draft.projectId
                     )
                 }
             } else if loading {
@@ -892,8 +903,8 @@ struct ReviewDetailPage: View {
                         Task { await load() }
                     }
                 }
-            } else if let review, let detail, !fileChanges.isEmpty {
-                content(review, detail: detail)
+            } else if let review, detail != nil, !draftDetails.isEmpty {
+                content(review)
             } else {
                 ContentUnavailableView(
                     "Review Unavailable",
@@ -928,10 +939,7 @@ struct ReviewDetailPage: View {
         }
     }
 
-    private func content(
-        _ review: ReviewRecord,
-        detail: ReviewDetail
-    ) -> some View {
+    private func content(_ review: ReviewRecord) -> some View {
         return HSplitView {
             ReviewFileNavigator(
                 files: fileDescriptors,
@@ -940,7 +948,7 @@ struct ReviewDetailPage: View {
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
 
             Group {
-                if let selectedFileChange {
+                if let selectedDraftDetail {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
                             reviewHeader(review)
@@ -948,7 +956,7 @@ struct ReviewDetailPage: View {
                             if review.freshness == .behind {
                                 readinessChip(
                                     review,
-                                    detail: selectedFileChange.detail
+                                    detail: selectedDraftDetail
                                 )
                             }
 
@@ -956,7 +964,7 @@ struct ReviewDetailPage: View {
                                 generalCommentsPanel
                             }
 
-                            diffPanel(detail: selectedFileChange.detail)
+                            diffPanel(detail: selectedDraftDetail)
                         }
                         .frame(maxWidth: 1180, alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .top)
@@ -1191,7 +1199,18 @@ struct ReviewDetailPage: View {
 
     @ViewBuilder
     private func diffPanel(detail: ReviewDraftDetail) -> some View {
-        if detail.operations.last?.action == "delete" {
+        if loadingFile {
+            ProgressView("Loading file changes…")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+        } else if let fileLoadError {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Unable to Load File", systemImage: "exclamationmark.triangle")
+                Text(fileLoadError).foregroundStyle(.secondary).textSelection(.enabled)
+                Button("Try Again") { selectCurrentFile() }
+            }
+            .padding(.vertical, 20)
+        } else if detail.operations.last?.action == "delete" {
             Label {
                 Text("This Review deletes the selected memory. There is no proposed file to render.")
             } icon: {
@@ -1212,7 +1231,7 @@ struct ReviewDetailPage: View {
                 onSubmitComment: { line in Task { await submitComment(line: line) } },
                 onReply: { line in composing = .line(line) }
             )
-        } else {
+        } else if changeSources != nil {
             Text("This Review changes metadata without changing text content.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -1247,7 +1266,7 @@ struct ReviewDetailPage: View {
         loading = true
         loadError = nil
         detail = nil
-        fileChanges = []
+        loadedPaths = [:]
         changeSources = nil
         diffModel = nil
         composing = nil
@@ -1261,10 +1280,8 @@ struct ReviewDetailPage: View {
         }
         do {
             let loadedDetail = try await store.reviewDetail(reviewId)
-            let loadedChanges = try await store.reviewFileChanges(for: loadedDetail)
             applyLoadedDetail(
                 loadedDetail,
-                changes: loadedChanges,
                 request: request
             )
         } catch {
@@ -1280,10 +1297,8 @@ struct ReviewDetailPage: View {
         let request = beginDetailRequest()
         do {
             let loadedDetail = try await store.reviewDetail(reviewId)
-            let loadedChanges = try await store.reviewFileChanges(for: loadedDetail)
             applyLoadedDetail(
                 loadedDetail,
-                changes: loadedChanges,
                 request: request
             )
         } catch {
@@ -1299,17 +1314,23 @@ struct ReviewDetailPage: View {
     }
 
     private func beginDetailRequest() -> DetailRequest {
-        clearDecisionReadiness()
-        let generation = UUID()
-        detailRequestGeneration = generation
+        invalidateDetailRequests()
         return DetailRequest(
-            generation: generation,
+            generation: detailRequestGeneration,
             baseline: storedReviewDecisionSignature
         )
     }
 
     private func invalidateDetailRequests() {
         detailRequestGeneration = UUID()
+        fileLoadTask?.cancel()
+        fileLoadTask = nil
+        if let fileLoader { Task { await fileLoader.cancel() } }
+        fileLoader = nil
+        changeSources = nil
+        diffModel = nil
+        fileLoadError = nil
+        loadingFile = false
         clearDecisionReadiness()
     }
 
@@ -1321,14 +1342,12 @@ struct ReviewDetailPage: View {
 
     private func applyLoadedDetail(
         _ loadedDetail: ReviewDetail,
-        changes loadedChanges: [ReviewFileChange],
         request: DetailRequest
     ) {
         guard !Task.isCancelled,
               detailRequestGeneration == request.generation,
               storedReviewDecisionSignature == request.baseline else { return }
         let loadedReview = WorkspaceLoader.mapReview(loadedDetail.review)
-        let loadedSignature = ReviewDecisionReadiness(review: loadedReview)
         if let baseline = request.baseline,
            loadedReview.version < baseline.reviewVersion {
             loading = false
@@ -1337,27 +1356,59 @@ struct ReviewDetailPage: View {
         }
 
         detail = loadedDetail
-        fileChanges = loadedChanges
+        loadedPaths = [:]
+        fileLoader = store.makeReviewFileLoader()
         loading = false
         loadError = nil
+        ClientDiagnostics.record("review_directory_loaded", ["file_count": String(draftDetails.count)])
         let availableIds = Set(fileDescriptors.map(\.id))
         if selectedFileId == nil || !availableIds.contains(selectedFileId!) {
             selectedFileId = fileDescriptors.first?.id
+        } else {
+            selectCurrentFile()
         }
-        selectCurrentFile()
         store.replaceReview(with: loadedReview)
-        store.reviewDecisionReadiness = loadedSignature
     }
 
     private func selectCurrentFile() {
-        changeSources = selectedFileChange?.sources
-        diffModel = selectedFileChange.flatMap { makeDiffModel(from: $0.sources) }
+        fileLoadTask?.cancel()
+        changeSources = nil
+        diffModel = nil
+        fileLoadError = nil
         composing = nil
         commentDraft = ""
+        clearDecisionReadiness()
+        guard let selectedDraftDetail, let fileLoader else { return }
+        let generation = detailRequestGeneration
+        let fileId = selectedFileId
+        loadingFile = true
+        fileLoadTask = Task {
+            let started = ContinuousClock.now
+            do {
+                let content = try await fileLoader.load(selectedDraftDetail)
+                guard !Task.isCancelled, detailRequestGeneration == generation,
+                      selectedFileId == fileId else { return }
+                changeSources = content.sources
+                diffModel = content.diff
+                loadedPaths[selectedDraftDetail.draft.draftId] = content.sources.proposedPath
+                loadingFile = false
+                markCurrentDetailDecisionReady()
+                let elapsed = started.duration(to: .now).components
+                ClientDiagnostics.record("review_file_loaded", [
+                    "elapsed_ms": String(elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000)
+                ])
+            } catch {
+                guard !Task.isCancelled, detailRequestGeneration == generation,
+                      selectedFileId == fileId else { return }
+                loadingFile = false
+                fileLoadError = error.localizedDescription
+                ClientDiagnostics.record("review_file_load_failed", ClientDiagnostics.failureFields(error))
+            }
+        }
     }
 
     private func markCurrentDetailDecisionReady() {
-        guard let detail else {
+        guard let detail, changeSources != nil, !loadingFile, fileLoadError == nil else {
             clearDecisionReadiness()
             return
         }
@@ -1418,17 +1469,9 @@ struct ReviewDetailPage: View {
     }
 
     private func handlePendingReconciliation(_ reviewId: String?) {
-        guard reviewId == self.reviewId, let detail = selectedFileChange?.detail else { return }
+        guard reviewId == self.reviewId, let detail = selectedDraftDetail else { return }
         store.pendingReviewReconciliationId = nil
         loadReconciliation(detail: detail)
-    }
-
-    private func makeDiffModel(from sources: ReviewChangeSources) -> SplitDiffModel? {
-        guard let proposed = sources.draftContent else { return nil }
-        return SplitDiffModel.make(
-            original: sources.baseContent ?? "",
-            modified: proposed
-        )
     }
 
     private func decisionTitle(_ status: String) -> String {
