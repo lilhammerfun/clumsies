@@ -5,7 +5,6 @@
 //! the daemon's typed IPC contracts so a short-lived `clumsiesd` process can
 //! remain a protocol proxy only.
 
-pub mod hook;
 pub mod mcp;
 pub mod mcp_contract;
 
@@ -44,11 +43,7 @@ pub(crate) fn validate_identity(identity: &AgentRuntimeIdentity) -> Result<(), D
 pub(crate) fn method_requires_identity(method: &str) -> bool {
     matches!(
         method,
-        "resolve_project_binding"
-            | "activate_memory"
-            | "load_memory"
-            | "store_draft_operation"
-            | "record_agent_run_event"
+        "resolve_project_binding" | "activate_memory" | "load_memory" | "store_draft_operation"
     )
 }
 
@@ -145,7 +140,6 @@ mod tests {
             "activate_memory",
             "load_memory",
             "store_draft_operation",
-            "record_agent_run_event",
         ] {
             assert!(super::method_requires_identity(method), "{method}");
         }

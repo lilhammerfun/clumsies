@@ -27,17 +27,6 @@ pub use global::{
     DaemonAgentAdapterSetting, DaemonAgentAdapterSettings, DaemonSetAgentAdapterRequest,
 };
 
-const ISSUE_RUN_EVENT_CODEX: &str =
-    include_str!("../../../assets/adapters/codex/runtime/hooks/agent-run-event.sh.tpl");
-const ISSUE_RUN_EVENT_CLAUDE: &str =
-    include_str!("../../../assets/adapters/claude-code/runtime/hooks/agent-run-event.sh.tpl");
-const ISSUE_RUN_EVENT_ANTIGRAVITY: &str =
-    include_str!("../../../assets/adapters/antigravity/runtime/hooks/agent-run-event.sh.tpl");
-const OPENCODE_PLUGIN: &str = include_str!("../../../assets/adapters/opencode/runtime/plugin.ts");
-const LEGACY_USER_PROMPT_SUBMIT_CODEX_SHA256: &str =
-    "03bfb5ddbad36dcf53ba3f1e4e07a83cece33d4a98c29298dc0d7e776f63f815";
-const LEGACY_USER_PROMPT_SUBMIT_CLAUDE_SHA256: &str =
-    "6a2daa1dca1e4ae6ee5c7855bf160418fea46a3ca881c47acdd3f7e7f539aa54";
 const MAX_ADAPTER_FS_OPS: usize = 128;
 const MAX_ADAPTER_FS_CHANGES: usize = 32;
 const MAX_ADAPTER_FS_CONTENT_BYTES: usize = 4 * 1024 * 1024;
@@ -2109,13 +2098,11 @@ pub(crate) async fn install(
     verify_code_signature(&runtime_binary)?;
     let runtime_hash = sha256_file(&runtime_binary)?;
     let previous_manifest = existing.as_ref().map(|record| &record.manifest);
-    let mut changes = install_plan_with_project(
+    let mut changes = install_plan(
         request.adapter,
         &workspace_root,
         &runtime_binary,
         previous_manifest,
-        Some(&server_url),
-        Some(&project_id),
     )?;
     // Retire previously-managed files the new plan no longer includes
     // instead of silently orphaning them on disk.
@@ -2399,30 +2386,11 @@ async fn normalize_empty_binding_alias(
     Ok(())
 }
 
-#[cfg(test)]
 fn install_plan(
     adapter: ProjectAgentAdapterKind,
     workspace_root: &Path,
     runtime_binary: &Path,
     previous_manifest: Option<&AdapterManifest>,
-) -> Result<Vec<PendingChange>, DaemonError> {
-    install_plan_with_project(
-        adapter,
-        workspace_root,
-        runtime_binary,
-        previous_manifest,
-        None,
-        None,
-    )
-}
-
-fn install_plan_with_project(
-    adapter: ProjectAgentAdapterKind,
-    workspace_root: &Path,
-    runtime_binary: &Path,
-    previous_manifest: Option<&AdapterManifest>,
-    server_url: Option<&str>,
-    project_id: Option<&str>,
 ) -> Result<Vec<PendingChange>, DaemonError> {
     install_plan_with_claude_mcp_path(
         adapter,
@@ -2430,8 +2398,6 @@ fn install_plan_with_project(
         runtime_binary,
         previous_manifest,
         None,
-        server_url,
-        project_id,
     )
 }
 
@@ -2441,230 +2407,59 @@ fn install_plan_with_claude_mcp_path(
     runtime_binary: &Path,
     previous_manifest: Option<&AdapterManifest>,
     claude_mcp_path: Option<&Path>,
-    server_url: Option<&str>,
-    project_id: Option<&str>,
 ) -> Result<Vec<PendingChange>, DaemonError> {
-    let effective_claude_mcp_path = claude_mcp_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| workspace_root.join(".mcp.json"));
-    let target_paths = match adapter {
-        ProjectAgentAdapterKind::Codex => vec![
-            workspace_root.join(".codex/config.toml"),
-            workspace_root.join(".codex/hooks.json"),
-            workspace_root.join(".codex/hooks/resolve-binary.sh"),
-            workspace_root.join(".codex/hooks/agent-run-event.sh"),
-            workspace_root.join(".codex/hooks/user-prompt-submit.sh"),
-        ],
-        ProjectAgentAdapterKind::ClaudeCode => vec![
-            effective_claude_mcp_path.clone(),
-            workspace_root.join(".claude/settings.json"),
-            workspace_root.join(".claude/hooks/resolve-binary.sh"),
-            workspace_root.join(".claude/hooks/agent-run-event.sh"),
-            workspace_root.join(".claude/hooks/user-prompt-submit.sh"),
-        ],
-        ProjectAgentAdapterKind::Opencode => vec![
-            workspace_root.join("opencode.json"),
-            workspace_root.join(".opencode/plugins/clumsies.ts"),
-        ],
-        ProjectAgentAdapterKind::Dsh => vec![workspace_root.join(".dsh/clumsies.json")],
-        ProjectAgentAdapterKind::Antigravity => vec![
-            workspace_root.join(".mcp.json"),
-            workspace_root.join(".agents/hooks.json"),
-            workspace_root.join(".agents/hooks/resolve-binary.sh"),
-            workspace_root.join(".agents/hooks/agent-run-event.sh"),
-        ],
-    };
-    for path in &target_paths {
-        ManagedPathGuard::capture_under(workspace_root, path)?;
-    }
-
-    let runtime = runtime_binary.display().to_string();
+    let runtime = runtime_binary
+        .to_str()
+        .ok_or_else(|| adapter_conflict("Runtime path is not UTF-8."))?;
     let previous_runtime = previous_manifest.map(|manifest| manifest.runtime_binary_path.as_str());
-    let mut changes = match adapter {
-        ProjectAgentAdapterKind::Codex => {
-            let hooks_path = workspace_root.join(".codex/hooks.json");
-            let hook_script_path = workspace_root.join(".codex/hooks/agent-run-event.sh");
-            let legacy_hook_script_path = workspace_root.join(".codex/hooks/user-prompt-submit.sh");
-            let hook_ownership = HookOwnership {
-                lifecycle: manifest_manages_path(previous_manifest, &hook_script_path),
-                legacy_prompt: legacy_hook_is_proven_managed(
-                    previous_manifest,
-                    &legacy_hook_script_path,
-                    LEGACY_USER_PROMPT_SUBMIT_CODEX_SHA256,
-                )?,
-            };
-            let managed_hook = render_managed_hook_script(ISSUE_RUN_EVENT_CODEX, &runtime);
-            let managed_resolver =
-                render_managed_binary_resolver(ProjectAgentAdapterKind::Codex, &runtime);
-            vec![
-                merged_change(
-                    workspace_root.join(".codex/config.toml"),
-                    ManagedFileKind::CodexConfig,
-                    0o644,
-                    |current| render_codex_config(current, &runtime, previous_runtime),
-                )?,
-                merged_change(
-                    hooks_path.clone(),
-                    ManagedFileKind::CodexHooks,
-                    0o644,
-                    |current| {
-                        render_hook_registry(current, &hook_script_path, false, hook_ownership)
-                    },
-                )?,
-                exclusive_change(
-                    workspace_root.join(".codex/hooks/resolve-binary.sh"),
-                    managed_resolver.as_bytes(),
-                    previous_manifest,
-                    0o755,
-                )?,
-                exclusive_change(
-                    hook_script_path,
-                    managed_hook.as_bytes(),
-                    previous_manifest,
-                    0o755,
-                )?,
-            ]
-        }
-        ProjectAgentAdapterKind::ClaudeCode => {
-            let settings_path = workspace_root.join(".claude/settings.json");
-            let mcp_path = effective_claude_mcp_path;
-            let hook_script_path = workspace_root.join(".claude/hooks/agent-run-event.sh");
-            let legacy_hook_script_path =
-                workspace_root.join(".claude/hooks/user-prompt-submit.sh");
-            let hook_ownership = HookOwnership {
-                lifecycle: manifest_manages_path(previous_manifest, &hook_script_path),
-                legacy_prompt: legacy_hook_is_proven_managed(
-                    previous_manifest,
-                    &legacy_hook_script_path,
-                    LEGACY_USER_PROMPT_SUBMIT_CLAUDE_SHA256,
-                )?,
-            };
-            let managed_hook = render_managed_hook_script(ISSUE_RUN_EVENT_CLAUDE, &runtime);
-            let managed_resolver =
-                render_managed_binary_resolver(ProjectAgentAdapterKind::ClaudeCode, &runtime);
-            vec![
-                merged_change(
-                    mcp_path.clone(),
-                    ManagedFileKind::ClaudeMcp,
-                    0o644,
-                    |current| render_claude_mcp(current, &runtime, previous_runtime),
-                )?,
-                merged_change(
-                    settings_path.clone(),
-                    ManagedFileKind::ClaudeSettings,
-                    0o644,
-                    |current| {
-                        render_hook_registry(current, &hook_script_path, true, hook_ownership)
-                    },
-                )?,
-                exclusive_change(
-                    workspace_root.join(".claude/hooks/resolve-binary.sh"),
-                    managed_resolver.as_bytes(),
-                    previous_manifest,
-                    0o755,
-                )?,
-                exclusive_change(
-                    hook_script_path,
-                    managed_hook.as_bytes(),
-                    previous_manifest,
-                    0o755,
-                )?,
-            ]
-        }
-        ProjectAgentAdapterKind::Opencode => {
-            let config_path = workspace_root.join("opencode.json");
-            let plugin_path = workspace_root.join(".opencode/plugins/clumsies.ts");
-            vec![
-                merged_change(
-                    config_path.clone(),
-                    ManagedFileKind::OpencodeConfig,
-                    0o644,
-                    |current| render_opencode_config(current, &runtime, previous_runtime),
-                )?,
-                exclusive_change(
-                    plugin_path,
-                    render_opencode_plugin(&runtime).as_bytes(),
-                    previous_manifest,
-                    0o644,
-                )?,
-            ]
-        }
-        ProjectAgentAdapterKind::Dsh => {
-            let server_url = server_url.ok_or_else(|| {
-                adapter_conflict("The dsh adapter plan needs the daemon server URL.")
-            })?;
-            let project_id = project_id.ok_or_else(|| {
-                adapter_conflict("The dsh adapter plan needs the bound Project id.")
-            })?;
-            vec![exclusive_change_with_kind(
-                workspace_root.join(".dsh/clumsies.json"),
-                &render_dsh_config(server_url, project_id, &runtime),
-                previous_manifest,
-                0o644,
-                ManagedFileKind::DshConfig,
-            )?]
-        }
+    let (path, kind) = match adapter {
+        ProjectAgentAdapterKind::Codex => (
+            workspace_root.join(".codex/config.toml"),
+            ManagedFileKind::CodexConfig,
+        ),
+        ProjectAgentAdapterKind::ClaudeCode => (
+            claude_mcp_path
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| workspace_root.join(".mcp.json")),
+            ManagedFileKind::ClaudeMcp,
+        ),
+        ProjectAgentAdapterKind::Opencode => (
+            workspace_root.join("opencode.json"),
+            ManagedFileKind::OpencodeConfig,
+        ),
         ProjectAgentAdapterKind::Antigravity => {
-            let mcp_path = workspace_root.join(".mcp.json");
-            let hooks_path = workspace_root.join(".agents/hooks.json");
-            let hook_script_path = workspace_root.join(".agents/hooks/agent-run-event.sh");
-            let hook_ownership = HookOwnership {
-                lifecycle: manifest_manages_path(previous_manifest, &hook_script_path),
-                legacy_prompt: false,
-            };
-            let managed_hook = render_managed_hook_script(ISSUE_RUN_EVENT_ANTIGRAVITY, &runtime);
-            let managed_resolver =
-                render_managed_binary_resolver(ProjectAgentAdapterKind::Antigravity, &runtime);
-            vec![
-                merged_change(mcp_path, ManagedFileKind::ClaudeMcp, 0o644, |current| {
-                    render_claude_mcp(current, &runtime, previous_runtime)
-                })?,
-                merged_change(
-                    hooks_path.clone(),
-                    ManagedFileKind::AntigravityHooks,
-                    0o644,
-                    |current| render_antigravity_hooks(current, &hook_script_path, hook_ownership),
-                )?,
-                exclusive_change(
-                    workspace_root.join(".agents/hooks/resolve-binary.sh"),
-                    managed_resolver.as_bytes(),
-                    previous_manifest,
-                    0o755,
-                )?,
-                exclusive_change(
-                    hook_script_path,
-                    managed_hook.as_bytes(),
-                    previous_manifest,
-                    0o755,
-                )?,
-            ]
+            (workspace_root.join(".mcp.json"), ManagedFileKind::ClaudeMcp)
         }
+        ProjectAgentAdapterKind::Dsh => return Err(DaemonError::InvalidRequest(
+            "Configure the DSH MCP entry in your profile; use Settings → Agents for its global preference.".to_owned(),
+        )),
     };
-    changes.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(changes)
+    ManagedPathGuard::capture_under(workspace_root, &path)?;
+    Ok(vec![merged_change(
+        path,
+        kind,
+        0o644,
+        |current| match adapter {
+            ProjectAgentAdapterKind::Codex => {
+                render_codex_config(current, runtime, previous_runtime)
+            }
+            ProjectAgentAdapterKind::Opencode => render_opencode_config_for_scope(
+                current,
+                runtime,
+                previous_runtime,
+                previous_manifest.is_some_and(|manifest| {
+                    manifest.managed_files.iter().any(|file| {
+                        file.kind == ManagedFileKind::Exclusive
+                            && Path::new(&file.path)
+                                == workspace_root.join(".opencode/plugins/clumsies.ts")
+                    })
+                }),
+            ),
+            _ => render_claude_mcp(current, runtime, previous_runtime),
+        },
+    )?])
 }
 
-/// Renders the workspace marker the dsh hook plugin reads to route dsh
-/// sessions to this Project: the daemon's canonical server URL, the bound
-/// Project id, and the App-bundled clumsiesd path that forwards lifecycle
-/// events. The file is fully owned by this integration (Exclusive).
-fn render_dsh_config(server_url: &str, project_id: &str, runtime_binary: &str) -> Vec<u8> {
-    let value = json!({
-        "server_url": server_url,
-        "project_id": project_id,
-        "runtime": runtime_binary,
-    });
-    let mut rendered = serde_json::to_vec_pretty(&value)
-        .expect("serializing the dsh adapter config to JSON cannot fail");
-    rendered.push(b'\n');
-    rendered
-}
-
-/// Retires previously-managed exclusive files the new install plan no
-/// longer includes. The thin-skills retirement (ISSUE-064) relies on this to
-/// delete stale `.agents/skills/*` and `.claude/skills/*` files on the next
-/// adapter update instead of silently orphaning them. A file that changed
-/// since install is a conflict, mirroring `remove_plan` semantics.
 fn retire_stale_managed_changes(
     changes: &[PendingChange],
     previous_manifest: Option<&AdapterManifest>,
@@ -2674,34 +2469,16 @@ fn retire_stale_managed_changes(
         return Ok(Vec::new());
     };
     let plan_paths: BTreeSet<&Path> = changes.iter().map(|change| change.path.as_path()).collect();
-    let mut retired = Vec::new();
-    for file in &previous_manifest.managed_files {
-        let path = PathBuf::from(&file.path);
-        if plan_paths.contains(path.as_path()) || file.kind != ManagedFileKind::Exclusive {
-            continue;
-        }
-        validate_manifest_managed_path(workspace_root, &path, file.kind)?;
-        let expected = capture_file_snapshot(&path)?;
-        if let Some(content) = &expected.content
-            && sha256(content) != file.installed_hash
-        {
-            return Err(state_error(
-                "project_agent_adapter_conflict",
-                &format!(
-                    "{} changed after Clumsies installed it; review it before updating the integration.",
-                    path.display()
-                ),
-            ));
-        }
-        retired.push(PendingChange {
-            path,
-            expected,
-            desired: None,
-            kind: file.kind,
-            mode: 0o644,
-        });
-    }
-    Ok(retired)
+    let retired = AdapterManifest {
+        managed_files: previous_manifest
+            .managed_files
+            .iter()
+            .filter(|file| !plan_paths.contains(Path::new(&file.path)))
+            .cloned()
+            .collect(),
+        ..previous_manifest.clone()
+    };
+    remove_plan(&retired, workspace_root)
 }
 
 fn remove_plan(
@@ -2733,17 +2510,25 @@ fn remove_plan(
                     .map(|content| remove_codex_config(content, helper))
                     .transpose()?
                     .flatten(),
-                ManagedFileKind::CodexHooks => expected
+                ManagedFileKind::CodexHooks | ManagedFileKind::ClaudeSettings => expected
                     .content
                     .as_deref()
                     .map(|content| {
+                        let directory = path.parent().unwrap_or(Path::new(".")).join("hooks");
+                        let owns = |name: &str| {
+                            manifest.managed_files.iter().any(|file| {
+                                file.kind == ManagedFileKind::Exclusive
+                                    && Path::new(&file.path) == directory.join(name)
+                            })
+                        };
                         remove_hook_registry(
                             content,
-                            &path
-                                .parent()
-                                .unwrap_or(Path::new("."))
-                                .join("hooks/agent-run-event.sh"),
-                            false,
+                            &directory.join("agent-run-event.sh"),
+                            file.kind == ManagedFileKind::ClaudeSettings,
+                            HookOwnership {
+                                lifecycle: owns("agent-run-event.sh"),
+                                legacy_prompt: owns("user-prompt-submit.sh"),
+                            },
                         )
                     })
                     .transpose()?
@@ -2754,30 +2539,19 @@ fn remove_plan(
                     .map(|content| remove_claude_mcp(content, helper))
                     .transpose()?
                     .flatten(),
-                ManagedFileKind::ClaudeSettings => expected
-                    .content
-                    .as_deref()
-                    .map(|content| {
-                        remove_hook_registry(
-                            content,
-                            &path
-                                .parent()
-                                .unwrap_or(Path::new("."))
-                                .join("hooks/agent-run-event.sh"),
-                            true,
-                        )
-                    })
-                    .transpose()?
-                    .flatten(),
                 ManagedFileKind::OpencodeConfig => expected
                     .content
                     .as_deref()
                     .map(|content| {
-                        if path == workspace_root.join(".config/opencode/opencode.json") {
-                            remove_opencode_config_for_scope(content, helper, false)
-                        } else {
-                            remove_opencode_config(content, helper)
-                        }
+                        remove_opencode_config_for_scope(
+                            content,
+                            helper,
+                            manifest.managed_files.iter().any(|file| {
+                                file.kind == ManagedFileKind::Exclusive
+                                    && Path::new(&file.path)
+                                        == workspace_root.join(".opencode/plugins/clumsies.ts")
+                            }),
+                        )
                     })
                     .transpose()?
                     .flatten(),
@@ -2884,58 +2658,6 @@ fn validate_manifest_managed_path(
     Ok(())
 }
 
-fn exclusive_change(
-    path: PathBuf,
-    desired: &[u8],
-    previous_manifest: Option<&AdapterManifest>,
-    mode: u32,
-) -> Result<PendingChange, DaemonError> {
-    exclusive_change_with_kind(
-        path,
-        desired,
-        previous_manifest,
-        mode,
-        ManagedFileKind::Exclusive,
-    )
-}
-
-fn exclusive_change_with_kind(
-    path: PathBuf,
-    desired: &[u8],
-    previous_manifest: Option<&AdapterManifest>,
-    mode: u32,
-    kind: ManagedFileKind,
-) -> Result<PendingChange, DaemonError> {
-    let expected = capture_file_snapshot(&path)?;
-    if let Some(current) = expected.content.as_deref() {
-        let current_hash = sha256(current);
-        let previously_managed = previous_manifest
-            .and_then(|manifest| {
-                manifest
-                    .managed_files
-                    .iter()
-                    .find(|file| Path::new(&file.path) == path)
-            })
-            .is_some_and(|file| file.installed_hash == current_hash);
-        if current != desired && !previously_managed {
-            return Err(state_error(
-                "project_agent_adapter_conflict",
-                &format!(
-                    "{} already exists and is not managed by this Clumsies integration.",
-                    path.display()
-                ),
-            ));
-        }
-    }
-    Ok(PendingChange {
-        path,
-        expected,
-        desired: Some(desired.to_vec()),
-        kind,
-        mode,
-    })
-}
-
 fn merged_change(
     path: PathBuf,
     kind: ManagedFileKind,
@@ -2953,35 +2675,7 @@ fn merged_change(
     })
 }
 
-fn manifest_manages_path(manifest: Option<&AdapterManifest>, path: &Path) -> bool {
-    manifest.is_some_and(|manifest| {
-        manifest
-            .managed_files
-            .iter()
-            .any(|file| Path::new(&file.path) == path)
-    })
-}
-
-fn legacy_hook_is_proven_managed(
-    manifest: Option<&AdapterManifest>,
-    path: &Path,
-    known_hash: &str,
-) -> Result<bool, DaemonError> {
-    let Some(content) = capture_file_snapshot(path)?.content else {
-        return Ok(false);
-    };
-    let current_hash = sha256(&content);
-    if current_hash == known_hash {
-        return Ok(true);
-    }
-    Ok(manifest.is_some_and(|manifest| {
-        manifest
-            .managed_files
-            .iter()
-            .any(|file| Path::new(&file.path) == path && file.installed_hash == current_hash)
-    }))
-}
-
+#[cfg(test)]
 const BASE_AGENT_RUN_HOOKS: [(&str, u64); 4] = [
     ("UserPromptSubmit", 5),
     ("SubagentStart", 5),
@@ -2989,9 +2683,7 @@ const BASE_AGENT_RUN_HOOKS: [(&str, u64); 4] = [
     ("SessionEnd", 3),
 ];
 
-// Stop is intentionally absent from fresh installs, but remains in the cleanup
-// set so an update or remove can retire an exact handler owned by an older
-// adapter without touching another tool's Stop hook.
+// Only used to remove lifecycle handlers owned by retired adapters.
 const REMOVABLE_AGENT_RUN_HOOKS: [(&str, u64); 5] = [
     ("UserPromptSubmit", 5),
     ("Stop", 5),
@@ -3006,51 +2698,7 @@ struct HookOwnership {
     legacy_prompt: bool,
 }
 
-fn render_managed_hook_script(template: &str, runtime_binary: &str) -> String {
-    let injected = format!("# Agent runtime: {}\n", shell_single_quote(runtime_binary));
-    match template.find('\n') {
-        Some(index) => {
-            let mut rendered = String::with_capacity(template.len() + injected.len());
-            rendered.push_str(&template[..=index]);
-            rendered.push_str(&injected);
-            rendered.push_str(&template[index + 1..]);
-            rendered
-        }
-        None => format!("{template}\n{injected}"),
-    }
-}
-
-fn render_managed_binary_resolver(
-    adapter: ProjectAgentAdapterKind,
-    runtime_binary: &str,
-) -> String {
-    let project_directory = match adapter {
-        ProjectAgentAdapterKind::Codex => {
-            r#"PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)""#
-        }
-        ProjectAgentAdapterKind::ClaudeCode => r#"PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}""#,
-        ProjectAgentAdapterKind::Antigravity => r#"PROJECT_DIR="${ANTIGRAVITY_PROJECT_DIR:-$PWD}""#,
-        ProjectAgentAdapterKind::Opencode | ProjectAgentAdapterKind::Dsh => {
-            unreachable!("opencode and dsh do not install a resolver")
-        }
-    };
-    let exported_project_directory = match adapter {
-        ProjectAgentAdapterKind::Codex => "PROJECT_ROOT",
-        ProjectAgentAdapterKind::ClaudeCode | ProjectAgentAdapterKind::Antigravity => "PROJECT_DIR",
-        ProjectAgentAdapterKind::Opencode | ProjectAgentAdapterKind::Dsh => {
-            unreachable!("opencode and dsh do not install a resolver")
-        }
-    };
-    format!(
-        "#!/usr/bin/env bash\n# Resolve only the App-bundled clumsiesd selected by Clumsies.\n\
-         set -euo pipefail\n\n{project_directory}\n\n\
-         CLUMSIES={}\n\
-         [ -x \"$CLUMSIES\" ] || exit 0\n\n\
-         export CLUMSIES {exported_project_directory}\n",
-        shell_single_quote(runtime_binary)
-    )
-}
-
+#[cfg(test)]
 fn render_hook_registry(
     existing: Option<&[u8]>,
     script_path: &Path,
@@ -3082,6 +2730,7 @@ fn render_hook_registry(
     render_json(&root)
 }
 
+#[cfg(test)]
 fn install_hook_handler(
     hooks: &mut Map<String, Value>,
     event: &str,
@@ -3109,6 +2758,7 @@ fn install_hook_handler(
     Ok(())
 }
 
+#[cfg(test)]
 fn retire_hook_handler(
     hooks: &mut Map<String, Value>,
     event: &str,
@@ -3135,6 +2785,7 @@ fn remove_hook_registry(
     content: &[u8],
     script_path: &Path,
     include_stop_failure: bool,
+    ownership: HookOwnership,
 ) -> Result<Option<Vec<u8>>, DaemonError> {
     let mut root = serde_json::from_slice::<Value>(content)
         .map_err(|_| adapter_conflict("The existing hook registry is not valid JSON."))?;
@@ -3156,15 +2807,7 @@ fn remove_hook_registry(
         let Some(groups) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
             continue;
         };
-        remove_owned_hook_handlers(
-            groups,
-            script_path,
-            timeout_for_event(event),
-            HookOwnership {
-                lifecycle: true,
-                legacy_prompt: false,
-            },
-        )?;
+        remove_owned_hook_handlers(groups, script_path, timeout_for_event(event), ownership)?;
         if groups.is_empty() {
             hooks.remove(event);
         }
@@ -3374,6 +3017,7 @@ fn single_bash_script_path(command: &str) -> Option<String> {
     (quote == Quote::None && !escaped && !path.is_empty()).then_some(path)
 }
 
+#[cfg(test)]
 fn hook_command(script_path: &Path) -> String {
     format!(
         "bash {}",
@@ -3381,6 +3025,7 @@ fn hook_command(script_path: &Path) -> String {
     )
 }
 
+#[cfg(test)]
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -3391,6 +3036,7 @@ fn render_json(value: &Value) -> Result<Vec<u8>, DaemonError> {
     Ok(rendered)
 }
 
+#[cfg(test)]
 fn render_antigravity_hooks(
     existing: Option<&[u8]>,
     script_path: &Path,
@@ -3629,22 +3275,20 @@ fn claude_mcp_entry(runtime_binary: &str) -> Value {
     })
 }
 
-/// opencode.json merge: register the clumsies MCP server under `mcp` and
-/// append the clumsies plugin to the `plugin` array. User-owned keys and
-/// other servers/plugins are preserved.
+#[cfg(test)]
 fn render_opencode_config(
     existing: Option<&[u8]>,
     runtime_binary: &str,
     previous_runtime_binary: Option<&str>,
 ) -> Result<Vec<u8>, DaemonError> {
-    render_opencode_config_for_scope(existing, runtime_binary, previous_runtime_binary, true)
+    render_opencode_config_for_scope(existing, runtime_binary, previous_runtime_binary, false)
 }
 
 fn render_opencode_config_for_scope(
     existing: Option<&[u8]>,
     runtime_binary: &str,
     previous_runtime_binary: Option<&str>,
-    repository: bool,
+    retire_plugin: bool,
 ) -> Result<Vec<u8>, DaemonError> {
     let mut root = match existing {
         Some(content) => serde_json::from_slice::<Value>(content)
@@ -3672,18 +3316,10 @@ fn render_opencode_config_for_scope(
     }
     mcp.insert("clumsies".to_owned(), opencode_mcp_entry(runtime_binary));
 
-    if repository {
-        const PLUGIN_SPEC: &str = "./.opencode/plugins/clumsies.ts";
-        let plugins = root
-            .entry("plugin")
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-            .ok_or_else(|| adapter_conflict("opencode `plugin` must be an array."))?;
-        if !plugins
-            .iter()
-            .any(|item| item.as_str() == Some(PLUGIN_SPEC))
-        {
-            plugins.push(Value::String(PLUGIN_SPEC.to_owned()));
+    if retire_plugin && let Some(plugins) = root.get_mut("plugin").and_then(Value::as_array_mut) {
+        plugins.retain(|plugin| plugin.as_str() != Some("./.opencode/plugins/clumsies.ts"));
+        if plugins.is_empty() {
+            root.remove("plugin");
         }
     }
 
@@ -3700,6 +3336,7 @@ fn opencode_mcp_entry(runtime_binary: &str) -> Value {
     })
 }
 
+#[cfg(test)]
 fn remove_opencode_config(
     content: &[u8],
     runtime_binary: &str,
@@ -3710,7 +3347,7 @@ fn remove_opencode_config(
 fn remove_opencode_config_for_scope(
     content: &[u8],
     runtime_binary: &str,
-    repository: bool,
+    retire_plugin: bool,
 ) -> Result<Option<Vec<u8>>, DaemonError> {
     let mut root = serde_json::from_slice::<Value>(content)
         .map_err(|_| adapter_conflict("The existing opencode config is not valid JSON."))?;
@@ -3733,7 +3370,7 @@ fn remove_opencode_config_for_scope(
         }
     }
 
-    if repository && let Some(plugins) = root.get_mut("plugin").and_then(Value::as_array_mut) {
+    if retire_plugin && let Some(plugins) = root.get_mut("plugin").and_then(Value::as_array_mut) {
         plugins.retain(|item| item.as_str() != Some("./.opencode/plugins/clumsies.ts"));
         if plugins.is_empty() {
             root.remove("plugin");
@@ -3746,14 +3383,6 @@ fn remove_opencode_config_for_scope(
     let mut rendered = serde_json::to_vec_pretty(&Value::Object(root.clone()))?;
     rendered.push(b'\n');
     Ok(Some(rendered))
-}
-
-/// Pins the App-bundled clumsiesd path into the plugin so Agent runtime
-/// traffic cannot be redirected through PATH or a stale environment value.
-fn render_opencode_plugin(runtime_binary: &str) -> String {
-    let runtime_literal = serde_json::to_string(runtime_binary)
-        .expect("serializing an Agent runtime path to a JSON string cannot fail");
-    OPENCODE_PLUGIN.replace("\"__CLUMSIES_RUNTIME_BINARY__\"", &runtime_literal)
 }
 
 fn remove_claude_mcp(content: &[u8], runtime_binary: &str) -> Result<Option<Vec<u8>>, DaemonError> {
@@ -4680,9 +4309,17 @@ mod tests {
             assert!(failure_commands.contains(&"echo failure foreign"));
         }
 
-        let removed = remove_hook_registry(&second, script, include_stop_failure)
-            .unwrap()
-            .unwrap();
+        let removed = remove_hook_registry(
+            &second,
+            script,
+            include_stop_failure,
+            HookOwnership {
+                lifecycle: true,
+                legacy_prompt: false,
+            },
+        )
+        .unwrap()
+        .unwrap();
         let removed: Value = serde_json::from_slice(&removed).unwrap();
         assert_eq!(removed["theme"], "dark");
         let prompt_commands = hook_commands(&removed, "UserPromptSubmit");
@@ -4982,14 +4619,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn reconcile_repairs_exclusive_modes_without_broadening_shared_files() {
+    fn reconcile_preserves_private_shared_file_permissions() {
         use std::os::unix::fs::PermissionsExt;
-
         let workspace = tempfile::tempdir().unwrap();
         let config = workspace.path().join(".codex/config.toml");
-        let hook = workspace.path().join(".codex/hooks/agent-run-event.sh");
         fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(&config, b"[model]\nname = \"member\"\n").unwrap();
+        fs::write(&config, "model = \"member\"\n").unwrap();
         fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
         let runtime = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
         let first = install_plan(
@@ -5000,10 +4635,7 @@ mod tests {
         )
         .unwrap();
         apply_changes(&first).unwrap();
-        assert_eq!(file_mode(&config).unwrap(), Some(0o600));
-
         let manifest = manifest_for_changes(&first, runtime, "runtime-hash".to_owned());
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o600)).unwrap();
         let reconcile = install_plan(
             ProjectAgentAdapterKind::Codex,
             workspace.path(),
@@ -5011,15 +4643,9 @@ mod tests {
             Some(&manifest),
         )
         .unwrap();
-        assert!(
-            reconcile
-                .iter()
-                .find(|change| change.path == hook)
-                .is_some_and(|change| change_is_needed(change).unwrap())
-        );
         apply_changes(&reconcile).unwrap();
-        assert_eq!(file_mode(&hook).unwrap(), Some(0o755));
         assert_eq!(file_mode(&config).unwrap(), Some(0o600));
+        assert!(!workspace.path().join(".codex/hooks").exists());
     }
 
     #[cfg(unix)]
@@ -5040,9 +4666,9 @@ mod tests {
         apply_changes(&changes).unwrap();
         let manifest = manifest_for_changes(&changes, runtime, "runtime-hash".to_owned());
 
-        fs::remove_dir_all(workspace.path().join(".codex/hooks")).unwrap();
+        fs::remove_dir_all(workspace.path().join(".codex")).unwrap();
         fs::write(victim.path().join("keep"), b"untouched\n").unwrap();
-        symlink(victim.path(), workspace.path().join(".codex/hooks")).unwrap();
+        symlink(victim.path(), workspace.path().join(".codex")).unwrap();
 
         let error = remove_plan(&manifest, workspace.path()).unwrap_err();
         assert!(matches!(error, DaemonError::State { .. }));
@@ -5050,7 +4676,7 @@ mod tests {
             fs::read(victim.path().join("keep")).unwrap(),
             b"untouched\n"
         );
-        assert!(workspace.path().join(".codex/config.toml").exists());
+        assert!(!victim.path().join("config.toml").exists());
     }
 
     #[cfg(unix)]
@@ -5072,8 +4698,6 @@ mod tests {
             Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd"),
             None,
             Some(&registry),
-            None,
-            None,
         )
         .unwrap();
 
@@ -5301,156 +4925,20 @@ mod tests {
         }))
         .unwrap();
 
-        let removed = remove_hook_registry(&existing, script, false)
-            .unwrap()
-            .unwrap();
+        let removed = remove_hook_registry(
+            &existing,
+            script,
+            false,
+            HookOwnership {
+                lifecycle: true,
+                legacy_prompt: false,
+            },
+        )
+        .unwrap()
+        .unwrap();
         let removed: Value = serde_json::from_slice(&removed).unwrap();
         assert_eq!(removed["theme"], "dark");
         assert_eq!(hook_commands(&removed, "Stop"), vec!["echo foreign"]);
-    }
-
-    #[test]
-    fn managed_hook_and_resolver_pin_the_bundled_daemon_runtime() {
-        let runtime = "/Applications/Clumsies App.app/Contents/Resources/clumsiesd";
-        let rendered =
-            render_managed_hook_script("#!/usr/bin/env bash\nsource resolver.sh\n", runtime);
-        assert!(rendered.starts_with(
-            "#!/usr/bin/env bash\n# Agent runtime: '/Applications/Clumsies App.app/Contents/Resources/clumsiesd'\n"
-        ));
-        for adapter in [
-            ProjectAgentAdapterKind::Codex,
-            ProjectAgentAdapterKind::ClaudeCode,
-        ] {
-            let resolver = render_managed_binary_resolver(adapter, runtime);
-            assert!(resolver.contains(runtime));
-            assert!(!resolver.contains("zig-out"));
-            assert!(!resolver.contains("command -v clumsies"));
-            assert!(!resolver.contains(".clumsies/bin/clumsies"));
-        }
-    }
-
-    #[test]
-    fn install_plan_includes_lifecycle_assets_for_both_hosts() {
-        let workspace = tempfile::tempdir().unwrap();
-        let helper = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
-
-        let codex = install_plan(
-            ProjectAgentAdapterKind::Codex,
-            workspace.path(),
-            helper,
-            None,
-        )
-        .unwrap();
-        assert!(codex.iter().any(|change| {
-            change.path.ends_with(".codex/hooks.json") && change.kind == ManagedFileKind::CodexHooks
-        }));
-        assert!(codex.iter().any(|change| {
-            change.path.ends_with(".codex/hooks/agent-run-event.sh") && change.mode == 0o755
-        }));
-        let codex_registry: Value = serde_json::from_slice(
-            codex
-                .iter()
-                .find(|change| change.path.ends_with(".codex/hooks.json"))
-                .and_then(|change| change.desired.as_deref())
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(codex_registry["hooks"].get("Stop").is_none());
-        assert!(codex_registry["hooks"].get("StopFailure").is_none());
-
-        let claude = install_plan(
-            ProjectAgentAdapterKind::ClaudeCode,
-            workspace.path(),
-            helper,
-            None,
-        )
-        .unwrap();
-        assert!(claude.iter().any(|change| {
-            change.path.ends_with(".claude/settings.json")
-                && change.kind == ManagedFileKind::ClaudeSettings
-        }));
-        assert!(claude.iter().any(|change| {
-            change.path.ends_with(".claude/hooks/agent-run-event.sh") && change.mode == 0o755
-        }));
-        let claude_registry: Value = serde_json::from_slice(
-            claude
-                .iter()
-                .find(|change| change.path.ends_with(".claude/settings.json"))
-                .and_then(|change| change.desired.as_deref())
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(claude_registry["hooks"].get("Stop").is_none());
-        assert_eq!(hook_commands(&claude_registry, "StopFailure").len(), 1);
-    }
-
-    #[test]
-    fn lifecycle_migration_does_not_claim_or_delete_unowned_legacy_scripts() {
-        let helper = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
-        for (adapter, legacy_relative_path, registry_relative_path) in [
-            (
-                ProjectAgentAdapterKind::Codex,
-                ".codex/hooks/user-prompt-submit.sh",
-                ".codex/hooks.json",
-            ),
-            (
-                ProjectAgentAdapterKind::ClaudeCode,
-                ".claude/hooks/user-prompt-submit.sh",
-                ".claude/settings.json",
-            ),
-        ] {
-            let workspace = tempfile::tempdir().unwrap();
-            let legacy_path = workspace.path().join(legacy_relative_path);
-            let registry_path = workspace.path().join(registry_relative_path);
-            fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
-            fs::write(&legacy_path, b"#!/bin/sh\necho user-owned\n").unwrap();
-            let legacy_command = hook_command(&legacy_path);
-            fs::write(
-                &registry_path,
-                render_json(&json!({
-                    "hooks": {
-                        "UserPromptSubmit": [{
-                            "hooks": [{
-                                "type": "command",
-                                "command": legacy_command,
-                                "timeout": 5
-                            }]
-                        }]
-                    }
-                }))
-                .unwrap(),
-            )
-            .unwrap();
-
-            let changes = install_plan(adapter, workspace.path(), helper, None).unwrap();
-            assert!(changes.iter().all(|change| change.path != legacy_path));
-            apply_changes(&changes).unwrap();
-            assert_eq!(
-                fs::read(&legacy_path).unwrap(),
-                b"#!/bin/sh\necho user-owned\n"
-            );
-            let installed_registry: Value =
-                serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
-            assert!(
-                hook_commands(&installed_registry, "UserPromptSubmit")
-                    .contains(&legacy_command.as_str())
-            );
-
-            let manifest = manifest_for_changes(&changes, helper, "helper-hash".to_owned());
-            let removals = remove_plan(&manifest, workspace.path()).unwrap();
-            assert!(removals.iter().all(|change| change.path != legacy_path));
-            apply_changes(&removals).unwrap();
-            assert_eq!(
-                fs::read(&legacy_path).unwrap(),
-                b"#!/bin/sh\necho user-owned\n"
-            );
-            let removed_registry: Value =
-                serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
-            assert!(
-                hook_commands(&removed_registry, "UserPromptSubmit")
-                    .contains(&legacy_command.as_str())
-            );
-        }
     }
 
     #[test]
@@ -5506,12 +4994,7 @@ mod tests {
         );
         assert_eq!(value["mcp"]["clumsies"]["command"][1], "mcp");
         assert_eq!(value["mcp"]["clumsies"]["enabled"], true);
-        assert!(
-            value["plugin"]
-                .as_array()
-                .unwrap()
-                .contains(&Value::String("./.opencode/plugins/clumsies.ts".to_owned()))
-        );
+        assert!(value.get("plugin").is_none());
     }
 
     #[test]
@@ -5547,159 +5030,6 @@ mod tests {
         let mutated = render_json(&mutated).unwrap();
         let error = remove_opencode_config(&mutated, "/tmp/clumsiesd").unwrap_err();
         assert!(matches!(error, DaemonError::State { .. }));
-    }
-
-    #[test]
-    fn opencode_plugin_pins_the_bundled_daemon_runtime() {
-        let rendered =
-            render_opencode_plugin("/Applications/Clumsies App.app/Contents/Resources/clumsiesd");
-        assert!(
-            rendered
-                .contains("return \"/Applications/Clumsies App.app/Contents/Resources/clumsiesd\"")
-        );
-        assert!(!rendered.contains("process.env.CLUMSIES_BINARY"));
-        assert!(rendered.contains(r#"hook_event_name: "StopFailure""#));
-        assert!(!rendered.contains(r#"hook_event_name: "Stop""#));
-        assert!(!rendered.contains(r#"hasError ? "StopFailure" : "Stop""#));
-    }
-
-    #[test]
-    fn install_plan_includes_opencode_assets() {
-        let workspace = tempfile::tempdir().unwrap();
-        let helper = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
-
-        let changes = install_plan(
-            ProjectAgentAdapterKind::Opencode,
-            workspace.path(),
-            helper,
-            None,
-        )
-        .unwrap();
-        assert!(changes.iter().any(|change| {
-            change.path.ends_with("opencode.json") && change.kind == ManagedFileKind::OpencodeConfig
-        }));
-        assert!(changes.iter().any(|change| {
-            change.path.ends_with(".opencode/plugins/clumsies.ts")
-                && change.kind == ManagedFileKind::Exclusive
-        }));
-    }
-
-    #[test]
-    fn install_plan_includes_dsh_marker() {
-        let workspace = tempfile::tempdir().unwrap();
-        let helper = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
-
-        let changes = install_plan_with_project(
-            ProjectAgentAdapterKind::Dsh,
-            workspace.path(),
-            helper,
-            None,
-            Some("https://clumsies.example.com"),
-            Some("prj_dsh_test"),
-        )
-        .unwrap();
-        assert_eq!(changes.len(), 1);
-        let marker = &changes[0];
-        assert_eq!(marker.path, workspace.path().join(".dsh/clumsies.json"));
-        assert_eq!(marker.kind, ManagedFileKind::DshConfig);
-        assert_eq!(marker.mode, 0o644);
-        let rendered: Value = serde_json::from_slice(marker.desired.as_deref().unwrap()).unwrap();
-        assert_eq!(rendered["server_url"], "https://clumsies.example.com");
-        assert_eq!(rendered["project_id"], "prj_dsh_test");
-        assert_eq!(
-            rendered["runtime"],
-            "/Applications/Clumsies.app/Contents/Resources/clumsiesd"
-        );
-    }
-
-    #[test]
-    fn dsh_plan_requires_project_context() {
-        let workspace = tempfile::tempdir().unwrap();
-        let helper = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
-        let error = install_plan_with_project(
-            ProjectAgentAdapterKind::Dsh,
-            workspace.path(),
-            helper,
-            None,
-            None,
-            None,
-        )
-        .unwrap_err();
-        assert!(matches!(error, DaemonError::State { .. }));
-    }
-
-    #[test]
-    fn dsh_install_remove_round_trip() {
-        let workspace = tempfile::tempdir().unwrap();
-        let helper = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
-
-        let changes = install_plan_with_project(
-            ProjectAgentAdapterKind::Dsh,
-            workspace.path(),
-            helper,
-            None,
-            Some("https://clumsies.example.com"),
-            Some("prj_dsh_test"),
-        )
-        .unwrap();
-        apply_changes(&changes).unwrap();
-
-        let marker_path = workspace.path().join(".dsh/clumsies.json");
-        let marker: Value = serde_json::from_slice(&fs::read(&marker_path).unwrap()).unwrap();
-        assert_eq!(marker["server_url"], "https://clumsies.example.com");
-        assert_eq!(marker["project_id"], "prj_dsh_test");
-        assert_eq!(
-            marker["runtime"],
-            "/Applications/Clumsies.app/Contents/Resources/clumsiesd"
-        );
-
-        let manifest = manifest_for_changes(&changes, helper, "helper-hash".to_owned());
-        let removals = remove_plan(&manifest, workspace.path()).unwrap();
-        apply_changes(&removals).unwrap();
-        assert!(!marker_path.exists());
-        cleanup_empty_adapter_directories(&removals, workspace.path());
-        assert!(!workspace.path().join(".dsh").exists());
-    }
-
-    #[test]
-    fn install_plan_includes_antigravity_artifacts() {
-        let workspace = tempfile::tempdir().unwrap();
-        let helper = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
-
-        let changes = install_plan(
-            ProjectAgentAdapterKind::Antigravity,
-            workspace.path(),
-            helper,
-            None,
-        )
-        .unwrap();
-
-        assert!(changes.iter().any(|change| {
-            change.path == workspace.path().join(".mcp.json")
-                && change.kind == ManagedFileKind::ClaudeMcp
-                && change.mode == 0o644
-        }));
-        assert!(changes.iter().any(|change| {
-            change.path == workspace.path().join(".agents/hooks.json")
-                && change.kind == ManagedFileKind::AntigravityHooks
-                && change.mode == 0o644
-        }));
-        assert!(changes.iter().any(|change| {
-            change.path == workspace.path().join(".agents/hooks/resolve-binary.sh")
-                && change.kind == ManagedFileKind::Exclusive
-                && change.mode == 0o755
-        }));
-        assert!(changes.iter().any(|change| {
-            change.path == workspace.path().join(".agents/hooks/agent-run-event.sh")
-                && change.kind == ManagedFileKind::Exclusive
-                && change.mode == 0o755
-        }));
-        // Verify NO skills are installed
-        assert!(
-            changes
-                .iter()
-                .all(|change| !change.path.to_string_lossy().contains("skills"))
-        );
     }
 
     #[test]
@@ -5878,19 +5208,15 @@ name: legacy
         let hook_path = workspace.path().join(".agents/hooks/agent-run-event.sh");
 
         assert!(mcp_path.exists());
-        assert!(hooks_path.exists());
-        assert!(resolver_path.exists());
-        assert!(hook_path.exists());
+        assert!(!hooks_path.exists());
+        assert!(!resolver_path.exists());
+        assert!(!hook_path.exists());
 
         let mcp_json: Value = serde_json::from_slice(&fs::read(&mcp_path).unwrap()).unwrap();
         assert_eq!(
             mcp_json["mcpServers"]["clumsies"]["command"],
             "/Applications/Clumsies.app/Contents/Resources/clumsiesd"
         );
-
-        let hooks_json: Value = serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
-        assert!(hooks_json["clumsies-agent-run-event"]["PreInvocation"].is_array());
-        assert!(hooks_json["clumsies-agent-run-event"].get("Stop").is_none());
 
         let manifest = manifest_for_changes(&changes, helper, "helper-hash".to_owned());
         let removals = remove_plan(&manifest, workspace.path()).unwrap();
@@ -6068,7 +5394,7 @@ name: legacy
 
         let merged_hooks: Value = serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
         assert!(merged_hooks.get("lint-checker").is_some());
-        assert!(merged_hooks.get("clumsies-agent-run-event").is_some());
+        assert!(merged_hooks.get("clumsies-agent-run-event").is_none());
 
         let manifest = manifest_for_changes(&changes, helper, "helper-hash".to_owned());
         let removals = remove_plan(&manifest, workspace.path()).unwrap();
@@ -6104,14 +5430,9 @@ name: legacy
             config["mcp"]["clumsies"]["command"][0],
             "/Applications/Clumsies.app/Contents/Resources/clumsiesd"
         );
+        assert!(config.get("plugin").is_none());
         assert!(
-            config["plugin"]
-                .as_array()
-                .unwrap()
-                .contains(&Value::String("./.opencode/plugins/clumsies.ts".to_owned()))
-        );
-        assert!(
-            workspace
+            !workspace
                 .path()
                 .join(".opencode/plugins/clumsies.ts")
                 .exists()
@@ -6127,6 +5448,106 @@ name: legacy
                 .join(".opencode/plugins/clumsies.ts")
                 .exists()
         );
+    }
+
+    #[test]
+    fn retirement_removes_owned_legacy_prompt_registration_and_script() {
+        let workspace = tempfile::tempdir().unwrap();
+        let script = workspace.path().join(".claude/hooks/user-prompt-submit.sh");
+        let registry = workspace.path().join(".claude/settings.json");
+        let content = render_json(&json!({
+            "theme": "user-theme",
+            "hooks": {"UserPromptSubmit": [{"hooks": [{
+                "type": "command", "command": hook_command(&script), "timeout": 5
+            }]}]}
+        }))
+        .unwrap();
+        let old = vec![
+            PendingChange {
+                path: registry.clone(),
+                expected: capture_file_snapshot(&registry).unwrap(),
+                desired: Some(content),
+                kind: ManagedFileKind::ClaudeSettings,
+                mode: 0o644,
+            },
+            PendingChange {
+                path: script.clone(),
+                expected: capture_file_snapshot(&script).unwrap(),
+                desired: Some(b"old script".to_vec()),
+                kind: ManagedFileKind::Exclusive,
+                mode: 0o755,
+            },
+        ];
+        apply_changes(&old).unwrap();
+        let manifest = manifest_for_changes(
+            &old,
+            Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd"),
+            "a".repeat(64),
+        );
+        let removal = retire_stale_managed_changes(&[], Some(&manifest), workspace.path()).unwrap();
+        apply_changes(&removal).unwrap();
+        assert!(!script.exists());
+        let remaining: Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+        assert_eq!(remaining, json!({"theme": "user-theme"}));
+    }
+
+    #[test]
+    fn opencode_upgrade_only_retires_manifest_owned_plugin() {
+        for owned in [false, true] {
+            let workspace = tempfile::tempdir().unwrap();
+            let runtime = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
+            let config = workspace.path().join("opencode.json");
+            let plugin = workspace.path().join(".opencode/plugins/clumsies.ts");
+            fs::write(
+                &config,
+                br#"{"plugin":["./.opencode/plugins/clumsies.ts","user-plugin"]}"#,
+            )
+            .unwrap();
+            let mut old = install_plan(
+                ProjectAgentAdapterKind::Opencode,
+                workspace.path(),
+                runtime,
+                None,
+            )
+            .unwrap();
+            if owned {
+                old.push(PendingChange {
+                    path: plugin.clone(),
+                    expected: capture_file_snapshot(&plugin).unwrap(),
+                    desired: Some(b"old plugin".to_vec()),
+                    kind: ManagedFileKind::Exclusive,
+                    mode: 0o644,
+                });
+            } else {
+                fs::create_dir_all(plugin.parent().unwrap()).unwrap();
+                fs::write(&plugin, "user plugin").unwrap();
+            }
+            apply_changes(&old).unwrap();
+            let manifest = manifest_for_changes(&old, runtime, "a".repeat(64));
+            let mut changes = install_plan(
+                ProjectAgentAdapterKind::Opencode,
+                workspace.path(),
+                runtime,
+                Some(&manifest),
+            )
+            .unwrap();
+            changes.extend(
+                retire_stale_managed_changes(&changes, Some(&manifest), workspace.path()).unwrap(),
+            );
+            apply_changes(&changes).unwrap();
+            let value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+            let expected = if owned {
+                json!(["user-plugin"])
+            } else {
+                json!(["./.opencode/plugins/clumsies.ts", "user-plugin"])
+            };
+            assert_eq!(value["plugin"], expected);
+            assert_eq!(plugin.exists(), !owned);
+            let manifest = manifest_for_changes(&changes, runtime, "a".repeat(64));
+            apply_changes(&remove_plan(&manifest, workspace.path()).unwrap()).unwrap();
+            let value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+            assert_eq!(value["plugin"], expected);
+        }
     }
 
     #[cfg(unix)]

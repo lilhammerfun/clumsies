@@ -1,13 +1,13 @@
 # Code Review Instructions
 
-> Development workflow (worktrees + kanban) is documented in `docs/guides/development-workflow.md`; reviews should flag commits that violate the one-issue-one-worktree split.
+> Development workflow is documented in `docs/guides/development-workflow.md`; reviews should follow its worktree rules.
 
 ## Review Priorities
 
 **CRITICAL (Block merge)**
-- Security: path traversal, unsafe command construction, unbounded input, exposed secrets, or raw Agent Hook payload persistence
+- Security: path traversal, unsafe command construction, unbounded input, exposed secrets, or unnecessary session payload persistence
 - Data loss: ignored write/transaction errors, incomplete rollback, or unsafe cross-database publication
-- Runtime authority drift: duplicated MCP/Hook validation, a proxy that opens daemon state directly, or an Adapter fallback to a retired executable
+- Runtime authority drift: duplicated MCP validation, a proxy that opens daemon state directly, or an Adapter fallback to a retired executable
 
 **IMPORTANT (Requires discussion)**
 - Missing test coverage for new behavior and failure paths
@@ -21,10 +21,9 @@
 
 - `cargo fmt --all --check`, `cargo test --workspace`, and daemon clippy gates must pass.
 - The resident daemon is the only owner of SQLite, model state, and background workers.
-- `clumsiesd mcp serve` and `_agent` modes are short-lived stdio/Hook proxies; they use typed XPC and must not construct `DaemonState`.
+- `clumsiesd mcp serve` is a stdio proxy; it uses typed XPC and must not construct `DaemonState`.
 - MCP schemas, argument validation, and domain conversion live in Rust. Do not add an untyped JSON tunnel.
 - Proxy stdout is protocol-only. Diagnostics go to bounded, privacy-safe logging.
-- Agent Hook normalization must discard prompt, transcript, assistant, and tool payloads before IPC.
 - Adapter entries must point to the signed bundled `clumsiesd`; no PATH, worktree build, or archived CLI fallback is allowed.
 
 ## Retired Zig history

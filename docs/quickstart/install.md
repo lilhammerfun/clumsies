@@ -72,7 +72,7 @@ just install-macos
 
 If Git reports local changes or a divergent branch, resolve that before reinstalling; do not discard changes to force an update.
 
-When the App finishes reconciling its Codex plugin, restart Codex and start a new task. Check Clumsies in `/hooks` when prompted to review its hooks. Detailed agent setup follows in the quickstart.
+When the App finishes reconciling its Codex plugin, restart Codex and start a new task. Detailed agent setup follows in the quickstart.
 
 ## If installation stops
 

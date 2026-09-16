@@ -6,8 +6,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use daemon::{DaemonHealth, DaemonIpcClient, DaemonProjectBindingResolveRequest};
-use serde_json::{Value, json};
-use sqlx::Row;
+use serde_json::Value;
 use uuid::Uuid;
 
 const SERVER_URL: &str = "http://127.0.0.1:9";
@@ -238,26 +237,6 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
     let plugin_output = plugin_mcp.wait_with_output().unwrap();
     assert_process_succeeded("delivery-gated MCP proxy", &plugin_output);
 
-    let hook_fixture = json!({
-        "session_id": "runtime-e2e-session",
-        "turn_id": "runtime-e2e-turn",
-        "hook_event_name": "UserPromptSubmit",
-        "cwd": workspace.display().to_string(),
-        "prompt": "SECRET_HOOK_PROMPT_MUST_NOT_PERSIST",
-        "transcript_path": "/private/secret/transcript.jsonl"
-    });
-    let hook = run_proxy(
-        &binary,
-        &["_agent", "agent-run-event", "--host", "codex"],
-        &workspace,
-        &service_name,
-        &serde_json::to_string(&hook_fixture).unwrap(),
-        &[],
-    );
-    assert_process_succeeded("Hook proxy", &hook);
-    assert!(hook.stdout.is_empty());
-    assert_hook_fixture_persisted(&daemon_root.join("local.db")).await;
-
     let stale_mcp = run_proxy(
         &binary,
         &["mcp", "serve"],
@@ -393,41 +372,6 @@ async fn rebind_project(local_db: &Path) {
         .execute(&pool)
         .await
         .unwrap();
-    pool.close().await;
-}
-
-async fn assert_hook_fixture_persisted(local_db: &Path) {
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", local_db.display()))
-        .await
-        .unwrap();
-    let run = sqlx::query(
-        "SELECT project_id, host, host_run_key, host_session_id, kind, phase, summary
-         FROM agent_runs WHERE host_session_id = 'runtime-e2e-session'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(run.get::<String, _>("project_id"), REBOUND_PROJECT_ID);
-    assert_eq!(run.get::<String, _>("host"), "codex");
-    assert_eq!(
-        run.get::<String, _>("host_run_key"),
-        "root:runtime-e2e-turn"
-    );
-    assert_eq!(run.get::<String, _>("kind"), "root");
-    assert_eq!(run.get::<String, _>("phase"), "running");
-    assert_eq!(run.get::<Option<String>, _>("summary"), None);
-
-    let event = sqlx::query(
-        "SELECT source, event_type, summary FROM agent_run_events
-         WHERE run_id = (SELECT run_id FROM agent_runs
-                         WHERE host_session_id = 'runtime-e2e-session')",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(event.get::<String, _>("source"), "hook");
-    assert_eq!(event.get::<String, _>("event_type"), "started");
-    assert_eq!(event.get::<Option<String>, _>("summary"), None);
     pool.close().await;
 }
 

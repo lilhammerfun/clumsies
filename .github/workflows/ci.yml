@@ -31,8 +31,6 @@ jobs:
         run: |
           shellcheck dev/check-agent-runtime-boundary.sh
           sh dev/check-agent-runtime-boundary.sh
-          node dev/dsh/clumsies-hook.test.mjs
-          shellcheck dev/dsh/agent-run-event.sh
 
       - name: Check retired terminology
         run: |

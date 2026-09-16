@@ -18,7 +18,7 @@ Rust workspace 有两个成员：`crates/server` 和 `crates/daemon`。Swift 负
 | `crates/server/src/` | HTTP 路由与领域模块 | 想理解共享数据和权限 |
 | `crates/server/migrations/` | PostgreSQL schema 演进 | 想检查持久化记录和约束 |
 | `crates/server/openapi/` | Public 与 Admin HTTP 契约 | 想查请求和响应结构 |
-| `assets/adapters/`、`packages/clumsies/` | 宿主集成资源和 Clumsies 插件 | 想知道宿主如何启动内置运行时 |
+| `packages/clumsies/` | 宿主集成资源和 Clumsies 插件 | 想知道宿主如何启动内置运行时 |
 | `dev/`、`apps/macos/Scripts/` | 本地开发与构建工具 | 想运行隔离开发环境 |
 | `docs/`、`docs/zh/` | 英文与中文文档 | 想改进文档站 |
 

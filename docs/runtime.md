@@ -6,7 +6,7 @@ Start with [Architecture](/architecture) and [End-to-end flows](/flows) to under
 
 `clumsiesd` is an owner-scoped macOS launchd service. The macOS app installs and
 starts it. Desktop connects directly over XPC; Agent hosts start the same
-App-bundled executable as a short-lived MCP or Hook proxy, which then connects
+App-bundled executable as a short-lived MCP proxy, which then connects
 to the resident process over XPC. The daemon has one central SQLite database for
 durable client state and one derived search database inside each Project's
 active local storage.

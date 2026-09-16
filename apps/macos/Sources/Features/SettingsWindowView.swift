@@ -85,7 +85,7 @@ enum SettingsDestination: Hashable, Identifiable {
     private var keywords: String {
         switch self {
         case .pane(.general): "about automatic download software update version"
-        case .pane(.agent): "plugin repair hooks integration repository"
+        case .pane(.agent): "plugin repair mcp integration repository"
         case .pane(.organization): "team administration name rename"
         case .pane(.advanced): "diagnostics logs help troubleshooting"
         case .organization(.organization): "name rename"

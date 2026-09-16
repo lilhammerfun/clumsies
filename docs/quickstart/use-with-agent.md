@@ -22,7 +22,7 @@ The Codex status should read **Plugin installed and enabled**. For installation 
 
 ## 1. Start from the bound repository
 
-After the Plugin is first installed or updated, restart Codex and start a new task from `clumsies-demo`. Inspect and trust the Clumsies Hook in `/hooks` to enable activity recording.
+After the Plugin is first installed or updated, restart Codex and start a new task from `clumsies-demo`.
 
 The integration is installed once for your local user. Repository bindings determine which Project each task uses. Selecting Payments in the Clumsies window does not switch arbitrary Codex tasks to that Project.
 
@@ -34,7 +34,7 @@ Send this request in the new task:
 
 The Clumsies integration includes instructions for Codex to call `memory.activate` when starting a substantive task. It retrieves relevant passages and uses `memory.load` when full context is needed. You do not need to paste the knowledge base into the conversation or write tool arguments yourself.
 
-“Automatic retrieval” means the agent follows those integration instructions and calls the tool. Verify the actual call; Hook activity recording does not perform retrieval for it.
+“Automatic retrieval” means the agent follows those integration instructions and calls the tool. Verify the actual tool call and its result.
 
 ## 3. Confirm that it used existing knowledge
 

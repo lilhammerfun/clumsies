@@ -1,10 +1,5 @@
-# Archived attestation client
+# Attestation (retired)
 
-The former Zig client attestation pipeline is not part of the current Agent
-runtime or MCP contract. Its last active implementation remains recoverable
-from Git commit `4b18f7947a977dbc6b62f560b698dc992597f19d`; no copy is built,
-installed, uploaded, or exposed as an active product surface.
-
-Current lifecycle observation is the privacy-bounded daemon `AgentRun` bridge.
-It records bounded host lifecycle identifiers for local Activity and never uploads
-prompts or transcripts. See [AgentRun lifecycle](/guides/agent-run-injection).
+The earlier attestation, prompt-capture hooks, and Kanban AgentRun are retired.
+[Activity](/recall) reads local host session logs and joins Memory retrieval history.
+See [Workspace binding](/guides/workspace-binding) for Memory routing.

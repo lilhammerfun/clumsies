@@ -19,8 +19,7 @@ use crate::{
     DaemonServerResponse, DaemonSyncRetryRequest, DaemonSyncStatus, EvaluationCaseDetail,
     ExportEvaluationSetRequest, ExportEvaluationSetResponse, GetRecallFragmentRequest,
     GetRecallFragmentResponse, ListRecallsRequest, ListRecallsResponse, LoadMemoryRequest,
-    LoadMemoryResponse, RecordAgentRunEventRequest, RecordAgentRunEventResponse,
-    ResolveEvaluationCaseRequest, RetrievalRunDetail, RetrievalRunListRequest,
+    LoadMemoryResponse, ResolveEvaluationCaseRequest, RetrievalRunDetail, RetrievalRunListRequest,
     RetrievalRunListResponse, RetrievalRunRequest, SearchIndexProjectRequest, SearchIndexStatus,
 };
 use std::time::Duration;
@@ -317,17 +316,6 @@ impl DaemonIpcClient {
     ) -> Result<LoadMemoryResponse, DaemonError> {
         self.call(DaemonIpcRequest::new(
             "load_memory",
-            serde_json::to_value(request)?,
-        ))?
-        .into_payload()
-    }
-
-    pub fn record_agent_run_event(
-        &self,
-        request: RecordAgentRunEventRequest,
-    ) -> Result<RecordAgentRunEventResponse, DaemonError> {
-        self.call(DaemonIpcRequest::new(
-            "record_agent_run_event",
             serde_json::to_value(request)?,
         ))?
         .into_payload()
@@ -1044,7 +1032,6 @@ mod tests {
             "activate_memory",
             "load_memory",
             "store_draft_operation",
-            "record_agent_run_event",
         ] {
             let missing = DaemonIpcRequest::empty(method);
             assert!(matches!(

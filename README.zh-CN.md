@@ -61,7 +61,7 @@ https://github.com/lilhammerfun/clumsies
 
 当前实现包含 macOS Codex App、Claude Code、opencode、DeepSeek Harness（`dsh`）和 Google Antigravity 的集成。Agent 宿主需要自行安装。适配器按本机用户安装一次，供所有项目使用；首次设置默认勾选 Codex。仓库绑定决定 Agent 使用哪个 Project 的 Memory。
 
-修改 Codex 集成后，需要重启 Codex 并新建任务。要启用 Agent 活动记录，请在 `/hooks` 中审查并信任 Clumsies；通过 MCP 检索 Memory 不依赖 Hook 信任。检索需要本地 daemon 运行、索引就绪；首次使用会下载检索模型。各宿主的具体要求见 [Agent 接入](https://docs.clumsies.ai/zh/guides/agent-runtime)。
+修改 Codex 集成后，需要重启 Codex 并新建任务。检索需要本地 daemon 运行、索引就绪；首次使用会下载检索模型。各宿主的具体要求见 [Agent 接入](https://docs.clumsies.ai/zh/guides/agent-runtime)。
 
 团队也可以自行部署 Rust Server 和 PostgreSQL，接入自己的 OIDC 身份提供方，详见[组织部署](https://docs.clumsies.ai/zh/guides/deploy-for-an-org)。
 

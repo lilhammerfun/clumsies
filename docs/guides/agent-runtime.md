@@ -22,9 +22,9 @@ For Codex, look for **Plugin installed and enabled**. If it says **Will install 
 
 After installing or updating the Codex plugin, restart Codex and start a new task from the bound repository. Existing tasks keep their previous plugin snapshot.
 
-In Codex, review and trust the Clumsies Hook in `/hooks` to enable Agent activity records. This trust is separate from Memory retrieval: the Hook observes activity, while the MCP tool retrieves and changes Memory.
+Activity reads Codex and DSH session logs and links Memory activations to local retrieval history. It does not require lifecycle hooks.
 
-Clumsies checks the task's directory at startup and on every tool call. An unbound directory cannot use the Project merely selected in the App. Git worktrees can resolve through the main checkout's binding. When you change directories, verify that the task resolves to the intended Project.
+Clumsies checks the task's directory at startup and on every tool call. An unbound directory cannot use the Project merely selected in the App. Git worktrees can resolve through the main checkout's binding. The MCP connection keeps its startup directory; a shell `cd` does not retarget it. See [Workspace binding](/guides/workspace-binding) for routing and upgrade details.
 
 ## Verify the connection
 
@@ -42,12 +42,12 @@ The first use downloads local search models and prepares the Project index. Whil
 | Repository is not bound | Bind the actual directory used by this task to the intended Project. |
 | Runtime version mismatch after an update | Restart Clumsies and the agent host so the bundled runtime and resident daemon use the same build. |
 | Retrieval is preparing or a document is missing | Check model preparation, synchronization, and the Project's selected Memory. |
-| Retrieval works but activity records are absent | Check the host's Hook setup and trust separately. |
+| Retrieval works but activity records are absent | Check that the bound workspace has a supported Codex or DSH session log containing a Clumsies activation. |
 
 If a failure persists, use [Troubleshooting](/guides/troubleshooting) to collect the relevant diagnostics.
 
 ## Other supported hosts
 
-Settings also lists Claude Code, opencode, Antigravity, and dsh. Their integration and lifecycle support differ. For dsh, **Runtime configured; profile bridge required** means the profile bridge still needs configuration.
+Settings also lists Claude Code, opencode, Antigravity, and dsh. For dsh, **Enabled; MCP profile setup required** means you still need to register MCP in its user-managed profile; see [DSH integration](/guides/dsh-integration).
 
-The [adapter reference](/adapter) describes each host's files, Hook support, and profile requirements. Use that page when maintaining an integration; the [MCP reference](/mcp) defines the Memory tool itself.
+The [adapter reference](/adapter) describes each host's MCP configuration and profile requirements. Use that page when maintaining an integration; the [MCP reference](/mcp) defines the Memory tool itself.

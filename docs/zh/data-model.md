@@ -173,7 +173,7 @@ Project Tree 中，所选 Memory 使用 `type: memory`、`source: selected_org`�
 | Effective Memory | 从已安装快照和 Draft 操作合成 | 派生视图，不存在一张远端 Effective Memory 权威表。 |
 | 检索索引 | Project SQLite 的 `search_revisions`、`search_resources`、`search_units`、`search_units_fts`、`search_heads` 等 | 可重建；记录来源 Commit/Draft，必须匹配 Effective Memory 与模型版本。 |
 
-Project Local Storage 只允许移动受管理的 generation 和检索数据。中心 Draft、同步队列、凭据等不会跟着移动，详见[本地运行时](/zh/runtime)。AgentRun 与检索评测各有自己的数据边界，见[术语表](/zh/glossary)，不参与 Memory 的发布快照。
+Project Local Storage 只允许移动受管理的 generation 和检索数据。中心 Draft、同步队列、凭据等不会跟着移动，详见[本地运行时](/zh/runtime)。Activity 与检索评测各有自己的数据边界，见[术语表](/zh/glossary)，不参与 Memory 的发布快照。
 
 ## 继续阅读与实现依据
 

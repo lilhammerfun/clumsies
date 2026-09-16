@@ -30,7 +30,7 @@ next:
 
 适配器按本机用户安装一次，供所有项目使用。之后绑定的仓库决定 Codex 使用哪个 Project 的 Memory；启用适配器不会自动完成仓库绑定。
 
-Codex 集成安装或修改后，需要重启 Codex 并新建任务。要启用 Agent 活动记录，请在 `/hooks` 中审查并信任 Clumsies；通过 MCP 检索 Memory 不依赖 Hook 信任。选好项目的 Memory 后，[在 Codex 中使用 Memory](/zh/quickstart/use-with-agent)会介绍如何确认检索正常。
+Codex 集成安装或修改后，需要重启 Codex 并新建任务。选好项目的 Memory 后，[在 Codex 中使用 Memory](/zh/quickstart/use-with-agent)会介绍如何确认检索正常。
 
 ## 确认工作区
 

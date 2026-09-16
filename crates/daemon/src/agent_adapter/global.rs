@@ -197,13 +197,20 @@ async fn set_at(
         )
         .await?;
     } else {
-        let changes = if request.enabled {
+        let mut changes = if request.enabled {
             install_plan(request.adapter, home, &runtime, manifest.as_ref())?
         } else if let Some(manifest) = &manifest {
             remove_plan(manifest, home)?
         } else {
             Vec::new()
         };
+        if request.enabled {
+            changes.extend(retire_stale_managed_changes(
+                &changes,
+                manifest.as_ref(),
+                home,
+            )?);
+        }
         let next_manifest = request
             .enabled
             .then(|| manifest_for_changes(&changes, &runtime, hash));
@@ -211,9 +218,13 @@ async fn set_at(
             save(
                 &state.inner.pool,
                 request.adapter,
-                false,
+                request.enabled,
                 revision.unwrap_or(0) + 1,
-                None,
+                next_manifest
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?
+                    .as_deref(),
             )
             .await?;
         } else if manifest != next_manifest
@@ -369,64 +380,21 @@ fn install_plan(
             runtime,
             previous,
             Some(&home.join(".claude.json")),
-            None,
-            None,
         ),
-        ProjectAgentAdapterKind::Opencode => Ok(vec![
-            merged_change(
-                home.join(".config/opencode/opencode.json"),
-                ManagedFileKind::OpencodeConfig,
-                0o644,
-                |current| render_opencode_config_for_scope(current, binary, old, false),
-            )?,
-            exclusive_change(
-                home.join(".config/opencode/plugins/clumsies.ts"),
-                render_opencode_plugin(binary).as_bytes(),
-                previous,
-                0o644,
-            )?,
-        ]),
-        ProjectAgentAdapterKind::Antigravity => {
-            let directory = home.join(".gemini/config");
-            let script = directory.join("hooks/agent-run-event.sh");
-            let ownership = HookOwnership {
-                lifecycle: manifest_manages_path(previous, &script),
-                legacy_prompt: false,
-            };
-            Ok(vec![
-                merged_change(
-                    directory.join("mcp_config.json"),
-                    ManagedFileKind::ClaudeMcp,
-                    0o644,
-                    |current| render_claude_mcp(current, binary, old),
-                )?,
-                merged_change(
-                    directory.join("hooks.json"),
-                    ManagedFileKind::AntigravityHooks,
-                    0o644,
-                    |current| render_antigravity_hooks(current, &script, ownership),
-                )?,
-                exclusive_change(
-                    directory.join("hooks/resolve-binary.sh"),
-                    render_managed_binary_resolver(adapter, binary).as_bytes(),
-                    previous,
-                    0o755,
-                )?,
-                exclusive_change(
-                    script,
-                    render_managed_hook_script(ISSUE_RUN_EVENT_ANTIGRAVITY, binary).as_bytes(),
-                    previous,
-                    0o755,
-                )?,
-            ])
-        }
-        ProjectAgentAdapterKind::Dsh => Ok(vec![exclusive_change_with_kind(
-            home.join(".dsh/clumsies.json"),
-            &render_json(&json!({"runtime": binary}))?,
-            previous,
+        ProjectAgentAdapterKind::Opencode => Ok(vec![merged_change(
+            home.join(".config/opencode/opencode.json"),
+            ManagedFileKind::OpencodeConfig,
             0o644,
-            ManagedFileKind::DshConfig,
+            |current| render_opencode_config_for_scope(current, binary, old, false),
         )?]),
+        ProjectAgentAdapterKind::Antigravity => Ok(vec![merged_change(
+            home.join(".gemini/config/mcp_config.json"),
+            ManagedFileKind::ClaudeMcp,
+            0o644,
+            |current| render_claude_mcp(current, binary, old),
+        )?]),
+        // DSH registers the MCP command in its user-managed profile.
+        ProjectAgentAdapterKind::Dsh => Ok(Vec::new()),
         ProjectAgentAdapterKind::Codex => {
             Err(adapter_conflict("Codex uses its global plugin installer."))
         }
@@ -511,10 +479,12 @@ mod tests {
             br#"{"theme":"dark","mcpServers":{"other":{"command":"other"}}}"#,
         )
         .unwrap();
-        for adapter in ADAPTERS
-            .into_iter()
-            .filter(|adapter| *adapter != ProjectAgentAdapterKind::Codex)
-        {
+        for adapter in ADAPTERS.into_iter().filter(|adapter| {
+            !matches!(
+                adapter,
+                ProjectAgentAdapterKind::Codex | ProjectAgentAdapterKind::Dsh
+            )
+        }) {
             let changes = install_plan(adapter, &home, runtime, None).unwrap();
             let manifest = manifest_for_changes(&changes, runtime, "a".repeat(64));
             let operation = prepared_adapter_fs_op(
@@ -560,13 +530,7 @@ mod tests {
                     "Global plugins are discovered by the harness, without a repository path"
                 );
             }
-            if adapter == ProjectAgentAdapterKind::Dsh {
-                let config: Value =
-                    serde_json::from_slice(&fs::read(home.join(".dsh/clumsies.json")).unwrap())
-                        .unwrap();
-                assert!(config.get("project_id").is_none());
-                assert!(config.get("server_url").is_none());
-            }
+
             let removals = remove_plan(&manifest, &home).unwrap();
             let removal = prepared_adapter_fs_op(
                 PreparedAdapterFsOp {
@@ -610,6 +574,115 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_retires_owned_lifecycle_files_and_preserves_foreign_hooks() {
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let runtime = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
+        for adapter in [
+            ProjectAgentAdapterKind::ClaudeCode,
+            ProjectAgentAdapterKind::Antigravity,
+            ProjectAgentAdapterKind::Opencode,
+            ProjectAgentAdapterKind::Dsh,
+        ] {
+            let mut old = install_plan(adapter, &home, runtime, None).unwrap();
+            let (relative, kind) = match adapter {
+                ProjectAgentAdapterKind::ClaudeCode => (
+                    ".claude/hooks/agent-run-event.sh",
+                    ManagedFileKind::Exclusive,
+                ),
+                ProjectAgentAdapterKind::Antigravity => (
+                    ".gemini/config/hooks/agent-run-event.sh",
+                    ManagedFileKind::Exclusive,
+                ),
+                ProjectAgentAdapterKind::Opencode => (
+                    ".config/opencode/plugins/clumsies.ts",
+                    ManagedFileKind::Exclusive,
+                ),
+                _ => (".dsh/clumsies.json", ManagedFileKind::DshConfig),
+            };
+            let artifact = home.join(relative);
+            old.push(PendingChange {
+                path: artifact.clone(),
+                expected: capture_file_snapshot(&artifact).unwrap(),
+                desired: Some(b"legacy lifecycle artifact".to_vec()),
+                kind,
+                mode: if relative.ends_with(".sh") {
+                    0o755
+                } else {
+                    0o644
+                },
+            });
+            let registry = match adapter {
+                ProjectAgentAdapterKind::ClaudeCode => {
+                    let content = render_hook_registry(Some(br#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"user-lint"}]}]}}"#), &artifact, true, HookOwnership::default()).unwrap();
+                    Some((
+                        home.join(".claude/settings.json"),
+                        ManagedFileKind::ClaudeSettings,
+                        content,
+                    ))
+                }
+                ProjectAgentAdapterKind::Antigravity => {
+                    let content = render_antigravity_hooks(
+                        Some(br#"{"user-lint":{"PreInvocation":[]}}"#),
+                        &artifact,
+                        HookOwnership::default(),
+                    )
+                    .unwrap();
+                    Some((
+                        home.join(".gemini/config/hooks.json"),
+                        ManagedFileKind::AntigravityHooks,
+                        content,
+                    ))
+                }
+                _ => None,
+            };
+            if let Some((path, kind, content)) = &registry {
+                old.push(PendingChange {
+                    path: path.clone(),
+                    expected: capture_file_snapshot(path).unwrap(),
+                    desired: Some(content.clone()),
+                    kind: *kind,
+                    mode: 0o600,
+                });
+            }
+            apply_changes(&old).unwrap();
+            let manifest = manifest_for_changes(&old, runtime, "a".repeat(64));
+            let mut changes = install_plan(adapter, &home, runtime, Some(&manifest)).unwrap();
+            changes.extend(retire_stale_managed_changes(&changes, Some(&manifest), &home).unwrap());
+            let next_manifest = manifest_for_changes(&changes, runtime, "a".repeat(64));
+            let operation = prepared_adapter_fs_op(
+                PreparedAdapterFsOp {
+                    global: true,
+                    operation_id: Uuid::new_v4().to_string(),
+                    server_url: String::new(),
+                    project_id: String::new(),
+                    workspace_root: home.clone(),
+                    adapter,
+                    action: AdapterFsAction::Install,
+                    expected_revision: Some(1),
+                    next_revision: Some(2),
+                    manifest_json: Some(serde_json::to_string(&next_manifest).unwrap()),
+                    changes: Vec::new(),
+                },
+                &changes,
+            )
+            .unwrap();
+            apply_prepared_adapter_fs_op(&operation).unwrap();
+            assert!(!artifact.exists());
+            if let Some((path, _, _)) = &registry {
+                let content = fs::read_to_string(path).unwrap();
+                assert!(content.contains("user-lint"));
+                assert!(!content.contains("agent-run-event"));
+                assert!(!content.contains("user-prompt-submit"));
+            }
+            // A user edit must stop retirement before any writes occur.
+            fs::write(&artifact, "user edit").unwrap();
+            assert!(retire_stale_managed_changes(&[], Some(&manifest), &home).is_err());
+            fs::remove_file(&artifact).unwrap();
+        }
+    }
+
+    #[test]
     fn global_install_and_remove_protect_foreign_configuration() {
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
@@ -623,8 +696,8 @@ mod tests {
         apply_changes(&changes).unwrap();
         let manifest = manifest_for_changes(&changes, runtime, "a".repeat(64));
         fs::write(
-            home.join(".gemini/config/hooks/agent-run-event.sh"),
-            "user change",
+            home.join(".gemini/config/mcp_config.json"),
+            r#"{"mcpServers":{"clumsies":{"command":"user-change"}}}"#,
         )
         .unwrap();
         assert!(remove_plan(&manifest, &home).is_err());

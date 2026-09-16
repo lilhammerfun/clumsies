@@ -16,7 +16,7 @@ Clumsies 只向 Coding Agent 暴露一个 MCP 工具：
 | `load` | 需要完整资源，或者即将修改它 | 完整资源、稳定 ID 和完整资源哈希 |
 | `store` | 用户明确要求创建、更新、重命名、删除或丢弃受管 Memory | 持久化的本地 Draft 操作及同步状态 |
 
-`clumsiesd mcp serve` 是短生命周期的 stdio 协议代理。Effective Memory 构建、索引、检索、Draft 持久化与 AgentRun 观测都由常驻 `clumsiesd` 管理，代理通过本地 XPC 调用它。代理只接受本文列出的强类型输入，不能把任意 JSON 转发给 daemon。
+`clumsiesd mcp serve` 是短生命周期的 stdio 协议代理。Effective Memory 构建、索引、检索、Draft 持久化都由常驻 `clumsiesd` 管理，代理通过本地 XPC 调用它。代理只接受本文列出的强类型输入，不能把任意 JSON 转发给 daemon。
 
 启动时，代理会校验常驻 daemon 的 Agent runtime 协议修订和构建标识，再根据当前目录解析 Project binding。版本不一致、daemon 不可用或严格 host-plugin 模式下无法解析 binding 时都会显式失败。当前协议没有 setup 调用，也不兼容已移除的 `retrieve` 工具、host-session binding、`META_PROMPT.md` bootstrap 或 MCP attestation。
 
@@ -247,8 +247,6 @@ update 失败不意味着可以改用完整正文覆盖。activate 失败也不�
 MCP operation 会映射到 daemon 的 `activate_memory`、`load_memory` 与 `store_draft_operation`。Desktop 还使用 Review、merge 和检索诊断等私有 XPC 方法；它们不是额外 MCP 工具。
 
 每次有效 `activate` 会基于同一候选轨迹写入一条本地 Retrieval Run，但不会改变 MCP 响应 schema。Retrieval Run、Evaluation Case 和评测导出属于 daemon/Desktop 诊断能力，参见[检索运行与评测](/zh/retrieval-evaluation)，不会发送给 Server。
-
-私有 `record_agent_run_event` 方法接收受管 Agent host 的生命周期事件，不是 MCP 工具。代理只提取有界标识和生命周期字段，不保存原始 hook JSON、prompt、transcript 或工具正文；失败不会阻塞 host。具体集成见 [Agent runtime](/zh/guides/agent-runtime)。
 
 ## 实现入口
 

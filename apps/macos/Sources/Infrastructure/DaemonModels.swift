@@ -624,7 +624,7 @@ enum DaemonDraftOperation: Codable, Sendable {
     }
 }
 
-enum AgentRunHost: String, Codable, Hashable, Sendable {
+enum AgentHost: String, Codable, Hashable, Sendable {
     case codex
     case claudeCode = "claude-code"
     case manual
@@ -636,48 +636,8 @@ enum AgentRunHost: String, Codable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = AgentRunHost(rawValue: raw) ?? .unknown
+        self = AgentHost(rawValue: raw) ?? .unknown
     }
-}
-
-enum AgentRunKind: String, Codable, Hashable, Sendable {
-    case root
-    case subagent
-}
-
-enum AgentRunPhase: String, Codable, Hashable, Sendable {
-    case running
-    case ended
-}
-
-enum AgentRunOutcome: String, Codable, Hashable, Sendable {
-    case completed
-    case blocked
-    case failed
-    case cancelled
-    case unknown
-}
-
-struct AgentRun: Codable, Identifiable, Equatable, Sendable {
-    var id: String { runId }
-
-    let runId: String
-    let projectId: String
-    let host: AgentRunHost
-    let hostRunKey: String
-    let hostSessionId: String?
-    let parentRunId: String?
-    let kind: AgentRunKind
-    let phase: AgentRunPhase
-    let outcome: AgentRunOutcome?
-    let endReason: String?
-    let displayLabel: String?
-    let summary: String?
-    let revision: Int
-    let startedAt: String
-    let lastSeenAt: String
-    let leaseExpiresAt: String
-    let endedAt: String?
 }
 
 enum RetrievalRunStatus: String, Codable, Hashable, Sendable {
@@ -941,7 +901,7 @@ struct GetRecallFragmentResponse: Codable, Sendable {
 struct RecallSession: Codable, Identifiable, Sendable {
     var id: String { "\(host.rawValue):\(sessionId)" }
 
-    let host: AgentRunHost
+    let host: AgentHost
     let sessionId: String
     let title: String?
     let workspaceRoot: String

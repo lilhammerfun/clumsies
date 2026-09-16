@@ -25,7 +25,7 @@ and click **Continue in Browser** to sign in. The app loads the Server's
 configured organization automatically. Choose a Project and add your working
 repository through **Repositories → Add Repositories…**. Then connect your
 agent in **Settings → Agent**. For Codex, wait for **Ready**, restart Codex, start
-a new task in the bound repository, and review the Clumsies Hook in `/hooks`.
+a new task in the bound repository.
 
 See the [usage guide](../../docs/guides/how-to-use-clumsies.md) for the full
 workflow.

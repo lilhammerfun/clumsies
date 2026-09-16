@@ -62,7 +62,7 @@ the installed App opens, then guide me to the documentation quickstart.
 
 Clumsies includes integrations for the macOS Codex App, Claude Code, opencode, DeepSeek Harness (`dsh`), and Google Antigravity. Install the agent host separately. Adapters are configured once per Mac user for all projects; Codex is selected by default during first-time setup. Repository bindings determine which Project's Memory an agent can use.
 
-After changing the Codex integration, restart Codex and start a new task. To enable Agent activity recording, review and trust Clumsies in `/hooks`; MCP Memory retrieval does not require Hook trust. Retrieval needs the local daemon and a ready index; first use downloads the retrieval models. Host-specific requirements are documented in [Agent integration](https://docs.clumsies.ai/guides/agent-runtime).
+After changing the Codex integration, restart Codex and start a new task. Retrieval needs the local daemon and a ready index; first use downloads the retrieval models. Host-specific requirements are documented in [Agent integration](https://docs.clumsies.ai/guides/agent-runtime).
 
 Teams can deploy the Rust Server and PostgreSQL with their own OIDC identity provider. See [organization deployment](https://docs.clumsies.ai/guides/deploy-for-an-org).
 

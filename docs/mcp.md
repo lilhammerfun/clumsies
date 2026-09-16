@@ -18,7 +18,7 @@ Clumsies exposes one agent-facing tool:
 
 The App-bundled Rust `clumsiesd mcp serve` process is a protocol proxy.
 Effective Memory construction, indexing, retrieval, exact loading, Draft
-persistence, and AgentRun observation belong to the resident `clumsiesd` and
+persistence belong to the resident `clumsiesd` and
 are reached over local XPC. The proxy exposes only the typed `memory` tool; it
 cannot pass arbitrary JSON through to daemon methods.
 
@@ -289,23 +289,8 @@ A failed update does not permit a fallback full-body overwrite. A failed activat
 | `activate_memory` | MCP `activate` |
 | `load_memory` | MCP `load` |
 | `store_draft_operation` | MCP `store`, Desktop, and other clients |
-| `record_agent_run_event` | Private Coding Agent lifecycle hook bridge |
 | `search_index_status` | Desktop diagnostics and tests |
 | `rebuild_search_index` | Recovery, tests, and development tooling |
-
-Adapter-managed scripts pipe lifecycle events to the private command
-`clumsiesd _agent agent-run-event --host codex|claude-code|opencode|dsh|antigravity`. The
-short-lived Rust proxy resolves the repository's daemon Project binding,
-reduces the host payload to bounded identifiers and lifecycle fields, and
-calls `record_agent_run_event`. Managed adapters neither install nor synthesize
-a normal root `Stop`, and the proxy never blocks a host.
-`StopFailure`, `SubagentStop`, and `SessionEnd` remain non-blocking lifecycle
-observations. All parsing, binding, IPC, and daemon failures remain fail-open.
-
-The private bridge does not persist raw hook JSON, prompts, transcripts, tool
-payloads, or assistant messages. `record_agent_run_event` is not exposed as an
-MCP tool. The bridge accepts a legacy or manually forwarded normal `Stop` for
-compatibility, but records only AgentRun telemetry and never blocks the host.
 
 Every valid `activate_memory` call also writes one local Retrieval Run from the
 same ranked candidate trace used for the response. This does not add fields to

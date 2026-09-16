@@ -19,7 +19,6 @@ mod server_client;
 mod state;
 mod types;
 mod util;
-mod work_tracking;
 
 pub use agent_adapter::{
     DaemonAgentAdapterSetting, DaemonAgentAdapterSettings, DaemonCodexPluginRequest,
@@ -65,8 +64,8 @@ pub use project_storage::{
     DaemonProjectStorageResetRequest,
 };
 pub use recall::{
-    GetRecallFragmentRequest, GetRecallFragmentResponse, ListRecallsRequest, ListRecallsResponse,
-    RecallActivation, RecallFragment, RecallSession, RecallTask,
+    AgentHost, GetRecallFragmentRequest, GetRecallFragmentResponse, ListRecallsRequest,
+    ListRecallsResponse, RecallActivation, RecallFragment, RecallSession, RecallTask,
 };
 pub use retrieval_history::{
     ClearRetrievalRunsRequest, ClearRetrievalRunsResponse, CreateEvaluationCaseRequest,
@@ -122,8 +121,4 @@ use util::{
     apply_exact_text_replacements, canonical_binding_root, canonical_server_url,
     canonical_workspace_directory, git_worktree_main_root, memory_kind_matches_resource,
     non_empty_string,
-};
-pub use work_tracking::{
-    AgentRun, AgentRunEventSource, AgentRunEventType, AgentRunHost, AgentRunKind, AgentRunOutcome,
-    AgentRunPhase, RecordAgentRunEventRequest, RecordAgentRunEventResponse,
 };

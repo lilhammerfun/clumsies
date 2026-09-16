@@ -173,7 +173,7 @@ Local state includes both unsynchronized user changes and rebuildable caches. Dr
 | Effective Memory | Assembled from installed snapshots and Draft operations | Derived view; no remote authoritative Effective Memory table. |
 | Retrieval index | Project SQLite `search_revisions`, `search_resources`, `search_units`, `search_units_fts`, `search_heads`, etc. | Rebuildable. Retains Commit/Draft provenance and must match effective content and model versions. |
 
-Project Local Storage moves only managed generations and retrieval data. Central Drafts, queues, and credentials stay in central storage; see [Runtime](/runtime). AgentRuns and retrieval evaluations have separate boundaries described in the [glossary](/glossary); they are not part of Memory publication snapshots.
+Project Local Storage moves only managed generations and retrieval data. Central Drafts, queues, and credentials stay in central storage; see [Runtime](/runtime). Retrieval evaluations have separate boundaries described in the [glossary](/glossary); they are not part of Memory publication snapshots.
 
 ## Continue reading and implementation sources
 

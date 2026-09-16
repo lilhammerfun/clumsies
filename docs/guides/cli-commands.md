@@ -10,7 +10,6 @@ from **Settings → Agent** to the App-bundled Rust runtime:
 
 ```text
 clumsiesd mcp serve
-clumsiesd _agent agent-run-event --host <host>
 ```
 
 These are adapter-managed proxy modes, not a replacement general-purpose CLI.

@@ -30,7 +30,7 @@ On first use, **Connect Your Agents** asks which agent integrations to enable. C
 
 Adapters are installed once for this Mac user and work across projects. The repository you bind later determines which Project's Memory Codex uses. Enabling an adapter alone does not bind a repository.
 
-After the Codex integration is installed or changed, restart Codex and start a new task. To enable Agent activity recording, review and trust Clumsies in `/hooks`; MCP Memory retrieval does not require Hook trust. The [Use Memory in Codex](/quickstart/use-with-agent) page explains how to verify retrieval after you select the project's Memory.
+After the Codex integration is installed or changed, restart Codex and start a new task. The [Use Memory in Codex](/quickstart/use-with-agent) page explains how to verify retrieval after you select the project's Memory.
 
 ## Check the workspace
 

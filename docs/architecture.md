@@ -9,20 +9,34 @@ This page explains which processes handle a request, where data lives, who can c
 
 ## The system at a glance
 
-[![Normal Clumsies data path: Desktop uses XPC; an agent uses an MCP proxy and XPC to reach the resident daemon. The daemon uses SQLite, Project storage, and Keychain, and calls the Server over HTTPS. The Server uses PostgreSQL.](/diagrams/system-architecture.png)](/diagrams/system-architecture.png)
+```mermaid
+flowchart LR
+  subgraph Mac[macOS device]
+    Desktop -->|typed XPC| Daemon[Resident clumsiesd]
+    Host[Agent host] -->|MCP stdio| Proxy[Runtime proxy]
+    Proxy -->|typed XPC| Daemon
+    Daemon --> SQLite
+    Daemon --> Storage[Project storage]
+    Daemon --> Keychain
+  end
+  subgraph Org[Organization deployment]
+    Server[Rust Server] --> PostgreSQL
+  end
+  Daemon -->|Authenticated HTTPS| Server
+```
 
-The left boundary is the user's macOS device; the right is the organization's deployment. Open the image for full size. Sign-in, initial setup, and administrator recovery use separate paths described below.
+The left boundary is the user's macOS device; the right is the organization's deployment. Sign-in, initial setup, and administrator recovery use separate paths described below.
 
 | Component | What it is | Role in a deployment rollback checklist example |
 | --- | --- | --- |
 | Desktop | Native Swift macOS application | Display and edit the checklist, review differences, confirm publication |
 | Agent host | The application running a coding agent | Call the `memory` tool during a task |
-| Runtime proxy | A protocol-proxy process using the bundled `clumsiesd` | Convert MCP or lifecycle Hooks into typed local requests |
+| Runtime proxy | A protocol-proxy process using the bundled `clumsiesd` | Convert MCP into typed local requests |
 | Resident daemon | Rust `clumsiesd`, managed by launchd | Persist drafts, synchronize, prepare effective content, run retrieval |
 | Server | Rust HTTP service using Axum | Authenticate, save shared Drafts/Reviews, publish transactionally, serve snapshots |
 | PostgreSQL | The Server's relational database | Persist members, published content, proposals, reviews, and version history |
 
-The proxy and daemon use **one executable in the App bundle**, started in different modes. Ordinary startup runs the resident service; `mcp serve` runs the MCP proxy; `_agent agent-run-event` forwards lifecycle events. Proxies do not open business databases, load models, or run synchronization workers.
+The proxy and daemon use **one executable in the App bundle**, started in different modes. Ordinary startup runs the resident service; `mcp serve` runs the MCP proxy. Proxies do not open business databases, load models, or run synchronization workers.
 
 ## Why these layers exist
 
@@ -39,7 +53,7 @@ Local state includes both unsynchronized edits and rebuildable caches. They must
 | Location | Contents | Ownership and durability |
 | --- | --- | --- |
 | Server PostgreSQL | Organizations/Projects, members, published Memory, Drafts/Reviews, Blob/Tree/Commit/Ref, audit | Shared server state; the Organization Ref identifies the published version |
-| Central daemon SQLite | Project bindings, local drafts and operation queues, cached objects/Refs, AgentRuns, retrieval history | Includes edits that may not have reached the Server; not a disposable cache |
+| Central daemon SQLite | Project bindings, local drafts and operation queues, cached objects/Refs, retrieval history | Includes edits that may not have reached the Server; not a disposable cache |
 | Project Local Storage | Verified Commit file snapshots and Effective Memory search indexes | Rebuildable derived data, managed per Project |
 | macOS Keychain | Server access/refresh token pair | Credentials stored separately from content and SQLite |
 | Daemon model cache | Embedding and reranker model files | Local retrieval dependencies shared across Projects |
@@ -93,7 +107,7 @@ These directories live under `crates/server/src/`. HTTP code translates requests
 - **Sign-in:** Desktop opens the organization's OIDC identity provider in a system browser. The Server verifies identity. Desktop exchanges the authorization code and passes the token pair to the daemon over XPC for Keychain storage. The daemon adds bearer credentials to normal Server requests.
 - **Project binding:** The daemon resolves the longest bound ancestor of the current directory within the normalized Server authority. Managed agent proxies recheck binding and runtime identity to avoid using a Project after its directory is rebound.
 - **Publication:** Project members can propose and submit edits; Organization owners/admins decide publication. Role checks do not replace version or `If-Match` concurrency checks.
-- **Local diagnostics:** AgentRun, retrieval history, and host Activity projections remain on the device. They are distinct from Draft content synchronized to the Server.
+- **Local diagnostics:** Retrieval history and host Activity projections remain on the device. They are distinct from Draft content synchronized to the Server.
 
 Initial setup and administrator recovery when the daemon is unavailable use restricted direct HTTPS requests from Desktop to the trusted Server origin. These are exceptions to the diagram's normal data path. Admin APIs use bearer authentication; setup cookies/CSRF do not form a general browser administration session. See [Authentication and sessions](/reference/auth).
 

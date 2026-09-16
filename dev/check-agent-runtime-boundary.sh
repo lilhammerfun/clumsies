@@ -21,7 +21,7 @@ if rg -n \
   .github/workflows \
   apps/macos/Scripts \
   apps/macos/project.yml \
-  assets/adapters \
+  packages/clumsies \
   package.json
 then
   echo "An active build, package, or Adapter surface still references the retired Zig CLI." >&2

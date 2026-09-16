@@ -18,7 +18,7 @@ The two Rust workspace members are `crates/server` and `crates/daemon`. Swift ow
 | `crates/server/src/` | HTTP routing and domain modules | Understand shared data and authorization |
 | `crates/server/migrations/` | PostgreSQL schema history | Inspect persistent records and constraints |
 | `crates/server/openapi/` | Public and Admin HTTP contracts | Look up request/response schemas |
-| `assets/adapters/`, `packages/clumsies/` | Host integration assets and the Clumsies plugin | See how hosts launch the bundled runtime |
+| `packages/clumsies/` | Host integration assets and the Clumsies plugin | See how hosts launch the bundled runtime |
 | `dev/`, `apps/macos/Scripts/` | Local development and build utilities | Run an isolated development environment |
 | `docs/`, `docs/zh/` | English and Chinese documentation | Improve this site |
 
