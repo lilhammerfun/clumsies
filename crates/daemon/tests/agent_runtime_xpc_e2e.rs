@@ -105,10 +105,10 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
     std::fs::create_dir_all(&workspace).unwrap();
     let suffix = Uuid::new_v4().simple().to_string();
     let service_name = format!("ai.clumsies.test.runtime.{suffix}");
-    let binary = stage_test_binary(
-        Path::new(env!("CARGO_BIN_EXE_clumsiesd")),
-        &daemon_root.join("bin/clumsiesd"),
-    );
+    let source_binary = std::env::var_os("CLUMSIES_TEST_PACKAGED_DAEMON")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_clumsiesd")));
+    let binary = stage_test_binary(&source_binary, &daemon_root.join("bin/clumsiesd"));
     let job = LaunchdJob::bootstrap(&binary, &daemon_root, &service_name);
 
     let ordinary_client = DaemonIpcClient::new(&service_name).with_timeout(Duration::from_secs(30));

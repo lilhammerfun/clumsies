@@ -1,6 +1,6 @@
 ---
 title: Install Clumsies
-description: Build and install the current macOS App for everyday use, then connect to your organization.
+description: Download the macOS DMG, open Clumsies, and connect to your organization, or install from source.
 prev:
   text: Quickstart
   link: /quickstart/
@@ -10,15 +10,26 @@ next:
 ---
 # Install Clumsies
 
-Install the current App from the repository's `main` branch. The `just install-macos` command builds it, installs **`~/Applications/Clumsies.app`**, and opens it. This is the regular application installation, with persistent accounts, Memory, and agent settings.
+## Download and install
 
-::: warning WIP — the native App is still in development
-[Public GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) contain the older CLI and do not provide an installer for this App. Source installation uses the Debug build configuration; it is not a stable release.
+Supports **macOS 14 or later on Apple Silicon and Intel Macs**, without build tools.
+
+1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) and download `Clumsies-*-macos-universal.dmg` from the newest **Clumsies macOS Preview**.
+2. Open the DMG, drag `Clumsies.app` into `Applications`, and eject the disk image.
+3. Open the App. The preview is not notarized by Apple. If macOS blocks it, verify that you trust the download, then use **System Settings → Privacy & Security → Open Anyway**. [Apple's instructions](https://support.apple.com/102445)
+4. Continue to [Connect to your organization](/quickstart/connect). The default Server is `https://app.clumsies.ai`; sign-in requires an admitted account. First use downloads the retrieval models.
+
+::: warning Preview
+The DMG is ad-hoc signed and not notarized by Apple. Managed Macs may restrict first-open exceptions. It uses the regular App's accounts, Memory, and settings; it is not a stable release.
 :::
 
-If your team already supplies the current App, follow its installation instructions and continue to [Connect to your organization](/quickstart/connect).
+To update, quit the App, download a newer DMG, and replace the existing application. Your data is retained. If your source installation is at `~/Applications/Clumsies.app`, replace it there to avoid keeping two copies. Preview updates use a new DMG download.
 
-## Prepare your Mac
+## Install from source
+
+The following tools are only needed to compile the App. DMG users can skip this section.
+
+### Prepare your Mac
 
 The App targets **macOS 14 or later**. Building it requires a newer macOS version compatible with the Xcode you select; check [Apple's Xcode system requirements](https://developer.apple.com/xcode/system-requirements/).
 
@@ -45,7 +56,7 @@ brew install just xcodegen rust
 
 If you already have a working stable Rust toolchain, omit `rust`. Keep existing tools that meet the requirements.
 
-## Build and install
+### Build and install
 
 For a new checkout:
 
@@ -61,7 +72,7 @@ The App includes the default Server address **`https://app.clumsies.ai`**. You s
 
 This installation connects to an existing Server. It does not require a local Docker environment. Contributors who need an isolated App and local services can follow [Development workflow](/guides/development-workflow).
 
-## Update an existing installation
+### Update a source installation
 
 In your `main` checkout, preserve any local changes before updating:
 
@@ -78,9 +89,10 @@ When the App finishes reconciling its Codex plugin, restart Codex and start a ne
 
 | Symptom | Next action |
 | --- | --- |
+| First launch reports an unidentified developer | Verify the download source, then use System Settings → Privacy & Security → Open Anyway; managed devices may restrict this. |
 | `xcodebuild` cannot find full Xcode or requests first-launch components | Recheck the active Xcode path and complete its setup. |
 | `just`, `xcodegen`, `cargo`, or `rustc` is unavailable | Install the missing tool or correct the current shell's `PATH`, then rerun the command. |
 | Dependency download or build fails | Keep the failing command and error output; use [Troubleshooting](/guides/troubleshooting) or report the failure. |
 | The App opens but sign-in is denied | Installation succeeded. Ask your organization's administrator to check account access. |
 
-Once **`~/Applications/Clumsies.app`** opens, continue to [Connect to your organization](/quickstart/connect).
+Once the installed **Clumsies.app** opens, continue to [Connect to your organization](/quickstart/connect).

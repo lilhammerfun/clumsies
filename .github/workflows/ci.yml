@@ -32,6 +32,13 @@ jobs:
           shellcheck dev/check-agent-runtime-boundary.sh
           sh dev/check-agent-runtime-boundary.sh
 
+      - name: Check macOS packaging scripts
+        run: |
+          shellcheck apps/macos/Scripts/archive-preview.sh \
+            apps/macos/Scripts/archive-release.sh apps/macos/Scripts/create-dmg.sh \
+            apps/macos/Scripts/embed-daemon.sh apps/macos/Scripts/generate-appcast.sh \
+            apps/macos/Scripts/test-distribution-package.sh apps/macos/Scripts/test-runtime-package.sh
+
       - name: Check retired terminology
         run: |
           shellcheck dev/check-retired-terms.sh

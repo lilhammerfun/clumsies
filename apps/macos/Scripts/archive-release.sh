@@ -16,6 +16,7 @@ output_dir="${CLUMSIES_MACOS_OUTPUT_DIR:-$repo_root/dist/macos}"
 app_path="$archive_path/Products/Applications/Clumsies.app"
 archive_name="Clumsies-$CLUMSIES_VERSION-macos-universal.zip"
 update_archive="$output_dir/$archive_name"
+disk_image="$output_dir/Clumsies-$CLUMSIES_VERSION-macos-universal.dmg"
 
 cd "$repo_root"
 mkdir -p "$output_dir" "$(dirname "$archive_path")"
@@ -49,4 +50,16 @@ apps/macos/Scripts/verify-release-signature.sh "$app_path" "$APPLE_TEAM_ID"
 
 rm "$update_archive"
 ditto -c -k --sequesterRsrc --keepParent "$app_path" "$update_archive"
-printf '%s\n' "$update_archive"
+
+sh apps/macos/Scripts/create-dmg.sh "$app_path" "$disk_image"
+codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$disk_image"
+xcrun notarytool submit "$disk_image" \
+  --apple-id "$APPLE_ID" \
+  --password "$APPLE_PASSWORD" \
+  --team-id "$APPLE_TEAM_ID" \
+  --wait
+xcrun stapler staple "$disk_image"
+xcrun stapler validate "$disk_image"
+codesign --verify --strict --verbose=2 "$disk_image"
+spctl --assess --type open --context context:primary-signature --verbose=2 "$disk_image"
+printf '%s\n' "$update_archive" "$disk_image"

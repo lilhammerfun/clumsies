@@ -89,14 +89,55 @@ xcodegen generate --spec apps/macos/project.yml
 
 The generated `Clumsies.xcodeproj` is ignored; only its SwiftPM lockfile is tracked.
 
+### Downloadable previews
+
+Run the **Release** workflow with `distribution=preview` (the manual default)
+and matching workflow/source refs. For example, after merging into `main`:
+
+```sh
+gh workflow run release.yml --ref main -f distribution=preview -f ref=main
+```
+
+CI builds a universal App and daemon, ad-hoc signs them, creates and mounts
+the DMG, verifies its contents, signing, and architectures, then publishes
+a GitHub pre-release tagged `macos-preview-<run-number>` with a DMG and SHA-256
+checksum. Preview builds need no Apple or Sparkle secrets. They do not change
+the latest stable release or publish an automatic-update feed. Users update
+by downloading another DMG.
+
+The preview uses the Debug runtime contract, as `just install-macos` does,
+with the regular `ai.clumsies.desktop` App identity and bundled daemon.
+Release runtimes still require Developer ID signing for Agent installation;
+an ad-hoc Release build would fail that check. The preview does not create a
+Dev Instance. It is not Apple-notarized; first launch may require the user's
+Privacy & Security exception, which managed Macs can restrict.
+
 ### Distribution signing
 
 Tagged releases build a universal Developer ID-signed app, notarize and staple
 it, verify the App and bundled Agent runtime share the expected signing team
-and hardened-runtime identity, then publish a Sparkle-signed update archive
-and `appcast.xml` through GitHub Actions. The workflow can also be dispatched
-from the current default-branch tip to produce a signed candidate. Manual
-candidates do not publish a GitHub Release or appcast.
+and hardened-runtime identity, then create a signed and notarized DMG for
+downloads. GitHub Actions publishes `Clumsies-<version>-macos-universal.dmg`,
+the Sparkle-signed ZIP update archive, and `appcast.xml`. Sparkle only scans
+the ZIP, so the DMG cannot create a duplicate update for the same version.
+The workflow can also be dispatched
+with `distribution=notarized` from the current default-branch tip to produce a signed candidate. Manual
+candidates include both DMG and ZIP, without publishing a GitHub Release or appcast.
+
+The DMG contains `Clumsies.app` and an `Applications` shortcut. Users drag the
+App into Applications, eject the disk image, and open the installed App.
+The ZIP is also usable for manual installation: unzip it and move the App
+to Applications before opening it. Neither format requires build tools.
+Developer ID signing and notarization let Gatekeeper validate the download
+without the preview's manual exception. Switching to ZIP does not remove
+those checks. This distribution path does not use App Store Review.
+
+`just test-macos-package` also creates and mounts a temporary DMG, verifies
+the copied App signature and binaries, and checks ZIP-only appcast selection.
+These local checks use ad-hoc signing and do not submit to Apple. A local
+packaging preview can be created from an existing App with
+`sh apps/macos/Scripts/create-dmg.sh /path/to/Clumsies.app /tmp/Clumsies.dmg`;
+that command does not sign or notarize a distribution package.
 
 Keep the Apple certificate, certificate passphrase, notarization account,
 app-specific password, team ID, temporary keychain password, and Sparkle

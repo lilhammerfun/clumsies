@@ -125,3 +125,49 @@ hooks 与 remote 由 worktree 共享；`clumsies-commit-format` 会检查提交�
 - `down` 有意保留状态，删除 worktree 前必须 `reset`，否则实例目录和凭据仍会存在。
 - Preview 模式只消费既有 descriptor，不负责自动部署远端 Preview。
 - 安全快照分支是否可删取决于其内容是否已进入 `main`，不能用“worktree 已删除”推断。
+
+## 8. macOS 分发包
+
+### 可下载的体验版
+
+手动运行 **Release** 流水线，选择 `distribution=preview`（默认值），并让
+workflow ref 与 source ref 一致。例如，合入 `main` 后执行：
+
+```sh
+gh workflow run release.yml --ref main -f distribution=preview -f ref=main
+```
+
+CI 构建包含 App 与 daemon 的通用包、完成 ad-hoc 签名、生成并挂载 DMG，检查内容、
+签名及双架构，然后发布带有 DMG 和 SHA-256 校验文件的 GitHub 预发布版本，tag 为
+`macos-preview-<run-number>`。这个流程不需要 Apple 或 Sparkle 密钥，不覆盖 latest
+稳定版，也不发布自动更新清单；体验版用户下载新 DMG 手动更新。
+
+体验包沿用 `just install-macos` 的 Debug runtime 契约，使用正常的
+`ai.clumsies.desktop` App 身份及内置 daemon，不创建 Dev Instance。Release runtime
+仍要求 Developer ID 签名才能安装 Agent 适配器；直接给 Release 包做 ad-hoc 签名
+会在此处失败。体验包尚未经过 Apple 公证，首次打开可能需要用户在“隐私与安全”中
+手动放行；受管理的 Mac 可能不允许此操作。
+
+### Developer ID 签名与公证
+
+Release 流水线构建包含 daemon 的通用 App，完成 Developer ID 签名、公证和票据装订，
+再生成同样经过签名、公证和装订的 DMG。GitHub Release 同时发布：
+
+- `Clumsies-<version>-macos-universal.dmg`：用户下载后，将 `Clumsies.app` 拖入
+  `Applications`，推出磁盘映像，再打开已安装的 App。
+- 同名 `.zip`：用于 Sparkle 自动更新，也可手动解压后将 App 移入应用程序目录。
+- `appcast.xml`：自动更新清单。生成时只扫描 ZIP，避免同版本 DMG 重复进入更新清单。
+
+两种格式都不要求用户安装编译工具。通过官网或 GitHub 分发无需 App Store 人工审核，
+Developer ID 签名和 Apple 公证可让 Gatekeeper 验证下载，无需体验版的手动放行；
+换成 ZIP 不会省掉这些检查。
+
+Apple 证书、证书密码、公证账号、App 专用密码、Team ID、临时 Keychain 密码和
+Sparkle 私钥应配置在受保护的 `macos-signing` GitHub Environment，名称以
+`.github/workflows/release.yml` 为准。手动选择 `distribution=notarized` 可从当前默认分支生成 DMG 和 ZIP
+签名候选，不发布 Release 或更新清单；tag 发布还需要 Sparkle 私钥。
+
+`just test-macos-package` 会创建并挂载临时 DMG，验证 App 签名、二进制完整性及
+ZIP 更新清单选择。本地测试使用 ad-hoc 签名，不向 Apple 提交。已有 App 可通过
+`sh apps/macos/Scripts/create-dmg.sh /path/to/Clumsies.app /tmp/Clumsies.dmg`
+预览包装效果；这条命令不会替产物完成正式签名或公证。
