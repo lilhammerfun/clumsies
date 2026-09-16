@@ -162,7 +162,7 @@ Activity 是只读的本地诊断视图。daemon 只为已绑定工作目录读�
 
 投影会读取真实用户消息、`memory.activate` 的精确 query、tool result 和已返回 fragment，并可从本地 Retrieval Run 冻结快照打开当时的完整 fragment。它不导入通用聊天历史、assistant prose 或其他 tool，不修改日志、Memory 或 Retrieval Run。
 
-这些内容可能包含源代码、提示词和组织知识，因此只通过本机 XPC 暴露给 Desktop，不上传 Server，也不进入 Organization Memory。正常 App 列表从 binding 表枚举 workspace，完整历史片段读取也校验 Project；但底层 `ListRecallsRequest.workspace_root` 当前只规范化显式路径而未验证该路径已绑定，本机 XPC 调用方仍可读取对应日志投影。移除 binding 会让目录离开正常 Activity 列表，但在修复前不能视为所有底层列表调用都已撤销读取能力。完整格式、兼容解析和缺口见 [Activity](/zh/recall)。
+这些内容只通过本机 XPC 提供给 Desktop。所有列表过滤都限制在绑定目录内；指定 Project 时同时校验目录归属。完整格式见 [Activity](/zh/recall)。
 
 ## 诊断与验证
 

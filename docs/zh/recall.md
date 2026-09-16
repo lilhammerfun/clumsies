@@ -51,7 +51,7 @@ UI 使用面向用户的交付标签，不会把 `add` 表述成创建或修改�
 
 Activity 由本机 daemon 直接读取本地日志和本地 retrieval history。当前 App 只传 Project filter（或不传 filter），这两条 UI 路径都从 daemon 的 workspace binding 表取根目录，因此正常界面只列出已绑定工作区。
 
-底层 `ListRecallsRequest.workspace_root` 是一个需要如实记录的例外：当前 daemon 会规范化调用方显式传入的路径，却不会先证明它存在于 binding 表。能够调用本地 XPC 的客户端若直接传这个字段，可能读取对应目录的 DSH/Codex 投影，但因 Project id 为空无法关联 retrieval history。当前 App 不使用该参数；在 daemon 补上 binding 拒绝之前，不能把“任意调用路径都强制限制为已绑定 workspace”写成已完成的权限保证。
+显式 `workspace_root` 过滤同样必须匹配绑定表；同时传入 Project filter 时还会校验项目归属。未匹配时返回空列表。
 
 ### DSH
 
@@ -123,8 +123,6 @@ Activity 不会为了生成视图把本地会话日志上传到 Server，也不�
 - App 的无 filter / Project filter 只从 daemon binding 表发现 workspace；
 - Project filter 只包含绑定到该 Project 的 workspace；
 - `run_id` 与完整历史片段读取必须再次通过 Project 边界校验。
-
-底层 `workspace_root` filter 尚未验证 binding，是当前隐私边界缺口，不应由文档掩盖。它不改变“日志只在本机读取”的事实，但会扩大本地 XPC 调用者可选择的目录范围。
 
 浏览 Activity 不会修改 Memory、Issue 或 session 文件，也不会导入 ChatGPT 数据导出。检索详情中的不准确反馈与证据核对会更新评估记录，并为评估保留对应的 source run。源日志与其他 retrieval history 的保留和删除仍由各自的本地存储生命周期负责。
 
