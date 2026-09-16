@@ -644,15 +644,28 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn write_mock_codex(path: &Path, script: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Write in a child so parallel forks cannot inherit a writable executable (ETXTBSY).
+        let status = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "printf '%s' \"$2\" > \"$1\" && chmod 755 \"$1\"",
+                "write-mock-codex",
+            ])
+            .arg(path)
+            .arg(script)
+            .status()
+            .unwrap();
+        assert!(status.success(), "could not write mock Codex CLI");
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn inspection_with_codex_lists_state_without_materializing() {
-        use std::os::unix::fs::PermissionsExt;
-
         let host = tempfile::tempdir().unwrap();
         let codex = host.path().join("Codex.app/Contents/Resources/codex");
-        fs::create_dir_all(codex.parent().unwrap()).unwrap();
-        fs::write(&codex, "#!/bin/sh\necho '{\"marketplaces\":[]}'\n").unwrap();
-        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+        write_mock_codex(&codex, "#!/bin/sh\necho '{\"marketplaces\":[]}'\n");
         let daemon = tempfile::tempdir().unwrap();
         let marketplace = daemon.path().join("agent-plugins/codex-marketplace");
 
@@ -669,8 +682,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn reconciliation_repairs_missing_stale_and_disabled_state() {
-        use std::os::unix::fs::PermissionsExt;
-
         let daemon = tempfile::tempdir().unwrap();
         let plugin = materialize(
             daemon.path(),
@@ -710,10 +721,9 @@ mod tests {
         })
         .to_string();
         let codex = host.path().join("Codex.app/Contents/Resources/codex");
-        fs::create_dir_all(codex.parent().unwrap()).unwrap();
-        fs::write(
+        write_mock_codex(
             &codex,
-            format!(
+            &format!(
                 "#!/bin/sh\n\
                  if [ \"$1\" = plugin ] && [ \"$2\" = marketplace ] && [ \"$3\" = list ]; then\n\
                    if [ -f {marketplace_marker} ]; then printf '%s\\n' {marketplace_ready}; else printf '%s\\n' '{{\"marketplaces\":[]}}'; fi\n\
@@ -730,9 +740,7 @@ mod tests {
                 plugin_ready = shell_single_quote(&plugin_ready),
                 plugin_stale = shell_single_quote(&plugin_stale),
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         ensure_marketplace(&codex, &plugin.marketplace_root)
             .await
