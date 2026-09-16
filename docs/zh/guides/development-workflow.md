@@ -137,10 +137,11 @@ workflow ref 与 source ref 一致。例如，合入 `main` 后执行：
 gh workflow run release.yml --ref main -f distribution=preview -f ref=main
 ```
 
-CI 构建包含 App 与 daemon 的通用包、完成 ad-hoc 签名、生成并挂载 DMG，检查内容、
-签名及双架构，然后发布带有 DMG 和 SHA-256 校验文件的 GitHub 预发布版本，tag 为
+CI 构建包含 App 与 daemon 的 Apple Silicon 包、完成 ad-hoc 签名、生成并挂载 DMG，检查内容、
+签名及架构，然后发布带有 DMG 和 SHA-256 校验文件的 GitHub 预发布版本，tag 为
 `macos-preview-<run-number>`。这个流程不需要 Apple 或 Sparkle 密钥，不覆盖 latest
-稳定版，也不发布自动更新清单；体验版用户下载新 DMG 手动更新。
+稳定版，也不发布自动更新清单；体验版用户下载新 DMG 手动更新。当前 ONNX Runtime
+依赖没有 `x86_64-apple-darwin` 预编译库，因此暂不提供 Intel 体验包。
 
 体验包沿用 `just install-macos` 的 Debug runtime 契约，使用正常的
 `ai.clumsies.desktop` App 身份及内置 daemon，不创建 Dev Instance。Release runtime

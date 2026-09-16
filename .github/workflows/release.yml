@@ -35,7 +35,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -50,9 +50,7 @@ jobs:
         env:
           CLUMSIES_TEST_PACKAGED_DAEMON: ${{ github.workspace }}/build/macos-preview-derived/Build/Products/Debug/Clumsies.app/Contents/Resources/clumsiesd
           CARGO_PROFILE_DEV_DEBUG: '0'
-        run: |
-          HOST_TARGET=$(rustc -vV | sed -n 's/^host: //p')
-          cargo test --locked -p daemon --target "$HOST_TARGET" --test agent_runtime_xpc_e2e -- --nocapture
+        run: cargo test --locked -p daemon --test agent_runtime_xpc_e2e -- --nocapture
 
       - uses: actions/upload-artifact@v4
         with:
@@ -83,10 +81,10 @@ jobs:
           ## Install / 安装
 
           Download the DMG below, open it, and drag Clumsies.app into Applications.
-          macOS 14 or later; Apple Silicon and Intel are included. No build tools required.
+          macOS 14 or later on Apple Silicon (M1 or newer). No build tools required.
 
           下载下方 DMG，打开后将 Clumsies.app 拖入 Applications。支持 macOS 14 及以上、
-          Apple Silicon 和 Intel，无需自行编译。默认连接 https://app.clumsies.ai，
+          Apple Silicon（M1 及更新机型），无需自行编译。默认连接 https://app.clumsies.ai，
           登录需要组织访问权限。
 
           This preview is ad-hoc signed and **not notarized by Apple**. After first trying

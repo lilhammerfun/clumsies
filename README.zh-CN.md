@@ -27,9 +27,9 @@ Clumsies 帮助团队维护供 Coding Agent 使用的 Markdown 知识，例如�
 
 ## 安装并开始使用
 
-支持 **macOS 14 及以上版本，Apple Silicon 和 Intel Mac**。直接安装无需 Xcode、Rust 或其他编译工具。
+支持 **macOS 14 及以上版本，Apple Silicon Mac（M1 及更新机型）**。直接安装无需 Xcode、Rust 或其他编译工具。
 
-1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases)，在最新的 **Clumsies macOS Preview** 中下载 `Clumsies-*-macos-universal.dmg`。
+1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases)，在最新的 **Clumsies macOS Preview** 中下载 `Clumsies-*-macos-arm64.dmg`。
 2. 打开 DMG，将 **Clumsies.app** 拖入 **Applications（应用程序）**，推出磁盘映像，再打开已安装的 App。
 3. 当前体验版尚未经过 Apple 公证。首次打开若被拦截，确认文件来自本仓库后，到 **系统设置 → 隐私与安全 → 仍要打开** 放行。受管理的 Mac 可能不允许此操作。[Apple 操作说明](https://support.apple.com/zh-cn/102445)
 4. 保留默认 Server 地址 **`https://app.clumsies.ai`** 并登录；需要该组织已经准入的账号。接入其他部署时，使用团队提供的 Server 地址。
