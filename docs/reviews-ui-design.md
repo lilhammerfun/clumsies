@@ -108,10 +108,17 @@ The file navigator reuses the path hierarchy, folder expansion, file symbols,
 and native row styling extracted from the Memory file tree. It owns only Review
 file selection; it must not inherit Memory rename, delete, or open side effects.
 
-The current Server contract models one Draft resource per Review, so the tree
-currently contains one real terminal file path. Do not turn operation history
-into fake files. The tree accepts stable file IDs and paths so a future
-materialized multi-file API can extend it without changing the interaction.
+Build the tree from the Review's `drafts[]` metadata as soon as it arrives. Each
+Draft contributes its final file path; operation history does not create extra
+files. Load snapshot content and calculate the diff only for the selected file,
+off the main thread. Share completed and in-flight commit requests within the
+loaded Review revision. File loading and retry errors stay in the detail pane,
+so the navigator remains usable. Replacing the Review revision or leaving the
+page cancels its loader; late responses cannot replace the current selection.
+
+The commit endpoint still returns a complete snapshot. Its first download is
+required for the selected diff, but does not block the file tree. Client logs
+record directory readiness and individual file load duration separately.
 
 The main pane contains only information needed to make the decision:
 

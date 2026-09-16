@@ -5091,31 +5091,11 @@ final class WorkspaceStore: ObservableObject {
         replaceReview(with: WorkspaceLoader.mapReview(updated))
     }
 
-    func reviewFileChanges(for detail: ReviewDetail) async throws -> [ReviewFileChange] {
-        let draftDetails = detail.drafts ?? [
-            ReviewDraftDetail(draft: detail.draft, operations: detail.operations)
-        ]
-        var changes = [ReviewFileChange]()
-        changes.reserveCapacity(draftDetails.count)
-        for draftDetail in draftDetails {
-            async let baseRequest: CommitPayload? = loadCommit(draftDetail.draft.baseCommitId)
-            async let currentRequest: CommitPayload? = loadCommit(
-                draftDetail.draft.coordination.currentCommitId
-            )
-            let (base, current) = try await (baseRequest, currentRequest)
-            changes.append(
-                ReviewFileChange(
-                    detail: draftDetail,
-                    sources: try WorkspaceLoader.mapReviewChangeSources(
-                        draft: draftDetail.draft,
-                        operations: draftDetail.operations,
-                        base: base,
-                        current: current
-                    )
-                )
-            )
+    func makeReviewFileLoader() -> ReviewFileLoader {
+        let client = server
+        return ReviewFileLoader { id in
+            try await client.get("/api/v1/commits/\(id)")
         }
-        return changes
     }
 
     func reconciliationCandidate(for draft: LocalDraft) async throws -> DraftReconciliationCandidate {
