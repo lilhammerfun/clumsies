@@ -30,3 +30,5 @@ if apps/macos/Scripts/verify-release-signature.sh "$app" NOT_A_RELEASE_TEAM; the
   echo "Ad-hoc package unexpectedly passed release signature verification." >&2
   exit 1
 fi
+
+sh apps/macos/Scripts/test-distribution-package.sh "$app"

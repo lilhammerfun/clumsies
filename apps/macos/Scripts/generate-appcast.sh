@@ -20,6 +20,12 @@ if [ ! -x "$generate_appcast" ]; then
   exit 1
 fi
 
+# Keep the download DMG out of Sparkle's archive discovery for the same version.
+archives="$(mktemp -d "${TMPDIR:-/tmp}/clumsies-appcast.XXXXXX")"
+trap 'rm -rf "$archives"' EXIT
+trap 'exit 1' HUP INT TERM
+cp "$output_dir/Clumsies-${GITHUB_REF_NAME#v}-macos-universal.zip" "$archives/"
+
 printf '%s' "$SPARKLE_PRIVATE_KEY" | "$generate_appcast" \
   --ed-key-file - \
   --download-url-prefix "https://github.com/lilhammerfun/clumsies/releases/download/$GITHUB_REF_NAME/" \
@@ -27,7 +33,7 @@ printf '%s' "$SPARKLE_PRIVATE_KEY" | "$generate_appcast" \
   --maximum-versions 1 \
   --maximum-deltas 0 \
   -o "$output_dir/appcast.xml" \
-  "$output_dir"
+  "$archives"
 
 test -s "$output_dir/appcast.xml"
 printf '%s\n' "$output_dir/appcast.xml"

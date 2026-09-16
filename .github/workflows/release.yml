@@ -5,8 +5,14 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
+      distribution:
+        description: Preview DMG needs no Apple credentials; notarized builds require Developer ID
+        type: choice
+        options: [preview, notarized]
+        default: preview
+        required: true
       ref:
-        description: Ref resolving to the current default branch tip to sign
+        description: Source ref (preview must match selected workflow ref; notarized must be main tip)
         required: true
         default: main
 
@@ -14,13 +20,105 @@ permissions:
   contents: read
 
 jobs:
+  macos-preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.distribution == 'preview'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Verify preview source matches the selected workflow
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build and verify preview DMG
+        env:
+          CLUMSIES_BUILD_NUMBER: ${{ github.run_number }}
+          CLUMSIES_AGENT_RUNTIME_BUILD_ID: preview-${{ github.sha }}
+        run: sh apps/macos/Scripts/archive-preview.sh
+
+      - name: Exercise bundled daemon over XPC and MCP
+        env:
+          CLUMSIES_TEST_PACKAGED_DAEMON: ${{ github.workspace }}/build/macos-preview-derived/Build/Products/Debug/Clumsies.app/Contents/Resources/clumsiesd
+          CARGO_PROFILE_DEV_DEBUG: '0'
+        run: |
+          HOST_TARGET=$(rustc -vV | sed -n 's/^host: //p')
+          cargo test --locked -p daemon --target "$HOST_TARGET" --test agent_runtime_xpc_e2e -- --nocapture
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clumsies-macos-preview
+          path: |
+            dist/macos-preview/*.dmg
+            dist/macos-preview/*.sha256
+          if-no-files-found: error
+
+  publish-preview:
+    needs: [macos-preview]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: clumsies-macos-preview
+          path: dist/macos-preview
+
+      - name: Publish downloadable preview
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="macos-preview-$GITHUB_RUN_NUMBER"
+          cat > "$RUNNER_TEMP/preview-notes.md" <<EOF
+          ## Install / 安装
+
+          Download the DMG below, open it, and drag Clumsies.app into Applications.
+          macOS 14 or later; Apple Silicon and Intel are included. No build tools required.
+
+          下载下方 DMG，打开后将 Clumsies.app 拖入 Applications。支持 macOS 14 及以上、
+          Apple Silicon 和 Intel，无需自行编译。默认连接 https://app.clumsies.ai，
+          登录需要组织访问权限。
+
+          This preview is ad-hoc signed and **not notarized by Apple**. After first trying
+          to open it, use System Settings → Privacy & Security → Open Anyway only if you
+          trust this download. Managed Macs may restrict this exception.
+
+          此体验版尚未经过 Apple 公证。首次打开若被拦截，确认下载来源可信后，在
+          系统设置 → 隐私与安全 → 仍要打开。受管理的 Mac 可能不允许手动放行。
+
+          Updates: download a newer DMG and replace the installed App after quitting it.
+          Accounts, Memory, and settings remain in your user data directory.
+
+          Source: $GITHUB_SHA
+          Build: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          Configuration: Debug, regular Clumsies app identity; includes the bundled daemon.
+          EOF
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --target "$GITHUB_SHA" --draft --prerelease \
+              --title "Clumsies macOS Preview $GITHUB_RUN_NUMBER" \
+              --notes-file "$RUNNER_TEMP/preview-notes.md"
+          gh release upload "$TAG" dist/macos-preview/* --clobber
+          gh release edit "$TAG" --draft=false --prerelease --latest=false
+
   macos-release:
+    if: github.event_name == 'push' || inputs.distribution == 'notarized'
     environment: macos-signing
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
 
       - name: Verify release source is the default branch tip
         env:
@@ -126,6 +224,7 @@ jobs:
         with:
           name: clumsies-macos
           path: |
+            dist/macos/Clumsies-*-macos-universal.dmg
             dist/macos/Clumsies-*-macos-universal.zip
             dist/macos/appcast.xml
           if-no-files-found: error
@@ -136,6 +235,7 @@ jobs:
         with:
           name: clumsies-macos
           path: |
+            dist/macos/Clumsies-*-macos-universal.dmg
             dist/macos/Clumsies-*-macos-universal.zip
           if-no-files-found: error
 
