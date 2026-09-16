@@ -6,7 +6,7 @@ You do not need to understand the database or MCP to start. This page introduces
 
 ## Start with one document
 
-Imagine your team maintains **Deployment rollback checklist**, at `operations/deployment-rollback.md`.
+Imagine your team maintains **Deployment rollback checklist**, at `deployment-rollback.md`.
 
 A developer working on the Payments repository needs that checklist. The team selects it for the Payments Project. When an agent starts a deployment task, Clumsies finds the relevant passages. The agent can then read the complete document.
 
@@ -71,7 +71,7 @@ The agent's `memory.store` success means **accepted locally**. It is not a publi
 
 | Your question | Read next |
 | --- | --- |
-| How do I use this with my repository? | [Member workflow](/guides/how-to-use-clumsies) |
+| How do I use this with my repository? | [Quickstart](/quickstart/) |
 | What happens from retrieval through publication? | [End-to-end flows](/flows) |
 | Which components run where? | [Architecture](/architecture) |
 | What are the main records and version fields? | [Data model](/data-model) |

@@ -1,6 +1,8 @@
 # 接口与参考资料
 
-这里把产品操作与具体数据、接口对应起来。如果你刚接触 Clumsies，先读[项目概览](/zh/overview)、[架构](/zh/architecture)、[数据模型](/zh/data-model)和[核心流程](/zh/flows)，再回来查字段、权限和失败处理。
+这里供你查阅领域操作、字段、权限和失败处理。按当前问题选择页面即可，无需从头顺序阅读。
+
+想先上手使用，请跟随[快速开始](/zh/quickstart/)；想理解数据和接口为什么这样设计，请从[认识 Clumsies](/zh/overview)进入，再读架构和数据模型。
 
 ## 按问题查找
 
@@ -12,7 +14,7 @@
 | 登录、角色、令牌刷新和本地凭据怎样工作？ | [认证与会话](/zh/reference/auth) |
 | 项目里的术语是什么意思？ | [术语表](/zh/glossary) |
 | Clumsies 会写哪些本地文件？ | [运行时文件与路径](/zh/runtime) |
-| Coding Agent host 怎样启动本地集成？ | [Agent runtime](/zh/guides/agent-runtime) |
+| Coding Agent host 怎样启动本地集成？ | [Agent 适配器](/zh/adapter) |
 | 对应的代码在哪里？ | [代码库地图](/zh/repos) |
 
 ## 机器可读的 HTTP 契约

@@ -1,6 +1,8 @@
 # Interface and reference guide
 
-Use this section to connect a product action to its data and interface. If you are new to Clumsies, first read [Overview](/overview), [Architecture](/architecture), [Data model](/data-model), and [Core flows](/flows). You can then return here for exact fields, permissions and failure handling.
+Look up domain operations, fields, permissions, and failure handling here. Choose a page by the question you need to answer; you do not need to read this section in order.
+
+To learn the product by using it, follow the [quickstart](/quickstart/). To understand why its data and interfaces work this way, start with [Understand Clumsies](/overview) and continue to the architecture and data model.
 
 ## Find the right page
 
@@ -12,7 +14,7 @@ Use this section to connect a product action to its data and interface. If you a
 | How do login, roles, token refresh and local credentials work? | [Authentication and sessions](/reference/auth) |
 | What does a project-specific term mean? | [Glossary](/glossary) |
 | Which local files does Clumsies write? | [Runtime surfaces](/runtime) |
-| How do Coding Agent hosts start the local integration? | [Agent runtime](/guides/agent-runtime) |
+| How do Coding Agent hosts start the local integration? | [Agent adapters](/adapter) |
 | Where does the implementation live? | [Codebase map](/repos) |
 
 ## Machine-readable HTTP contracts

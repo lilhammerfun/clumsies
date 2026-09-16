@@ -6,7 +6,7 @@ Clumsies 为团队提供一套编码 Agent 可以查找、使用和共同维护�
 
 ## 从一篇文档开始
 
-假设团队有一篇 **部署回滚检查单**，路径是 `operations/deployment-rollback.md`。
+假设团队有一篇 **部署回滚检查单**，路径是 `deployment-rollback.md`。
 
 开发者正在 Payments 仓库中处理部署任务，需要用到这份检查单。团队先把它选入 Payments Project。Agent 开始工作时，Clumsies 根据任务找出相关段落；需要完整上下文时，Agent 再读取全文。
 
@@ -69,7 +69,7 @@ Agent 调用 `memory.store` 成功，只表示**本地已受理**，不能作为
 
 | 你想知道 | 下一篇 |
 | --- | --- |
-| 怎样在自己的仓库里使用？ | [成员使用流程](/zh/guides/how-to-use-clumsies) |
+| 怎样在自己的仓库里使用？ | [快速开始](/zh/quickstart/) |
 | 从检索到发布，数据经历了什么？ | [完整流程](/zh/flows) |
 | 哪些组件运行在哪里？ | [系统架构](/zh/architecture) |
 | 核心记录、字段和版本关系是什么？ | [数据模型](/zh/data-model) |

@@ -1,8 +1,8 @@
 # 一篇 Memory 从检索到发布的完整流程
 
-本文继续使用虚构的 **部署回滚检查单**，路径为 `operations/deployment-rollback.md`，逐步说明：用户做什么、数据在哪里变化，以及每一步“成功”的含义。
+本文继续使用虚构的 **部署回滚检查单**，路径为 `deployment-rollback.md`，逐步说明：用户做什么、数据在哪里变化，以及每一步“成功”的含义。
 
-如果还不熟悉 Memory、Draft、Project，请先读[认识 Clumsies](/zh/overview)。本文解释系统怎样工作；实际开始使用的步骤见[成员使用流程](/zh/guides/how-to-use-clumsies)。
+如果还不熟悉 Memory、Draft、Project，请先读[认识 Clumsies](/zh/overview)。本文解释系统怎样工作；实际开始使用的步骤见[快速开始](/zh/quickstart/)。
 
 ## 先看全程
 
@@ -27,7 +27,7 @@
 
 ## 1. 让 Project 可以使用检查单
 
-**用户操作。** 组织 owner 或 admin 把检查单选入 Payments Project，本地仓库绑定到这个 Project。
+**用户操作。** Project admin，或能访问 Payments 的组织 owner/admin，把检查单选入该项目，本地仓库绑定到这个 Project。
 
 **Server 中的数据。** Project 选择集记录所选组织 Memory 的 ID。Server 根据选择集生成 Project 快照，把 Project Ref 移到新快照。组织检查单的正文没有因此变化。
 
@@ -65,7 +65,7 @@ Activation 检索并排序相关片段，返回来源身份和内容，Agent 再
 {
   "op": {
     "load": {
-      "ids": ["operations/deployment-rollback.md"]
+      "ids": ["deployment-rollback.md"]
     }
   }
 }

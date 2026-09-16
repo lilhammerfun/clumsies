@@ -1,43 +1,46 @@
 ---
-title: 阅读路线
-description: 初次了解 Clumsies，从产品概念到架构、核心数据结构、领域接口和完整流程。
+title: 从这里开始
+description: 按使用产品、理解设计或开发运维的目标，选择 Clumsies 文档阅读路线。
 ---
 # 从这里认识 Clumsies
 
-Clumsies 让团队把可复用的知识保存为 **Memory**，供编码 Agent 在任务中查找和使用。修改先成为草稿，由人审阅并发布，团队才会共享新的正式版本。
+Clumsies 为团队维护一组可复用的知识，称为 **Memory**，供编码 Agent 查找和使用。Project 选择当前项目需要的知识；修改先成为 Draft 草稿，经人审阅并发布后，才改变团队共享的正式版本。
 
-这套文档面向第一次接触项目的成员、开发者和维护者。你不需要先读代码，也不需要了解 Clumsies 的历史版本。
+下面有三条阅读路线。你可以先了解设计，也可以先完成一次操作，遇到疑问再查原理。
 
-## 先花半小时建立整体认识
+## 我想在团队中使用 Clumsies
 
-时间是阅读建议，不包含动手操作。以下章节使用同一个“部署回滚清单”示例。
+从[快速开始](/zh/quickstart/)进入：创建项目、选择已有的组织 Memory、让 Codex 使用它、明确要求 Codex 提出修改，最后由人审阅并发布。
 
-| 顺序 | 阅读内容 | 读完应该能回答 |
-| --- | --- | --- |
-| 1 · 约 5 分钟 | [认识 Clumsies](/zh/overview) | 产品解决什么问题？Organization、Project、Memory 分别是什么？ |
-| 2 · 约 7 分钟 | [系统架构](/zh/architecture) | Desktop、daemon、Server 怎样配合？数据在本地还是服务端？ |
-| 3 · 约 10 分钟 | [核心数据结构](/zh/data-model) | 一篇内容、一个 Draft、一个 Commit 有哪些关键字段，如何关联？ |
-| 4 · 约 8 分钟 | [完整流程](/zh/flows) | 一次修改如何保存、同步、审阅、发布，再被 Agent 读到？ |
+**完成后：** Codex 能使用项目选中的知识，你能分清“提案已保存”和“团队版本已发布”。教程贯穿使用 Payments 项目、`clumsies-demo` 练习仓库和 `deployment-rollback.md`。
 
-然后打开[领域接口地图](/zh/reference/domain-api)，把每一步对应到 MCP、本地 XPC 或 HTTP 接口。查到不熟悉的名词时，用[术语表](/zh/glossary)补充，不必提前背下所有术语。
+如果已经在项目中工作，可以直接打开[任务指南](/zh/guides/)，只查当前要做的事。
 
-## 按当前任务阅读
+## 我想理解项目设计
 
-| 我想做什么 | 从哪里开始 |
+这条路线适合想了解项目如何实现的读者。先读[认识 Clumsies](/zh/overview)，再按下面的顺序深入：
+
+| 阅读内容 | 回答的问题 |
 | --- | --- |
-| 先用起来 | [第一次使用](/zh/guides/how-to-use-clumsies) → [接入 Agent](/zh/guides/agent-runtime) |
-| 理解设计和数据 | [系统架构](/zh/architecture) → [数据结构](/zh/data-model) → [Memory 详细设计](/zh/unified-memory-model) |
-| 开发调用方或排查接口 | [领域接口](/zh/reference/domain-api) → [MCP](/zh/mcp) / [HTTP 契约](/zh/reference/http-api) |
-| 部署和维护组织服务 | [组织部署](/zh/guides/deploy-for-an-org) → [认证与会话](/zh/reference/auth) → [排查问题](/zh/guides/troubleshooting) |
-| 修改这个项目的代码 | [代码库地图](/zh/repos) → [本地开发](/zh/guides/development-workflow) |
-| 理解为什么慢或查不到内容 | [排查问题](/zh/guides/troubleshooting) → [检索与评测](/zh/retrieval-evaluation) → [性能专题](/zh/performance/) |
+| [系统架构](/zh/architecture) | App、本地 daemon、Server 和 Agent 集成各自负责什么？ |
+| [核心数据结构](/zh/data-model) | Memory、Draft、Review 和版本如何表示、怎样关联？ |
+| [完整流程](/zh/flows) | 数据如何经过检索、本地修改、同步和发布？ |
+| [领域接口地图](/zh/reference/domain-api) | 一个操作跨越哪些边界，由哪个接口处理？ |
 
-## 阅读时先分清三件事
+**读完后：** 你能说明数据存在哪里、读到的是哪个版本，以及本地保存、同步和发布为什么是不同结果。遇到不熟悉的词，可以查[术语表](/zh/glossary)；侧栏也保留了各子系统的详细设计。
 
-- **本地保存成功：** 编辑已经写到这台设备，网络失败不应让这次已保存的编辑消失。
-- **同步成功：** Server 收到了提案，它仍然需要审阅。
-- **发布成功：** 授权合并推进了 Organization 的正式版本；各设备随后准备新的可读视图。
+## 我想开发集成、部署服务或修改代码
 
-这三个状态是理解 Clumsies 数据和接口的起点。详细设计放在侧栏“深入设计”，退役方案放在“维护与历史”；它们都不是入门的前置条件。
+按你负责的部分选择入口：
 
-开始阅读：[认识 Clumsies](/zh/overview)。
+| 要做的工作 | 阅读路线 | 预期结果 |
+| --- | --- | --- |
+| 开发集成 | [领域接口](/zh/reference/domain-api) → [MCP](/zh/mcp) 或 [HTTP](/zh/reference/http-api) | 找到合适的操作、输入、权限和错误处理方式 |
+| 维护团队服务 | [组织部署](/zh/guides/deploy-for-an-org) → [认证与会话](/zh/reference/auth) → [排查问题](/zh/guides/troubleshooting) | 配置访问权限，并能定位运行问题 |
+| 修改实现 | [代码库地图](/zh/repos) → [开发流程](/zh/guides/development-workflow) | 找到相关源码，运行独立开发实例 |
+
+[接口参考](/zh/reference/)用于查契约，[任务指南](/zh/guides/)用于完成具体工作。历史方案和带日期的性能证据放在“开发与维护”下面。
+
+## 使用 App 前
+
+**WIP：** 原生 App 仍在开发。当前获取方式见[获取 App](/zh/quickstart/install)，登录步骤见[连接组织](/zh/quickstart/connect)。它们是动手教程的准备工作；阅读设计文档不需要先安装 App。

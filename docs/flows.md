@@ -1,8 +1,8 @@
 # Follow a Memory from retrieval to publication
 
-This walkthrough follows one fictional document, **Deployment rollback checklist**, at `operations/deployment-rollback.md`. It explains what the user does, what data changes, and what success means at each boundary.
+This walkthrough follows one fictional document, **Deployment rollback checklist**, at `deployment-rollback.md`. It explains what the user does, what data changes, and what success means at each boundary.
 
-Read [Understand Clumsies](/overview) first if Memory, Draft, and Project are new terms. This is a system walkthrough; the [member guide](/guides/how-to-use-clumsies) gives the practical setup steps.
+Read [Understand Clumsies](/overview) first if Memory, Draft, and Project are new terms. This is a system walkthrough; the [quickstart](/quickstart/) walks you through the practical steps.
 
 ## The whole journey
 
@@ -27,7 +27,7 @@ Saving a Draft and publishing a Commit are separate events. Network synchronizat
 
 ## 1. Make the checklist available to a Project
 
-**User action.** An organization owner or administrator selects the checklist for Payments. The local repository is bound to that Project.
+**User action.** A Project administrator, or an organization owner or administrator with access to Payments, selects the checklist for the Project. The local repository is bound to that Project.
 
 **Server data.** A Project selection stores the IDs of selected organization Memory. Server creates a Project snapshot from that selection and moves the Project Ref to it. The organization checklist itself is unchanged.
 
@@ -65,7 +65,7 @@ The agent then calls:
 {
   "op": {
     "load": {
-      "ids": ["operations/deployment-rollback.md"]
+      "ids": ["deployment-rollback.md"]
     }
   }
 }

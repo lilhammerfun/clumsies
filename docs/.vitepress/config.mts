@@ -7,8 +7,9 @@ export default withMermaid(
   defineConfig({
     lang: "en-US",
     title: "clumsies",
-    description: "Understand Clumsies: architecture, data structures, interfaces, and practical guides for shared agent memory.",
+    description: "Use shared Memory with coding agents, understand the design, and find Clumsies integration and maintenance references.",
     base: "/",
+    head: [["link", { rel: "icon", type: "image/png", href: "/logo.png" }]],
     appearance: true,
     cleanUrls: true,
     lastUpdated: true,
@@ -25,90 +26,111 @@ export default withMermaid(
           },
           nav: [
             { text: "开始阅读", link: "/zh/" },
-            { text: "架构", link: "/zh/architecture" },
-            { text: "数据", link: "/zh/data-model" },
-            { text: "接口", link: "/zh/reference/domain-api" },
-            { text: "指南", link: "/zh/guides/" },
+            { text: "任务指南", link: "/zh/guides/" },
+            { text: "概念与设计", link: "/zh/overview" },
+            { text: "接口参考", link: "/zh/reference/" },
+            { text: "开发维护", link: "/zh/repos" },
           ],
           sidebar: [
             {
-              text: "从这里开始",
+              text: "初识与快速开始",
               collapsed: false,
               items: [
                 { text: "阅读路线", link: "/zh/" },
+                { text: "快速开始说明", link: "/zh/quickstart/" },
+                { text: "获取 App", link: "/zh/quickstart/install" },
+                { text: "连接组织", link: "/zh/quickstart/connect" },
+                { text: "1. 创建项目", link: "/zh/quickstart/create-project" },
+                { text: "2. 选择 Memory", link: "/zh/quickstart/select-memory" },
+                { text: "3. 让 Codex 使用", link: "/zh/quickstart/use-with-agent" },
+                { text: "4. 提出修改", link: "/zh/quickstart/update-memory" },
+                { text: "5. 审阅并发布", link: "/zh/quickstart/review-and-publish" },
+              ]
+            },
+            {
+              text: "任务指南",
+              collapsed: true,
+              items: [
+                { text: "按任务查找", link: "/zh/guides/" },
+                { text: "常用成员任务", link: "/zh/guides/how-to-use-clumsies" },
+                { text: "创建新的 Memory", link: "/zh/guides/create-memory" },
+                { text: "接入 Agent", link: "/zh/guides/agent-runtime" },
+                { text: "部署组织服务", link: "/zh/guides/deploy-for-an-org" },
+                { text: "排查问题", link: "/zh/guides/troubleshooting" },
+                { text: "接入 DeepSeek Harness", link: "/zh/guides/dsh-integration" },
+              ]
+            },
+            {
+              text: "概念与设计",
+              collapsed: true,
+              items: [
                 { text: "认识 Clumsies", link: "/zh/overview" },
                 { text: "系统架构", link: "/zh/architecture" },
                 { text: "核心数据结构", link: "/zh/data-model" },
                 { text: "完整流程", link: "/zh/flows" },
+                { text: "术语表", link: "/zh/glossary" },
+                {
+                  text: "子系统详解",
+                  collapsed: true,
+                  items: [
+                    { text: "Organization Memory", link: "/zh/artifact" },
+                    { text: "Project 选择与绑定", link: "/zh/workspace" },
+                    { text: "Memory 详细设计", link: "/zh/unified-memory-model" },
+                    { text: "Server", link: "/zh/server" },
+                    { text: "本地运行时", link: "/zh/runtime" },
+                    { text: "宿主适配", link: "/zh/adapter" },
+                    { text: "AgentRun 生命周期", link: "/zh/guides/agent-run-injection" },
+                    { text: "Memory 界面设计", link: "/zh/macos-memory-ui" },
+                    { text: "Review 界面设计", link: "/zh/reviews-ui-design" },
+                    { text: "检索与评测", link: "/zh/retrieval-evaluation" },
+                    { text: "本地活动记录", link: "/zh/recall" },
+                  ]
+                },
               ]
             },
             {
               text: "接口参考",
-              collapsed: false,
+              collapsed: true,
               items: [
+                { text: "参考索引", link: "/zh/reference/" },
                 { text: "领域接口地图", link: "/zh/reference/domain-api" },
-                { text: "MCP：Agent 如何调用", link: "/zh/mcp" },
+                { text: "MCP：Agent 调用", link: "/zh/mcp" },
                 { text: "HTTP 请求与并发", link: "/zh/reference/http-api" },
                 { text: "认证与会话", link: "/zh/reference/auth" },
-                { text: "术语表", link: "/zh/glossary" },
               ]
             },
             {
-              text: "使用与运维",
-              collapsed: false,
-              items: [
-                { text: "指南首页", link: "/zh/guides/" },
-                { text: "第一次使用", link: "/zh/guides/how-to-use-clumsies" },
-                { text: "Agent 接入", link: "/zh/guides/agent-runtime" },
-                { text: "组织部署", link: "/zh/guides/deploy-for-an-org" },
-                { text: "排查问题", link: "/zh/guides/troubleshooting" },
-                { text: "本地开发", link: "/zh/guides/development-workflow" },
-              ]
-            },
-            {
-              text: "深入设计",
+              text: "开发与维护",
               collapsed: true,
               items: [
-                { text: "Organization Memory", link: "/zh/artifact" },
-                { text: "Project 选择与绑定", link: "/zh/workspace" },
-                { text: "Memory 详细设计", link: "/zh/unified-memory-model" },
-                { text: "Server", link: "/zh/server" },
-                { text: "本地运行时", link: "/zh/runtime" },
-                { text: "宿主适配", link: "/zh/adapter" },
-                { text: "AgentRun 生命周期", link: "/zh/guides/agent-run-injection" },
-                { text: "Memory 界面", link: "/zh/macos-memory-ui" },
-                { text: "Review 界面", link: "/zh/reviews-ui-design" },
-                { text: "检索与评测", link: "/zh/retrieval-evaluation" },
-                { text: "本地活动记录", link: "/zh/recall" },
                 { text: "代码库地图", link: "/zh/repos" },
-                { text: "DSH 集成", link: "/zh/guides/dsh-integration" },
-              ]
-            },
-            {
-              text: "性能与验证",
-              collapsed: true,
-              items: [
-                { text: "专题索引", link: "/zh/performance/" },
-                { text: "服务端热路径", link: "/zh/performance/server-hot-path" },
-                { text: "macOS 首次就绪", link: "/zh/performance/macos-first-ready" },
-                { text: "延迟模型与诊断", link: "/zh/performance/latency-model" },
-                { text: "gzip 实验", link: "/zh/performance/gzip-experiment" },
-                { text: "签名边界", link: "/zh/performance/signing-boundary" },
-                { text: "验证证据台账", link: "/zh/performance/evidence-ledger" },
-              ]
-            },
-            {
-              text: "维护与历史",
-              collapsed: true,
-              items: [
+                { text: "开发流程", link: "/zh/guides/development-workflow" },
                 { text: "文档编写约定", link: "/zh/engineering-documents" },
-                { text: "参考资料索引", link: "/zh/reference/" },
-                { text: "Project 权威迁移", link: "/zh/project-authority-migration" },
-                { text: "Memory 存储迁移", link: "/zh/guides/rule-store-unification" },
-                { text: "Metaprompt 移除", link: "/zh/meta-prompt" },
-                { text: "已归档 CLI", link: "/zh/guides/cli-commands" },
-                { text: "已归档 TUI", link: "/zh/tui" },
-                { text: "已归档 Attestation", link: "/zh/attestation" },
+                {
+                  text: "性能证据",
+                  collapsed: true,
+                  items: [
+                    { text: "专题索引", link: "/zh/performance/" },
+                    { text: "服务端热路径", link: "/zh/performance/server-hot-path" },
+                    { text: "macOS 首次就绪", link: "/zh/performance/macos-first-ready" },
+                    { text: "延迟模型与诊断", link: "/zh/performance/latency-model" },
+                    { text: "gzip 实验", link: "/zh/performance/gzip-experiment" },
+                    { text: "签名边界", link: "/zh/performance/signing-boundary" },
+                    { text: "验证证据台账", link: "/zh/performance/evidence-ledger" },
+                  ]
+                },
+                {
+                  text: "历史文档",
+                  collapsed: true,
+                  items: [
+                    { text: "Project 权威迁移", link: "/zh/project-authority-migration" },
+                    { text: "Memory 存储迁移", link: "/zh/guides/rule-store-unification" },
+                    { text: "Metaprompt 移除", link: "/zh/meta-prompt" },
+                    { text: "已归档 CLI", link: "/zh/guides/cli-commands" },
+                    { text: "已归档 TUI", link: "/zh/tui" },
+                    { text: "已归档 Attestation", link: "/zh/attestation" },
+                  ]
+                },
               ]
             },
           ],
@@ -208,90 +230,111 @@ export default withMermaid(
       },
       nav: [
         { text: "Start here", link: "/" },
-        { text: "Architecture", link: "/architecture" },
-        { text: "Data", link: "/data-model" },
-        { text: "Interfaces", link: "/reference/domain-api" },
-        { text: "Guides", link: "/guides/" },
+        { text: "Task guides", link: "/guides/" },
+        { text: "Concepts and design", link: "/overview" },
+        { text: "Reference", link: "/reference/" },
+        { text: "Development", link: "/repos" },
       ],
       sidebar: [
         {
-          text: "Start here",
+          text: "Start here and quickstart",
           collapsed: false,
           items: [
-            { text: "Reading paths", link: "/" },
+            { text: "Reading routes", link: "/" },
+            { text: "Quickstart introduction", link: "/quickstart/" },
+            { text: "Get the App", link: "/quickstart/install" },
+            { text: "Connect to your organization", link: "/quickstart/connect" },
+            { text: "1. Create a project", link: "/quickstart/create-project" },
+            { text: "2. Select Memory", link: "/quickstart/select-memory" },
+            { text: "3. Use it with Codex", link: "/quickstart/use-with-agent" },
+            { text: "4. Propose an update", link: "/quickstart/update-memory" },
+            { text: "5. Review and publish", link: "/quickstart/review-and-publish" },
+          ]
+        },
+        {
+          text: "Task guides",
+          collapsed: true,
+          items: [
+            { text: "Find a task", link: "/guides/" },
+            { text: "Member task index", link: "/guides/how-to-use-clumsies" },
+            { text: "Create a new Memory", link: "/guides/create-memory" },
+            { text: "Connect an agent", link: "/guides/agent-runtime" },
+            { text: "Deploy for an organization", link: "/guides/deploy-for-an-org" },
+            { text: "Troubleshoot a problem", link: "/guides/troubleshooting" },
+            { text: "Connect DeepSeek Harness", link: "/guides/dsh-integration" },
+          ]
+        },
+        {
+          text: "Concepts and design",
+          collapsed: true,
+          items: [
             { text: "Meet Clumsies", link: "/overview" },
             { text: "System architecture", link: "/architecture" },
             { text: "Core data structures", link: "/data-model" },
             { text: "End-to-end flows", link: "/flows" },
+            { text: "Glossary", link: "/glossary" },
+            {
+              text: "Subsystem details",
+              collapsed: true,
+              items: [
+                { text: "Organization Memory", link: "/artifact" },
+                { text: "Project selection and binding", link: "/workspace" },
+                { text: "Memory design", link: "/unified-memory-model" },
+                { text: "Server", link: "/server" },
+                { text: "Local runtime", link: "/runtime" },
+                { text: "Host adapters", link: "/adapter" },
+                { text: "AgentRun lifecycle", link: "/guides/agent-run-injection" },
+                { text: "Memory UI design", link: "/macos-memory-ui" },
+                { text: "Review UI design", link: "/reviews-ui-design" },
+                { text: "Retrieval and evaluation", link: "/retrieval-evaluation" },
+                { text: "Local activity", link: "/recall" },
+              ]
+            },
           ]
         },
         {
           text: "Interface reference",
-          collapsed: false,
+          collapsed: true,
           items: [
+            { text: "Reference index", link: "/reference/" },
             { text: "Domain interfaces", link: "/reference/domain-api" },
             { text: "MCP for agents", link: "/mcp" },
             { text: "HTTP requests and concurrency", link: "/reference/http-api" },
             { text: "Authentication and sessions", link: "/reference/auth" },
-            { text: "Glossary", link: "/glossary" },
           ]
         },
         {
-          text: "Guides and operations",
-          collapsed: false,
-          items: [
-            { text: "Guide index", link: "/guides/" },
-            { text: "First use", link: "/guides/how-to-use-clumsies" },
-            { text: "Agent integration", link: "/guides/agent-runtime" },
-            { text: "Deploy for an organization", link: "/guides/deploy-for-an-org" },
-            { text: "Troubleshooting", link: "/guides/troubleshooting" },
-            { text: "Local development", link: "/guides/development-workflow" },
-          ]
-        },
-        {
-          text: "Design details",
+          text: "Development and maintenance",
           collapsed: true,
           items: [
-            { text: "Organization Memory", link: "/artifact" },
-            { text: "Project selection and binding", link: "/workspace" },
-            { text: "Memory design", link: "/unified-memory-model" },
-            { text: "Server", link: "/server" },
-            { text: "Local runtime", link: "/runtime" },
-            { text: "Host adapters", link: "/adapter" },
-            { text: "AgentRun lifecycle", link: "/guides/agent-run-injection" },
-            { text: "Memory UI", link: "/macos-memory-ui" },
-            { text: "Review UI", link: "/reviews-ui-design" },
-            { text: "Retrieval and evaluation", link: "/retrieval-evaluation" },
-            { text: "Local activity", link: "/recall" },
             { text: "Codebase map", link: "/repos" },
-            { text: "DSH integration", link: "/guides/dsh-integration" },
-          ]
-        },
-        {
-          text: "Performance and validation",
-          collapsed: true,
-          items: [
-            { text: "Topic index", link: "/performance/" },
-            { text: "Server hot path", link: "/performance/server-hot-path" },
-            { text: "macOS first readiness", link: "/performance/macos-first-ready" },
-            { text: "Latency and diagnosis", link: "/performance/latency-model" },
-            { text: "gzip experiment", link: "/performance/gzip-experiment" },
-            { text: "Signing boundary", link: "/performance/signing-boundary" },
-            { text: "Evidence ledger", link: "/performance/evidence-ledger" },
-          ]
-        },
-        {
-          text: "Maintenance and history",
-          collapsed: true,
-          items: [
+            { text: "Development workflow", link: "/guides/development-workflow" },
             { text: "Writing documentation", link: "/engineering-documents" },
-            { text: "Reference index", link: "/reference/" },
-            { text: "Project authority migration", link: "/project-authority-migration" },
-            { text: "Memory storage migration", link: "/guides/rule-store-unification" },
-            { text: "Metaprompt removal", link: "/meta-prompt" },
-            { text: "Archived CLI", link: "/guides/cli-commands" },
-            { text: "Archived TUI", link: "/tui" },
-            { text: "Archived attestation", link: "/attestation" },
+            {
+              text: "Performance evidence",
+              collapsed: true,
+              items: [
+                { text: "Topic index", link: "/performance/" },
+                { text: "Server hot path", link: "/performance/server-hot-path" },
+                { text: "macOS first readiness", link: "/performance/macos-first-ready" },
+                { text: "Latency and diagnosis", link: "/performance/latency-model" },
+                { text: "gzip experiment", link: "/performance/gzip-experiment" },
+                { text: "Signing boundary", link: "/performance/signing-boundary" },
+                { text: "Evidence ledger", link: "/performance/evidence-ledger" },
+              ]
+            },
+            {
+              text: "History",
+              collapsed: true,
+              items: [
+                { text: "Project authority migration", link: "/project-authority-migration" },
+                { text: "Memory storage migration", link: "/guides/rule-store-unification" },
+                { text: "Metaprompt removal", link: "/meta-prompt" },
+                { text: "Archived CLI", link: "/guides/cli-commands" },
+                { text: "Archived TUI", link: "/tui" },
+                { text: "Archived attestation", link: "/attestation" },
+              ]
+            },
           ]
         },
       ],

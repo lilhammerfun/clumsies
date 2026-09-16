@@ -20,6 +20,12 @@ daemon 使用一个中心 SQLite 数据库；当前 schema version 为 `40`。�
 
 本地文件权限为 owner-only。access/refresh token 只作为绑定 Server URL 的一个 generic-password 条目保存在 macOS Keychain；SQLite 和文件系统没有明文凭据兜底。
 
+## 检索模型准备
+
+daemon 在第一次 MCP 请求之前，就开始后台准备模型。当前使用固定版本的 int8 `intfloat/multilingual-e5-small` 做 embedding，使用 int8 `Xenova/bge-reranker-base` 做 reranking。完整下载量为 431,831,479 字节；版本、文件大小和 SHA-256 校验值定义在[模型清单](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/models.rs)中。
+
+下载支持断点续传，文件通过校验后才加载到 ONNX，随后可复用本机缓存。准备期间，搜索状态显示 `preparing` 及已下载、总字节数。Activation 会立即返回 `search_model_preparing`，不会让 MCP 请求一直等待未报告的下载，也不会静默降级到较弱的检索方式。
+
 ## 请求路径
 
 ```text

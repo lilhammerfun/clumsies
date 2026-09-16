@@ -31,6 +31,12 @@ File permissions are owner-only. Access and refresh tokens are stored as one
 Server-bound generic-password item in macOS Keychain. SQLite never persists
 either token, and daemon has no plaintext credential fallback.
 
+## Retrieval model preparation
+
+The daemon prepares models in the background before the first MCP request. It uses pinned int8 versions of `intfloat/multilingual-e5-small` for embedding and `Xenova/bge-reranker-base` for reranking. The current download is 431,831,479 bytes; the revisions, artifact sizes, and SHA-256 checksums are defined in the [model manifest](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/models.rs).
+
+Downloads support resuming. Artifacts are verified before ONNX loading and cached for offline reuse. Search status reports `preparing` with downloaded and total bytes. Activation returns `search_model_preparing` immediately until preparation finishes; it does not hold an MCP request open for an unreported download or silently use a weaker retrieval path.
+
 ## Desktop request path
 
 The native Swift client serializes typed capability requests over XPC. Daemon
