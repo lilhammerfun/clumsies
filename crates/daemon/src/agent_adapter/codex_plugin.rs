@@ -1,3 +1,5 @@
+//! Package and install the Clumsies MCP server and project-memory skill for Codex.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -27,7 +29,7 @@ const PLUGIN_MANIFEST: &str =
     include_str!("../../../../packages/clumsies/.codex-plugin/plugin.json");
 const MCP_TEMPLATE: &str = include_str!("../../../../packages/clumsies/.mcp.json.tpl");
 const BOOTSTRAP_SKILL: &str =
-    include_str!("../../../../packages/clumsies/skills/clumsies/SKILL.md");
+    include_str!("../../../../packages/clumsies/skills/project-memory/SKILL.md");
 
 struct MaterializedPlugin {
     marketplace_root: PathBuf,
@@ -177,6 +179,10 @@ async fn inspect_verified(
     })
 }
 
+/// Write the versioned plugin source and retire superseded App-owned files.
+///
+/// # Errors
+/// Returns an error for invalid runtime identity, unsafe paths, or failed file writes or cleanup.
 fn materialize(
     daemon_root: &Path,
     runtime_binary: &Path,
@@ -196,7 +202,7 @@ fn materialize(
     for directory in [
         marketplace_root.join(".agents/plugins"),
         plugin_root.join(".codex-plugin"),
-        plugin_root.join("skills/clumsies"),
+        plugin_root.join("skills/project-memory"),
     ] {
         ensure_private_directory(&directory)?;
     }
@@ -215,8 +221,12 @@ fn materialize(
         });
     }
     write_json(&plugin_root.join(".mcp.json"), &mcp)?;
-    // These two files belong to the App's materialized plugin, not host configuration.
-    for relative in ["hooks/hooks.json", "scripts/agent-run-event.sh"] {
+    // These retired files belong to the App's materialized plugin, not host configuration.
+    for relative in [
+        "hooks/hooks.json",
+        "scripts/agent-run-event.sh",
+        "skills/clumsies/SKILL.md",
+    ] {
         let path = plugin_root.join(relative);
         ManagedPathGuard::capture_under(&plugin_root, &path)?;
         match fs::remove_file(path) {
@@ -226,7 +236,7 @@ fn materialize(
         }
     }
     write_private_file(
-        &plugin_root.join("skills/clumsies/SKILL.md"),
+        &plugin_root.join("skills/project-memory/SKILL.md"),
         BOOTSTRAP_SKILL.as_bytes(),
     )?;
 
@@ -562,13 +572,16 @@ mod tests {
             ])
         );
         assert!(mcp["mcpServers"]["clumsies"].get("env").is_none());
-        let skill = fs::read_to_string(plugin_root.join("skills/clumsies/SKILL.md")).unwrap();
-        assert!(skill.contains("skill stored in Memory as ordinary Memory content"));
+        let skill = fs::read_to_string(plugin_root.join("skills/project-memory/SKILL.md")).unwrap();
+        assert_eq!(skill, BOOTSTRAP_SKILL);
+        assert!(!plugin_root.join("skills/clumsies/SKILL.md").exists());
         assert!(!plugin_root.join("skills/coding").exists());
         assert!(!plugin_root.join("hooks/hooks.json").exists());
         assert!(!plugin_root.join("scripts/agent-run-event.sh").exists());
         fs::create_dir(plugin_root.join("hooks")).unwrap();
         fs::create_dir(plugin_root.join("scripts")).unwrap();
+        fs::create_dir(plugin_root.join("skills/clumsies")).unwrap();
+        fs::write(plugin_root.join("skills/clumsies/SKILL.md"), "legacy skill").unwrap();
         fs::write(plugin_root.join("hooks/hooks.json"), "legacy hook").unwrap();
         fs::write(
             plugin_root.join("scripts/agent-run-event.sh"),
@@ -576,6 +589,11 @@ mod tests {
         )
         .unwrap();
         materialize(root.path(), runtime, &"a".repeat(64), None).unwrap();
+        assert_eq!(
+            fs::read_to_string(plugin_root.join("skills/project-memory/SKILL.md")).unwrap(),
+            BOOTSTRAP_SKILL
+        );
+        assert!(!plugin_root.join("skills/clumsies/SKILL.md").exists());
         assert!(!plugin_root.join("hooks/hooks.json").exists());
         assert!(!plugin_root.join("scripts/agent-run-event.sh").exists());
     }

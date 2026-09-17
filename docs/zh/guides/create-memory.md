@@ -23,7 +23,7 @@ next:
 ## 创建并填写草稿
 
 1. 打开 **Memory**，在顶部项目筛选器中选择 **Payments**。若项目设置仍打开，点击 **Project Settings** 齿轮返回内容。
-2. 选择 macOS 菜单 **File → New Memory**，或按 **⌘N**。空列表中的 **Propose New Organization Memory** 也可创建草稿。
+2. 选择 macOS 菜单 **File → New Memory**，或按 **⌘N**。空列表中的 **Create a Memory** 也可创建草稿。若要先约定 Agent 怎样维护知识，可选择 **Use Default Guidelines**，见[记忆维护规范](/zh/guides/memory-guidelines)。
 3. 文件树中出现默认命名的草稿，通常为 `untitled.md`。右键选择 **Rename…**。
 4. 在 **Rename Draft** 的 **File name** 中输入 `deployment-rollback.md`，点击 **Rename**。本例使用根目录文件名，不要输入 `/`。
 5. 右键文件选择 **Open Source**，或在已打开文件的 **Document View** 中选择 **Source**，将正文替换为：

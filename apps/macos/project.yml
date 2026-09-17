@@ -40,6 +40,8 @@ targets:
       - path: Sources
       - path: Resources/Assets.xcassets
         buildPhase: resources
+      - path: Resources/CLUMSIES.md
+        buildPhase: resources
       - path: Resources/FileSymbols
         type: folder
         buildPhase: resources

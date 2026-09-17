@@ -58,8 +58,12 @@ which Project's Memory to use. Removing a binding does not uninstall any global
 adapter. See [dsh integration](/guides/dsh-integration) for its profile setup.
 
 Every host consumes the MCP tools directly. The Codex plugin carries one thin
-`clumsies` bootstrap Skill that tells the harness when to activate Memory and
-how to load relevant project guidance. Project-maintained skills such as `coding` are ordinary
+`project-memory` Skill that directs agents to consult project Memory before
+analysis, planning, or implementation, even when the user does not name Clumsies.
+Clumsies complements host-native memory: agents follow applicable host memory
+policies and also query Clumsies, even after consulting host memory. Clumsies
+memory maintenance follows the bound Project's Memory Guidelines.
+Project-maintained skills such as `coding` are ordinary
 resources in Memory Space: the bootstrap loads them through `memory.load` when
 relevant and never copies or installs them into a host skill directory.
 

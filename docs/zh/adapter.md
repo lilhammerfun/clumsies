@@ -49,8 +49,11 @@ build identity。替换 App 会更新之后启动的 proxy；若 resident 仍是
 安装器精确清理各 Server 下 daemon 管理的旧仓库配置；用户改过的内容会报冲突，暂时
 不可达的目录保留记录，之后再重试。
 
-所有宿主直接消费 `memory` MCP 工具。Codex Plugin 只附带一个很薄的 bootstrap Skill，
-用于说明何时 `memory.activate`、如何加载 Project skill。`skills/**` 中的项目技能仍是普通 Memory，由 bootstrap 在相关时通过
+所有宿主直接消费 `memory` MCP 工具。Codex Plugin 附带 `project-memory` Skill，
+引导 Agent 在分析、规划或实现项目任务前先检索项目 Memory，无需用户先提到 Clumsies。
+Clumsies 与宿主原生记忆并存：Agent 遵循适用的宿主记忆政策，也查询 Clumsies，
+即使已经查询过宿主记忆。维护 Clumsies 记忆时，遵循绑定项目的记忆维护规范。
+`skills/**` 中的项目技能仍是普通 Memory，由此 Skill 在相关时通过
 `memory.load` 读取；Adapter 不把它们复制到宿主 skill 目录，也不从 `workflow/` 路径
 自动生成可执行 skill。
 
