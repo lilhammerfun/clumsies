@@ -169,26 +169,14 @@ private struct EmptyMemoryCollectionView: View {
     @ObservedObject var store: WorkspaceStore
 
     var body: some View {
-        ContentUnavailableView {
-            Label("No Memory", systemImage: "doc")
-        } description: {
-            if store.activeProjectId == nil {
-                Text("Select a project to propose a new organization memory.")
-            } else {
-                Text("Propose the first organization memory for this project.")
-            }
-        } actions: {
-            if let scope = MemoryFileTreeMenu.creationScope(inOrgView: store.activeProjectId == nil) {
-                Button("Propose New Organization Memory") {
-                    Task {
-                        await store.createMemory(kind: store.selectedKind, scope: scope)
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(
-                    !store.canCreateMemory(kind: store.selectedKind, scope: scope)
-                )
-            }
+        if store.activeProjectId != nil {
+            MemoryGuidelinesSetupView(store: store)
+        } else {
+            ContentUnavailableView(
+                "No Memory",
+                systemImage: "doc",
+                description: Text("Select a project to create memory and set up memory guidelines.")
+            )
         }
     }
 }

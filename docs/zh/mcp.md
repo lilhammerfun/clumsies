@@ -44,7 +44,7 @@ Clumsies 只向 Coding Agent 暴露一个 MCP 工具：
 
 `memory` 包含 `activate`、`load` 和 `store` 三个 operation。
 
-### Project Memory 指南
+### 记忆维护规范（Memory Guidelines）
 
 Project 可以约定一份受管 Memory 指南，默认路径为 `CLUMSIES.md`；受管集成也可以提供其他路径。这里的路径位于 Effective Memory 内，不是让工具打开操作系统中的任意文件。它通常定义：
 
@@ -53,9 +53,15 @@ Project 可以约定一份受管 Memory 指南，默认路径为 `CLUMSIES.md`�
 - description、替代与弃用规则；
 - 不应持久化的内容。
 
-进行实质性 Memory 维护前，先通过 `load` 读取该指南。指南本身仍是普通 Memory，不是安装到 Agent 本地目录的特殊 skill。
+维护 Memory 前，通过 `load` 按 MCP 提示的确切路径读取完整规范。同一任务中仍有效、仍在上下文里的规范可以复用；普通只读任务无需全文加载。用户在规范中维护的约定适用于相应内容，App 内置模板只提供初始正文。规范本身仍是普通 Memory，不增加写入授权，也不安装为宿主 Skill。
+
+若规范返回 `memory_resource_not_found`，说明缺失路径。这只表示当前项目视图中没有该文档，不代表整个组织没有。可以继续检索，并依据用户指令和现有约定完成要求明确、已获授权的修改；只有依赖缺失规范的决定才需要澄清。不要自动创建规范、替换为本地文件，或从缺失的自定义路径回退到默认路径。
+
+用户希望设置规范时，可在 App 的空项目 Memory 页面选择 **Use Default Guidelines** 或 **Use Organization Guidelines**。后者选择组织已有资源，需要项目管理员权限。采用规范是可选操作；内置模板只有在用户采用后才成为 Memory。概念、预览和研究出处见[记忆维护规范](/zh/guides/memory-guidelines)。
 
 ### `activate`
+
+Clumsies 与宿主原生记忆并存。Agent 遵循适用的宿主记忆政策，也在实质项目任务中查询 Clumsies，即使已经查询过宿主记忆。在一个记忆空间完成读写，不代表另一个也已完成；维护 Clumsies 记忆时遵循绑定项目的记忆维护规范。用户明确要求跳过 Clumsies 或仅使用其他来源、保存位置时，尊重该选择。
 
 每个实质任务开始时调用一次 `activate`，让 daemon 从当前 Effective Memory 中返回最相关的片段：
 

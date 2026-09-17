@@ -52,9 +52,15 @@ Each Project may define a managed Memory guidelines document, conventionally at 
 2. **Update Rules & Mutation Policy**: When the agent should propose drafts, what descriptions to write, and what not to persist.
 3. **Deprecation Policy**: How conflicting or obsolete memories should be superseded.
 
-Agents can read this document via `memory` with `op: { load: { ids: ["CLUMSIES.md"] } }` before making substantial memory updates.
+Before maintaining memory, agents read the complete guide via `memory` with `op: { load: { ids: ["CLUMSIES.md"] } }`, using the exact configured path from MCP guidance when different. A current guide already in context for the same task can be reused. Ordinary read-only tasks do not require loading it in full. User customizations in the guide govern the applicable maintenance conventions; the App's bundled template is only a starting point and grants no additional write authorization.
+
+If the guide returns `memory_resource_not_found`, report the missing path. This establishes absence only in the current Project view, not throughout the Organization. Continue retrieval and fully specified, authorized edits using the user's instructions and existing conventions; clarify decisions that depend on the missing guide. Do not automatically create a guide, substitute a local file, or fall back from a missing custom path.
+
+Users who want to set up guidelines can use **Use Default Guidelines** or **Use Organization Guidelines** in the App's empty Project Memory view. The latter selects existing Organization Memory and requires Project administrator access. Adoption is optional; the bundled template is not a Memory resource until adopted. See [Memory Guidelines](/guides/memory-guidelines) for the concept, preview, and research sources.
 
 ### Activate
+
+Clumsies complements host-native memory. Follow applicable host memory policies and also query Clumsies for substantive project tasks, even when host memory has already been consulted. A read or write in one store does not fulfill a read or write in the other. Clumsies maintenance follows the bound Project's Memory Guidelines. Respect explicit user requests to skip Clumsies or use only another source or destination.
 
 Call `memory` with `op: { activate: ... }` once at the beginning of each substantive task:
 

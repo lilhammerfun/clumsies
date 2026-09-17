@@ -1,0 +1,76 @@
+import Foundation
+
+/// The resource a user is about to open, select, or create as Memory Guidelines.
+struct MemoryGuidelinesSetup: Equatable, Sendable {
+    enum Action: Equatable, Sendable {
+        case open(String)
+        case useOrganization(MemoryResource)
+        case createDefault
+    }
+
+    let projectId: String
+    let path: String
+    let action: Action
+
+    func hasSameDestination(as other: Self) -> Bool {
+        guard projectId == other.projectId, path == other.path else { return false }
+        switch (action, other.action) {
+        case (.open(let left), .open(let right)): return left == right
+        case (.useOrganization(let left), .useOrganization(let right)): return left.id == right.id
+        case (.createDefault, .createDefault): return true
+        default: return false
+        }
+    }
+}
+
+enum MemoryGuidelines {
+    static let defaultPath = "CLUMSIES.md"
+
+    static func configuredPath(_ value: String?) -> String {
+        let path = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return path.isEmpty ? defaultPath : path
+    }
+
+    static func defaultDocument() throws -> EditableMemoryDocument {
+        guard let url = Bundle.main.url(forResource: "CLUMSIES", withExtension: "md") else {
+            throw MemoryValidationError.invalidPath("The bundled memory guidelines are unavailable.")
+        }
+        return .init(
+            title: "Memory Guidelines",
+            path: defaultPath,
+            body: try String(contentsOf: url, encoding: .utf8)
+        )
+    }
+
+    /// Resolve the effective project document before considering shared authority.
+    /// A missing custom path or pending removal must never seed a replacement.
+    static func setup(
+        projectId: String,
+        path: String,
+        items: [MemoryListItem],
+        organizationResources: [MemoryResource]
+    ) throws -> MemoryGuidelinesSetup {
+        if let item = items.first(where: { $0.document.path == path }) {
+            guard item.draft?.isDeletion != true else {
+                throw MemoryValidationError.invalidPath(
+                    "A draft removes \(path). Resolve that draft before setting up memory guidelines."
+                )
+            }
+            return .init(projectId: projectId, path: path, action: .open(item.id))
+        }
+        if let resource = organizationResources.first(where: { $0.document.path == path }) {
+            guard !items.contains(where: { $0.draft?.targetId == resource.id }) else {
+                throw MemoryValidationError.invalidPath(
+                    "A draft changes the location of \(path). Resolve that draft or update the guidelines path."
+                )
+            }
+            return .init(projectId: projectId, path: path, action: .useOrganization(resource))
+        }
+        guard path == defaultPath else {
+            throw MemoryValidationError.invalidPath(
+                "Your configured memory guidelines, \(path), could not be found. Restore that memory or correct the configured path."
+            )
+        }
+        return .init(projectId: projectId, path: path, action: .createDefault)
+    }
+}

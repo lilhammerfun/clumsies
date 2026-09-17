@@ -1,3 +1,5 @@
+//! MCP Memory tool schema and request validation for bound projects.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
@@ -393,6 +395,13 @@ fn require_non_empty(value: &str, name: &str) -> Result<(), ContractError> {
 
 pub const DEFAULT_GUIDELINES_PATH: &str = "CLUMSIES.md";
 
+/// Describe the user-owned maintenance guide consistently across MCP discovery surfaces.
+pub(super) fn memory_guidelines_instructions(guidelines_path: &str) -> String {
+    format!(
+        "Memory Guidelines at {guidelines_path} define what to keep and how to organize, update, and retire knowledge in Clumsies. Before Clumsies memory maintenance, load this exact Effective Memory path with op.load; reuse a current guide already in context for the same task. Follow the user's applicable conventions and customizations. The guide is ordinary Memory, not a host file or extra write authorization. If missing, report the path and continue reads and fully specified authorized edits using the user's instructions and existing conventions; clarify only decisions that depend on the missing guide. Do not initialize or replace it automatically, or fall back from a missing custom path. For optional setup, direct the user to the App's empty Project Memory view: Use Default Guidelines creates a Draft; Use Organization Guidelines selects an existing resource and requires Project administrator access. The bundled template becomes Memory only after the user adopts it."
+    )
+}
+
 /// Tool definitions exposed over MCP. Keep these schemas MCP-specific: daemon
 /// request structs intentionally do not double as public Agent contracts.
 pub fn tool_definitions() -> Vec<Value> {
@@ -403,13 +412,15 @@ pub fn tool_definitions_with_guidelines(guidelines_path: &str) -> Vec<Value> {
     vec![memory_tool_definition(guidelines_path)]
 }
 
+/// Expose the bound project's Memory operations and their storage boundaries.
 fn memory_tool_definition(guidelines_path: &str) -> Value {
+    let guidelines = memory_guidelines_instructions(guidelines_path);
     let description = format!(
-        "Work with Effective Memory for the bound Project: activate ranked fragments, load complete resources by ID or path, or create/update/rename/delete/discard Project-carried proposal Drafts when explicitly requested. Store never writes Organization authority; publication requires an authorized Review decision and merge. Project memory conventions and update rules are documented at {guidelines_path}; call memory with op.load to read them before making substantial memory updates. Pass exactly one tagged operation in op."
+        "Consult Clumsies project memory before answering project questions, planning, implementing, debugging, or reviewing, even when the user does not mention memory. Follow applicable host memory policies and additionally query Clumsies, even when host memory has already been consulted. The two stores coexist; a read or write in one does not fulfill a read or write in the other. Recall decisions, conventions, procedures, and project-maintained skills, or remember, record, correct, update, or delete project knowledge when explicitly requested. Respect explicit user requests to skip Clumsies or use only another source or destination. Activate ranked fragments, load complete resources by ID or path, or store Project-carried proposal Drafts. Ordinary development and current-task reminders do not authorize Clumsies memory writes. Store never writes Organization authority; publication requires an authorized Review decision and merge. Report the saved resource and Draft status. {guidelines} Pass exactly one tagged operation in op."
     );
     json!({
         "name": MEMORY_TOOL_NAME,
-        "title": "Memory",
+        "title": "Clumsies Project Memory",
         "description": description,
         "inputSchema": {
             "type": "object",
@@ -421,7 +432,7 @@ fn memory_tool_definition(guidelines_path: &str) -> Value {
                     "properties": {
                         "activate": {
                             "type": "object",
-                            "description": "Activate the memory fragments most useful for the current task. Call once at the start of each substantive task. The daemon performs BM25 and vector recall, RRF fusion, reranking, budget control, and fragment delta calculation. Pass state only while fragments from the preceding activation remain in the model context.",
+                            "description": "Retrieve Clumsies memory relevant to the current project task or recall project decisions, conventions, procedures, and skills. Call before project analysis, planning, or editing, even without an explicit request to search memory; reuse the current task's activation while its fragments remain in context. Pass state only while fragments from the preceding activation remain in the model context.",
                             "properties": {
                                 "query": {
                                     "type": "string",
@@ -458,7 +469,7 @@ fn memory_tool_definition(guidelines_path: &str) -> Value {
                         },
                         "store": {
                             "type": "object",
-                            "description": "Create, update, rename, delete, or discard a Memory proposal Draft carried by the bound Project when the user explicitly requests memory maintenance. Before merge its overlay affects only that Project's Effective Memory. Before update, load the complete resource and use its content_hash with exact text replacements; update never accepts a complete document body. A successful call means durable local persistence and queued synchronization, not an authorized Review decision, merge, or Organization authority publication. Follow project memory conventions defined at CLUMSIES.md.",
+                            "description": "Create, update, rename, delete, or discard a Clumsies Memory proposal Draft when the user explicitly requests memory maintenance, such as remembering, recording, correcting, updating, or deleting project knowledge. Ordinary development and current-task reminders do not authorize writes. Before merge its overlay affects only the bound Project's Effective Memory. Before update, load the complete resource and use its content_hash with exact text replacements; update never accepts a complete document body. A successful call means durable local persistence and queued synchronization, not an authorized Review decision, merge, or Organization authority publication. Follow the project memory conventions identified in the tool description and report the saved resource and Draft status.",
                             "properties": {
                                 "resource": {
                                     "type": "string",

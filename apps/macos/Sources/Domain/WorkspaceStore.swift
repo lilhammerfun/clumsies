@@ -2935,65 +2935,144 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func createMemory(kind: MemoryKind, scope: MemoryScope) async {
-        guard scope == .org, canCreateMemory(kind: kind, scope: scope) else { return }
-        guard let projectId = activeProjectId else { return }
         do {
-            guard let authority = try await loadStableOrgAuthoritySnapshot(
-                allowingEmptyHead: true
-            ) else {
-                throw ServerClientError.invalidResponse(
-                    "A fresh Organization Memory snapshot is required to create a Draft."
-                )
-            }
+            _ = try await createMemoryDraft(kind: kind, scope: scope)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func createMemoryDraft(
+        kind: MemoryKind,
+        scope: MemoryScope,
+        initialDocument: EditableMemoryDocument? = nil
+    ) async throws -> String? {
+        guard scope == .org, canCreateMemory(kind: kind, scope: scope),
+              let projectId = activeProjectId else { return nil }
+        let generation = workspaceReloadGeneration
+        guard let authority = try await loadStableOrgAuthoritySnapshot(
+            allowingEmptyHead: true
+        ) else {
+            throw ServerClientError.invalidResponse(
+                "A fresh Organization Memory snapshot is required to create a Draft."
+            )
+        }
+        guard workspaceReloadGeneration == generation else { return nil }
+        return try await withDraftMutation {
             guard Self.projectContextIsCurrent(
                 isSwitchingMemoryContext: isSwitchingMemoryContext,
                 activeProjectId: activeProjectId,
                 expectedProjectId: projectId
-            ) else { return }
-            try await withDraftMutation {
-                guard Self.projectContextIsCurrent(
-                    isSwitchingMemoryContext: isSwitchingMemoryContext,
-                    activeProjectId: activeProjectId,
-                    expectedProjectId: projectId
-                ) else { return }
+            ), workspaceReloadGeneration == generation else { return nil }
+            let document: EditableMemoryDocument
+            if let initialDocument {
+                try validate(kind: kind, document: initialDocument)
+                let occupiedPaths = Set(authority.resources.map(\.document.path))
+                    .union(Self.memoryTreeDrafts(drafts, activeProjectId: projectId).map(\.document.path))
+                guard !occupiedPaths.contains(initialDocument.path) else {
+                    throw MemoryValidationError.invalidPath(
+                        "\(initialDocument.path) already exists. Refresh memory guidelines to use the existing document."
+                    )
+                }
+                document = initialDocument
+            } else {
                 let path = uniqueDefaultPath(
                     for: kind,
                     scope: scope,
                     authoritativeOrgResources: authority.resources,
                     projectId: projectId
                 )
-                let document = Self.defaultDocument(kind: kind, path: path)
-                let response = try await daemon.store(
-                    .init(
-                        draftId: nil,
-                        baseCommitId: authority.commitId,
-                        projectId: projectId,
-                        scope: .org,
-                        resource: kind.daemonKind,
-                        op: .create(
-                            path: path,
-                            content: daemonContent(kind: kind, document: document),
-                            description: nil
-                        ),
-                        source: .desktop
-                    )
-                )
-                guard Self.projectContextIsCurrent(
-                    isSwitchingMemoryContext: isSwitchingMemoryContext,
-                    activeProjectId: activeProjectId,
-                    expectedProjectId: projectId
-                ) else { return }
-                try await refreshDraft(response.draftId)
-                guard Self.projectContextIsCurrent(
-                    isSwitchingMemoryContext: isSwitchingMemoryContext,
-                    activeProjectId: activeProjectId,
-                    expectedProjectId: projectId
-                ) else { return }
-                selectedItemId = response.draftId
+                document = Self.defaultDocument(kind: kind, path: path)
             }
-        } catch {
-            errorMessage = error.localizedDescription
+            let response = try await daemon.store(
+                .init(
+                    draftId: nil,
+                    baseCommitId: authority.commitId,
+                    projectId: projectId,
+                    scope: .org,
+                    resource: kind.daemonKind,
+                    op: .create(
+                        path: document.path,
+                        content: daemonContent(kind: kind, document: document),
+                        description: nil
+                    ),
+                    source: .desktop
+                )
+            )
+            guard Self.projectContextIsCurrent(
+                isSwitchingMemoryContext: isSwitchingMemoryContext,
+                activeProjectId: activeProjectId,
+                expectedProjectId: projectId
+            ), workspaceReloadGeneration == generation else { return nil }
+            try await refreshDraft(response.draftId)
+            guard Self.projectContextIsCurrent(
+                isSwitchingMemoryContext: isSwitchingMemoryContext,
+                activeProjectId: activeProjectId,
+                expectedProjectId: projectId
+            ), workspaceReloadGeneration == generation else { return nil }
+            selectedItemId = response.draftId
+            return response.draftId
         }
+    }
+
+    /// Inspect both the effective Project and fresh Org authority before offering initialization.
+    func prepareMemoryGuidelines(projectId: String) async throws -> MemoryGuidelinesSetup {
+        let generation = workspaceReloadGeneration
+        let config = try await daemon.projectConfig()
+        guard let authority = try await loadStableOrgAuthoritySnapshot(allowingEmptyHead: true) else {
+            throw ServerClientError.invalidResponse("Couldn’t check your organization's memory guidelines. Try again.")
+        }
+        await refreshDraftInventory(includeFailed: true, generation: generation)
+        try Task.checkCancellation()
+        guard generation == workspaceReloadGeneration, phase == .ready,
+              selectedSection == .memory,
+              Self.projectContextIsCurrent(
+                  isSwitchingMemoryContext: isSwitchingMemoryContext,
+                  activeProjectId: activeProjectId,
+                  expectedProjectId: projectId
+              ) else { throw CancellationError() }
+        switch draftInventoryLoadState {
+        case .loaded: break
+        case .failed(let message): throw ServerClientError.invalidResponse(message)
+        case .loading: throw ServerClientError.invalidResponse("Wait for drafts to finish loading, then try again.")
+        }
+        return try MemoryGuidelines.setup(
+            projectId: projectId,
+            path: MemoryGuidelines.configuredPath(config.memoryGuidelinesPath),
+            items: visibleMemoryItems,
+            organizationResources: authority.resources
+        )
+    }
+
+    /// Recheck the offered action. A changed destination is presented again for the user to choose.
+    func useMemoryGuidelines(_ offered: MemoryGuidelinesSetup) async throws -> MemoryGuidelinesSetup {
+        let current = try await prepareMemoryGuidelines(projectId: offered.projectId)
+        guard current.hasSameDestination(as: offered) else { return current }
+        let generation = workspaceReloadGeneration
+        let itemId: String
+        switch current.action {
+        case .open(let id):
+            itemId = id
+        case .useOrganization(let resource):
+            if !resources.contains(where: { $0.id == resource.id }) {
+                resources.append(resource)
+            }
+            try await addOrgMemories(resourceIds: [resource.id], toProject: current.projectId)
+            itemId = resource.id
+        case .createDefault:
+            guard let id = try await createMemoryDraft(
+                kind: .context, scope: .org, initialDocument: MemoryGuidelines.defaultDocument()
+            ) else { throw CancellationError() }
+            itemId = id
+        }
+        guard generation == workspaceReloadGeneration,
+              activeProjectId == current.projectId,
+              selectedSection == .memory else { throw CancellationError() }
+        guard let item = visibleMemoryItems.first(where: { $0.id == itemId }) else {
+            throw ServerClientError.invalidResponse("Memory guidelines were saved, but could not be opened. Refresh the project to open them.")
+        }
+        open(item, mode: .preview)
+        return current
     }
 
     func stageDocumentSave(_ item: MemoryListItem, document: EditableMemoryDocument) {
