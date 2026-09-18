@@ -1,15 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-
 use daemon::{
     CredentialStore, CredentialStoreError, DaemonConfig, DaemonIpcService, DaemonState,
     ServerCredentials,
 };
-use server::api::ReplaceSetupConfigurationRequest;
-use server::auth::OidcIdentity;
-use server::installation::{InitializedInstallation, InstallationService};
+use server::app::auth::OidcIdentity;
+use server::app::installation::dto::ReplaceSetupConfigurationRequest;
+use server::app::installation::{InitializedInstallation, InstallationService};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tempfile::TempDir;
-use testcontainers::{ContainerAsync, runners::AsyncRunner};
+use testcontainers::ContainerAsync;
+use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -17,7 +17,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 pub struct TestPostgres {
     _permit: OwnedSemaphorePermit,
     _container: ContainerAsync<Postgres>,
-    pub port: u16,
+    pub database_url: String,
 }
 
 fn postgres_slots() -> &'static Arc<Semaphore> {
@@ -29,24 +29,13 @@ fn postgres_slots() -> &'static Arc<Semaphore> {
 pub async fn start_postgres() -> TestPostgres {
     let permit = postgres_slots().clone().acquire_owned().await.unwrap();
     let container = Postgres::default().start().await.unwrap();
-    let mut last_error = None;
-    for _ in 0..20 {
-        match container.get_host_port_ipv4(5432).await {
-            Ok(port) => {
-                return TestPostgres {
-                    _permit: permit,
-                    _container: container,
-                    port,
-                };
-            }
-            Err(error) => last_error = Some(error),
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let host = container.get_host().await.unwrap();
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    TestPostgres {
+        _permit: permit,
+        _container: container,
+        database_url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
     }
-    panic!(
-        "PostgreSQL test container never exposed port 5432: {}",
-        last_error.unwrap()
-    );
 }
 
 #[allow(dead_code)]
@@ -178,4 +167,76 @@ pub async fn test_daemon() -> (TempDir, DaemonState, DaemonIpcService) {
     .await;
     let service = DaemonIpcService::new(state.clone());
     (root, state, service)
+}
+
+/// Construct the production server with unconfigured authentication for TCP scenarios.
+#[allow(dead_code)]
+pub fn server_app(pool: sqlx::PgPool) -> axum::Router {
+    let auth = server::app::auth::AuthService::unconfigured(pool.clone());
+    let installation = InstallationService::new(pool.clone(), None, true).unwrap();
+    server::build_app(pool, auth, installation)
+}
+
+/// A TCP scenario owns the server task, its pool, and its PostgreSQL container.
+#[allow(dead_code)]
+pub struct TestServer {
+    pub address: std::net::SocketAddr,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<()>,
+    pool: sqlx::PgPool,
+    postgres: Option<TestPostgres>,
+}
+
+#[allow(dead_code)]
+impl TestServer {
+    /// Bind a fresh port and serve the production Router with the scenario's pool.
+    pub async fn start(pool: sqlx::PgPool, postgres: TestPostgres) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = server_app(pool.clone());
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .expect("serve test application");
+        });
+        Self {
+            address,
+            shutdown: Some(shutdown),
+            task,
+            pool,
+            postgres: Some(postgres),
+        }
+    }
+
+    /// Drain HTTP tasks before closing the pool and removing the database.
+    pub async fn shutdown(mut self) {
+        self.shutdown
+            .take()
+            .unwrap()
+            .send(())
+            .expect("signal test server shutdown");
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut self.task)
+            .await
+            .expect("test server shutdown deadline")
+            .expect("join test server");
+        self.pool.close().await;
+        self.postgres
+            .take()
+            .unwrap()
+            ._container
+            .rm()
+            .await
+            .expect("remove test database");
+    }
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        // Panic-path fallback; successful scenarios await shutdown explicitly.
+        self.task.abort();
+    }
 }

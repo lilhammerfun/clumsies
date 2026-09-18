@@ -1,7 +1,3 @@
-mod common;
-
-use std::collections::BTreeMap;
-
 use daemon::{
     DaemonConfig, DaemonContentDraftUpdate, DaemonCreateDraftOperation, DaemonDeleteDraftOperation,
     DaemonDraftContent, DaemonDraftListQuery, DaemonDraftOperation,
@@ -13,15 +9,20 @@ use daemon::{
     DaemonServerRequest, DaemonSyncRetryRequest, DaemonUpdateDraftOperation,
     DraftOperationSyncStatus, LoadMemoryRequest, SyncRetryChannel, SyncState,
 };
-use server::api::{
-    CreateDraftRebaseRequest, CreateDraftRequest, CreateProjectRequest,
-    CreateReviewDecisionRequest, CreateReviewMergeRequest, CreateReviewRequest,
-    CreateReviewSubmissionRequest, DraftOperationAction, DraftOperationInput, DraftResourceContent,
-    DraftResourceRef, Project, ReconciliationCandidateStatus, ReplaceProjectOrgSelectionRequest,
-    ResourceScope, ReviewDecision, ReviewDraftRequest, ReviewMergeResult,
+use server::app::draft::dto::{
+    CreateDraftRebaseRequest, CreateDraftRequest, DraftOperationAction, DraftOperationInput,
+    DraftResourceContent, DraftResourceRef, ReconciliationCandidateStatus,
 };
-use server::repository::ServerRepository;
+use server::app::memory::dto::{ReplaceProjectOrgSelectionRequest, ResourceScope};
+use server::app::project::dto::{CreateProjectRequest, Project};
+use server::app::review::dto::{
+    CreateReviewDecisionRequest, CreateReviewMergeRequest, CreateReviewRequest,
+    CreateReviewSubmissionRequest, ReviewDecision, ReviewDraftRequest, ReviewMergeResult,
+};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+
+mod common;
 
 #[cfg(target_os = "macos")]
 fn directory_handoff_bookmark(path: &std::path::Path) -> String {
@@ -106,57 +107,59 @@ fn workflow_content(content: &str) -> DaemonDraftContent {
 }
 
 async fn approve_and_merge(
-    repository: &ServerRepository,
+    pool: &sqlx::PgPool,
     draft_id: &str,
     expected_draft_version: i64,
     expected_ref: Option<&str>,
 ) -> ReviewMergeResult {
-    let detail = repository.get_draft(draft_id).await.unwrap();
-    let review = repository
-        .create_review(
-            &detail.draft.author.user_id,
-            expected_ref,
-            CreateReviewRequest {
-                drafts: vec![ReviewDraftRequest {
-                    draft_id: draft_id.to_owned(),
-                    expected_draft_version,
-                    candidate_id: None,
-                    resolved_state: None,
-                }],
-                title: None,
-                description: None,
-            },
-        )
+    let detail = server::app::draft::service::get_draft(pool, draft_id)
         .await
         .unwrap();
-    let approved = repository
-        .create_review_decision(
-            &review.review.review_id,
-            &review.review.author.user_id,
-            CreateReviewDecisionRequest {
-                decision: ReviewDecision::Approved,
-                expected_review_version: review.review.version,
-                body: None,
-            },
-        )
-        .await
-        .unwrap();
-    repository
-        .create_review_merge(
-            &approved.review.review_id,
-            &approved.review.author.user_id,
-            expected_ref,
-            CreateReviewMergeRequest {
-                expected_review_version: approved.review.version,
-            },
-        )
-        .await
-        .unwrap()
+    let review = server::app::review::service::create_review(
+        pool,
+        &detail.draft.author.user_id,
+        expected_ref,
+        CreateReviewRequest {
+            drafts: vec![ReviewDraftRequest {
+                draft_id: draft_id.to_owned(),
+                expected_draft_version,
+                candidate_id: None,
+                resolved_state: None,
+            }],
+            title: None,
+            description: None,
+        },
+    )
+    .await
+    .unwrap();
+    let approved = server::app::review::service::create_review_decision(
+        pool,
+        &review.review.review_id,
+        &review.review.author.user_id,
+        CreateReviewDecisionRequest {
+            decision: ReviewDecision::Approved,
+            expected_review_version: review.review.version,
+            body: None,
+        },
+    )
+    .await
+    .unwrap();
+    server::app::review::service::create_review_merge(
+        pool,
+        &approved.review.review_id,
+        &approved.review.author.user_id,
+        expected_ref,
+        CreateReviewMergeRequest {
+            expected_review_version: approved.review.version,
+        },
+    )
+    .await
+    .unwrap()
 }
 
 async fn sync_local_draft_and_merge(
     service: &DaemonIpcService,
-    repository: &ServerRepository,
+    pool: &sqlx::PgPool,
     local_draft_id: &str,
     expected_ref: Option<&str>,
 ) -> String {
@@ -168,7 +171,7 @@ async fn sync_local_draft_and_merge(
         .unwrap();
     let projection = service.get_draft(local_draft_id).await.unwrap();
     let merge = approve_and_merge(
-        repository,
+        pool,
         projection.draft.server_draft_id.as_deref().unwrap(),
         projection.draft.server_version,
         expected_ref,
@@ -333,9 +336,8 @@ async fn cache_root_for_commit(
     std::path::PathBuf::from(cache.active_generation_path.unwrap())
 }
 
-async fn current_project_commit_id(repository: &ServerRepository, project_id: &str) -> String {
-    repository
-        .get_project_commit_state(project_id, None)
+async fn current_project_commit_id(pool: &sqlx::PgPool, project_id: &str) -> String {
+    server::app::commit::service::get_project_commit_state(pool, project_id, None)
         .await
         .unwrap()
         .reference
@@ -346,10 +348,11 @@ async fn current_project_commit_id(repository: &ServerRepository, project_id: &s
 #[tokio::test]
 async fn project_creation_proxy_preserves_idempotency_and_replays_the_result() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Project Proxy").await;
 
     let access_token = "daemon-project-create-access-token";
@@ -377,14 +380,9 @@ async fn project_creation_proxy_preserves_idempotency_and_replays_the_result() {
     .await
     .unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
-    let server_pool = pool.clone();
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(server_pool))
-            .await
-            .unwrap();
-    });
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
+
     let root = tempfile::tempdir().unwrap();
     let mut config = DaemonConfig::for_root(root.path());
     config.project.server_url = format!("http://{server_address}");
@@ -426,17 +424,17 @@ async fn project_creation_proxy_preserves_idempotency_and_replays_the_result() {
             .unwrap();
     assert_eq!(project_count, 1);
 
-    server_task.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
 async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
-    let repository = ServerRepository::new(pool.clone());
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Daemon Integration").await;
 
     let stale_access_token = "expired-daemon-access-token";
@@ -466,14 +464,9 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     .await
     .unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
     let verification_pool = pool.clone();
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(pool))
-            .await
-            .unwrap();
-    });
 
     let root = tempfile::tempdir().unwrap();
     let mut config = DaemonConfig::for_root(root.path());
@@ -539,14 +532,16 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     .unwrap();
     assert_eq!(active_token_count, 2);
 
-    let drafts = repository
-        .list_drafts(&bootstrap.user_id, Some(&bootstrap.project_id))
-        .await
-        .unwrap();
+    let drafts = server::app::draft::service::list_drafts(
+        &pool,
+        &bootstrap.user_id,
+        Some(&bootstrap.project_id),
+    )
+    .await
+    .unwrap();
     assert_eq!(drafts.items.len(), 1);
     assert_eq!(drafts.items[0].author.user_id, bootstrap.user_id);
-    let draft = repository
-        .get_draft(&drafts.items[0].draft_id)
+    let draft = server::app::draft::service::get_draft(&pool, &drafts.items[0].draft_id)
         .await
         .unwrap();
     assert_eq!(draft.operations.len(), 1);
@@ -558,23 +553,23 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
         })
     );
 
-    let review = repository
-        .create_review(
-            &bootstrap.user_id,
-            None,
-            CreateReviewRequest {
-                drafts: vec![ReviewDraftRequest {
-                    draft_id: draft.draft.draft_id.clone(),
-                    expected_draft_version: draft.draft.version,
-                    candidate_id: None,
-                    resolved_state: None,
-                }],
-                title: None,
-                description: None,
-            },
-        )
-        .await
-        .unwrap();
+    let review = server::app::review::service::create_review(
+        &pool,
+        &bootstrap.user_id,
+        None,
+        CreateReviewRequest {
+            drafts: vec![ReviewDraftRequest {
+                draft_id: draft.draft.draft_id.clone(),
+                expected_draft_version: draft.draft.version,
+                candidate_id: None,
+                resolved_state: None,
+            }],
+            title: None,
+            description: None,
+        },
+    )
+    .await
+    .unwrap();
     service
         .retry_sync(DaemonSyncRetryRequest {
             channel: SyncRetryChannel::Drafts,
@@ -585,18 +580,18 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     assert_eq!(projected.draft.status, DaemonLocalDraftStatus::Submitted);
     assert_eq!(projected.draft.server_version, review.draft.version);
 
-    let rejected = repository
-        .create_review_decision(
-            &review.review.review_id,
-            &review.review.author.user_id,
-            CreateReviewDecisionRequest {
-                decision: ReviewDecision::Rejected,
-                expected_review_version: review.review.version,
-                body: Some("Revise the context.".to_owned()),
-            },
-        )
-        .await
-        .unwrap();
+    let rejected = server::app::review::service::create_review_decision(
+        &pool,
+        &review.review.review_id,
+        &review.review.author.user_id,
+        CreateReviewDecisionRequest {
+            decision: ReviewDecision::Rejected,
+            expected_review_version: review.review.version,
+            body: Some("Revise the context.".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
     service
         .retry_sync(DaemonSyncRetryRequest {
             channel: SyncRetryChannel::Drafts,
@@ -639,25 +634,25 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     assert_eq!(edited.draft.status, DaemonLocalDraftStatus::Open);
     assert_eq!(edited.draft.server_version, rejected.draft.version + 1);
 
-    let resubmitted = repository
-        .create_review_submission(
-            &rejected.review.review_id,
-            &bootstrap.user_id,
-            rejected.draft.coordination.current_commit_id.as_deref(),
-            CreateReviewSubmissionRequest {
-                expected_review_version: rejected.review.version,
-                drafts: vec![ReviewDraftRequest {
-                    draft_id: rejected.draft.draft_id.clone(),
-                    expected_draft_version: edited.draft.server_version,
-                    candidate_id: None,
-                    resolved_state: None,
-                }],
-                title: Some("Revised daemon context".to_owned()),
-                description: None,
-            },
-        )
-        .await
-        .unwrap();
+    let resubmitted = server::app::review::service::create_review_submission(
+        &pool,
+        &rejected.review.review_id,
+        &bootstrap.user_id,
+        rejected.draft.coordination.current_commit_id.as_deref(),
+        CreateReviewSubmissionRequest {
+            expected_review_version: rejected.review.version,
+            drafts: vec![ReviewDraftRequest {
+                draft_id: rejected.draft.draft_id.clone(),
+                expected_draft_version: edited.draft.server_version,
+                candidate_id: None,
+                resolved_state: None,
+            }],
+            title: Some("Revised daemon context".to_owned()),
+            description: None,
+        },
+    )
+    .await
+    .unwrap();
     service
         .retry_sync(DaemonSyncRetryRequest {
             channel: SyncRetryChannel::Drafts,
@@ -669,60 +664,59 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     assert_eq!(projected.draft.server_version, resubmitted.draft.version);
     assert_eq!(resubmitted.review.review_id, review.review.review_id);
 
-    server_task.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
 async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
-    let repository = ServerRepository::new(pool.clone());
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Context Lifecycle").await;
 
-    let seed_draft = repository
-        .create_draft(
-            &bootstrap.user_id,
-            CreateDraftRequest {
-                daemon_installation_id: "daemon_seed_context".to_owned(),
-                project_id: bootstrap.project_id.clone(),
-                base_commit_id: None,
-                title: "Seed context".to_owned(),
-                description: None,
+    let seed_draft = server::app::draft::service::create_draft(
+        &pool,
+        &bootstrap.user_id,
+        CreateDraftRequest {
+            daemon_installation_id: "daemon_seed_context".to_owned(),
+            project_id: bootstrap.project_id.clone(),
+            base_commit_id: None,
+            title: "Seed context".to_owned(),
+            description: None,
+            resource: DraftResourceRef {
+                scope: ResourceScope::Org,
+                id: None,
+                path: Some("context/original.md".to_owned()),
+            },
+            operations: vec![DraftOperationInput {
+                action: DraftOperationAction::Create,
                 resource: DraftResourceRef {
                     scope: ResourceScope::Org,
                     id: None,
                     path: Some("context/original.md".to_owned()),
                 },
-                operations: vec![DraftOperationInput {
-                    action: DraftOperationAction::Create,
-                    resource: DraftResourceRef {
-                        scope: ResourceScope::Org,
-                        id: None,
-                        path: Some("context/original.md".to_owned()),
-                    },
-                    content: Some(DraftResourceContent {
-                        description: None,
-                        content: "# Original\n\nBefore local editing.".to_owned(),
-                    }),
-                    new_path: None,
-                }],
-            },
-        )
-        .await
-        .unwrap();
+                content: Some(DraftResourceContent {
+                    description: None,
+                    content: "# Original\n\nBefore local editing.".to_owned(),
+                }),
+                new_path: None,
+            }],
+        },
+    )
+    .await
+    .unwrap();
     let seed_merge = approve_and_merge(
-        &repository,
+        &pool,
         &seed_draft.draft.draft_id,
         seed_draft.draft.version,
         None,
     )
     .await;
     let seed_org_commit_id = seed_merge.commit_id.unwrap();
-    let context_id = repository
-        .list_org_memories(&bootstrap.org_id)
+    let context_id = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
         .await
         .unwrap()
         .items
@@ -756,13 +750,9 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
     .await
     .unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(pool))
-            .await
-            .unwrap();
-    });
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
+
     let root = tempfile::tempdir().unwrap();
     let mut config = DaemonConfig::for_root(root.path());
     config.project.server_url = format!("http://{server_address}");
@@ -857,7 +847,7 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
         .unwrap();
     let update_projection = service.get_draft(&update_draft.draft_id).await.unwrap();
     let update_merge = approve_and_merge(
-        &repository,
+        &pool,
         update_projection.draft.server_draft_id.as_deref().unwrap(),
         update_projection.draft.server_version,
         Some(&seed_org_commit_id),
@@ -872,13 +862,13 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
         .unwrap();
     let merged_update = service.get_draft(&update_draft.draft_id).await.unwrap();
     assert_eq!(merged_update.draft.status, DaemonLocalDraftStatus::Merged);
-    let update_project_commit_id = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let update_project_commit_id =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     assert_ne!(update_project_commit_id, update_org_commit_id);
     let cache = service
         .memory_cache(DaemonMemoryCacheRequest {
@@ -937,7 +927,7 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
         .unwrap();
     let delete_projection = service.get_draft(&delete_draft.draft_id).await.unwrap();
     let delete_merge = approve_and_merge(
-        &repository,
+        &pool,
         delete_projection.draft.server_draft_id.as_deref().unwrap(),
         delete_projection.draft.server_version,
         Some(&update_org_commit_id),
@@ -952,13 +942,13 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
         .unwrap();
     let merged_delete = service.get_draft(&delete_draft.draft_id).await.unwrap();
     assert_eq!(merged_delete.draft.status, DaemonLocalDraftStatus::Merged);
-    let delete_project_commit_id = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let delete_project_commit_id =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     assert_ne!(delete_project_commit_id, delete_org_commit_id);
     let deleted_cache = service
         .memory_cache(DaemonMemoryCacheRequest {
@@ -980,59 +970,57 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
             .exists()
     );
     assert!(matches!(
-        repository
-            .get_org_memory(&bootstrap.org_id, &context_id)
-            .await,
-        Err(server::repository::ServerError::NotFound { .. })
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &context_id).await,
+        Err(server::error::ServerError::NotFound { .. })
     ));
 
-    server_task.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
 async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
-    let repository = ServerRepository::new(pool.clone());
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let verification_pool = pool.clone();
     let bootstrap = common::initialize_installation(pool.clone(), "Offline Conflict").await;
 
-    let base_draft = repository
-        .create_draft(
-            &bootstrap.user_id,
-            CreateDraftRequest {
-                daemon_installation_id: "daemon_conflict_seed".to_owned(),
-                project_id: bootstrap.project_id.clone(),
-                base_commit_id: None,
-                title: "Seed conflict base".to_owned(),
-                description: None,
+    let base_draft = server::app::draft::service::create_draft(
+        &pool,
+        &bootstrap.user_id,
+        CreateDraftRequest {
+            daemon_installation_id: "daemon_conflict_seed".to_owned(),
+            project_id: bootstrap.project_id.clone(),
+            base_commit_id: None,
+            title: "Seed conflict base".to_owned(),
+            description: None,
+            resource: DraftResourceRef {
+                scope: ResourceScope::Org,
+                id: None,
+                path: Some("context/base.md".to_owned()),
+            },
+            operations: vec![DraftOperationInput {
+                action: DraftOperationAction::Create,
                 resource: DraftResourceRef {
                     scope: ResourceScope::Org,
                     id: None,
                     path: Some("context/base.md".to_owned()),
                 },
-                operations: vec![DraftOperationInput {
-                    action: DraftOperationAction::Create,
-                    resource: DraftResourceRef {
-                        scope: ResourceScope::Org,
-                        id: None,
-                        path: Some("context/base.md".to_owned()),
-                    },
-                    content: Some(DraftResourceContent {
-                        description: None,
-                        content: "# Base\n\nThe offline Draft starts from this Commit.".to_owned(),
-                    }),
-                    new_path: None,
-                }],
-            },
-        )
-        .await
-        .unwrap();
+                content: Some(DraftResourceContent {
+                    description: None,
+                    content: "# Base\n\nThe offline Draft starts from this Commit.".to_owned(),
+                }),
+                new_path: None,
+            }],
+        },
+    )
+    .await
+    .unwrap();
     let base_merge = approve_and_merge(
-        &repository,
+        &pool,
         &base_draft.draft.draft_id,
         base_draft.draft.version,
         None,
@@ -1065,14 +1053,9 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     .await
     .unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
     let server_url = format!("http://{server_address}");
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(pool))
-            .await
-            .unwrap();
-    });
     let root = tempfile::tempdir().unwrap();
     let mut config = DaemonConfig::for_root(root.path());
     config.project.server_url = server_url.clone();
@@ -1138,39 +1121,39 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         DraftOperationSyncStatus::Retrying
     );
 
-    let remote_draft = repository
-        .create_draft(
-            &bootstrap.user_id,
-            CreateDraftRequest {
-                daemon_installation_id: "daemon_remote_change".to_owned(),
-                project_id: bootstrap.project_id.clone(),
-                base_commit_id: Some(base_commit_id.clone()),
-                title: "Advance the remote Ref".to_owned(),
-                description: None,
+    let remote_draft = server::app::draft::service::create_draft(
+        &pool,
+        &bootstrap.user_id,
+        CreateDraftRequest {
+            daemon_installation_id: "daemon_remote_change".to_owned(),
+            project_id: bootstrap.project_id.clone(),
+            base_commit_id: Some(base_commit_id.clone()),
+            title: "Advance the remote Ref".to_owned(),
+            description: None,
+            resource: DraftResourceRef {
+                scope: ResourceScope::Org,
+                id: None,
+                path: Some("context/remote-change.md".to_owned()),
+            },
+            operations: vec![DraftOperationInput {
+                action: DraftOperationAction::Create,
                 resource: DraftResourceRef {
                     scope: ResourceScope::Org,
                     id: None,
                     path: Some("context/remote-change.md".to_owned()),
                 },
-                operations: vec![DraftOperationInput {
-                    action: DraftOperationAction::Create,
-                    resource: DraftResourceRef {
-                        scope: ResourceScope::Org,
-                        id: None,
-                        path: Some("context/remote-change.md".to_owned()),
-                    },
-                    content: Some(DraftResourceContent {
-                        description: None,
-                        content: "# Remote change\n\nThis advances the Project Ref.".to_owned(),
-                    }),
-                    new_path: None,
-                }],
-            },
-        )
-        .await
-        .unwrap();
+                content: Some(DraftResourceContent {
+                    description: None,
+                    content: "# Remote change\n\nThis advances the Project Ref.".to_owned(),
+                }),
+                new_path: None,
+            }],
+        },
+    )
+    .await
+    .unwrap();
     let remote_merge = approve_and_merge(
-        &repository,
+        &pool,
         &remote_draft.draft.draft_id,
         remote_draft.draft.version,
         Some(&base_commit_id),
@@ -1368,69 +1351,71 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         SyncState::Idle
     );
 
-    let server_behind = repository
-        .get_draft(projected_behind.draft.server_draft_id.as_deref().unwrap())
-        .await
-        .unwrap();
+    let server_behind = server::app::draft::service::get_draft(
+        &pool,
+        projected_behind.draft.server_draft_id.as_deref().unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         server_behind.draft.base_commit_id,
         Some(base_commit_id.clone())
     );
     assert_eq!(server_behind.operations.len(), 2);
 
-    let reconciliation_error = repository
-        .create_review(
-            &bootstrap.user_id,
-            Some(&current_commit_id),
-            CreateReviewRequest {
-                drafts: vec![ReviewDraftRequest {
-                    draft_id: server_behind.draft.draft_id.clone(),
-                    expected_draft_version: server_behind.draft.version,
-                    candidate_id: None,
-                    resolved_state: None,
-                }],
-                title: None,
-                description: None,
-            },
-        )
-        .await
-        .unwrap_err();
+    let reconciliation_error = server::app::review::service::create_review(
+        &pool,
+        &bootstrap.user_id,
+        Some(&current_commit_id),
+        CreateReviewRequest {
+            drafts: vec![ReviewDraftRequest {
+                draft_id: server_behind.draft.draft_id.clone(),
+                expected_draft_version: server_behind.draft.version,
+                candidate_id: None,
+                resolved_state: None,
+            }],
+            title: None,
+            description: None,
+        },
+    )
+    .await
+    .unwrap_err();
     let candidate_id = match reconciliation_error {
-        server::repository::ServerError::ReconciliationRequired { candidate_id, .. } => {
-            candidate_id
-        }
+        server::error::ServerError::ReconciliationRequired { candidate_id, .. } => candidate_id,
         error => panic!("expected reconciliation_required, got {error:?}"),
     };
-    let candidate = repository
-        .get_draft_reconciliation_candidate(&server_behind.draft.draft_id, &candidate_id)
-        .await
-        .unwrap();
+    let candidate = server::app::draft::service::get_draft_reconciliation_candidate(
+        &pool,
+        &server_behind.draft.draft_id,
+        &candidate_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(candidate.status, ReconciliationCandidateStatus::Clean);
     assert!(candidate.valid);
     assert_eq!(candidate.base_commit_id, Some(base_commit_id.clone()));
     assert_eq!(candidate.current_commit_id, Some(current_commit_id.clone()));
 
-    let unchanged = repository
-        .get_draft(&server_behind.draft.draft_id)
+    let unchanged = server::app::draft::service::get_draft(&pool, &server_behind.draft.draft_id)
         .await
         .unwrap();
     assert_eq!(unchanged.draft.base_commit_id, Some(base_commit_id.clone()));
     assert_eq!(unchanged.draft.version, server_behind.draft.version);
     assert_eq!(unchanged.operations, server_behind.operations);
 
-    let rebased = repository
-        .create_draft_rebase(
-            &server_behind.draft.draft_id,
-            &bootstrap.user_id,
-            Some(&current_commit_id),
-            CreateDraftRebaseRequest {
-                candidate_id,
-                expected_draft_version: server_behind.draft.version,
-                resolved_state: None,
-            },
-        )
-        .await
-        .unwrap();
+    let rebased = server::app::draft::service::create_draft_rebase(
+        &pool,
+        &server_behind.draft.draft_id,
+        &bootstrap.user_id,
+        Some(&current_commit_id),
+        CreateDraftRebaseRequest {
+            candidate_id,
+            expected_draft_version: server_behind.draft.version,
+            resolved_state: None,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         rebased.draft.draft.base_commit_id.as_deref(),
         Some(current_commit_id.as_str())
@@ -1486,46 +1471,46 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     assert_eq!(resolved_sync_status.failed_operation_count, 0);
     assert_eq!(resolved_sync_status.draft_sync.state, SyncState::Idle);
 
-    let review = repository
-        .create_review(
-            &bootstrap.user_id,
-            Some(&current_commit_id),
-            CreateReviewRequest {
-                drafts: vec![ReviewDraftRequest {
-                    draft_id: rebased.draft.draft.draft_id.clone(),
-                    expected_draft_version: rebased.draft.draft.version,
-                    candidate_id: None,
-                    resolved_state: None,
-                }],
-                title: None,
-                description: None,
-            },
-        )
-        .await
-        .unwrap();
-    let approved = repository
-        .create_review_decision(
-            &review.review.review_id,
-            &review.review.author.user_id,
-            CreateReviewDecisionRequest {
-                decision: ReviewDecision::Approved,
-                expected_review_version: review.review.version,
-                body: Some("Reviewed against the current Ref.".to_owned()),
-            },
-        )
-        .await
-        .unwrap();
-    let final_merge = repository
-        .create_review_merge(
-            &approved.review.review_id,
-            &approved.review.author.user_id,
-            Some(&current_commit_id),
-            CreateReviewMergeRequest {
-                expected_review_version: approved.review.version,
-            },
-        )
-        .await
-        .unwrap();
+    let review = server::app::review::service::create_review(
+        &pool,
+        &bootstrap.user_id,
+        Some(&current_commit_id),
+        CreateReviewRequest {
+            drafts: vec![ReviewDraftRequest {
+                draft_id: rebased.draft.draft.draft_id.clone(),
+                expected_draft_version: rebased.draft.draft.version,
+                candidate_id: None,
+                resolved_state: None,
+            }],
+            title: None,
+            description: None,
+        },
+    )
+    .await
+    .unwrap();
+    let approved = server::app::review::service::create_review_decision(
+        &pool,
+        &review.review.review_id,
+        &review.review.author.user_id,
+        CreateReviewDecisionRequest {
+            decision: ReviewDecision::Approved,
+            expected_review_version: review.review.version,
+            body: Some("Reviewed against the current Ref.".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    let final_merge = server::app::review::service::create_review_merge(
+        &pool,
+        &approved.review.review_id,
+        &approved.review.author.user_id,
+        Some(&current_commit_id),
+        CreateReviewMergeRequest {
+            expected_review_version: approved.review.version,
+        },
+    )
+    .await
+    .unwrap();
     let final_commit_id = final_merge.commit_id.unwrap();
     assert_ne!(final_commit_id, current_commit_id);
 
@@ -1537,13 +1522,13 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         .unwrap();
     let merged = service.get_draft(&local_draft.draft_id).await.unwrap();
     assert_eq!(merged.draft.status, DaemonLocalDraftStatus::Merged);
-    let final_project_commit_id = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let final_project_commit_id =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     assert_ne!(final_project_commit_id, final_commit_id);
     let cache = service
         .memory_cache(DaemonMemoryCacheRequest {
@@ -1567,17 +1552,17 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
             .is_file()
     );
 
-    server_task.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
 async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
-    let repository = ServerRepository::new(pool.clone());
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Structured Lifecycle").await;
 
     let access_token = "daemon-structured-lifecycle-access-token";
@@ -1605,13 +1590,9 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     .await
     .unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(pool))
-            .await
-            .unwrap();
-    });
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
+
     let root = tempfile::tempdir().unwrap();
     let mut config = DaemonConfig::for_root(root.path());
     config.project.server_url = format!("http://{server_address}");
@@ -1632,9 +1613,8 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     )
     .await;
     let rule_create_org_commit =
-        sync_local_draft_and_merge(&service, &repository, &create_rule, None).await;
-    let rule_meta = repository
-        .list_org_memories(&bootstrap.org_id)
+        sync_local_draft_and_merge(&service, &pool, &create_rule, None).await;
+    let rule_meta = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
         .await
         .unwrap()
         .items
@@ -1642,17 +1622,16 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         .find(|memory| memory.path == "rules/memory-review")
         .unwrap();
     let rule_id = rule_meta.memory_id;
-    let created_rule = repository
-        .get_org_memory(&bootstrap.org_id, &rule_id)
-        .await
-        .unwrap();
+    let created_rule =
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id)
+            .await
+            .unwrap();
     assert_eq!(created_rule.memory.name, "memory-review");
     assert_eq!(
         created_rule.content,
         "# Memory review discipline\n\nApply when publishing durable memory.\n\nReview every memory change before merge.\n\nTags: memory, review"
     );
-    let rule_create_project_commit =
-        current_project_commit_id(&repository, &bootstrap.project_id).await;
+    let rule_create_project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
     assert_ne!(rule_create_project_commit, rule_create_org_commit);
     let rule_create_root =
         cache_root_for_commit(&service, &bootstrap.project_id, &rule_create_project_commit).await;
@@ -1675,13 +1654,12 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     .await;
     let workflow_create_org_commit = sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &create_workflow,
         Some(&rule_create_org_commit),
     )
     .await;
-    let workflow_meta = repository
-        .list_org_memories(&bootstrap.org_id)
+    let workflow_meta = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
         .await
         .unwrap()
         .items
@@ -1689,10 +1667,10 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         .find(|memory| memory.path == "workflow/memory-publication")
         .unwrap();
     let workflow_id = workflow_meta.memory_id;
-    let created_workflow = repository
-        .get_org_memory(&bootstrap.org_id, &workflow_id)
-        .await
-        .unwrap();
+    let created_workflow =
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id)
+            .await
+            .unwrap();
     assert_eq!(
         created_workflow.content,
         format!(
@@ -1700,7 +1678,7 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         )
     );
     let workflow_create_project_commit =
-        current_project_commit_id(&repository, &bootstrap.project_id).await;
+        current_project_commit_id(&pool, &bootstrap.project_id).await;
     assert_ne!(workflow_create_project_commit, workflow_create_org_commit);
     let workflow_create_root = cache_root_for_commit(
         &service,
@@ -1732,22 +1710,21 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     .await;
     let rule_update_org_commit = sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &update_rule,
         Some(&workflow_create_org_commit),
     )
     .await;
-    let updated_rule = repository
-        .get_org_memory(&bootstrap.org_id, &rule_id)
-        .await
-        .unwrap();
+    let updated_rule =
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id)
+            .await
+            .unwrap();
     assert_eq!(updated_rule.memory.path, "rules/memory-review-policy");
     assert_eq!(
         updated_rule.content,
         "# Memory review discipline\n\nApply when publishing durable memory.\n\nReview the change and its materialized result before merge.\n\nTags: memory, review, verification"
     );
-    let rule_update_project_commit =
-        current_project_commit_id(&repository, &bootstrap.project_id).await;
+    let rule_update_project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
     assert_ne!(rule_update_project_commit, rule_update_org_commit);
     let rule_update_root =
         cache_root_for_commit(&service, &bootstrap.project_id, &rule_update_project_commit).await;
@@ -1781,15 +1758,15 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     .await;
     let workflow_update_org_commit = sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &update_workflow,
         Some(&rule_update_org_commit),
     )
     .await;
-    let updated_workflow = repository
-        .get_org_memory(&bootstrap.org_id, &workflow_id)
-        .await
-        .unwrap();
+    let updated_workflow =
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id)
+            .await
+            .unwrap();
     assert_eq!(updated_workflow.memory.path, "workflow/memory-publish");
     assert_eq!(
         updated_workflow.content,
@@ -1798,7 +1775,7 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         )
     );
     let workflow_update_project_commit =
-        current_project_commit_id(&repository, &bootstrap.project_id).await;
+        current_project_commit_id(&pool, &bootstrap.project_id).await;
     assert_ne!(workflow_update_project_commit, workflow_update_org_commit);
     let workflow_update_root = cache_root_for_commit(
         &service,
@@ -1834,19 +1811,17 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     .await;
     let workflow_delete_org_commit = sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &delete_workflow,
         Some(&workflow_update_org_commit),
     )
     .await;
     assert!(matches!(
-        repository
-            .get_org_memory(&bootstrap.org_id, &workflow_id)
-            .await,
-        Err(server::repository::ServerError::NotFound { .. })
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id).await,
+        Err(server::error::ServerError::NotFound { .. })
     ));
     let workflow_delete_project_commit =
-        current_project_commit_id(&repository, &bootstrap.project_id).await;
+        current_project_commit_id(&pool, &bootstrap.project_id).await;
     assert_ne!(workflow_delete_project_commit, workflow_delete_org_commit);
     let workflow_delete_root = cache_root_for_commit(
         &service,
@@ -1875,17 +1850,16 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     .await;
     let rule_delete_org_commit = sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &delete_rule,
         Some(&workflow_delete_org_commit),
     )
     .await;
     assert!(matches!(
-        repository.get_org_memory(&bootstrap.org_id, &rule_id).await,
-        Err(server::repository::ServerError::NotFound { .. })
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id).await,
+        Err(server::error::ServerError::NotFound { .. })
     ));
-    let rule_delete_project_commit =
-        current_project_commit_id(&repository, &bootstrap.project_id).await;
+    let rule_delete_project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
     assert_ne!(rule_delete_project_commit, rule_delete_org_commit);
     let rule_delete_root =
         cache_root_for_commit(&service, &bootstrap.project_id, &rule_delete_project_commit).await;
@@ -1900,17 +1874,17 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
             .exists()
     );
 
-    server_task.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
 async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
-    let repository = ServerRepository::new(pool.clone());
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Selected Hub Lifecycle").await;
 
     let access_token = "daemon-selected-hub-lifecycle-access-token";
@@ -1938,13 +1912,9 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     .await
     .unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(pool))
-            .await
-            .unwrap();
-    });
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
+
     let root = tempfile::tempdir().unwrap();
     let mut config = DaemonConfig::for_root(root.path());
     config.project.server_url = format!("http://{server_address}");
@@ -1970,10 +1940,8 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         DaemonDraftOperationSource::Desktop,
     )
     .await;
-    let org_rule_commit =
-        sync_local_draft_and_merge(&service, &repository, &create_rule, None).await;
-    let rule = repository
-        .list_org_memories(&bootstrap.org_id)
+    let org_rule_commit = sync_local_draft_and_merge(&service, &pool, &create_rule, None).await;
+    let rule = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
         .await
         .unwrap()
         .items
@@ -1994,15 +1962,9 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         DaemonDraftOperationSource::McpStore,
     )
     .await;
-    let org_workflow_commit = sync_local_draft_and_merge(
-        &service,
-        &repository,
-        &create_workflow,
-        Some(&org_rule_commit),
-    )
-    .await;
-    let workflow = repository
-        .list_org_memories(&bootstrap.org_id)
+    let org_workflow_commit =
+        sync_local_draft_and_merge(&service, &pool, &create_workflow, Some(&org_rule_commit)).await;
+    let workflow = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
         .await
         .unwrap()
         .items
@@ -2011,10 +1973,10 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         .unwrap();
     let workflow_id = workflow.memory_id;
 
-    let selection = repository
-        .get_project_org_selection(&bootstrap.project_id)
-        .await
-        .unwrap();
+    let selection =
+        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
+            .await
+            .unwrap();
     assert_eq!(selection.revision, 2);
     assert_eq!(selection.memories.len(), 2);
     assert!(
@@ -2035,13 +1997,13 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         })
         .await
         .unwrap();
-    let selected_project_commit = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let selected_project_commit =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     let selected_root =
         cache_root_for_commit(&service, &bootstrap.project_id, &selected_project_commit).await;
     assert!(
@@ -2067,20 +2029,15 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         DaemonDraftOperationSource::Desktop,
     )
     .await;
-    let org_rule_update_commit = sync_local_draft_and_merge(
-        &service,
-        &repository,
-        &update_rule,
-        Some(&org_workflow_commit),
-    )
-    .await;
-    let rule_update_project_commit = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let org_rule_update_commit =
+        sync_local_draft_and_merge(&service, &pool, &update_rule, Some(&org_workflow_commit)).await;
+    let rule_update_project_commit =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     assert_ne!(rule_update_project_commit, selected_project_commit);
     assert_ne!(rule_update_project_commit, org_rule_update_commit);
     let rule_update_root =
@@ -2115,18 +2072,18 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     .await;
     let org_workflow_update_commit = sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &update_workflow,
         Some(&org_rule_update_commit),
     )
     .await;
-    let workflow_update_project_commit = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let workflow_update_project_commit =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     assert_ne!(workflow_update_project_commit, rule_update_project_commit);
     let workflow_update_root = cache_root_for_commit(
         &service,
@@ -2157,18 +2114,18 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     .await;
     let org_workflow_delete_commit = sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &delete_workflow,
         Some(&org_workflow_update_commit),
     )
     .await;
-    let workflow_delete_project_commit = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let workflow_delete_project_commit =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     let workflow_delete_root = cache_root_for_commit(
         &service,
         &bootstrap.project_id,
@@ -2185,10 +2142,10 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
             .join("cache/memory/rules/shared-review-policy")
             .exists()
     );
-    let selection_after_workflow_delete = repository
-        .get_project_org_selection(&bootstrap.project_id)
-        .await
-        .unwrap();
+    let selection_after_workflow_delete =
+        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
+            .await
+            .unwrap();
     assert_eq!(
         selection_after_workflow_delete.revision,
         selection.revision + 1
@@ -2209,18 +2166,18 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     .await;
     sync_local_draft_and_merge(
         &service,
-        &repository,
+        &pool,
         &delete_rule,
         Some(&org_workflow_delete_commit),
     )
     .await;
-    let rule_delete_project_commit = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let rule_delete_project_commit =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     let rule_delete_root =
         cache_root_for_commit(&service, &bootstrap.project_id, &rule_delete_project_commit).await;
     assert!(
@@ -2228,10 +2185,10 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
             .join("cache/memory/rules/shared-review-policy")
             .exists()
     );
-    let final_selection = repository
-        .get_project_org_selection(&bootstrap.project_id)
-        .await
-        .unwrap();
+    let final_selection =
+        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
+            .await
+            .unwrap();
     assert_eq!(final_selection.revision, selection.revision + 2);
     assert!(final_selection.memories.is_empty());
     assert!(
@@ -2240,26 +2197,25 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
             .exists()
     );
     assert!(matches!(
-        repository.get_org_memory(&bootstrap.org_id, &rule_id).await,
-        Err(server::repository::ServerError::NotFound { .. })
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id).await,
+        Err(server::error::ServerError::NotFound { .. })
     ));
     assert!(matches!(
-        repository
-            .get_org_memory(&bootstrap.org_id, &workflow_id)
-            .await,
-        Err(server::repository::ServerError::NotFound { .. })
+        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id).await,
+        Err(server::error::ServerError::NotFound { .. })
     ));
 
-    server_task.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
 async fn two_daemon_installations_converge_on_the_same_draft_history() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Daemon Convergence").await;
 
     let access_token = "daemon-convergence-access-token";
@@ -2287,13 +2243,8 @@ async fn two_daemon_installations_converge_on_the_same_draft_history() {
     .await
     .unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(pool))
-            .await
-            .unwrap();
-    });
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
 
     let root_a = tempfile::tempdir().unwrap();
     let mut config_a = DaemonConfig::for_root(root_a.path());
@@ -2468,17 +2419,17 @@ async fn two_daemon_installations_converge_on_the_same_draft_history() {
     assert_eq!(after_restart.draft.server_version, 2);
     assert_eq!(after_restart.operations.len(), 2);
 
-    server_task.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
 async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     let postgres = common::start_postgres().await;
-    let port = postgres.port;
-    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-    server::db::run_migrations(&pool).await.unwrap();
-    let repository = ServerRepository::new(pool.clone());
+    let database_url = &postgres.database_url;
+    let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Commit Convergence").await;
 
     let access_token = "daemon-commit-convergence-access-token";
@@ -2506,10 +2457,14 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     .await
     .unwrap();
 
-    let secondary_project_id = repository
-        .create_project(&bootstrap.org_id, "Secondary Memory", "")
-        .await
-        .unwrap();
+    let secondary_project_id = server::app::project::service::create_project(
+        &pool,
+        &bootstrap.org_id,
+        "Secondary Memory",
+        "",
+    )
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO project_members (project_id, user_id, role)
          VALUES ($1, $2, 'admin')",
@@ -2519,46 +2474,41 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     .execute(&pool)
     .await
     .unwrap();
-    let secondary_memory_id = repository
-        .create_org_context(
-            &bootstrap.org_id,
-            "context/secondary.md",
-            "# Secondary project",
-        )
-        .await
-        .unwrap();
-    repository
-        .replace_project_org_selection(
-            &secondary_project_id,
-            0,
-            ReplaceProjectOrgSelectionRequest {
-                resource_ids: vec![secondary_memory_id],
-            },
-        )
-        .await
-        .unwrap();
-    let secondary_commit_id = repository
-        .get_project_commit_state(&secondary_project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
-    let initial_org_commit_id = repository
-        .get_org_commit_state(&bootstrap.org_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server_address = listener.local_addr().unwrap();
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, server::http::router(pool))
+    let secondary_memory_id = server::app::memory::service::create_org_context(
+        &pool,
+        &bootstrap.org_id,
+        "context/secondary.md",
+        "# Secondary project",
+    )
+    .await
+    .unwrap();
+    server::app::memory::service::replace_project_org_selection(
+        &pool,
+        &secondary_project_id,
+        0,
+        ReplaceProjectOrgSelectionRequest {
+            resource_ids: vec![secondary_memory_id],
+        },
+    )
+    .await
+    .unwrap();
+    let secondary_commit_id =
+        server::app::commit::service::get_project_commit_state(&pool, &secondary_project_id, None)
             .await
+            .unwrap()
+            .reference
+            .commit_id
             .unwrap();
-    });
+    let initial_org_commit_id =
+        server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
+
+    let server = common::TestServer::start(pool.clone(), postgres).await;
+    let server_address = server.address;
 
     let root_a = tempfile::tempdir().unwrap();
     let mut config_a = DaemonConfig::for_root(root_a.path());
@@ -2601,80 +2551,79 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
         assert!(empty_checkout.resources.is_empty());
     }
 
-    let draft = repository
-        .create_draft(
-            &bootstrap.user_id,
-            CreateDraftRequest {
-                daemon_installation_id: "daemon_commit_origin".to_owned(),
-                project_id: bootstrap.project_id.clone(),
-                base_commit_id: Some(initial_org_commit_id.clone()),
-                title: "Add synchronized context".to_owned(),
-                description: None,
+    let draft = server::app::draft::service::create_draft(
+        &pool,
+        &bootstrap.user_id,
+        CreateDraftRequest {
+            daemon_installation_id: "daemon_commit_origin".to_owned(),
+            project_id: bootstrap.project_id.clone(),
+            base_commit_id: Some(initial_org_commit_id.clone()),
+            title: "Add synchronized context".to_owned(),
+            description: None,
+            resource: DraftResourceRef {
+                scope: ResourceScope::Org,
+                id: None,
+                path: Some("context/commit-sync.md".to_owned()),
+            },
+            operations: vec![DraftOperationInput {
+                action: DraftOperationAction::Create,
                 resource: DraftResourceRef {
                     scope: ResourceScope::Org,
                     id: None,
                     path: Some("context/commit-sync.md".to_owned()),
                 },
-                operations: vec![DraftOperationInput {
-                    action: DraftOperationAction::Create,
-                    resource: DraftResourceRef {
-                        scope: ResourceScope::Org,
-                        id: None,
-                        path: Some("context/commit-sync.md".to_owned()),
-                    },
-                    content: Some(DraftResourceContent {
-                        description: None,
-                        content: "# Commit sync\n\nInstalled from an immutable Commit.".to_owned(),
-                    }),
-                    new_path: None,
-                }],
-            },
-        )
-        .await
-        .unwrap();
-    let review = repository
-        .create_review(
-            &bootstrap.user_id,
-            Some(&initial_org_commit_id),
-            CreateReviewRequest {
-                drafts: vec![ReviewDraftRequest {
-                    draft_id: draft.draft.draft_id,
-                    expected_draft_version: draft.draft.version,
-                    candidate_id: None,
-                    resolved_state: None,
-                }],
-                title: None,
-                description: None,
-            },
-        )
-        .await
-        .unwrap();
-    let approved = repository
-        .create_review_decision(
-            &review.review.review_id,
-            &review.review.author.user_id,
-            CreateReviewDecisionRequest {
-                decision: ReviewDecision::Approved,
-                expected_review_version: review.review.version,
-                body: None,
-            },
-        )
-        .await
-        .unwrap();
-    let merge = repository
-        .create_review_merge(
-            &approved.review.review_id,
-            &approved.review.author.user_id,
-            Some(&initial_org_commit_id),
-            CreateReviewMergeRequest {
-                expected_review_version: approved.review.version,
-            },
-        )
-        .await
-        .unwrap();
+                content: Some(DraftResourceContent {
+                    description: None,
+                    content: "# Commit sync\n\nInstalled from an immutable Commit.".to_owned(),
+                }),
+                new_path: None,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    let review = server::app::review::service::create_review(
+        &pool,
+        &bootstrap.user_id,
+        Some(&initial_org_commit_id),
+        CreateReviewRequest {
+            drafts: vec![ReviewDraftRequest {
+                draft_id: draft.draft.draft_id,
+                expected_draft_version: draft.draft.version,
+                candidate_id: None,
+                resolved_state: None,
+            }],
+            title: None,
+            description: None,
+        },
+    )
+    .await
+    .unwrap();
+    let approved = server::app::review::service::create_review_decision(
+        &pool,
+        &review.review.review_id,
+        &review.review.author.user_id,
+        CreateReviewDecisionRequest {
+            decision: ReviewDecision::Approved,
+            expected_review_version: review.review.version,
+            body: None,
+        },
+    )
+    .await
+    .unwrap();
+    let merge = server::app::review::service::create_review_merge(
+        &pool,
+        &approved.review.review_id,
+        &approved.review.author.user_id,
+        Some(&initial_org_commit_id),
+        CreateReviewMergeRequest {
+            expected_review_version: approved.review.version,
+        },
+    )
+    .await
+    .unwrap();
     let org_commit_id = merge.commit_id.unwrap();
-    let commit_sync_id = repository
-        .list_org_memories(&bootstrap.org_id)
+    let commit_sync_id = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
         .await
         .unwrap()
         .items
@@ -2682,38 +2631,38 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
         .find(|memory| memory.path == "context/commit-sync.md")
         .unwrap()
         .memory_id;
-    let initial_selection = repository
-        .get_project_org_selection(&bootstrap.project_id)
-        .await
-        .unwrap();
+    let initial_selection =
+        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
+            .await
+            .unwrap();
     assert_eq!(initial_selection.revision, 1);
     assert_eq!(initial_selection.memories.len(), 1);
     assert_eq!(initial_selection.memories[0].memory_id, commit_sync_id);
-    let org_context_id = repository
-        .create_org_context(
-            &bootstrap.org_id,
-            "context/shared-from-hub.md",
-            "# Shared from Hub\n\nSelected by the project.",
-        )
-        .await
-        .unwrap();
-    let selection = repository
-        .replace_project_org_selection(
-            &bootstrap.project_id,
-            initial_selection.revision,
-            ReplaceProjectOrgSelectionRequest {
-                resource_ids: vec![commit_sync_id.clone(), org_context_id.clone()],
-            },
-        )
-        .await
-        .unwrap();
-    let commit_id = repository
-        .get_project_commit_state(&bootstrap.project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let org_context_id = server::app::memory::service::create_org_context(
+        &pool,
+        &bootstrap.org_id,
+        "context/shared-from-hub.md",
+        "# Shared from Hub\n\nSelected by the project.",
+    )
+    .await
+    .unwrap();
+    let selection = server::app::memory::service::replace_project_org_selection(
+        &pool,
+        &bootstrap.project_id,
+        initial_selection.revision,
+        ReplaceProjectOrgSelectionRequest {
+            resource_ids: vec![commit_sync_id.clone(), org_context_id.clone()],
+        },
+    )
+    .await
+    .unwrap();
+    let commit_id =
+        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     assert_ne!(commit_id, org_commit_id);
 
     let mut roots = Vec::new();
@@ -2804,13 +2753,13 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
         Some(roots[0].to_str().unwrap())
     );
 
-    let current_org_commit_id = repository
-        .get_org_commit_state(&bootstrap.org_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap();
+    let current_org_commit_id =
+        server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
+            .await
+            .unwrap()
+            .reference
+            .commit_id
+            .unwrap();
     let next_draft = restarted_a
         .store_draft_operation(DaemonDraftOperationRequest {
             draft_id: None,
@@ -2874,5 +2823,5 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
         "# Secondary project"
     );
 
-    server_task.abort();
+    server.shutdown().await;
 }

@@ -40,4 +40,4 @@ A Bundle is a user's Server-stored set of Memory IDs for grouping, discovery, an
 
 The tables are `personal_bundles` and `personal_bundle_items`. Project selection uses a separate pair of tables; see the [storage mapping](/data-model#where-the-data-lives).
 
-Continue with [Project](/workspace) and [Unified Memory design](/unified-memory-model). Implementation sources: [Memory API](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/api.rs) and [resource/Bundle persistence](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/postgres.rs).
+Continue with [Project](/workspace) and [Unified Memory design](/unified-memory-model). Implementation sources: [Memory API](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/dto.rs) and [Memory persistence](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/repository.rs), [Bundle persistence](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/bundle/repository.rs).

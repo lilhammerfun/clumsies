@@ -18,7 +18,7 @@ async fn admin_routes_accept_only_an_organization_admin_bearer() {
     )
     .await;
     let (_, token) = common::authenticated_router(postgres.pool.clone()).await;
-    let app = server::http::router(postgres.pool);
+    let app = common::router(postgres.pool.clone());
 
     let cookie_only = app
         .clone()
@@ -60,4 +60,5 @@ async fn admin_routes_accept_only_an_organization_admin_bearer() {
         .await
         .unwrap();
     assert_eq!(removed_session_route.status(), StatusCode::NOT_FOUND);
+    postgres.shutdown().await;
 }

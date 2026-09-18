@@ -208,4 +208,5 @@ async fn unify_memory_migration_rewrites_legacy_kinds_on_live_data() {
     .await
     .unwrap();
     assert_eq!(operation_kind, "memory");
+    postgres.shutdown().await;
 }

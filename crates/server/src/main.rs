@@ -1,3 +1,5 @@
+//! Server and maintenance command entry points.
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();

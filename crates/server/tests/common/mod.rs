@@ -1,22 +1,23 @@
+//! PostgreSQL fixtures and production application construction for API scenarios.
 #![allow(dead_code)]
 
-use std::sync::{Arc, OnceLock};
-
 use async_trait::async_trait;
-use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, LOCATION};
 use axum::http::{HeaderValue, Request, StatusCode};
-use axum::middleware::{self, Next};
+use axum::middleware::Next;
+use axum::{Router, middleware};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use openidconnect::PkceCodeChallenge;
-use server::api::{ReplaceSetupConfigurationRequest, TokenRequest, TokenResponse};
-use server::auth::{AuthError, AuthService, OidcIdentity, OidcIdentityProvider};
-use server::http::{router_with_auth, router_with_services};
-use server::installation::{InitializedInstallation, InstallationService};
+use server::app::auth::dto::{TokenRequest, TokenResponse};
+use server::app::auth::{AuthError, AuthService, OidcIdentity, OidcIdentityProvider};
+use server::app::installation::dto::ReplaceSetupConfigurationRequest;
+use server::app::installation::{InitializedInstallation, InstallationService};
+use server::build_app;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::sync::{Arc, OnceLock};
 use testcontainers::ContainerAsync;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
@@ -42,7 +43,8 @@ pub async fn postgres_without_migrations() -> TestPostgres {
     let permit = postgres_slots().clone().acquire_owned().await.unwrap();
     let container = Postgres::default().start().await.unwrap();
     let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    let host = container.get_host().await.unwrap();
+    let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
     let pool = PgPool::connect(&url).await.unwrap();
 
     TestPostgres {
@@ -54,7 +56,9 @@ pub async fn postgres_without_migrations() -> TestPostgres {
 
 pub async fn migrated_postgres() -> TestPostgres {
     let postgres = postgres_without_migrations().await;
-    server::db::run_migrations(&postgres.pool).await.unwrap();
+    server::infra::database::run_migrations(&postgres.pool)
+        .await
+        .unwrap();
     postgres
 }
 
@@ -74,7 +78,7 @@ pub fn setup_router(pool: PgPool, owner_email: &str, owner_subject: &str) -> Rou
     );
     let installation =
         InstallationService::new(pool.clone(), Some(TEST_SETUP_CODE), false).unwrap();
-    router_with_services(pool, auth, installation)
+    build_app(pool, auth, installation)
 }
 
 pub async fn initialize_installation(
@@ -139,7 +143,8 @@ pub async fn authenticated_router_as(
         }),
         vec![Url::parse("http://127.0.0.1/callback").unwrap()],
     );
-    let app = router_with_auth(pool, auth);
+    let installation = InstallationService::new(pool.clone(), None, true).unwrap();
+    let app = build_app(pool, auth, installation);
     let verifier = "test-verifier-abcdefghijklmnopqrstuvwxyz-0123456789";
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
 
@@ -190,7 +195,7 @@ pub async fn authenticated_router_as(
         .unwrap();
     if callback_response.status() != StatusCode::FOUND {
         let status = callback_response.status();
-        let body = to_bytes(callback_response.into_body(), usize::MAX)
+        let body = to_bytes(callback_response.into_body(), 4 * 1024 * 1024)
             .await
             .unwrap();
         panic!(
@@ -218,7 +223,7 @@ pub async fn authenticated_router_as(
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_vec(&TokenRequest {
-                        grant_type: server::api::TokenGrantType::AuthorizationCode,
+                        grant_type: server::app::auth::dto::TokenGrantType::AuthorizationCode,
                         code: Some(code),
                         redirect_uri: Some("http://127.0.0.1:49152/callback".to_owned()),
                         code_verifier: Some(verifier.to_owned()),
@@ -232,7 +237,7 @@ pub async fn authenticated_router_as(
         .unwrap();
     assert_eq!(token_response.status(), StatusCode::OK);
     let token: TokenResponse = serde_json::from_slice(
-        &to_bytes(token_response.into_body(), usize::MAX)
+        &to_bytes(token_response.into_body(), 4 * 1024 * 1024)
             .await
             .unwrap(),
     )
@@ -305,5 +310,23 @@ fn uri_path(url: &Url) -> String {
     match url.query() {
         Some(query) => format!("{}?{query}", url.path()),
         None => url.path().to_owned(),
+    }
+}
+
+/// Build the production router with authentication left unconfigured.
+pub fn router(pool: PgPool) -> Router {
+    let auth = AuthService::unconfigured(pool.clone());
+    let installation = InstallationService::new(pool.clone(), None, true).unwrap();
+    build_app(pool, auth, installation)
+}
+
+impl TestPostgres {
+    /// Close database connections before removing this scenario's container.
+    pub async fn shutdown(self) {
+        self.pool.close().await;
+        self._container
+            .rm()
+            .await
+            .expect("remove PostgreSQL test container");
     }
 }

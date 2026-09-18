@@ -199,4 +199,5 @@ clumsies TUI 的完整 UI 组件库文档正文。'),
     .await
     .unwrap();
     assert_eq!(after_rerun, legacy, "rewrite is idempotent");
+    postgres.shutdown().await;
 }

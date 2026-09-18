@@ -1,6 +1,7 @@
+//! Validated listener and public-origin configuration.
+
 use std::env;
 use std::net::{AddrParseError, SocketAddr};
-
 use thiserror::Error;
 use url::{Host, Url};
 

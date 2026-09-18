@@ -1,19 +1,19 @@
-mod common;
-
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use server::api::{
-    CreateDraftRequest, CreateProjectRequest, DraftDetail, DraftOperationAction,
-    DraftOperationBatchItem, DraftOperationBatchRequest, DraftOperationInput, DraftResourceContent,
-    DraftResourceRef, ResourceScope,
+use server::app::draft::dto::{
+    CreateDraftRequest, DraftDetail, DraftOperationAction, DraftOperationBatchItem,
+    DraftOperationBatchRequest, DraftOperationInput, DraftResourceContent, DraftResourceRef,
 };
-use server::repository::ServerRepository;
+use server::app::memory::dto::ResourceScope;
+use server::app::project::dto::CreateProjectRequest;
 use tower::ServiceExt;
+
+mod common;
 
 #[tokio::test]
 async fn bearer_identity_enforces_personal_and_project_boundaries() {
     let postgres = common::migrated_postgres().await;
-    let repo = ServerRepository::new(postgres.pool.clone());
+    let pool = postgres.pool.clone();
     let bootstrap = common::initialize_installation(
         postgres.pool.clone(),
         "Acme Memory",
@@ -40,21 +40,33 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
     .execute(&postgres.pool)
     .await
     .unwrap();
-    let private_project_id = repo
-        .create_project(&bootstrap.org_id, "Owner Only", "")
-        .await
-        .unwrap();
-    let selected_org_memory_id = repo
-        .create_org_context(&bootstrap.org_id, "context/selected.md", "# Selected")
-        .await
-        .unwrap();
-    let unselected_org_memory_id = repo
-        .create_org_context(&bootstrap.org_id, "context/unselected.md", "# Unselected")
-        .await
-        .unwrap();
-    repo.select_org_resource_for_project(&bootstrap.project_id, &selected_org_memory_id)
-        .await
-        .unwrap();
+    let private_project_id =
+        server::app::project::service::create_project(&pool, &bootstrap.org_id, "Owner Only", "")
+            .await
+            .unwrap();
+    let selected_org_memory_id = server::app::memory::service::create_org_context(
+        &pool,
+        &bootstrap.org_id,
+        "context/selected.md",
+        "# Selected",
+    )
+    .await
+    .unwrap();
+    let unselected_org_memory_id = server::app::memory::service::create_org_context(
+        &pool,
+        &bootstrap.org_id,
+        "context/unselected.md",
+        "# Unselected",
+    )
+    .await
+    .unwrap();
+    server::app::memory::service::select_org_resource_for_project(
+        &pool,
+        &bootstrap.project_id,
+        &selected_org_memory_id,
+    )
+    .await
+    .unwrap();
 
     let (owner_app, _) = common::authenticated_router(postgres.pool.clone()).await;
     let draft_response = owner_app
@@ -85,7 +97,7 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
         .unwrap();
     assert_eq!(draft_response.status(), StatusCode::OK);
     let owner_draft: DraftDetail = serde_json::from_slice(
-        &to_bytes(draft_response.into_body(), usize::MAX)
+        &to_bytes(draft_response.into_body(), 4 * 1024 * 1024)
             .await
             .unwrap(),
     )
@@ -292,8 +304,8 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
         .await
         .unwrap();
     assert_eq!(create_project.status(), StatusCode::CREATED);
-    let created: server::api::Project = serde_json::from_slice(
-        &to_bytes(create_project.into_body(), usize::MAX)
+    let created: server::app::project::dto::Project = serde_json::from_slice(
+        &to_bytes(create_project.into_body(), 4 * 1024 * 1024)
             .await
             .unwrap(),
     )
@@ -398,14 +410,14 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let memory_id = repo
-        .create_org_context(
-            &bootstrap.org_id,
-            "context/member-project.md",
-            "# Initial memory",
-        )
-        .await
-        .unwrap();
+    let memory_id = server::app::memory::service::create_org_context(
+        &pool,
+        &bootstrap.org_id,
+        "context/member-project.md",
+        "# Initial memory",
+    )
+    .await
+    .unwrap();
     let (status, selection) = project_request(
         &member_app,
         "PUT",
@@ -471,6 +483,7 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
         .await
         .unwrap();
     assert_eq!(administer_project_members.status(), StatusCode::OK);
+    postgres.shutdown().await;
 }
 
 async fn project_request(
@@ -490,9 +503,12 @@ async fn project_request(
             .await
             .unwrap();
         if current.status() == StatusCode::OK {
-            let value: serde_json::Value =
-                serde_json::from_slice(&to_bytes(current.into_body(), usize::MAX).await.unwrap())
-                    .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(
+                &to_bytes(current.into_body(), 4 * 1024 * 1024)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
             request = request.header("if-match", value["revision"].as_i64().unwrap().to_string());
         }
     }
@@ -508,7 +524,11 @@ async fn project_request(
         .await
         .unwrap();
     let status = response.status();
-    let body =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let body = serde_json::from_slice(
+        &to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     (status, body)
 }

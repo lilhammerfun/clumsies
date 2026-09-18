@@ -40,4 +40,4 @@ Bundle 是用户保存在 Server 的 Memory ID 集合，用于归组、发现和
 
 数据表为 `personal_bundles` 与 `personal_bundle_items`。Project 选择使用另外两张表，见[数据存储映射](/zh/data-model#数据实际存在哪里)。
 
-继续阅读：[Project](/zh/workspace)、[统一 Memory 设计](/zh/unified-memory-model)。实现依据：[Memory API](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/api.rs)、[资源与 Bundle 持久化](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/postgres.rs)。
+继续阅读：[Project](/zh/workspace)、[统一 Memory 设计](/zh/unified-memory-model)。实现依据：[Memory API](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/dto.rs)、[Memory 持久化](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/repository.rs)、[Bundle 持久化](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/bundle/repository.rs)。
