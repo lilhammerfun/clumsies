@@ -124,4 +124,5 @@ async fn repair_restores_content_address_integrity() {
         entry_blob, valid,
         "tree entry must reference the repaired Blob"
     );
+    postgres.shutdown().await;
 }

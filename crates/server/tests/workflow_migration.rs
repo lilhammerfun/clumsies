@@ -164,6 +164,7 @@ async fn structured_workflows_and_drafts_migrate_to_markdown() {
     .await
     .unwrap();
     assert!(!old_commit_exists);
+    postgres.shutdown().await;
 }
 
 async fn current_project_ref(pool: &sqlx::PgPool) -> String {

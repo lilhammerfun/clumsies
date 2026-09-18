@@ -1,10 +1,12 @@
-use std::{io, time::Duration};
+//! Request correlation and HTTP tracing.
 
-use axum::Router;
 use axum::body::Body;
 use axum::extract::{MatchedPath, Request};
 use axum::http::{HeaderValue, Response};
-use axum::middleware::{self, Next};
+use axum::middleware::Next;
+use axum::{Router, middleware};
+use std::io;
+use std::time::Duration;
 use tower_http::trace::TraceLayer;
 use tracing::{Span, info_span};
 use tracing_subscriber::EnvFilter;

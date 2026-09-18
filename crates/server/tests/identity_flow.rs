@@ -48,4 +48,5 @@ async fn oidc_identity_survives_an_email_claim_change() {
     .await
     .unwrap();
     assert_eq!(identity_count, 1);
+    postgres.shutdown().await;
 }

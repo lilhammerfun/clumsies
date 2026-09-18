@@ -1,15 +1,17 @@
-use std::future::{self, Future, IntoFuture};
+//! Process startup, ready-file ownership, and bounded graceful shutdown.
+
+use crate::app::auth::AuthService;
+use crate::app::build_app;
+use crate::app::installation::InstallationService;
+use crate::config::ServerConfig;
+use crate::infra::database::{DatabaseConfig, connect, run_migrations};
+use crate::maintenance::project_authority::{MigrationMode, migrate_project_authority};
+use crate::telemetry;
+use std::future;
+use std::future::{Future, IntoFuture};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-use crate::app::build_app;
-use crate::auth::AuthService;
-use crate::config::ServerConfig;
-use crate::db::{DatabaseConfig, connect, run_migrations};
-use crate::installation::InstallationService;
-use crate::project_authority_migration::{MigrationMode, migrate_project_authority};
-use crate::telemetry;
 
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(4);
 const SERVER_READY_FILE_ENV: &str = "CLUMSIES_SERVER_READY_FILE";

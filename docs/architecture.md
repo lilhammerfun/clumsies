@@ -130,3 +130,6 @@ See [Troubleshooting](/guides/troubleshooting). Commit downloads currently trans
 - [Daemon startup](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/main.rs): resident/proxy modes and background workers.
 - [Draft synchronization](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/draft.rs), [Commit installation](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/commit_sync.rs), and [effective-content overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/search/overlay.rs): three separate processing stages.
 - Next: [Core data structures](/data-model), connecting the diagram's names to objects, fields, and relationships.
+
+
+Server resources live under `crates/server/src/app/`. Each resource contains its routes, handlers, DTOs, operations, persistence and models as needed. Resource-owned clients remain inside the resource; shared database infrastructure lives in `infra/` and explicit maintenance commands in `maintenance/`. See [Server source organization](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/README.md) for the dependency boundaries and validation commands.

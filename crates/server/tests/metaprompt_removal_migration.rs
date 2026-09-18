@@ -204,4 +204,5 @@ async fn migration_rewrites_commit_history_and_removes_metaprompt_domain_data() 
     .execute(&postgres.pool)
     .await;
     assert!(rejected.is_err());
+    postgres.shutdown().await;
 }

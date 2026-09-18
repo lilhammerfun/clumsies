@@ -1,5 +1,8 @@
 # Server 热路径与 Rust 架构重构
 
+> 本文保留 2026-08-29 性能优化时的结构与技术债记录。后续资源目录重构已移除全局 `ServerRepository`、API 重导出和混合 `shared.rs`；当前结构及测试入口见 [Server 源码说明](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/README.md)。下文的旧文件树和当时的债务分析应结合这一变更阅读。
+
+
 | 文档属性 | 取值 |
 |---|---|
 | 文档角色 | 深度实践案例 |

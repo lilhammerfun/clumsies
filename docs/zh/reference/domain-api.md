@@ -115,6 +115,6 @@ App 可以调用私有 `server_request` 方法，提供 HTTP method、相对路�
 - [HTTP 示例与失败处理](/zh/reference/http-api)说明字段、前置条件和当前实现缺口。
 - [MCP 参考](/zh/mcp)定义唯一的 Agent 工具。
 - [Public OpenAPI](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/openapi/clumsies.public.v1.yaml) 与 [Admin OpenAPI](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/openapi/clumsies.admin.v1.yaml)描述 HTTP 方法和 schema。
-- [Server 路由](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/http.rs)、[Draft/Review 类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/changes/api.rs)、[Memory 类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/memory/api.rs)和 [daemon 类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/types.rs)对应实际实现。
+- [Server 路由](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/routes.rs)、[Draft/Review 类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/draft/dto.rs), [Review DTO](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/review/dto.rs)、[Memory 类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/dto.rs)和 [daemon 类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/types.rs)对应实际实现。
 
 部分类型枚举为历史数据保留了 `project` scope 和旧资源 ID。当前 Draft 创建和发布以 `org` 为目标，Project Ref 表示投影。已移除的 MCP `retrieve` 工具和旧的 rule/workflow/context 分立接口都不是当前接入入口。请把返回的 ID 当作不透明标识保存，不要仅凭前缀推断含义。

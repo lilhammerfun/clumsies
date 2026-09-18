@@ -119,4 +119,5 @@ async fn path_identity_migration_invalidates_only_active_legacy_org_candidates()
             ("legacy_submitted".to_owned(), "updated".to_owned(), 8),
         ]
     );
+    postgres.shutdown().await;
 }

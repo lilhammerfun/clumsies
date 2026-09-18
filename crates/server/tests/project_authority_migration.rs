@@ -1,14 +1,13 @@
 mod common;
 
-use server::project_authority_migration::{MigrationMode, migrate_project_authority};
-use server::repository::ServerRepository;
+use server::maintenance::project_authority::{MigrationMode, migrate_project_authority};
 use sha2::{Digest, Sha256};
 use sqlx::Executor;
 
 #[tokio::test]
 async fn migration_flattens_effective_project_memory_into_org_drafts() {
     let postgres = common::migrated_postgres().await;
-    let repo = ServerRepository::new(postgres.pool.clone());
+    let pool = postgres.pool.clone();
     let bootstrap = common::initialize_installation(
         postgres.pool.clone(),
         "Project Authority Migration",
@@ -18,17 +17,21 @@ async fn migration_flattens_effective_project_memory_into_org_drafts() {
         "Legacy Project",
     )
     .await;
-    let selected_org_id = repo
-        .create_org_context(
-            &bootstrap.org_id,
-            "shared/selected.md",
-            "# Selected Organization Memory",
-        )
-        .await
-        .unwrap();
-    repo.select_org_resource_for_project(&bootstrap.project_id, &selected_org_id)
-        .await
-        .unwrap();
+    let selected_org_id = server::app::memory::service::create_org_context(
+        &pool,
+        &bootstrap.org_id,
+        "shared/selected.md",
+        "# Selected Organization Memory",
+    )
+    .await
+    .unwrap();
+    server::app::memory::service::select_org_resource_for_project(
+        &pool,
+        &bootstrap.project_id,
+        &selected_org_id,
+    )
+    .await
+    .unwrap();
 
     // Recreate the state seen during a rolling upgrade: the NOT VALID guards
     // are installed around rows written by an older release.
@@ -391,6 +394,7 @@ async fn migration_flattens_effective_project_memory_into_org_drafts() {
     assert_eq!(second_dry_run.legacy_authority_count, 0);
     assert_eq!(second_dry_run.legacy_active_draft_count, 0);
     assert_eq!(second_dry_run.replacement_draft_count, 0);
+    postgres.shutdown().await;
 }
 
 fn sha256(value: &str) -> String {

@@ -1,12 +1,14 @@
+//! Authentication and security middleware.
+
+use crate::app::auth::AuthError;
+use crate::http::{HttpError, require_org_admin};
+use crate::state::AppState;
 use axum::extract::{Request, State};
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::middleware::Next;
 use axum::response::Response;
 use cookie::Cookie;
-
-use crate::auth::AuthError;
-use crate::http::{AppState, HttpError, require_org_admin};
 
 pub(crate) async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;

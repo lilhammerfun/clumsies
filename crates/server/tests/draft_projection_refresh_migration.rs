@@ -93,4 +93,5 @@ async fn active_drafts_emit_one_projection_refresh_event() {
     .await
     .unwrap();
     assert_eq!(discarded_refresh_count, 0);
+    postgres.shutdown().await;
 }

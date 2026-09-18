@@ -112,4 +112,5 @@ async fn web_admin_credentials_are_revoked_and_native_setup_transactions_are_all
     .execute(&postgres.pool)
     .await;
     assert!(rejected_web_login.is_err());
+    postgres.shutdown().await;
 }
