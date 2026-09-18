@@ -11,8 +11,8 @@ final class StartupWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { nil }
 
-    func show<Content: View>(_ content: Content) {
-        let size = Self.contentSize
+    func show<Content: View>(_ content: Content, height: CGFloat = contentSize.height) {
+        let size = NSSize(width: Self.contentSize.width, height: height)
         let window = window ?? NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .fullSizeContentView],
@@ -30,12 +30,15 @@ final class StartupWindowController: NSWindowController {
             .background(Color(nsColor: .textBackgroundColor)))
         window.contentMinSize = size
         window.contentMaxSize = size
+        window.setContentSize(size)
         if self.window == nil {
-            window.setContentSize(size)
             window.center()
             self.window = window
         } else {
-            window.setFrame(previousFrame, display: false)
+            window.setFrameOrigin(NSPoint(
+                x: previousFrame.midX - window.frame.width / 2,
+                y: previousFrame.midY - window.frame.height / 2
+            ))
         }
         window.makeKeyAndOrderFront(nil)
     }

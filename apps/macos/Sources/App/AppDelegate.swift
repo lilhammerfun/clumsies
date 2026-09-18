@@ -114,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .loading:
             guard !isChoosingAgents else { return }
             if startupWindowController.window?.isVisible == true {
-                presentAuthenticationContent(LaunchView())
+                presentMainLoading()
             } else if mainWindow == nil {
                 presentMainLoading()
             }
@@ -225,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentMainLoading() {
-        presentAuthenticationContent(LaunchView())
+        startupWindowController.show(LaunchView(), height: 360)
     }
 
     private func presentMainFailure(message: String, retry: @escaping () -> Void) {
