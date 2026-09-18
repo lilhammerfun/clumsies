@@ -23,6 +23,7 @@ enum SettingsWindowLayout {
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     let navigation: SettingsNavigation
     private let store: WorkspaceStore
+    private let administration: AdministrationModel
     private let softwareUpdateController: SoftwareUpdateController
     private let onShowLogs: () -> Void
     private var authorityObservation: AnyCancellable?
@@ -40,10 +41,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return alert.runModal() == .alertSecondButtonReturn
     }
 
-    init(store: WorkspaceStore, softwareUpdateController: SoftwareUpdateController,
+    init(store: WorkspaceStore, administration: AdministrationModel, softwareUpdateController: SoftwareUpdateController,
          onShowLogs: @escaping () -> Void,
          navigation: SettingsNavigation = SettingsNavigation()) {
         self.store = store
+        self.administration = administration
         self.softwareUpdateController = softwareUpdateController
         self.onShowLogs = onShowLogs
         self.navigation = navigation
@@ -84,7 +86,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             let host = NSHostingController(rootView: SettingsWindowView(
                 store: store, softwareUpdateController: softwareUpdateController, navigation: navigation,
                 onShowLogs: onShowLogs
-            ))
+            ).environmentObject(administration))
             host.sizingOptions = []
             host.sceneBridgingOptions = .all
             let window = NSWindow(

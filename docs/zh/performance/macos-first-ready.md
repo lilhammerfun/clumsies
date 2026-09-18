@@ -620,7 +620,7 @@ Cancellation 是资源优化，generation check 才是正确性边界。
 
 - [PR #203：Server 规范化与热路径](https://github.com/lilhammerfun/clumsies/pull/203)
 - [PR #204：first-ready、同步与 daemon](https://github.com/lilhammerfun/clumsies/pull/204)
-- macOS 入口：`apps/macos/Sources/Domain/WorkspaceStore.swift`
+- macOS 入口：`apps/macos/Sources/Services/Workspace/WorkspaceStore.swift`
 - daemon Ref 同步：`crates/daemon/src/commit_sync.rs`
 - Draft event 同步：`crates/daemon/src/draft.rs`
 - daemon 会话与响应缓存：`crates/daemon/src/state.rs`
