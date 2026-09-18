@@ -76,8 +76,8 @@ struct MemoryMainPane: View {
                             )
                         )
                     } else {
-                        ResourceLoadingView()
-                            .task(id: item) { await store.loadContentIfNeeded(item) }
+                        ResourceLoadingView(store: store, item: item)
+                            .id(item.id)
                     }
                 } else {
                     emptyState
@@ -94,8 +94,7 @@ struct MemoryMainPane: View {
         if store.visibleMemoryItems.isEmpty {
             switch store.draftInventoryLoadState {
             case .loading:
-                ProgressView("Loading Drafts...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ContentLoadingView(title: "Loading Memory…")
             case .failed(let message):
                 ContentUnavailableView {
                     Label("Drafts Unavailable", systemImage: "exclamationmark.triangle")
@@ -145,10 +144,32 @@ private struct DraftInventoryStatusBanner: View {
 }
 
 private struct ResourceLoadingView: View {
+    @ObservedObject var store: WorkspaceStore
+    let item: MemoryListItem
+    @State private var failure: String?
+
     var body: some View {
-        ProgressView()
-            .controlSize(.small)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if let failure {
+                ContentUnavailableView {
+                    Label("Memory Unavailable", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(failure)
+                } actions: {
+                    Button("Try Again") { Task { await load() } }
+                }
+            } else {
+                ContentLoadingView(title: "Loading Memory…", layout: .document)
+            }
+        }
+        .task(id: item) { await load() }
+    }
+
+    private func load() async {
+        failure = nil
+        let message = await store.loadContentIfNeeded(item)
+        guard !Task.isCancelled else { return }
+        failure = message
     }
 }
 
@@ -185,17 +206,18 @@ private struct ProjectPreparationView: View {
     @ObservedObject var store: WorkspaceStore
 
     var body: some View {
-        ContentUnavailableView {
-            Label("Preparing Project", systemImage: "folder")
-        } description: {
-            Text("Clumsies is preparing the local workspace.")
-        } actions: {
-            if store.loadingProjectId == store.activeProjectId {
-                ProgressView()
-                    .controlSize(.small)
-            } else if let projectId = store.activeProjectId {
-                Button("Try Again") {
-                    Task { await store.selectProject(projectId) }
+        if store.loadingProjectId == store.activeProjectId {
+            ContentLoadingView(title: "Loading Project…")
+        } else {
+            ContentUnavailableView {
+                Label("Project Unavailable", systemImage: "folder.badge.questionmark")
+            } description: {
+                Text("The project could not be loaded. Try again when the connection is available.")
+            } actions: {
+                if let projectId = store.activeProjectId {
+                    Button("Try Again") {
+                        Task { await store.selectProject(projectId) }
+                    }
                 }
             }
         }

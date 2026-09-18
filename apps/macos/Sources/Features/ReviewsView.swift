@@ -186,7 +186,7 @@ struct ReviewListPage: View {
                     visibleCount: reviews.count
                 ) {
                 case .loading:
-                    ProgressView("Loading Reviews…")
+                    ContentLoadingView(title: "Loading Reviews…")
                 case .failed:
                     ContentUnavailableView {
                         Label("Reviews Unavailable", systemImage: "exclamationmark.triangle")

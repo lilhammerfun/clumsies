@@ -8,7 +8,17 @@ struct RecallSessionList: View {
 
     var body: some View {
         Group {
-            if model.sessions.isEmpty && !model.isLoading {
+            if model.sessions.isEmpty, let error = model.errorMessage {
+                ContentUnavailableView {
+                    Label("Activity Unavailable", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Try Again") { Task { await model.load() } }
+                }
+            } else if model.sessions.isEmpty && (model.isLoading || !model.hasLoaded) {
+                ContentLoadingView(title: "Loading Activity…")
+            } else if model.sessions.isEmpty {
                 ContentUnavailableView(
                     model.selectedProjectId == nil ? "No Activity Yet" : "No Activity for This Project",
                     systemImage: "bubble.left.and.bubble.right",
@@ -30,9 +40,18 @@ struct RecallSessionList: View {
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
-        .overlay {
-            if model.isLoading && model.sessions.isEmpty {
-                ProgressView()
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !model.sessions.isEmpty {
+                if let error = model.errorMessage {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(error).foregroundStyle(.secondary)
+                        Button("Try Again") { Task { await model.load() } }
+                    }
+                    .font(.caption)
+                    .padding(8)
+                } else if model.isLoading {
+                    ProgressView("Refreshing Activity…").controlSize(.small).padding(8)
+                }
             }
         }
     }

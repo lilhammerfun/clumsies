@@ -90,6 +90,7 @@ struct ServerClient: Sendable {
     }
 
     private func performRaw(method: String, path: String, query: [URLQueryItem], headers: [String: String], body: String?) async throws -> DaemonServerResponse {
+        let started = ContinuousClock.now
         let requestPath = try buildPath(path, query: query)
         let dataSourceGeneration = dataSourceTracker.generation
         let response = try await requestLimiter.run {
@@ -101,9 +102,11 @@ struct ServerClient: Sendable {
         if response.isStaleCache, !Task.isCancelled {
             dataSourceTracker.markStale(generation: dataSourceGeneration)
         }
+        let elapsed = started.duration(to: .now).components
         ClientDiagnostics.record((200..<300).contains(response.status) ? "server_completed" : "server_failed", [
             "request_id": ClientDiagnostics.requestID ?? "", "method": method, "route": ClientDiagnostics.route(path),
             "status": String(response.status), "source": response.isStaleCache ? "cache" : "server",
+            "elapsed_ms": String(elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000),
             "server_request_id": ClientDiagnostics.identifier(response.headers["x-request-id"] ?? "")
         ])
         return DaemonServerResponse(status: response.status,
