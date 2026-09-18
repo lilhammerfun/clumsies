@@ -88,9 +88,9 @@ final class SettingsWindowLayoutTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let navigation = SettingsNavigation(defaults: defaults)
-        let workspace = WorkspaceStore()
+        let workspace = WorkspaceCoordinator()
         let controller = SettingsWindowController(
-            store: workspace, administration: AdministrationModel(workspace: workspace), softwareUpdateController: SoftwareUpdateController(startingUpdater: false),
+            store: workspace, administration: AdministrationModel(context: workspace.context, onWorkspaceChanged: {}), softwareUpdateController: SoftwareUpdateController(startingUpdater: false),
             onShowLogs: {}, navigation: navigation
         )
         let window = NSWindow()

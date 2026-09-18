@@ -1,31 +1,5 @@
 import Foundation
 
-enum DocumentSessionCommand: Equatable, Sendable {
-    case requestReview(sessionKey: MemoryDocumentSessionKey, draft: LocalDraft)
-    case discardDraft(sessionKey: MemoryDocumentSessionKey, draft: LocalDraft)
-    case applyReconciliation(sessionKey: MemoryDocumentSessionKey)
-    case closeReconciliation(sessionKey: MemoryDocumentSessionKey)
-    case moveToTrash(sessionKey: MemoryDocumentSessionKey)
-
-    var sessionKey: MemoryDocumentSessionKey {
-        switch self {
-        case .requestReview(let sessionKey, _),
-             .discardDraft(let sessionKey, _),
-             .applyReconciliation(let sessionKey),
-             .closeReconciliation(let sessionKey),
-             .moveToTrash(let sessionKey):
-            sessionKey
-        }
-    }
-}
-
-struct DocumentReconciliationToolbarState: Equatable, Sendable {
-    let sessionKey: MemoryDocumentSessionKey
-    let isLoading: Bool
-    let canUpdate: Bool
-    let isUpdating: Bool
-}
-
 enum ApplicationPhase: Equatable, Sendable {
     case launching
     case authenticationRequired

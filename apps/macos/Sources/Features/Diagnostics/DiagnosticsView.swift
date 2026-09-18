@@ -39,22 +39,23 @@ enum RetrievalEvidenceReviewAction: Equatable {
 }
 
 struct NativeRetrievalDiagnosticsView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @StateObject private var retrieval: RetrievalDiagnosticsModel
 
-    init(store: WorkspaceStore) {
+    init(store: WorkspaceCoordinator) {
         self.store = store
-        _retrieval = StateObject(wrappedValue: RetrievalDiagnosticsModel(daemon: store.daemon))
+        _retrieval = StateObject(wrappedValue: RetrievalDiagnosticsModel(daemon: store.context.daemon))
     }
 
     var body: some View {
         RetrievalDiagnosticsView(
             model: retrieval,
-            projectName: store.activeProject?.name,
-            projectId: store.activeProjectId
+            projectName: workspaceContext.activeProject?.name,
+            projectId: workspaceContext.activeProjectId
         )
-        .task(id: store.activeProjectId) {
-            await retrieval.load(projectId: store.activeProjectId)
+        .task(id: workspaceContext.activeProjectId) {
+            await retrieval.load(projectId: workspaceContext.activeProjectId)
         }
     }
 }

@@ -80,32 +80,32 @@ final class LiveWorkspaceIntegrationTests: XCTestCase {
             throw XCTSkip("Set CLUMSIES_RUN_LIVE_TESTS=1 to exercise native write paths.")
         }
 
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         await store.reload()
-        XCTAssertEqual(store.phase, .ready)
+        XCTAssertEqual(store.context.phase, .ready)
 
         for kind in [MemoryKind.context, .rules, .workflows] {
             try await exerciseDraft(kind: kind, store: store)
         }
 
-        let originalBundleIds = Set(store.bundles.map(\.id))
-        await store.createBundle()
-        let createdBundle = try XCTUnwrap(store.bundles.first { !originalBundleIds.contains($0.id) })
+        let originalBundleIds = Set(store.bundles.bundles.map(\.id))
+        await store.bundleSelection.createBundle()
+        let createdBundle = try XCTUnwrap(store.bundles.bundles.first { !originalBundleIds.contains($0.id) })
         do {
             let name = "Native integration \(UUID().uuidString.prefix(8))"
-            try await store.updateBundle(
+            try await store.bundles.updateBundle(
                 createdBundle,
                 name: name,
                 description: "Temporary native client integration test.",
                 resourceIds: []
             )
-            XCTAssertEqual(store.bundles.first { $0.id == createdBundle.id }?.name, name)
-            let currentBundle = try XCTUnwrap(store.bundles.first { $0.id == createdBundle.id })
-            await store.deleteBundle(currentBundle)
-            XCTAssertFalse(store.bundles.contains { $0.id == createdBundle.id })
+            XCTAssertEqual(store.bundles.bundles.first { $0.id == createdBundle.id }?.name, name)
+            let currentBundle = try XCTUnwrap(store.bundles.bundles.first { $0.id == createdBundle.id })
+            await store.bundleSelection.deleteBundle(currentBundle)
+            XCTAssertFalse(store.bundles.bundles.contains { $0.id == createdBundle.id })
         } catch {
-            if let currentBundle = store.bundles.first(where: { $0.id == createdBundle.id }) {
-                await store.deleteBundle(currentBundle)
+            if let currentBundle = store.bundles.bundles.first(where: { $0.id == createdBundle.id }) {
+                await store.bundleSelection.deleteBundle(currentBundle)
             }
             throw error
         }
@@ -113,10 +113,10 @@ final class LiveWorkspaceIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    private func exerciseDraft(kind: MemoryKind, store: WorkspaceStore) async throws {
-        let originalDraftIds = Set(store.drafts.map(\.id))
-        await store.createMemory(kind: kind, scope: .org)
-        let createdDraft = try XCTUnwrap(store.drafts.first { !originalDraftIds.contains($0.id) })
+    private func exerciseDraft(kind: MemoryKind, store: WorkspaceCoordinator) async throws {
+        let originalDraftIds = Set(store.edits.drafts.map(\.id))
+        await store.memory.createMemory(kind: kind, scope: .org)
+        let createdDraft = try XCTUnwrap(store.edits.drafts.first { !originalDraftIds.contains($0.id) })
 
         do {
             var document = createdDraft.document
@@ -129,15 +129,15 @@ final class LiveWorkspaceIntegrationTests: XCTestCase {
                 inherited: false,
                 projectContextId: createdDraft.projectId
             )
-            try await store.save(item, document: document)
-            let updatedDraft = try XCTUnwrap(store.drafts.first { $0.id == createdDraft.id })
+            try await store.edits.save(item, document: document)
+            let updatedDraft = try XCTUnwrap(store.edits.drafts.first { $0.id == createdDraft.id })
             XCTAssertEqual(updatedDraft.document.body, document.body)
             XCTAssertNotEqual(updatedDraft.syncStatus, .failed)
-            await store.discard(updatedDraft)
-            XCTAssertFalse(store.drafts.contains { $0.id == createdDraft.id })
+            await store.edits.discard(updatedDraft)
+            XCTAssertFalse(store.edits.drafts.contains { $0.id == createdDraft.id })
         } catch {
-            if let currentDraft = store.drafts.first(where: { $0.id == createdDraft.id }) {
-                await store.discard(currentDraft)
+            if let currentDraft = store.edits.drafts.first(where: { $0.id == createdDraft.id }) {
+                await store.edits.discard(currentDraft)
             }
             throw error
         }

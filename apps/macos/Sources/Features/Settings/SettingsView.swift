@@ -54,7 +54,9 @@ struct GeneralSettingsView: View {
 }
 
 struct AgentsSettingsView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var agentIntegration: AgentIntegrationService
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     var onCompleted: (() -> Void)?
     @State private var settings: [DaemonAgentAdapterSetting] = []
     @State private var selected: Set<ProjectAgentAdapterKind> = [.codex]
@@ -173,13 +175,13 @@ struct AgentsSettingsView: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            let loaded = try await store.daemon.agentAdapterSettings()
+            let loaded = try await workspaceContext.daemon.agentAdapterSettings()
             try Task.checkCancellation()
             settings = loaded
             selected = Set(loaded.filter(\.enabled).map(\.adapter))
             hasLoaded = true
             errorMessage = nil
-            codexStatus = try await store.codexPluginStatus()
+            codexStatus = try await agentIntegration.codexPluginStatus()
         } catch is CancellationError {
             return
         } catch {
@@ -191,12 +193,12 @@ struct AgentsSettingsView: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            settings = try await store.setAgentAdapter(adapter, enabled: enabled)
+            settings = try await agentIntegration.setAgentAdapter(adapter, enabled: enabled)
             selected = Set(settings.filter(\.enabled).map(\.adapter))
             errorMessage = nil
-            if adapter == .codex { codexStatus = try await store.codexPluginStatus() }
+            if adapter == .codex { codexStatus = try await agentIntegration.codexPluginStatus() }
         } catch {
-            if let actual = try? await store.daemon.agentAdapterSettings() {
+            if let actual = try? await workspaceContext.daemon.agentAdapterSettings() {
                 settings = actual
                 selected = Set(actual.filter(\.enabled).map(\.adapter))
             }
@@ -210,11 +212,11 @@ struct AgentsSettingsView: View {
         do {
             for adapter in ProjectAgentAdapterKind.allCases {
                 try Task.checkCancellation()
-                settings = try await store.setAgentAdapter(adapter, enabled: selected.contains(adapter))
+                settings = try await agentIntegration.setAgentAdapter(adapter, enabled: selected.contains(adapter))
             }
             errorMessage = nil
             if let onCompleted { onCompleted() }
-            else { codexStatus = try await store.codexPluginStatus() }
+            else { codexStatus = try await agentIntegration.codexPluginStatus() }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -250,7 +252,8 @@ struct ProjectMemoryCacheSettings: View {
         var id: String { rawValue }
     }
 
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @State private var storage: DaemonProjectStorage?
     @State private var move: DaemonProjectStorageMove?
     @State private var isWorking = false
@@ -259,7 +262,7 @@ struct ProjectMemoryCacheSettings: View {
 
     var body: some View {
         Section("Memory Cache") {
-            if let projectId = store.activeProjectId {
+            if let projectId = workspaceContext.activeProjectId {
                 if let storage {
                     LabeledContent("Location") {
                         Text(storage.selectedRootPath)
@@ -309,7 +312,7 @@ struct ProjectMemoryCacheSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .task(id: store.activeProjectId) {
+        .task(id: workspaceContext.activeProjectId) {
             await loadStorage()
         }
         .confirmationDialog(
@@ -336,7 +339,7 @@ struct ProjectMemoryCacheSettings: View {
     }
 
     private func loadStorage() async {
-        guard let projectId = store.activeProjectId else {
+        guard let projectId = workspaceContext.activeProjectId else {
             storage = nil
             move = nil
             return
@@ -345,7 +348,7 @@ struct ProjectMemoryCacheSettings: View {
         errorMessage = nil
         defer { isWorking = false }
         do {
-            let loaded = try await store.daemon.projectStorage(projectId)
+            let loaded = try await workspaceContext.daemon.projectStorage(projectId)
             storage = loaded
             if let moveId = loaded.activeMoveId {
                 await monitorMove(moveId, projectId: projectId)
@@ -378,7 +381,7 @@ struct ProjectMemoryCacheSettings: View {
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
-            let created = try await store.daemon.replaceProjectStorage(
+            let created = try await workspaceContext.daemon.replaceProjectStorage(
                 .init(
                     projectId: projectId,
                     selectedRootPath: url.path,
@@ -397,12 +400,12 @@ struct ProjectMemoryCacheSettings: View {
 
     private func resetLocation() async {
         confirmation = nil
-        guard let storage, let projectId = store.activeProjectId else { return }
+        guard let storage, let projectId = workspaceContext.activeProjectId else { return }
         isWorking = true
         errorMessage = nil
         defer { isWorking = false }
         do {
-            let created = try await store.daemon.resetProjectStorage(
+            let created = try await workspaceContext.daemon.resetProjectStorage(
                 .init(projectId: projectId, expectedLocationRevision: storage.locationRevision)
             )
             move = created
@@ -416,12 +419,12 @@ struct ProjectMemoryCacheSettings: View {
 
     private func clearCache() async {
         confirmation = nil
-        guard let storage, let projectId = store.activeProjectId else { return }
+        guard let storage, let projectId = workspaceContext.activeProjectId else { return }
         isWorking = true
         errorMessage = nil
         defer { isWorking = false }
         do {
-            self.storage = try await store.daemon.clearProjectCache(
+            self.storage = try await workspaceContext.daemon.clearProjectCache(
                 .init(projectId: projectId, expectedLocationRevision: storage.locationRevision)
             )
         } catch is CancellationError {
@@ -434,7 +437,7 @@ struct ProjectMemoryCacheSettings: View {
     private func monitorMove(_ moveId: String, projectId: String) async {
         do {
             while !Task.isCancelled {
-                let current = try await store.daemon.projectStorageMove(moveId)
+                let current = try await workspaceContext.daemon.projectStorageMove(moveId)
                 move = current
                 if current.state.isTerminal {
                     if let moveError = current.errorMessage {
@@ -442,7 +445,7 @@ struct ProjectMemoryCacheSettings: View {
                     } else if current.state == .failed {
                         errorMessage = "The storage move failed."
                     }
-                    storage = try await store.daemon.projectStorage(projectId)
+                    storage = try await workspaceContext.daemon.projectStorage(projectId)
                     return
                 }
                 try await Task.sleep(for: .milliseconds(500))

@@ -22,7 +22,7 @@ enum SettingsWindowLayout {
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     let navigation: SettingsNavigation
-    private let store: WorkspaceStore
+    private let store: WorkspaceCoordinator
     private let administration: AdministrationModel
     private let softwareUpdateController: SoftwareUpdateController
     private let onShowLogs: () -> Void
@@ -41,7 +41,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return alert.runModal() == .alertSecondButtonReturn
     }
 
-    init(store: WorkspaceStore, administration: AdministrationModel, softwareUpdateController: SoftwareUpdateController,
+    init(store: WorkspaceCoordinator, administration: AdministrationModel, softwareUpdateController: SoftwareUpdateController,
          onShowLogs: @escaping () -> Void,
          navigation: SettingsNavigation = SettingsNavigation()) {
         self.store = store
@@ -49,14 +49,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         self.softwareUpdateController = softwareUpdateController
         self.onShowLogs = onShowLogs
         self.navigation = navigation
-        organizationID = store.organization?.orgId
-        accountID = store.account?.userId
-        hadOrganizationAccess = store.canAdministerOrganization && store.phase != .authenticationRequired
+        organizationID = store.context.organization?.orgId
+        accountID = store.context.account?.userId
+        hadOrganizationAccess = store.context.canAdministerOrganization && store.context.phase != .authenticationRequired
         super.init(window: nil)
-        mutationObservation = store.$isMutatingAdministration
+        mutationObservation = store.context.$isMutatingAdministration
             .sink { [weak self] saving in self?.navigation.isSaving = saving }
-        authorityObservation = store.$organization
-            .combineLatest(store.$account, store.$capabilities, store.$phase)
+        authorityObservation = store.context.$organization
+            .combineLatest(store.context.$account, store.context.$capabilities, store.context.$phase)
             .receive(on: RunLoop.main)
             .sink { [weak self] organization, account, capabilities, phase in
                 guard let self else { return }
@@ -79,14 +79,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     override func showWindow(_ sender: Any?) {
         if navigation.destination.pane == .organization,
-           !store.canAdministerOrganization || store.phase == .authenticationRequired {
+           !store.context.canAdministerOrganization || store.context.phase == .authenticationRequired {
             navigation.resetForAuthorityChange()
         }
         if window == nil {
             let host = NSHostingController(rootView: SettingsWindowView(
                 store: store, softwareUpdateController: softwareUpdateController, navigation: navigation,
                 onShowLogs: onShowLogs
-            ).environmentObject(administration))
+            ).environmentObject(administration).workspaceEnvironment(store))
             host.sizingOptions = []
             host.sceneBridgingOptions = .all
             let window = NSWindow(
@@ -111,7 +111,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func confirmDiscardIfNeeded() -> Bool {
-        guard !store.isMutatingAdministration else {
+        guard !store.context.isMutatingAdministration else {
             window?.makeKeyAndOrderFront(nil)
             let alert = NSAlert()
             alert.messageText = "Changes are still being saved"
@@ -124,7 +124,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if store.isMutatingAdministration && navigation.hasUnsavedChanges { return false }
+        if store.context.isMutatingAdministration && navigation.hasUnsavedChanges { return false }
         guard !navigation.hasUnsavedChanges || confirmDiscard() else { return false }
         discardsOnClose = navigation.hasUnsavedChanges
         return true

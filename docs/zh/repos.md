@@ -31,7 +31,7 @@ Rust workspace 有两个成员：`crates/server` 和 `crates/daemon`。Swift 负
 
 | 问题 | 源码路径 |
 | --- | --- |
-| 用户编辑并请求 Review 后发生什么？ | `Features/Workspace/WorkspaceView.swift` → `Services/Workspace/WorkspaceStore.swift` → `Services/Daemon/DaemonXPCClient.swift` |
+| 用户编辑并请求 Review 后发生什么？ | `Features/Memory/MemoryModel.swift` → `Services/Memory/DraftStore.swift`; `Features/Reviews/ReviewsModel.swift` → `Services/Server/ServerClient.swift` |
 | Agent 的 `memory.store` 做了什么？ | `agent_runtime/mcp_contract.rs` → `agent_runtime/mod.rs` → `state.rs::store_draft_operation` → 本地 Draft 队列 |
 | Review 如何校验并发布？ | Server `http.rs` → `changes/http.rs` → `changes/service.rs` → `changes/postgres.rs` |
 | 发布怎样到达选择了文档的 Project？ | Server `memory/postgres.rs` → daemon `commit_sync.rs` → `search/` |

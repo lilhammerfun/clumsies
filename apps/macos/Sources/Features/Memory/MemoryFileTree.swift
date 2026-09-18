@@ -269,7 +269,7 @@ enum MemoryFileTreeMenu {
     ) -> [LocalDraft] {
         guard !inOrgView else { return [] }
         return items.compactMap(\.draft).filter {
-            $0.status == .open && WorkspaceStore.canRequestReview($0)
+            $0.status == .open && ReviewsModel.canRequestReview($0)
         }
     }
 

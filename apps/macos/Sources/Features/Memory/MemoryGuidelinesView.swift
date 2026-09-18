@@ -2,7 +2,9 @@ import MarkdownUI
 import SwiftUI
 
 struct MemoryGuidelinesSetupView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var memoryModel: MemoryModel
     @State private var setup: MemoryGuidelinesSetup?
     @State private var error: String?
     @State private var isLoading = true
@@ -67,7 +69,7 @@ struct MemoryGuidelinesSetupView: View {
                 }
             }
         }
-        .task(id: store.activeProjectId) { await prepare() }
+        .task(id: workspaceContext.activeProjectId) { await prepare() }
         .sheet(item: $preview) { content in
             MemoryGuidelinesPreview(documents: content.documents) {
                 preview = nil
@@ -77,8 +79,8 @@ struct MemoryGuidelinesSetupView: View {
     }
 
     private func canAdopt(_ setup: MemoryGuidelinesSetup) -> Bool {
-        guard setup.projectId == store.activeProjectId, !store.isSwitchingMemoryContext else { return false }
-        if case .useOrganization = setup.action { return store.canManageProject(setup.projectId) }
+        guard setup.projectId == workspaceContext.activeProjectId, !workspaceContext.isSwitchingMemoryContext else { return false }
+        if case .useOrganization = setup.action { return workspaceContext.canManageProject(setup.projectId) }
         return true
     }
 
@@ -110,23 +112,23 @@ struct MemoryGuidelinesSetupView: View {
     }
 
     private func prepare() async {
-        guard let projectId = store.activeProjectId else { return }
+        guard let projectId = workspaceContext.activeProjectId else { return }
         isLoading = true
         error = nil
         setup = nil
         destinationChanged = false
         preview = nil
         do {
-            let result = try await store.prepareMemoryGuidelines(projectId: projectId)
+            let result = try await memoryModel.prepareMemoryGuidelines(projectId: projectId)
             try Task.checkCancellation()
             setup = result
             isLoading = false
         } catch is CancellationError {
-            guard store.activeProjectId == projectId, !Task.isCancelled else { return }
+            guard workspaceContext.activeProjectId == projectId, !Task.isCancelled else { return }
             error = "The project changed while checking memory guidelines. Try again."
             isLoading = false
         } catch {
-            guard store.activeProjectId == projectId, !Task.isCancelled else { return }
+            guard workspaceContext.activeProjectId == projectId, !Task.isCancelled else { return }
             self.error = error.localizedDescription
             isLoading = false
         }
@@ -137,13 +139,13 @@ struct MemoryGuidelinesSetupView: View {
         isAdopting = true
         defer { isAdopting = false }
         do {
-            let result = try await store.useMemoryGuidelines(setup)
+            let result = try await memoryModel.useMemoryGuidelines(setup)
             destinationChanged = !result.hasSameDestination(as: setup)
             self.setup = result
         } catch is CancellationError {
             return
         } catch {
-            guard store.activeProjectId == setup.projectId else { return }
+            guard workspaceContext.activeProjectId == setup.projectId else { return }
             self.error = error.localizedDescription
         }
     }

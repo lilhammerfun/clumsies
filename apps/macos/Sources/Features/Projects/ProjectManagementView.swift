@@ -12,7 +12,10 @@ enum ProjectMetadataValidation {
 }
 
 struct ProjectCreationSheet: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var bundleStore: BundleStore
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
+    @EnvironmentObject private var projectService: ProjectService
     @Environment(\.dismiss) private var dismiss
     @FocusState private var nameFocused: Bool
     @State private var name = ""
@@ -39,7 +42,7 @@ struct ProjectCreationSheet: View {
                     DisclosureGroup("Additional options", isExpanded: $showsOptions) {
                         Picker("Initial memory", selection: $selectedBundleId) {
                             Text("None").tag(Optional<String>.none)
-                            ForEach(store.bundles) { bundle in
+                            ForEach(bundleStore.bundles) { bundle in
                                 Text(bundle.name).tag(Optional(bundle.id))
                             }
                         }
@@ -102,12 +105,12 @@ struct ProjectCreationSheet: View {
         errorMessage = nil
         Task {
             do {
-                let id = try await store.createProject(
+                let id = try await projectService.createProject(
                     name: name, description: description, idempotencyKey: idempotencyKey,
                     repositoryPaths: repositories.map(\.path), bundleId: selectedBundleId
                 )
-                store.selectedSection = .memory
-                store.showsProjectSettings = false
+                workspaceNavigation.selectedSection = .memory
+                workspaceNavigation.showsProjectSettings = false
                 await store.selectProject(id)
                 dismiss()
             } catch {
@@ -119,21 +122,23 @@ struct ProjectCreationSheet: View {
 }
 
 struct ProjectUnavailableView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
 
     var body: some View {
         ContentUnavailableView {
             Label("No Projects", systemImage: "folder")
         } description: {
-            if store.canCreateProject {
+            if workspaceContext.canCreateProject {
                 Text("Create a Project to start organizing local memory.")
             } else {
                 Text("Ask an organization administrator to grant you access to a Project.")
             }
         } actions: {
-            if store.canCreateProject {
+            if workspaceContext.canCreateProject {
                 Button("New Project…") {
-                    store.presentProjectCreation()
+                    workspaceNavigation.presentProjectCreation()
                 }
                 .keyboardShortcut(.defaultAction)
             } else {
@@ -146,7 +151,9 @@ struct ProjectUnavailableView: View {
 }
 
 struct ProjectSettingsView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     @EnvironmentObject private var administration: AdministrationModel
     let projectId: String
     var onDeleted: () -> Void = {}
@@ -159,12 +166,12 @@ struct ProjectSettingsView: View {
                     project: project,
                     allowsMutation: administration.canMutateProject(projectId),
                     onDeleted: {
-                        if store.activeProjectId == projectId { store.showsProjectSettings = false }
+                        if workspaceContext.activeProjectId == projectId { workspaceNavigation.showsProjectSettings = false }
                         onDeleted()
                     }
                 )
                 .id(project.id)
-                if projectId == store.activeProjectId {
+                if projectId == workspaceContext.activeProjectId {
                     ProjectLocalSetupSettings(store: store)
                     ProjectMemoryCacheSettings(store: store)
                 }
@@ -187,7 +194,7 @@ struct ProjectSettingsView: View {
 }
 
 struct OrganizationProjectsView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
     @EnvironmentObject private var administration: AdministrationModel
     @State private var path: [String] = []
 
@@ -226,7 +233,8 @@ struct OrganizationProjectsView: View {
 }
 
 private struct ProjectConfigurationSections: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let project: AdminProjectRecord
     let allowsMutation: Bool
@@ -246,13 +254,13 @@ private struct ProjectConfigurationSections: View {
                     Button("Try Again") {
                         Task { await administration.loadProject(id: project.id, force: true) }
                     }
-                    .disabled(store.isMutatingAdministration || state.isLoading)
+                    .disabled(workspaceContext.isMutatingAdministration || state.isLoading)
                 }
             }
             Section {
                 LabeledContent("Name") {
                     Text(project.name).textSelection(.enabled)
-                    if store.canManageProject(project.id) {
+                    if workspaceContext.canManageProject(project.id) {
                         Button("Edit…") { showsEdit = true }
                             .disabled(!allowsMutation)
                     }
@@ -286,7 +294,7 @@ private struct ProjectConfigurationSections: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            if store.canManageProject(project.id) {
+                            if workspaceContext.canManageProject(project.id) {
                                 Menu {
                                     Button("Remove Member…", role: .destructive) { pendingMemberRemoval = member }
                                         .disabled(!allowsMemberMutation)
@@ -301,13 +309,13 @@ private struct ProjectConfigurationSections: View {
                         }
                     }
                 }
-                if store.canManageProject(project.id) {
+                if workspaceContext.canManageProject(project.id) {
                     Button("Add Member…") { showsAddMember = true }
                         .disabled(!allowsMemberMutation)
                 }
             }
             Section {
-                if store.canManageProject(project.id) {
+                if workspaceContext.canManageProject(project.id) {
                     Button("Delete Project…", role: .destructive) { confirmsProjectDeletion = true }
                         .disabled(!allowsMutation)
                 }
@@ -370,7 +378,8 @@ private struct ProjectConfigurationSections: View {
 
 private struct ProjectDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     @State private var original: AdminProjectRecord
     @State private var name: String
@@ -378,7 +387,7 @@ private struct ProjectDetailsSheet: View {
     @State private var errorMessage: String?
 
     init(
-        store: WorkspaceStore,
+        store: WorkspaceCoordinator,
         project: AdminProjectRecord
     ) {
         self.store = store
@@ -395,7 +404,7 @@ private struct ProjectDetailsSheet: View {
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(3...6)
                 }
-                .disabled(store.isMutatingAdministration)
+                .disabled(workspaceContext.isMutatingAdministration)
                 if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
             .formStyle(.grouped)
@@ -403,7 +412,7 @@ private struct ProjectDetailsSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(store.isMutatingAdministration)
+                    .disabled(workspaceContext.isMutatingAdministration)
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
@@ -411,7 +420,7 @@ private struct ProjectDetailsSheet: View {
             .padding(12)
         }
         .frame(width: 460, height: 280)
-        .interactiveDismissDisabled(store.isMutatingAdministration)
+        .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
     }
 
     private var hasChanges: Bool { name != original.name || description != original.description }
@@ -441,7 +450,8 @@ private struct ProjectDetailsSheet: View {
 
 private struct ProjectMemberSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let projectId: String
     @State private var query = ""
@@ -459,7 +469,7 @@ private struct ProjectMemberSheet: View {
             ClassicSearchField(text: $query, prompt: "Search members", width: 404,
                 accessibilityIdentifier: "project-member-search")
                 .frame(height: 24)
-                .disabled(store.isMutatingAdministration)
+                .disabled(workspaceContext.isMutatingAdministration)
             List(selection: $selectedId) {
                 ForEach(availableMembers) { member in
                     VStack(alignment: .leading, spacing: 3) {
@@ -480,7 +490,7 @@ private struct ProjectMemberSheet: View {
                     }
                 }
             }
-            .disabled(store.isMutatingAdministration)
+            .disabled(workspaceContext.isMutatingAdministration)
             if let errorMessage {
                 HStack {
                     AdministrationInlineError(message: errorMessage)
@@ -488,7 +498,7 @@ private struct ProjectMemberSheet: View {
                         Button("Try Again") {
                             loadMoreTask = Task { await loadMembers(cursor: members.isEmpty ? nil : nextCursor) }
                         }
-                        .disabled(isLoading || store.isMutatingAdministration)
+                        .disabled(isLoading || workspaceContext.isMutatingAdministration)
                     }
                 }
             }
@@ -497,12 +507,12 @@ private struct ProjectMemberSheet: View {
                     Button("Show More") {
                         loadMoreTask = Task { await loadMembers(cursor: nextCursor) }
                     }
-                    .disabled(isLoading || store.isMutatingAdministration)
+                    .disabled(isLoading || workspaceContext.isMutatingAdministration)
                 }
                 if isLoading && !members.isEmpty { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(store.isMutatingAdministration)
+                    .disabled(workspaceContext.isMutatingAdministration)
                 Button("Add") { add() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canAdd)
@@ -510,7 +520,7 @@ private struct ProjectMemberSheet: View {
         }
         .padding(18)
         .frame(width: 440, height: 430)
-        .interactiveDismissDisabled(store.isMutatingAdministration)
+        .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
         .onChange(of: query) { _, _ in
             loadMoreTask?.cancel()
             members = []
@@ -581,7 +591,9 @@ private struct ProjectMemberSheet: View {
 }
 
 private struct ProjectLocalSetupSettings: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var projectService: ProjectService
     @State private var bindings: [DaemonProjectBinding] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -635,7 +647,7 @@ private struct ProjectLocalSetupSettings: View {
             } label: {
                 Label("Add Repositories…", systemImage: "plus")
             }
-            .disabled(store.activeProjectId == nil || isLoading)
+            .disabled(workspaceContext.activeProjectId == nil || isLoading)
 
             if let errorMessage {
                 Text(errorMessage)
@@ -646,7 +658,7 @@ private struct ProjectLocalSetupSettings: View {
         } header: {
             Text("Repositories on This Mac")
         }
-        .task(id: [store.activeProjectId ?? "", store.projectBindingsGeneration.uuidString]) {
+        .task(id: [workspaceContext.activeProjectId ?? "", projectService.projectBindingsGeneration.uuidString]) {
             await load()
         }
         .confirmationDialog(
@@ -671,7 +683,7 @@ private struct ProjectLocalSetupSettings: View {
     }
 
     private func load() async {
-        guard let projectId = store.activeProjectId else {
+        guard let projectId = workspaceContext.activeProjectId else {
             bindings = []
             return
         }
@@ -680,7 +692,7 @@ private struct ProjectLocalSetupSettings: View {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            bindings = try await store.projectBindings(projectId)
+            bindings = try await projectService.projectBindings(projectId)
         } catch is CancellationError {
             return
         } catch {
@@ -689,7 +701,7 @@ private struct ProjectLocalSetupSettings: View {
     }
 
     private func chooseRepositories() {
-        guard let projectId = store.activeProjectId else { return }
+        guard let projectId = workspaceContext.activeProjectId else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -702,7 +714,7 @@ private struct ProjectLocalSetupSettings: View {
                 isLoading = true
                 errorMessage = nil
                 do {
-                    _ = try await store.addProjectRepositories(
+                    _ = try await projectService.addProjectRepositories(
                         panel.urls.map(\.path),
                         projectId: projectId
                     )
@@ -719,7 +731,7 @@ private struct ProjectLocalSetupSettings: View {
         isLoading = true
         errorMessage = nil
         do {
-            try await store.removeProjectRepository(binding)
+            try await projectService.removeProjectRepository(binding)
             await load()
         } catch {
             errorMessage = error.localizedDescription

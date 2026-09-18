@@ -31,7 +31,9 @@ struct ReviewStatusFilterControl: View {
 }
 
 struct ReviewListPage: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var reviewModel: ReviewsModel
     let reviews: [ReviewRecord]
     let searchQuery: String
     @Binding var filters: ReviewListFilters
@@ -40,14 +42,14 @@ struct ReviewListPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !store.reviews.isEmpty {
+            if !reviewModel.reviews.isEmpty {
                 filterBar
             }
 
             Group {
                 switch ReviewListContentState.resolve(
-                    loadState: store.reviewLoadState,
-                    totalCount: store.reviews.count,
+                    loadState: reviewModel.reviewLoadState,
+                    totalCount: reviewModel.reviews.count,
                     visibleCount: reviews.count
                 ) {
                 case .loading:
@@ -56,7 +58,7 @@ struct ReviewListPage: View {
                     ContentUnavailableView {
                         Label("Reviews Unavailable", systemImage: "exclamationmark.triangle")
                     } description: {
-                        Text(store.reviewLoadState.failureMessage ?? "Reviews could not be loaded.")
+                        Text(reviewModel.reviewLoadState.failureMessage ?? "Reviews could not be loaded.")
                     } actions: {
                         Button("Try Again") { Task { await store.reload() } }
                     }
@@ -84,8 +86,8 @@ struct ReviewListPage: View {
                             let route = ReviewRoute(reviewId: review.id)
                             let state = ReviewQueueStatePresentation.resolve(
                                 review: review,
-                                isAuthor: store.isReviewAuthor(review),
-                                canMerge: store.canMergeReviews
+                                isAuthor: workspaceContext.isReviewAuthor(review),
+                                canMerge: workspaceContext.canMergeReviews
                             )
                             NavigationLink(value: route) {
                                 ReviewRow(
@@ -111,7 +113,7 @@ struct ReviewListPage: View {
             if toolbarOwnership.contains(.filter) {
                 ToolbarItem(id: "review.filter", placement: .navigation) {
                     ReviewStatusFilterControl(
-                        reviews: store.reviews,
+                        reviews: reviewModel.reviews,
                         selection: $filters.status
                     )
                 }
@@ -195,7 +197,7 @@ struct ReviewListPage: View {
 
     private var authors: [UserReference] {
         Dictionary(
-            store.reviews.map { ($0.author.userId, $0.author) },
+            reviewModel.reviews.map { ($0.author.userId, $0.author) },
             uniquingKeysWith: { first, _ in first }
         )
         .values
@@ -205,8 +207,8 @@ struct ReviewListPage: View {
     }
 
     private var projects: [ProjectState] {
-        let reviewProjectIds = Set(store.reviews.map(\.projectId))
-        return store.projects.filter { reviewProjectIds.contains($0.id) }
+        let reviewProjectIds = Set(reviewModel.reviews.map(\.projectId))
+        return workspaceContext.projects.filter { reviewProjectIds.contains($0.id) }
     }
 
     private var authorFilterTitle: String {
@@ -237,7 +239,7 @@ struct ReviewListPage: View {
     }
 
     private func projectName(for review: ReviewRecord) -> String? {
-        store.projects.first { $0.id == review.projectId }?.name
+        workspaceContext.projects.first { $0.id == review.projectId }?.name
     }
 
     private var trimmedSearchQuery: String {
@@ -268,11 +270,12 @@ enum ReviewListContentState: Equatable {
 }
 
 private struct ReviewCollectionStatusBanner: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var reviewModel: ReviewsModel
 
     @ViewBuilder
     var body: some View {
-        switch store.reviewLoadState {
+        switch reviewModel.reviewLoadState {
         case .loading:
             HStack(spacing: 8) {
                 ProgressView()

@@ -572,7 +572,7 @@ final class FileTreeSelectionTests: XCTestCase {
             let item = MemoryListItem(id: "memory", resource: nil, draft: draft, inherited: true)
             XCTAssertEqual(MemoryFileTreeRowAccessory.resolve(item: item), accessory)
             XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: item), tone)
-            let visible = WorkspaceStore.memoryTreeDrafts([draft], activeProjectId: "project")
+            let visible = MemoryTreeProjection.memoryTreeDrafts([draft], activeProjectId: "project")
             XCTAssertEqual(visible.isEmpty, status == .merged || status == .discarded)
         }
     }

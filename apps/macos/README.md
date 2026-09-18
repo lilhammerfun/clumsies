@@ -41,8 +41,8 @@ Sources/
   App/          # Entry point, AppDelegate, windows and menus
   Features/     # Activity, Administration, Bundles, Diagnostics, Memory,
                 # Projects, Reviews, ServerAccess, Settings, Workspace
-  Services/     # Authentication, Daemon, Memory, Runtime, Server,
-                # ServerAccess, Updates, Workspace
+  Services/     # Authentication, Bundles, Daemon, Memory, Projects,
+                # Runtime, Server, ServerAccess, Updates, Workspace
   Libraries/    # Concurrency, Configuration, Diagnostics, Diff,
                 # Formatting, Models, Serialization, UI
 Tests/
@@ -53,20 +53,38 @@ Tests/
   Integration/  # Opt-in live workspace tests
 ```
 
-Keep feature state with its views. `AdministrationModel` owns page loading,
-pagination and caches; `ActivityModel` owns activity selection and loading.
-`WorkspaceStore` owns the shared account/project context and coordinates edits,
-saving and project switches. `WorkspaceLoader` loads snapshots without owning
-UI state. Authority changes invalidate administration requests synchronously.
-`AppDelegate` creates the shared administration model and supplies it to both
-the main and Settings windows; views observe that model directly.
+State and operations move together into their owner:
 
-The responsibility split is incomplete: `WorkspaceStore` still owns tab
-navigation, document saving, synchronization and reconciliation, and Bundle and
-Review operations. These remain coupled through shared mutable state. Moving
-the store into Services does not resolve that coupling; further extraction
-should move state and operations together into their owning feature or service,
-while preserving save-before-switch and authority invalidation guarantees.
+| Owner | Responsibility |
+| --- | --- |
+| `Features/Workspace/WorkspaceCoordinator` | Shared component lifetime, reload, project switching, save-before-exit and refresh ordering |
+| `Features/Workspace/WorkspaceNavigation` | Tabs, history, selection and toolbar commands |
+| `Features/Memory/MemoryModel` | Memory presentation, creation, export and document Sync interaction |
+| `Features/Reviews/ReviewsModel` | Review loading, selection and actions |
+| `Features/Bundles/BundlesModel` | Bundle selection and page actions |
+| `Features/Administration/AdministrationModel` | Administration loading, pagination and caches |
+| `Features/Activity/ActivityModel` | Activity selection and loading |
+| `Services/Workspace/WorkspaceContext` | Account, organization, permissions, projects and request generations |
+| `Services/Memory/MemoryCatalog` | Resource snapshots, content loading and freshness |
+| `Services/Memory/DraftStore` | Draft inventory, edit buffers, serialized writes and pending saves |
+| `Services/Memory/DocumentSessions` | Document synchronization tasks, locks and reconciliation state |
+| `Services/Memory/MemorySyncService` and `DraftReconciliationService` | Shared resource refresh, draft upload barriers and reconciliation |
+| `Services/Bundles/BundleStore` | Bundle data, mutations and pending saves |
+| `Services/Projects/ProjectService` | Project creation, repositories and Memory selection |
+| `Services/Daemon/DaemonSyncService` | Sync status and retry tasks |
+| `Services/Runtime/AgentIntegrationService` | Agent adapter status and operations |
+
+The coordinator composes concrete owners and connects completion events; services
+never call back through a workspace facade. `WorkspaceLoader` reads snapshots
+without owning UI state. SwiftUI observes the actual state owners through
+`workspaceEnvironment`, including owners used by derived feature properties.
+AppKit subscribes to those same owners. Both the main and Settings windows share
+the administration model.
+
+Pending edits and synchronization outlive individual views. Project switches and
+sign-out flush pending edits first; failures retain the edits and stop the
+transition. Authority resets clear owner state and invalidate pending work;
+completed writes from an old authority cannot repopulate the new workspace.
 
 Services must not reference feature views or feature state. Libraries hold
 shared values and building blocks without depending on Services or App startup.

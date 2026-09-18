@@ -73,7 +73,11 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
 }
 
 struct ReviewDetailPage: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
+    @EnvironmentObject private var reconciler: DraftReconciliationService
+    @EnvironmentObject private var reviewModel: ReviewsModel
     let reviewId: String
     let loadsRemoteContent: Bool
 
@@ -103,7 +107,7 @@ struct ReviewDetailPage: View {
 
     private var review: ReviewRecord? {
         let loadedReview = detail.map { WorkspaceLoader.mapReview($0.review) }
-        let storedReview = store.reviews.first { $0.id == reviewId }
+        let storedReview = reviewModel.reviews.first { $0.id == reviewId }
         if let loadedReview, let storedReview {
             return storedReview.version >= loadedReview.version ? storedReview : loadedReview
         }
@@ -111,7 +115,7 @@ struct ReviewDetailPage: View {
     }
 
     private var storedReviewDecisionSignature: ReviewDecisionReadiness? {
-        store.reviews.first { $0.id == reviewId }.map(ReviewDecisionReadiness.init)
+        reviewModel.reviews.first { $0.id == reviewId }.map(ReviewDecisionReadiness.init)
     }
 
     private var draftDetails: [ReviewDraftDetail] {
@@ -175,7 +179,7 @@ struct ReviewDetailPage: View {
                         Task { await refreshDetail() }
                     }
                 ) { resolvedState in
-                    try await store.applyReconciliation(
+                    try await reconciler.applyReconciliation(
                         draftId: candidate.draftId,
                         candidate: candidate,
                         resolvedState: resolvedState,
@@ -218,7 +222,7 @@ struct ReviewDetailPage: View {
             invalidateDetailRequests()
         }
         .navigationTitle(review?.title ?? "Review")
-        .onChange(of: store.pendingReviewReconciliationId) { _, reviewId in
+        .onChange(of: reviewModel.pendingReviewReconciliationId) { _, reviewId in
             handlePendingReconciliation(reviewId)
         }
         .onChange(of: selectedFileId) { _, _ in
@@ -347,7 +351,7 @@ struct ReviewDetailPage: View {
 
     private func metadata(_ review: ReviewRecord) -> some View {
         let author = review.author.displayName ?? review.author.email
-        let project = store.projects.first { $0.id == review.projectId }?.name
+        let project = workspaceContext.projects.first { $0.id == review.projectId }?.name
         let context = [author, project]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -573,7 +577,7 @@ struct ReviewDetailPage: View {
             }
         }
         do {
-            let loadedDetail = try await store.reviewDetail(reviewId)
+            let loadedDetail = try await reviewModel.reviewDetail(reviewId)
             applyLoadedDetail(
                 loadedDetail,
                 request: request
@@ -583,14 +587,14 @@ struct ReviewDetailPage: View {
                   detailRequestGeneration == request.generation else { return }
             clearDecisionReadiness()
             loadError = error.localizedDescription
-            store.errorMessage = error.localizedDescription
+            workspaceFeedback.errorMessage = error.localizedDescription
         }
     }
 
     private func refreshDetail() async {
         let request = beginDetailRequest()
         do {
-            let loadedDetail = try await store.reviewDetail(reviewId)
+            let loadedDetail = try await reviewModel.reviewDetail(reviewId)
             applyLoadedDetail(
                 loadedDetail,
                 request: request
@@ -603,7 +607,7 @@ struct ReviewDetailPage: View {
                 loading = false
                 loadError = error.localizedDescription
             }
-            store.errorMessage = error.localizedDescription
+            workspaceFeedback.errorMessage = error.localizedDescription
         }
     }
 
@@ -629,8 +633,8 @@ struct ReviewDetailPage: View {
     }
 
     private func clearDecisionReadiness() {
-        if store.reviewDecisionReadiness?.reviewId == reviewId {
-            store.reviewDecisionReadiness = nil
+        if reviewModel.reviewDecisionReadiness?.reviewId == reviewId {
+            reviewModel.reviewDecisionReadiness = nil
         }
     }
 
@@ -651,7 +655,7 @@ struct ReviewDetailPage: View {
 
         detail = loadedDetail
         loadedPaths = [:]
-        let client = store.server
+        let client = workspaceContext.server
         fileLoader = ReviewFileLoader { id in
             try await client.get("/api/v1/commits/\(id)")
         }
@@ -664,7 +668,7 @@ struct ReviewDetailPage: View {
         } else {
             selectCurrentFile()
         }
-        store.replaceReview(with: loadedReview)
+        reviewModel.replaceReview(with: loadedReview)
     }
 
     private func selectCurrentFile() {
@@ -714,7 +718,7 @@ struct ReviewDetailPage: View {
             clearDecisionReadiness()
             return
         }
-        store.reviewDecisionReadiness = ReviewDecisionReadiness(review: loadedReview)
+        reviewModel.reviewDecisionReadiness = ReviewDecisionReadiness(review: loadedReview)
     }
 
     private func submitComment(line: Int?) async {
@@ -725,13 +729,13 @@ struct ReviewDetailPage: View {
         let renderedReview = WorkspaceLoader.mapReview(detail.review)
         let anchorPath = line == nil ? nil : changeSources?.proposedPath
         guard line == nil || anchorPath != nil else {
-            store.errorMessage = "The proposed file path is unavailable for this line comment."
+            workspaceFeedback.errorMessage = "The proposed file path is unavailable for this line comment."
             return
         }
         isSubmittingComment = true
         defer { isSubmittingComment = false }
         do {
-            try await store.addComment(
+            try await reviewModel.addComment(
                 commentDraft,
                 to: renderedReview,
                 anchorPath: anchorPath,
@@ -741,7 +745,7 @@ struct ReviewDetailPage: View {
             commentDraft = ""
             await refreshDetail()
         } catch {
-            store.errorMessage = error.localizedDescription
+            workspaceFeedback.errorMessage = error.localizedDescription
             if let serverError = error as? ServerClientError,
                case .response(let status, _) = serverError,
                status == 409 {
@@ -757,17 +761,17 @@ struct ReviewDetailPage: View {
         Task {
             defer { loadsReconciliation = false }
             do {
-                reconciliationCandidate = try await store.reconciliationCandidate(for: detail)
+                reconciliationCandidate = try await reconciler.reconciliationCandidate(for: detail)
             } catch {
                 markCurrentDetailDecisionReady()
-                store.errorMessage = error.localizedDescription
+                workspaceFeedback.errorMessage = error.localizedDescription
             }
         }
     }
 
     private func handlePendingReconciliation(_ reviewId: String?) {
         guard reviewId == self.reviewId, let detail = selectedDraftDetail else { return }
-        store.pendingReviewReconciliationId = nil
+        reviewModel.pendingReviewReconciliationId = nil
         loadReconciliation(detail: detail)
     }
 

@@ -9,7 +9,16 @@ private struct DocumentDiffIdentity: Hashable {
 }
 
 struct DocumentSessionView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var memoryCatalog: MemoryCatalog
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var draftStore: DraftStore
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
+    @EnvironmentObject private var memoryModel: MemoryModel
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
+    @EnvironmentObject private var reconciler: DraftReconciliationService
+    @EnvironmentObject private var reviewModel: ReviewsModel
+    @EnvironmentObject private var documentSessions: DocumentSessions
     let item: MemoryListItem
     let mode: WorkbenchTabMode
 
@@ -26,33 +35,33 @@ struct DocumentSessionView: View {
     @State private var confirmsOrganizationDeletion = false
 
     private var sessionKey: MemoryDocumentSessionKey? {
-        store.documentSessionKey(for: item)
+        documentSessions.documentSessionKey(for: item)
     }
 
-    init(store: WorkspaceStore, item: MemoryListItem, mode: WorkbenchTabMode) {
+    init(store: WorkspaceCoordinator, item: MemoryListItem, mode: WorkbenchTabMode) {
         self.store = store
         self.item = item
         self.mode = mode
-        _document = State(initialValue: store.pendingDocument(for: item) ?? item.document)
+        _document = State(initialValue: store.edits.pendingDocument(for: item) ?? item.document)
         _authoritativeDocument = State(initialValue: item.document)
     }
 
     var body: some View {
         Group {
-            if let candidate = store.pendingDocumentReconciliationCandidates[item.id] {
+            if let candidate = documentSessions.pendingDocumentReconciliationCandidates[item.id] {
                 DraftReconciliationView(
                     candidate: candidate,
                     updateRequest: reconciliationUpdateRequest,
                     usesContextualUpdateAction: true,
-                    initialResolvedState: store.documentReconciliationResolution(for: item.id),
+                    initialResolvedState: documentSessions.documentReconciliationResolution(for: item.id),
                     onResolvedStateChange: {
-                        store.updateDocumentReconciliationResolution($0, for: item.id)
+                        documentSessions.updateDocumentReconciliationResolution($0, for: item.id)
                     },
                     onUpdateStateChange: publishReconciliationToolbarState,
                     onCancel: closeReconciliation,
                     onApplied: closeReconciliation
                 ) { resolvedState in
-                    try await store.applyReconciliation(
+                    try await reconciler.applyReconciliation(
                         draftId: candidate.draftId,
                         candidate: candidate,
                         resolvedState: resolvedState,
@@ -67,14 +76,14 @@ struct DocumentSessionView: View {
         .onChange(of: item.document) { _, latest in
             adoptAuthoritativeDocument(latest)
         }
-        .onChange(of: store.documentContentGeneration(for: item.id)) { _, _ in
+        .onChange(of: memoryCatalog.documentContentGeneration(for: item.id)) { _, _ in
             adoptAuthoritativeDocument(item.document)
         }
-        .onChange(of: store.pendingDocumentCommand) { _, command in
+        .onChange(of: workspaceNavigation.pendingDocumentCommand) { _, command in
             handleDocumentCommand(command)
         }
         .onAppear {
-            handleDocumentCommand(store.pendingDocumentCommand)
+            handleDocumentCommand(workspaceNavigation.pendingDocumentCommand)
         }
         .onDisappear {
             flushSave()
@@ -129,9 +138,9 @@ struct DocumentSessionView: View {
             } else {
                 editor
                     .disabled(
-                        !store.canEditMemory(item)
-                            || store.isSwitchingMemoryContext
-                            || store.isSynchronizingDocument(item.id)
+                        !draftStore.canEditMemory(item)
+                            || workspaceContext.isSwitchingMemoryContext
+                            || documentSessions.isSynchronizingDocument(item.id)
                     )
             }
         }
@@ -230,7 +239,7 @@ struct DocumentSessionView: View {
             item: item,
             localDocument: document,
             staleResourceGeneration: item.resource.flatMap {
-                store.staleResourceGeneration(for: $0.id)
+                memoryCatalog.staleResourceGeneration(for: $0.id)
             },
             retryRequest: documentDiffRetryRequest
         )
@@ -240,11 +249,11 @@ struct DocumentSessionView: View {
         guard mode == .diff else { return }
         documentDiffPresentation = nil
         documentDiffError = nil
-        documentPathChanges = store.documentPathChanges(for: identity.item)
+        documentPathChanges = memoryModel.documentPathChanges(for: identity.item)
         loadsDocumentDiff = true
 
         do {
-            let result = try await store.documentDiffPresentation(
+            let result = try await memoryModel.documentDiffPresentation(
                 for: identity.item,
                 localText: identity.localDocument.body
             )
@@ -316,7 +325,7 @@ struct DocumentSessionView: View {
 
     private func handleDocumentCommand(_ command: DocumentSessionCommand?) {
         guard let command, command.sessionKey == sessionKey else { return }
-        store.pendingDocumentCommand = nil
+        workspaceNavigation.pendingDocumentCommand = nil
         switch command {
         case .requestReview(_, let draft):
             reviewDraft = draft
@@ -327,10 +336,10 @@ struct DocumentSessionView: View {
         case .closeReconciliation:
             closeReconciliation()
         case .moveToTrash:
-            guard store.canEditMemory(item),
+            guard draftStore.canEditMemory(item),
                   MemoryFileTreeMenu.canProposeOrganizationDeletion(
                       item,
-                      inOrgView: store.activeProjectId == nil
+                      inOrgView: workspaceContext.activeProjectId == nil
                   ) else {
                 return
             }
@@ -340,7 +349,7 @@ struct DocumentSessionView: View {
 
     private func publishReconciliationToolbarState(canUpdate: Bool, isUpdating: Bool) {
         guard let sessionKey else { return }
-        store.documentReconciliationToolbarState = .init(
+        workspaceNavigation.documentReconciliationToolbarState = .init(
             sessionKey: sessionKey,
             isLoading: false,
             canUpdate: canUpdate,
@@ -350,23 +359,23 @@ struct DocumentSessionView: View {
 
     private func closeReconciliation() {
         guard let sessionKey else { return }
-        store.finishDocumentReconciliation(for: sessionKey)
+        documentSessions.finishDocumentReconciliation(for: sessionKey)
         clearReconciliationToolbarState()
     }
 
     private func clearReconciliationToolbarState() {
-        guard store.documentReconciliationToolbarState?.sessionKey == sessionKey else { return }
-        store.documentReconciliationToolbarState = nil
+        guard workspaceNavigation.documentReconciliationToolbarState?.sessionKey == sessionKey else { return }
+        workspaceNavigation.documentReconciliationToolbarState = nil
     }
 
     private func stageSave(_ nextDocument: EditableMemoryDocument) {
         guard !suppressesSaving,
-              store.canEditMemory(item),
-              !store.isSwitchingMemoryContext,
-              !store.isSynchronizingDocument(item.id),
+              draftStore.canEditMemory(item),
+              !workspaceContext.isSwitchingMemoryContext,
+              !documentSessions.isSynchronizingDocument(item.id),
               mode == .source,
               nextDocument != item.document else { return }
-        store.stageDocumentSave(item, document: nextDocument)
+        draftStore.stageDocumentSave(item, document: nextDocument)
     }
 
     private func flushSave() {
@@ -374,9 +383,9 @@ struct DocumentSessionView: View {
               mode == .source else { return }
         Task {
             do {
-                try await store.flushDocumentSave(item)
+                try await draftStore.flushDocumentSave(item)
             } catch {
-                store.errorMessage = error.localizedDescription
+                workspaceFeedback.errorMessage = error.localizedDescription
             }
         }
     }
@@ -388,9 +397,9 @@ struct DocumentSessionView: View {
         candidate: DraftReconciliationCandidate?,
         resolvedState: ReconciliationResourceState?
     ) async throws {
-        try await store.flushDocumentSave(item)
-        let latest = store.drafts.first { $0.id == draft.id } ?? draft
-        try await store.requestReview(
+        try await draftStore.flushDocumentSave(item)
+        let latest = draftStore.drafts.first { $0.id == draft.id } ?? draft
+        try await reviewModel.requestReview(
             for: latest,
             title: title,
             description: description,
@@ -400,24 +409,24 @@ struct DocumentSessionView: View {
     }
 
     private func loadReviewCandidate(_ draft: LocalDraft) async throws -> DraftReconciliationCandidate {
-        try await store.flushDocumentSave(item)
-        let latest = store.drafts.first { $0.id == draft.id } ?? draft
-        return try await store.reconciliationCandidate(for: latest)
+        try await draftStore.flushDocumentSave(item)
+        let latest = draftStore.drafts.first { $0.id == draft.id } ?? draft
+        return try await reconciler.reconciliationCandidate(for: latest)
     }
 
     private func discard(_ draft: LocalDraft) {
         suppressesSaving = true
-        store.cancelDocumentSave(item)
+        draftStore.cancelDocumentSave(item)
         Task {
-            await store.discard(draft)
+            await draftStore.discard(draft)
             suppressesSaving = false
         }
     }
 
     private func moveToTrash() {
-        guard let activeProjectId = store.activeProjectId,
+        guard let activeProjectId = workspaceContext.activeProjectId,
               item.projectContextId == activeProjectId,
-              store.canEditMemory(item),
+              draftStore.canEditMemory(item),
               MemoryFileTreeMenu.canProposeOrganizationDeletion(
                   item,
                   inOrgView: false
@@ -425,9 +434,9 @@ struct DocumentSessionView: View {
             return
         }
         suppressesSaving = true
-        store.cancelDocumentSave(item)
+        draftStore.cancelDocumentSave(item)
         Task {
-            await store.delete(item)
+            await draftStore.delete(item)
             suppressesSaving = false
         }
     }
