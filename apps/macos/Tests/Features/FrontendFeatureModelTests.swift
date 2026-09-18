@@ -95,6 +95,37 @@ final class FrontendFeatureModelTests: XCTestCase {
         XCTAssertNil(workspace.feedback.errorMessage)
     }
 
+    func testReviewRefreshPreservesConflictEditorUntilAuthorityReset() async {
+        let workspace = WorkspaceCoordinator()
+        let started = expectation(description: "Review refresh")
+        var pending: CheckedContinuation<ReviewDetail, Error>?
+        let model = ReviewDetailModel(reviewId: "review", context: workspace.context, feedback: workspace.feedback,
+            reconciliation: workspace.reconciliation, reviews: workspace.reviews) { _ in
+                try await withCheckedThrowingContinuation { pending = $0; started.fulfill() }
+            }
+        let state = ReconciliationResourceState(exists: true,
+            resource: .init(scope: "org", id: "memory", path: "note.md"),
+            content: .init(description: nil, content: "Draft body"))
+        let candidate = DraftReconciliationCandidate(candidateId: "candidate", draftId: "draft",
+            draftVersion: 1, baseCommitId: "base", currentCommitId: "current", status: .conflicts,
+            baseState: state, currentState: state, draftState: state, proposedState: nil,
+            conflicts: [.init(kind: "content", field: "content", base: "Base", current: "Shared", draft: "Draft")],
+            resultHash: nil, valid: true, createdAt: "now", invalidatedAt: nil)
+        model.reconciliationCandidate = candidate
+
+        let refresh = Task { await model.refreshDetail() }
+        await fulfillment(of: [started], timeout: 1)
+        XCTAssertEqual(model.reconciliationCandidate, candidate,
+                       "Background refresh must not close the editor and discard its local edits")
+
+        workspace.clearAuthorityScopedWorkspace()
+        XCTAssertNil(model.reconciliationCandidate, "Signing out must clear the private conflict state")
+        pending?.resume(throwing: TestFailure.delayed)
+        await refresh.value
+        XCTAssertNil(model.reconciliationCandidate)
+        XCTAssertNil(workspace.feedback.errorMessage)
+    }
+
     func testReviewRequestRetriesAfterEmptyPreflightAndKeepsFormOnFailure() async {
         var submissions = 0
         var preflights = 0

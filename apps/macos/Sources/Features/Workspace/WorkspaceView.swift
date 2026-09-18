@@ -58,6 +58,11 @@ enum SyncToolbarPresentation: Equatable {
         return nil
     }
 
+    func visible(in section: WorkspaceSection) -> Self? {
+        if section == .reviews, case .inReview = self { return nil }
+        return self
+    }
+
     var isSyncing: Bool {
         if case .syncing = self { return true }
         return false
@@ -769,7 +774,6 @@ struct WorkspaceView: View {
                             isPending: pendingReviewToolbarAction == .approve
                         )
                     }
-                    .buttonStyle(.borderedProminent)
                     .disabled(
                         pendingReviewToolbarAction != nil
                             || !reviewModel.canPerformReviewMenuAction(.approve)
@@ -1165,7 +1169,7 @@ struct WorkspaceView: View {
             serverDataSource: daemonSync.runtime?.serverDataSource,
             submittedDraftCount: draftStore.draftInventoryLoadState == .loaded
                 ? reviewModel.submittedProjectDrafts.count : 0
-        )
+        )?.visible(in: workspaceNavigation.selectedSection)
     }
 
 }

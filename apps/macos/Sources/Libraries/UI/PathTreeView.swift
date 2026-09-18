@@ -124,9 +124,10 @@ struct PathTreeNode: Identifiable, Sendable {
     }
 }
 
-struct PathTreeView: View {
+struct PathTreeView<Accessory: View>: View {
     let items: [PathTreeItem]
     @Binding var selection: String?
+    @ViewBuilder var accessory: (PathTreeItem) -> Accessory
 
     @State private var expandedDirectoryIds: Set<String> = []
     @State private var initialized = false
@@ -149,7 +150,9 @@ struct PathTreeView: View {
                         depth: entry.depth,
                         isDirectory: false,
                         isExpanded: false
-                    )
+                    ) {
+                        accessory(item)
+                    }
                     .tag(item.id)
                     .accessibilityIdentifier("path-tree-item-\(item.id)")
                     .listRowInsets(.init(top: 0, leading: 5, bottom: 0, trailing: 5))
@@ -207,6 +210,12 @@ struct PathTreeView: View {
                 expandedDirectoryIds.insert(id)
             }
         }
+    }
+}
+
+extension PathTreeView where Accessory == EmptyView {
+    init(items: [PathTreeItem], selection: Binding<String?>) {
+        self.init(items: items, selection: selection) { _ in EmptyView() }
     }
 }
 
