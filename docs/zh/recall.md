@@ -19,7 +19,7 @@ Activity 是 macOS App 中的本地记忆活动视图。它把 DSH 与 Codex Des
 | 区域 | 内容 |
 |---|---|
 | 全局侧栏 | 选中 Activity 工作区。 |
-| 会话列表 | 已绑定工作区中的 Agent 活动；每行显示 DSH 或 Codex host、标题、请求数和时间。 |
+| 会话列表 | 已绑定工作区中的 Agent 活动；每行显示 DSH 或 Codex host、标题和时间。 |
 | 详情 | 用户请求、原始 Memory 查询、检索状态与耗时，以及直接内联渲染为 Markdown 的完整历史片段。 |
 
 会话身份是 `(host, session_id)`，因为 session id 只要求在各自 host 内唯一。项目筛选会包含该 Project 绑定的全部工作区。
@@ -106,7 +106,7 @@ payload.item = {
 
 新日志中，`structuredContent.run_id` 是关联本地 `retrieval_runs` 的权威身份。daemon 还会校验该 run 属于工作区绑定的 Project；查询文本只用于展示，不是身份键。
 
-选中候选的 `unit_key`、heading、最终顺序和预览来自该 run。每张可见片段卡使用 `run_id + unit_key` 和冻结 locator，从该次 run 保留的 corpus body 读取完整历史正文，并直接内联渲染 Markdown，不读取可能已经变化的当前 Memory。description-only 检索单元没有正文 byte range，因此只能如实返回当时保存的预览。快照缺失或检索历史已清理时，保留工具结果中的原始预览；历史记录不可用不等于没有发生检索。
+选中候选的 `unit_key`、heading、最终顺序和预览来自该 run。每张可见且预览被截断或为空的片段卡使用 `run_id + unit_key` 和冻结 locator，从该次 run 保留的 corpus body 读取完整历史正文，并直接内联渲染 Markdown，不读取可能已经变化的当前 Memory。description-only 检索单元没有正文 byte range，因此只能如实返回当时保存的预览。快照缺失或检索历史已清理时，保留工具结果中的原始预览；历史记录不可用不等于没有发生检索。
 
 同一次关联读取还提供可选的 `total_us`：只显示已结束 run 记录的检索耗时，运行中或无法关联时保持缺失。该值不是模型回复耗时，也不能通过简单相加各阶段计时得出。片段数量包含 `reuse`，不表示本次新发送的内容数量。
 
@@ -126,24 +126,28 @@ Activity 不会为了生成视图把本地会话日志上传到 Server，也不�
 
 浏览 Activity 不会修改 Memory、Issue 或 session 文件，也不会导入 ChatGPT 数据导出。检索详情中的不准确反馈与证据核对会更新评估记录，并为评估保留对应的 source run。源日志与其他 retrieval history 的保留和删除仍由各自的本地存储生命周期负责。
 
-## 资源上限与失败行为
+## 加载、分页与项目恢复
 
-- 默认最多返回 50 个 session，请求上限为 200，按新到旧排序；
-- 每个 session 最多投影 500 个用户请求；
-- 每个请求最多投影 100 次 activation；
-- 单个损坏、正在追加或无法读取的 session 会被跳过并记录 warning，不会清空其他来源；
-- Codex discovery 整体失败时会记录 warning，并保留已经读取的 DSH 结果；DSH session 文件单项失败也只跳过该文件。DSH 工作区目录本身无法枚举时，当前请求会失败。
+首个请求前恢复该服务器、组织和账号上次选择的具体项目。已删除或无权访问时，依次回退到当前 Memory 项目和第一个可用项目。**All Projects** 保留为本次会话中的主动选择，下次启动仍恢复上次具体项目。没有项目时不发起初始 Activity 请求。
 
-这些上限用于控制本地诊断视图的读取成本；Activity 不是无限历史导出接口。
+- `list_recalls` 只返回摘要，每页默认 20 条、最多 100 条。首次发现只在阻塞线程池读取有界日志头和标题预览，不解析完整会话或关联检索详情。
+- 后续页通过游标复用同一摘要快照，不重新扫描目录。手动刷新才建立新快照。
+- `get_recall_session` 使用摘要返回的 `session_token`，只解析选中的会话。任务按页返回，后续页复用首次解析结果，只为当前页补齐检索详情。
+- 移除原先 500 个请求、每个请求 100 次 activation 的静默截断；完整片段只在可见预览被截断或为空时读取。
+- daemon 在内存中保留最近八个列表快照和四个选中会话，不建立额外持久化会话副本。快照被淘汰或 daemon 重启后，可通过 **Refresh Activity** 恢复；绑定变化后不能沿用旧快照越界读取。
+- 单个损坏的日志头会被跳过；选中会话正文读取失败时，在详情区域显示错误与重试。Codex discovery 失败时保留 DSH 结果；DSH 工作区目录无法枚举时请求失败。
+
+首次加载只在等待区域显示一个原生指示器；刷新保留内容和选中项；翻页只在列表或任务末尾显示进度。项目或会话切换后，旧响应不能覆盖新内容。该设计参考 Apple 的 [Loading](https://developer.apple.com/design/human-interface-guidelines/loading) 和 [Progress indicators](https://developer.apple.com/design/human-interface-guidelines/progress-indicators)，移除了通用组件中转圈与装饰性骨架的叠加。
 
 ## 实现索引
 
 | 关注点 | 路径 |
 |---|---|
 | 共享投影、绑定过滤与 DSH reader | `crates/daemon/src/recall.rs` |
+| 摘要快照与任务分页 | `crates/daemon/src/recall/paging.rs` |
 | Codex rollout discovery 与 parser | `crates/daemon/src/recall/codex.rs` |
 | 历史片段与 Project 边界 | `crates/daemon/src/retrieval_history.rs` |
-| XPC dispatch | `crates/daemon/src/state.rs`（`list_recalls`、`get_recall_fragment`） |
+| XPC dispatch | `crates/daemon/src/state.rs`（`list_recalls`、`get_recall_session`、`get_recall_fragment`） |
 | XPC client 与模型 | `apps/macos/Sources/Infrastructure/DaemonXPCClient.swift`、`DaemonModels.swift` |
 | Activity UI 与 host badge | `apps/macos/Sources/Features/RecallView.swift`、`RecallModel.swift` |
 | Workspace 接线 | `apps/macos/Sources/Features/WorkspaceView.swift` |

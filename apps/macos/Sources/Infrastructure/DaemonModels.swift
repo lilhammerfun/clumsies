@@ -881,17 +881,47 @@ struct ListRecallsRequest: Codable, Sendable {
     let workspaceRoot: String?
     let projectId: String?
     let limit: Int?
+    let cursor: String?
 
-    init(workspaceRoot: String? = nil, projectId: String? = nil, limit: Int? = nil) {
+    init(workspaceRoot: String? = nil, projectId: String? = nil, limit: Int? = nil, cursor: String? = nil) {
         self.workspaceRoot = workspaceRoot
         self.projectId = projectId
         self.limit = limit
+        self.cursor = cursor
     }
 }
 
 struct ListRecallsResponse: Codable, Sendable {
-    let sessions: [RecallSession]
+    let sessions: [RecallSessionSummary]
     let workspaceRoots: [String]
+    var nextCursor: String? = nil
+}
+
+struct RecallSessionSummary: Codable, Identifiable, Sendable {
+    var id: String { "\(host.rawValue):\(sessionId)" }
+    let host: AgentHost
+    let sessionId: String
+    let title: String?
+    let workspaceRoot: String
+    let createdAt: Int64?
+    let sessionToken: String
+
+    var activityDisplayTitle: String {
+        title.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? "Agent activity"
+    }
+}
+
+struct GetRecallSessionRequest: Codable, Sendable {
+    let sessionToken: String
+    var offset: Int? = nil
+    var limit: Int? = nil
+}
+
+struct GetRecallSessionResponse: Codable, Sendable {
+    let session: RecallSession
+    let totalTasks: Int
+    let nextOffset: Int?
 }
 
 struct GetRecallFragmentRequest: Codable, Sendable {
@@ -912,7 +942,7 @@ struct RecallSession: Codable, Identifiable, Sendable {
     let title: String?
     let workspaceRoot: String
     let createdAt: Int64?
-    let tasks: [RecallTask]
+    var tasks: [RecallTask]
 }
 
 struct RecallTask: Codable, Identifiable, Sendable {

@@ -34,6 +34,20 @@ struct RecallSessionList: View {
                         RecallSessionRow(session: session)
                             .tag(session.id)
                     }
+                    if let error = model.pageError {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(error).foregroundStyle(.secondary)
+                            Button("Try Again") { Task { await model.loadMoreSessions() } }
+                            Button("Refresh Activity") { Task { await model.load() } }
+                        }
+                        .font(.caption)
+                    } else if let cursor = model.nextCursor {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity)
+                            .accessibilityLabel("More activity")
+                            .task(id: cursor) { await model.loadMoreSessions() }
+                    }
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
@@ -49,8 +63,6 @@ struct RecallSessionList: View {
                     }
                     .font(.caption)
                     .padding(8)
-                } else if model.isLoading {
-                    ProgressView("Refreshing Activity…").controlSize(.small).padding(8)
                 }
             }
         }
@@ -58,7 +70,7 @@ struct RecallSessionList: View {
 }
 
 private struct RecallSessionRow: View {
-    let session: RecallSession
+    let session: RecallSessionSummary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -67,7 +79,6 @@ private struct RecallSessionRow: View {
                 .lineLimit(1)
             HStack(spacing: 6) {
                 Text(session.host.activityTitle)
-                Text("\(session.tasks.count) request\(session.tasks.count == 1 ? "" : "s")")
                 if let createdAt = session.createdAt {
                     Text("·")
                     Text(Self.date(createdAt))
@@ -103,6 +114,19 @@ struct RecallSessionDetail: View {
                         taskList(session)
                             .navigationTitle("Activity")
                     }
+                } else if let summary = model.selectedSummary {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(summary.activityDisplayTitle).font(.title2.weight(.semibold))
+                        if let error = model.detailError {
+                            Text(error).foregroundStyle(.secondary)
+                            Button("Try Again") { Task { await model.loadSelectedSession() } }
+                            Button("Refresh Activity") { Task { await model.load() } }
+                            Spacer()
+                        } else {
+                            ContentLoadingView(title: "Activity details")
+                        }
+                    }
+                    .padding(24)
                 } else {
                     ContentUnavailableView(
                         "Select an Activity",
@@ -113,12 +137,13 @@ struct RecallSessionDetail: View {
             }
         }
         .id(model.selectedSessionId)
+        .task(id: model.selectedSummary?.sessionToken) { await model.loadSelectedSession() }
     }
 
     private func taskList(_ session: RecallSession) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                RecallSessionSummary(session: session)
+                RecallSessionHeader(session: session, totalTasks: model.totalTasks)
 
                 ForEach(Array(session.tasks.enumerated()), id: \.element.id) { index, task in
                     Divider()
@@ -128,6 +153,25 @@ struct RecallSessionDetail: View {
                         session: session,
                         model: model
                     )
+                }
+                if let error = model.detailError {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(error).foregroundStyle(.secondary)
+                        Button("Try Again") {
+                            Task { await model.retryDetail() }
+                        }
+                        Button("Refresh Activity") { Task { await model.load() } }
+                    }
+                    .padding(.vertical)
+                } else if let offset = model.nextTaskOffset {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical)
+                        .accessibilityLabel("More requests")
+                        .task(id: offset) { await model.loadMoreTasks() }
+                } else if model.isLoadingDetail {
+                    ProgressView().controlSize(.small).padding(.vertical)
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -139,18 +183,10 @@ struct RecallSessionDetail: View {
     }
 }
 
-private struct RecallSessionSummary: View {
+private struct RecallSessionHeader: View {
     let session: RecallSession
 
-    private var memorySearchCount: Int {
-        session.tasks.reduce(0) { $0 + $1.activations.count }
-    }
-
-    private var recalledMemoryCount: Int {
-        session.tasks.reduce(0) { taskTotal, task in
-            taskTotal + task.activations.reduce(0) { $0 + $1.fragments.count }
-        }
-    }
+    let totalTasks: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -168,20 +204,10 @@ private struct RecallSessionSummary: View {
             }
             .foregroundStyle(.secondary)
 
-            HStack(spacing: 14) {
-                Label(
-                    "\(session.tasks.count) request\(session.tasks.count == 1 ? "" : "s")",
-                    systemImage: "text.bubble"
-                )
-                Label(
-                    "\(memorySearchCount) search\(memorySearchCount == 1 ? "" : "es")",
-                    systemImage: "sparkle.magnifyingglass"
-                )
-                Label(
-                    "\(recalledMemoryCount) memory chunk\(recalledMemoryCount == 1 ? "" : "s")",
-                    systemImage: "doc.text"
-                )
-            }
+            Label(
+                "\(totalTasks) request\(totalTasks == 1 ? "" : "s")",
+                systemImage: "text.bubble"
+            )
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -424,7 +450,8 @@ struct RecallFragmentRow: View {
     }
 
     private func loadFullFragment() async {
-        guard fullFragment == nil, let runId else { return }
+        guard fullFragment == nil, let runId,
+              fragment.truncated || fragment.content.isEmpty else { return }
         let generation = UUID()
         loadGeneration = generation
         isLoading = true

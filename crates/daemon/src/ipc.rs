@@ -18,8 +18,9 @@ use crate::{
     DaemonProjectStorageResetRequest, DaemonRetryResponse, DaemonServerRequest,
     DaemonServerResponse, DaemonSyncRetryRequest, DaemonSyncStatus, EvaluationCaseDetail,
     ExportEvaluationSetRequest, ExportEvaluationSetResponse, GetRecallFragmentRequest,
-    GetRecallFragmentResponse, ListRecallsRequest, ListRecallsResponse, LoadMemoryRequest,
-    LoadMemoryResponse, ResolveEvaluationCaseRequest, RetrievalRunDetail, RetrievalRunListRequest,
+    GetRecallFragmentResponse, GetRecallSessionRequest, GetRecallSessionResponse,
+    ListRecallsRequest, ListRecallsResponse, LoadMemoryRequest, LoadMemoryResponse,
+    ResolveEvaluationCaseRequest, RetrievalRunDetail, RetrievalRunListRequest,
     RetrievalRunListResponse, RetrievalRunRequest, SearchIndexProjectRequest, SearchIndexStatus,
 };
 use std::time::Duration;
@@ -371,6 +372,21 @@ impl DaemonIpcClient {
     ) -> Result<ListRecallsResponse, DaemonError> {
         self.call(DaemonIpcRequest::new(
             "list_recalls",
+            serde_json::to_value(request)?,
+        ))?
+        .into_payload()
+    }
+
+    /// Fetches a page from the selected Activity session.
+    ///
+    /// # Errors
+    /// Returns IPC, expired snapshot, or session read errors.
+    pub fn get_recall_session(
+        &self,
+        request: GetRecallSessionRequest,
+    ) -> Result<GetRecallSessionResponse, DaemonError> {
+        self.call(DaemonIpcRequest::new(
+            "get_recall_session",
             serde_json::to_value(request)?,
         ))?
         .into_payload()
