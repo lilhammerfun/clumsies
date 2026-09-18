@@ -5,6 +5,30 @@ import XCTest
 
 @MainActor
 final class StartupWindowLayoutTests: XCTestCase {
+    func testCompactLoadingResizesTheSameWindowAroundItsCenter() throws {
+        let controller = StartupWindowController()
+        defer { controller.close() }
+        controller.show(ProgressView("Connecting…"), height: 360)
+        let window = try XCTUnwrap(controller.window)
+        window.setFrameOrigin(NSPoint(x: 150, y: 360))
+        let compactFrame = window.frame
+        XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 360))
+
+        controller.show(NativeServerAccessView(model: NativeServerAccessModel(
+            purpose: .appSignIn, destination: .memoryOnly,
+            recoveryState: NativeAdministratorRecoveryState()
+        )))
+        XCTAssertTrue(controller.window === window)
+        XCTAssertEqual(window.contentView?.frame.size, StartupWindowController.contentSize)
+        XCTAssertEqual(window.frame.midX, compactFrame.midX)
+        XCTAssertEqual(window.frame.midY, compactFrame.midY)
+
+        controller.show(ProgressView("Syncing team memory…"), height: 360)
+        XCTAssertEqual(window.frame, compactFrame)
+        XCTAssertEqual(window.contentMinSize, NSSize(width: 540, height: 360))
+        XCTAssertEqual(window.contentMaxSize, NSSize(width: 540, height: 360))
+    }
+
     func testStartupContentChangesKeepTheSameWindowFrameAndBackground() throws {
         let controller = StartupWindowController()
         defer { controller.close() }
