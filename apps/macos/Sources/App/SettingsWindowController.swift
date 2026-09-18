@@ -83,8 +83,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             navigation.resetForAuthorityChange()
         }
         if window == nil {
-            let host = NSHostingController(rootView: SettingsWindowView(
-                store: store, softwareUpdateController: softwareUpdateController, navigation: navigation,
+            let host = NSHostingController(rootView: SettingsWindowView(softwareUpdateController: softwareUpdateController, navigation: navigation,
                 onShowLogs: onShowLogs
             ).environmentObject(administration).workspaceEnvironment(store))
             host.sizingOptions = []

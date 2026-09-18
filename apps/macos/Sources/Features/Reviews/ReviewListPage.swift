@@ -31,7 +31,7 @@ struct ReviewStatusFilterControl: View {
 }
 
 struct ReviewListPage: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var reviewModel: ReviewsModel
     let reviews: [ReviewRecord]
@@ -60,7 +60,7 @@ struct ReviewListPage: View {
                     } description: {
                         Text(reviewModel.reviewLoadState.failureMessage ?? "Reviews could not be loaded.")
                     } actions: {
-                        Button("Try Again") { Task { await store.reload() } }
+                        Button("Try Again") { Task { await workspaceActions.reload() } }
                     }
                 case .empty:
                     ContentUnavailableView(
@@ -102,7 +102,7 @@ struct ReviewListPage: View {
                     }
                     .listStyle(.inset)
                     .safeAreaInset(edge: .bottom) {
-                        ReviewCollectionStatusBanner(store: store)
+                        ReviewCollectionStatusBanner()
                     }
                 }
             }
@@ -270,7 +270,7 @@ enum ReviewListContentState: Equatable {
 }
 
 private struct ReviewCollectionStatusBanner: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var reviewModel: ReviewsModel
 
     @ViewBuilder
@@ -288,7 +288,7 @@ private struct ReviewCollectionStatusBanner: View {
             .background(.bar)
         case .failed:
             Button("Review refresh failed — Try Again") {
-                Task { await store.reload() }
+                Task { await workspaceActions.reload() }
             }
             .buttonStyle(.plain)
             .font(.caption)

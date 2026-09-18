@@ -167,3 +167,23 @@ final class WorkspaceContext: ObservableObject {
         activeProjectId = snapshot.activeProjectId
     }
 }
+
+enum AdministrationError: LocalizedError, Sendable {
+    case forbidden
+    case unavailable
+    case stale
+    case busy
+
+    var errorDescription: String? {
+        switch self {
+        case .forbidden:
+            "Organization administrator access is required."
+        case .unavailable:
+            "Load this organization page before making changes."
+        case .stale:
+            "This organization page is showing cached data. Refresh with a live Server connection before making changes."
+        case .busy:
+            "Another organization operation is still in progress."
+        }
+    }
+}

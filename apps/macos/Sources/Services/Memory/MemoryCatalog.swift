@@ -418,3 +418,14 @@ final class MemoryCatalog: ObservableObject {
         }
     }
 }
+
+enum DocumentDiffError: LocalizedError, Equatable, Sendable {
+    case baselineUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .baselineUnavailable:
+            "The previous shared content is unavailable, so an accurate Diff cannot be shown."
+        }
+    }
+}

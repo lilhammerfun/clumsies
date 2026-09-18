@@ -134,3 +134,8 @@ final class AgentIntegrationService: ObservableObject {
         legacyAgentAdapterInspectionTask = nil
     }
 }
+
+struct LocalAgentAdapterReconciliationResult: Equatable, Sendable {
+    let conflicts: [DaemonLegacyAgentAdapterConflict]
+    let inspectionWarning: String?
+}

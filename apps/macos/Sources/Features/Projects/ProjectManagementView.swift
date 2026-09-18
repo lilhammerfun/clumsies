@@ -1,31 +1,19 @@
 import AppKit
 import SwiftUI
 
-enum ProjectMetadataValidation {
-    static func isValid(name: String, description: String) -> Bool {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !normalizedName.isEmpty
-            && normalizedName.count <= 120
-            && normalizedDescription.count <= 4_000
-    }
-}
-
 struct ProjectCreationSheet: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var bundleStore: BundleStore
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     @EnvironmentObject private var projectService: ProjectService
     @Environment(\.dismiss) private var dismiss
     @FocusState private var nameFocused: Bool
-    @State private var name = ""
-    @State private var description = ""
-    @State private var repositories: [URL] = []
-    @State private var selectedBundleId: String?
+    @StateObject private var model: ProjectCreationModel
     @State private var showsOptions = false
-    @State private var isCreating = false
-    @State private var errorMessage: String?
-    @State private var idempotencyKey = UUID().uuidString.lowercased()
+
+    init(model: @autoclosure @escaping () -> ProjectCreationModel) {
+        _model = StateObject(wrappedValue: model())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,55 +22,55 @@ struct ProjectCreationSheet: View {
                 .padding(.top, 20)
             Form {
                 Section {
-                    TextField("Name", text: $name).focused($nameFocused)
-                    TextField("Description", text: $description, axis: .vertical)
+                    TextField("Name", text: self.$model.name).focused(self.$nameFocused)
+                    TextField("Description", text: self.$model.description, axis: .vertical)
                         .lineLimit(2...4)
                 }
                 Section {
-                    DisclosureGroup("Additional options", isExpanded: $showsOptions) {
-                        Picker("Initial memory", selection: $selectedBundleId) {
+                    DisclosureGroup("Additional options", isExpanded: self.$showsOptions) {
+                        Picker("Initial memory", selection: self.$model.selectedBundleId) {
                             Text("None").tag(Optional<String>.none)
-                            ForEach(bundleStore.bundles) { bundle in
+                            ForEach(self.bundleStore.bundles) { bundle in
                                 Text(bundle.name).tag(Optional(bundle.id))
                             }
                         }
-                        ForEach(repositories, id: \.path) { repository in
+                        ForEach(self.model.repositories, id: \.path) { repository in
                             HStack {
                                 Text(repository.lastPathComponent).lineLimit(1)
                                     .help(repository.path)
                                 Spacer()
                                 Button {
-                                    repositories.removeAll { $0 == repository }
+                                    self.model.repositories.removeAll { $0 == repository }
                                 } label: { Image(systemName: "minus.circle") }
                                     .buttonStyle(.borderless)
                                     .accessibilityLabel("Remove \(repository.lastPathComponent)")
                             }
                         }
-                        Button("Attach Repositories…") { chooseRepositories() }
+                        Button("Attach Repositories…") { self.chooseRepositories() }
                         Text("Repositories can also be attached later on this Mac.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if let errorMessage {
+                if let errorMessage = model.errorMessage {
                     Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
                 }
             }
             .formStyle(.grouped)
-            .disabled(isCreating)
+            .disabled(self.model.isCreating)
             HStack {
-                if isCreating { ProgressView().controlSize(.small) }
+                if self.model.isCreating { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction).disabled(isCreating)
-                Button("Create") { create() }
+                Button("Cancel", role: .cancel) { self.dismiss() }
+                    .keyboardShortcut(.cancelAction).disabled(self.model.isCreating)
+                Button("Create") { self.create() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!ProjectMetadataValidation.isValid(name: name, description: description) || isCreating)
+                    .disabled(!ProjectMetadataValidation.isValid(name: self.model.name, description: self.model.description) || self.model.isCreating)
             }
             .padding(16)
         }
         .frame(width: 480, height: showsOptions ? 500 : 320)
-        .interactiveDismissDisabled(isCreating)
-        .onAppear { nameFocused = true }
+        .interactiveDismissDisabled(model.isCreating)
+        .onAppear { self.nameFocused = true }
     }
 
     private func chooseRepositories() {
@@ -93,36 +81,25 @@ struct ProjectCreationSheet: View {
         panel.prompt = "Attach"
         panel.begin { response in
             guard response == .OK else { return }
-            let existing = Set(repositories.map(\.standardized.path))
-            repositories += panel.urls.map(\.standardized).filter { !existing.contains($0.path) }
-            repositories.sort { $0.path < $1.path }
+            let existing = Set(model.repositories.map(\.standardized.path))
+            self.model.repositories += panel.urls.map(\.standardized).filter { !existing.contains($0.path) }
+            self.model.repositories.sort { $0.path < $1.path }
         }
     }
 
     private func create() {
-        guard !isCreating else { return }
-        isCreating = true
-        errorMessage = nil
         Task {
-            do {
-                let id = try await projectService.createProject(
-                    name: name, description: description, idempotencyKey: idempotencyKey,
-                    repositoryPaths: repositories.map(\.path), bundleId: selectedBundleId
-                )
-                workspaceNavigation.selectedSection = .memory
-                workspaceNavigation.showsProjectSettings = false
-                await store.selectProject(id)
-                dismiss()
-            } catch {
-                errorMessage = error.localizedDescription
-                isCreating = false
-            }
+            guard let id = await model.create() else { return }
+            workspaceNavigation.selectedSection = .memory
+            workspaceNavigation.showsProjectSettings = false
+            await workspaceActions.selectProject(id)
+            dismiss()
         }
     }
 }
 
 struct ProjectUnavailableView: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
 
@@ -130,20 +107,20 @@ struct ProjectUnavailableView: View {
         ContentUnavailableView {
             Label("No Projects", systemImage: "folder")
         } description: {
-            if workspaceContext.canCreateProject {
+            if self.workspaceContext.canCreateProject {
                 Text("Create a Project to start organizing local memory.")
             } else {
                 Text("Ask an organization administrator to grant you access to a Project.")
             }
         } actions: {
-            if workspaceContext.canCreateProject {
+            if self.workspaceContext.canCreateProject {
                 Button("New Project…") {
-                    workspaceNavigation.presentProjectCreation()
+                    self.workspaceNavigation.presentProjectCreation()
                 }
                 .keyboardShortcut(.defaultAction)
             } else {
                 Button("Refresh") {
-                    Task { await store.reload() }
+                    Task { await workspaceActions.reload() }
                 }
             }
         }
@@ -151,7 +128,7 @@ struct ProjectUnavailableView: View {
 }
 
 struct ProjectSettingsView: View {
-    let store: WorkspaceCoordinator
+    @EnvironmentObject private var projectService: ProjectService
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     @EnvironmentObject private var administration: AdministrationModel
@@ -161,24 +138,22 @@ struct ProjectSettingsView: View {
     var body: some View {
         Form {
             if let project = administration.project(id: projectId) {
-                ProjectConfigurationSections(
-                    store: store,
-                    project: project,
-                    allowsMutation: administration.canMutateProject(projectId),
+                ProjectConfigurationSections(project: project,
+                    allowsMutation: self.administration.canMutateProject(self.projectId),
                     onDeleted: {
-                        if workspaceContext.activeProjectId == projectId { workspaceNavigation.showsProjectSettings = false }
-                        onDeleted()
+                        if self.workspaceContext.activeProjectId == self.projectId { self.workspaceNavigation.showsProjectSettings = false }
+                        self.onDeleted()
                     }
                 )
                 .id(project.id)
-                if projectId == workspaceContext.activeProjectId {
-                    ProjectLocalSetupSettings(store: store)
-                    ProjectMemoryCacheSettings(store: store)
+                if self.projectId == self.workspaceContext.activeProjectId {
+                    ProjectLocalSetupSettings(model: ProjectRepositoriesModel(context: workspaceContext, projects: projectService))
+                    ProjectMemoryCacheSettings(model: ProjectStorageModel(context: workspaceContext))
                 }
             } else if let error = administration.projectDetailStates[projectId]?.errorMessage {
                 Text(error).foregroundStyle(.red).textSelection(.enabled)
                 Button("Try Again") {
-                    Task { await administration.loadProject(id: projectId, force: true) }
+                    Task { await self.administration.loadProject(id: self.projectId, force: true) }
                 }
             } else {
                 ProgressView("Loading project…")
@@ -188,13 +163,12 @@ struct ProjectSettingsView: View {
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task(id: "\(projectId):\(administration.refreshGeneration)") {
-            await administration.loadProject(id: projectId, force: true)
+            await self.administration.loadProject(id: self.projectId, force: true)
         }
     }
 }
 
 struct OrganizationProjectsView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var administration: AdministrationModel
     @State private var path: [String] = []
 
@@ -203,11 +177,11 @@ struct OrganizationProjectsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if state.isLoading { ProgressView("Loading projects…") }
-                if administration.snapshot?.projects.isEmpty == true, !state.isLoading {
+                if self.state.isLoading { ProgressView("Loading projects…") }
+                if self.administration.snapshot?.projects.isEmpty == true, !self.state.isLoading {
                     Text("No projects yet.").foregroundStyle(.secondary)
                 }
-                ForEach(administration.snapshot?.projects ?? []) { project in
+                ForEach(self.administration.snapshot?.projects ?? []) { project in
                     NavigationLink(value: project.id) {
                         HStack {
                             Label(project.name, systemImage: "folder")
@@ -216,24 +190,23 @@ struct OrganizationProjectsView: View {
                         }
                     }
                 }
-                if state.nextCursor != nil {
+                if self.state.nextCursor != nil {
                     Button("Show More") {
-                        Task { await administration.load(section: .projects, loadMore: true) }
+                        Task { await self.administration.load(section: .projects, loadMore: true) }
                     }
-                    .disabled(state.isLoading)
+                    .disabled(self.state.isLoading)
                 }
             }
             .navigationTitle("Organization Projects")
             .navigationDestination(for: String.self) { projectId in
-                ProjectSettingsView(store: store, projectId: projectId, onDeleted: { path = [] })
-                    .navigationTitle(administration.project(id: projectId)?.name ?? "Project")
+                ProjectSettingsView(projectId: projectId, onDeleted: { self.path = [] })
+                    .navigationTitle(self.administration.project(id: projectId)?.name ?? "Project")
             }
         }
     }
 }
 
 private struct ProjectConfigurationSections: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let project: AdminProjectRecord
@@ -252,37 +225,37 @@ private struct ProjectConfigurationSections: View {
                     Text(state.errorMessage ?? "These project details are cached. Refresh before making changes.")
                         .foregroundStyle(.secondary)
                     Button("Try Again") {
-                        Task { await administration.loadProject(id: project.id, force: true) }
+                        Task { await self.administration.loadProject(id: self.project.id, force: true) }
                     }
-                    .disabled(workspaceContext.isMutatingAdministration || state.isLoading)
+                    .disabled(self.workspaceContext.isMutatingAdministration || state.isLoading)
                 }
             }
             Section {
                 LabeledContent("Name") {
-                    Text(project.name).textSelection(.enabled)
-                    if workspaceContext.canManageProject(project.id) {
-                        Button("Edit…") { showsEdit = true }
-                            .disabled(!allowsMutation)
+                    Text(self.project.name).textSelection(.enabled)
+                    if self.workspaceContext.canManageProject(self.project.id) {
+                        Button("Edit…") { self.showsEdit = true }
+                            .disabled(!self.allowsMutation)
                     }
                 }
-                if !project.description.isEmpty {
+                if !self.project.description.isEmpty {
                     LabeledContent("Description") {
-                        Text(project.description)
+                        Text(self.project.description)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }
                 }
             }
             Section("Members") {
-                if administration.projectDetailStates[project.id]?.isLoading == true
-                    || administration.loadingProjectIds.contains(project.id) {
+                if self.administration.projectDetailStates[self.project.id]?.isLoading == true
+                    || self.administration.loadingProjectIds.contains(self.project.id) {
                     ProgressView("Loading members…")
                         .controlSize(.small)
-                } else if projectMembers.isEmpty {
+                } else if self.projectMembers.isEmpty {
                     Text("No project members.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(projectMembers) { member in
+                    ForEach(self.projectMembers) { member in
                         HStack(spacing: 10) {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(member.user.displayName ?? member.user.email)
@@ -294,10 +267,10 @@ private struct ProjectConfigurationSections: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            if workspaceContext.canManageProject(project.id) {
+                            if self.workspaceContext.canManageProject(self.project.id) {
                                 Menu {
-                                    Button("Remove Member…", role: .destructive) { pendingMemberRemoval = member }
-                                        .disabled(!allowsMemberMutation)
+                                    Button("Remove Member…", role: .destructive) { self.pendingMemberRemoval = member }
+                                        .disabled(!self.allowsMemberMutation)
                                 } label: {
                                     Image(systemName: "ellipsis.circle")
                                 }
@@ -309,31 +282,29 @@ private struct ProjectConfigurationSections: View {
                         }
                     }
                 }
-                if workspaceContext.canManageProject(project.id) {
-                    Button("Add Member…") { showsAddMember = true }
-                        .disabled(!allowsMemberMutation)
+                if self.workspaceContext.canManageProject(self.project.id) {
+                    Button("Add Member…") { self.showsAddMember = true }
+                        .disabled(!self.allowsMemberMutation)
                 }
             }
             Section {
-                if workspaceContext.canManageProject(project.id) {
-                    Button("Delete Project…", role: .destructive) { confirmsProjectDeletion = true }
-                        .disabled(!allowsMutation)
+                if self.workspaceContext.canManageProject(self.project.id) {
+                    Button("Delete Project…", role: .destructive) { self.confirmsProjectDeletion = true }
+                        .disabled(!self.allowsMutation)
                 }
                 if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
         }
         .sheet(isPresented: $showsEdit) {
-            ProjectDetailsSheet(
-                store: store,
-                project: project
+            ProjectDetailsSheet(project: self.project
             )
         }
         .sheet(isPresented: $showsAddMember) {
-            ProjectMemberSheet(store: store, projectId: project.id)
+            ProjectMemberSheet(projectId: self.project.id, administration: self.administration)
         }
         .confirmationDialog("Delete project?", isPresented: $confirmsProjectDeletion) {
-            Button("Delete \(project.name)", role: .destructive) {
-                mutate { try await administration.deleteAdminProject(project, onDeleted: onDeleted) }
+            Button("Delete \(self.project.name)", role: .destructive) {
+                self.mutate { try await self.administration.deleteAdminProject(self.project, onDeleted: self.onDeleted) }
             }
         } message: {
             Text("This permanently deletes the project and its project data.")
@@ -341,16 +312,16 @@ private struct ProjectConfigurationSections: View {
         .confirmationDialog(
             "Remove project member?",
             isPresented: Binding(
-                get: { pendingMemberRemoval != nil },
-                set: { if !$0 { pendingMemberRemoval = nil } }
+                get: { self.pendingMemberRemoval != nil },
+                set: { if !$0 { self.pendingMemberRemoval = nil } }
             ),
             presenting: pendingMemberRemoval
         ) { member in
             Button("Remove \(member.user.displayName ?? member.user.email)", role: .destructive) {
-                mutate {
-                    try await administration.deleteAdminProjectMember(projectId: project.id, userId: member.id)
+                self.mutate {
+                    try await self.administration.deleteAdminProjectMember(projectId: self.project.id, userId: member.id)
                 }
-                pendingMemberRemoval = nil
+                self.pendingMemberRemoval = nil
             }
         } message: { member in
             Text("\(member.user.email) will lose access to this project.")
@@ -371,14 +342,13 @@ private struct ProjectConfigurationSections: View {
         errorMessage = nil
         Task {
             do { try await operation() }
-            catch { errorMessage = error.localizedDescription }
+            catch { self.errorMessage = error.localizedDescription }
         }
     }
 }
 
 private struct ProjectDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     @State private var original: AdminProjectRecord
@@ -387,10 +357,8 @@ private struct ProjectDetailsSheet: View {
     @State private var errorMessage: String?
 
     init(
-        store: WorkspaceCoordinator,
         project: AdminProjectRecord
     ) {
-        self.store = store
         _original = State(initialValue: project)
         _name = State(initialValue: project.name)
         _description = State(initialValue: project.description)
@@ -400,22 +368,22 @@ private struct ProjectDetailsSheet: View {
         VStack(spacing: 0) {
             Form {
                 Section("Project details") {
-                    TextField("Name", text: $name)
-                    TextField("Description", text: $description, axis: .vertical)
+                    TextField("Name", text: self.$name)
+                    TextField("Description", text: self.$description, axis: .vertical)
                         .lineLimit(3...6)
                 }
-                .disabled(workspaceContext.isMutatingAdministration)
+                .disabled(self.workspaceContext.isMutatingAdministration)
                 if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
             .formStyle(.grouped)
             Divider()
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(workspaceContext.isMutatingAdministration)
-                Button("Save") { save() }
+                Button("Cancel", role: .cancel) { self.dismiss() }
+                    .disabled(self.workspaceContext.isMutatingAdministration)
+                Button("Save") { self.save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!canSave)
+                    .disabled(!self.canSave)
             }
             .padding(12)
         }
@@ -435,14 +403,14 @@ private struct ProjectDetailsSheet: View {
         errorMessage = nil
         Task {
             do {
-                _ = try await administration.updateAdminProject(
-                    original,
-                    name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                    description: description
+                _ = try await self.administration.updateAdminProject(
+                    self.original,
+                    name: self.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                    description: self.description
                 )
-                dismiss()
+                self.dismiss()
             } catch {
-                errorMessage = error.localizedDescription
+                self.errorMessage = error.localizedDescription
             }
         }
     }
@@ -450,28 +418,25 @@ private struct ProjectDetailsSheet: View {
 
 private struct ProjectMemberSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let projectId: String
-    @State private var query = ""
-    @State private var members: [UserReference] = []
-    @State private var selectedId: String?
-    @State private var nextCursor: String?
-    @State private var isLoading = true
-    @State private var errorMessage: String?
-    @State private var loadFailed = false
-    @State private var loadMoreTask: Task<Void, Never>?
+    @StateObject private var model: ProjectMemberPickerModel
+
+    init(projectId: String, administration: AdministrationModel) {
+        self.projectId = projectId
+        _model = StateObject(wrappedValue: ProjectMemberPickerModel(projectId: projectId, administration: administration))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add project member").font(.headline)
-            ClassicSearchField(text: $query, prompt: "Search members", width: 404,
+            ClassicSearchField(text: self.$model.query, prompt: "Search members", width: 404,
                 accessibilityIdentifier: "project-member-search")
                 .frame(height: 24)
-                .disabled(workspaceContext.isMutatingAdministration)
-            List(selection: $selectedId) {
-                ForEach(availableMembers) { member in
+                .disabled(self.workspaceContext.isMutatingAdministration)
+            List(selection: self.$model.selectedId) {
+                ForEach(self.model.availableMembers) { member in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(member.displayName ?? member.email)
                         if member.displayName != nil {
@@ -482,133 +447,73 @@ private struct ProjectMemberSheet: View {
                 }
             }
             .overlay {
-                if availableMembers.isEmpty {
-                    if isLoading {
+                if self.model.availableMembers.isEmpty {
+                    if self.model.isLoading {
                         ProgressView("Loading members…")
-                    } else if errorMessage == nil {
+                    } else if model.errorMessage == nil {
                         Text("No available members.").foregroundStyle(.secondary)
                     }
                 }
             }
-            .disabled(workspaceContext.isMutatingAdministration)
-            if let errorMessage {
+            .disabled(self.workspaceContext.isMutatingAdministration)
+            if let errorMessage = model.errorMessage {
                 HStack {
                     AdministrationInlineError(message: errorMessage)
-                    if loadFailed {
+                    if self.model.loadFailed {
                         Button("Try Again") {
-                            loadMoreTask = Task { await loadMembers(cursor: members.isEmpty ? nil : nextCursor) }
+                            self.model.retry()
                         }
-                        .disabled(isLoading || workspaceContext.isMutatingAdministration)
+                        .disabled(self.model.isLoading || self.workspaceContext.isMutatingAdministration)
                     }
                 }
             }
             HStack {
-                if let nextCursor {
+                if model.nextCursor != nil {
                     Button("Show More") {
-                        loadMoreTask = Task { await loadMembers(cursor: nextCursor) }
+                        self.model.loadMore()
                     }
-                    .disabled(isLoading || workspaceContext.isMutatingAdministration)
+                    .disabled(self.model.isLoading || self.workspaceContext.isMutatingAdministration)
                 }
-                if isLoading && !members.isEmpty { ProgressView().controlSize(.small) }
+                if self.model.isLoading && !self.model.members.isEmpty { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(workspaceContext.isMutatingAdministration)
-                Button("Add") { add() }
+                Button("Cancel", role: .cancel) { self.dismiss() }
+                    .disabled(self.workspaceContext.isMutatingAdministration)
+                Button("Add") { Task { if await self.model.add() { self.dismiss() } } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!canAdd)
+                    .disabled(!self.model.canAdd)
             }
         }
         .padding(18)
         .frame(width: 440, height: 430)
         .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
-        .onChange(of: query) { _, _ in
-            loadMoreTask?.cancel()
-            members = []
-            selectedId = nil
-            nextCursor = nil
-            errorMessage = nil
-            loadFailed = false
-            isLoading = true
+        .task(id: model.searchGeneration) {
+            await self.model.search()
         }
-        .task(id: query) {
-            do {
-                try await Task.sleep(for: .milliseconds(200))
-                await loadMembers()
-            } catch {}
-        }
-        .onDisappear { loadMoreTask?.cancel() }
+        .onDisappear { self.model.cancel() }
     }
 
-    private var availableMembers: [UserReference] {
-        let existingIds = Set((administration.projectMembers[projectId] ?? []).map(\.id))
-        return members.filter { !existingIds.contains($0.id) }
-    }
-
-    private var canAdd: Bool {
-        let detail = administration.projectDetailStates[projectId]
-        return administration.canMutateProject(projectId) && detail?.isStale != true && detail?.isLoading != true
-            && !administration.loadingProjectIds.contains(projectId)
-            && administration.projectMembers[projectId] != nil
-            && availableMembers.contains { $0.id == selectedId }
-    }
-
-    private func loadMembers(cursor: String? = nil) async {
-        let requestedQuery = query
-        isLoading = true
-        errorMessage = nil
-        loadFailed = false
-        defer { if requestedQuery == query && !Task.isCancelled { isLoading = false } }
-        do {
-            let response = try await administration.searchProjectMemberCandidates(projectId: projectId, query: requestedQuery, cursor: cursor)
-            try Task.checkCancellation()
-            guard requestedQuery == query else { return }
-            if cursor == nil { members = [] }
-            let existingIds = Set(members.map(\.id))
-            members.append(contentsOf: response.items.filter { !existingIds.contains($0.id) })
-            nextCursor = response.pageInfo.nextCursor
-        } catch is CancellationError {
-        } catch {
-            if requestedQuery == query && !Task.isCancelled {
-                errorMessage = error.localizedDescription
-                loadFailed = true
-            }
-        }
-    }
-
-    private func add() {
-        guard canAdd, let selectedId else { return }
-        errorMessage = nil
-        loadFailed = false
-        Task {
-            do {
-                try await administration.addAdminProjectMember(projectId: projectId, userId: selectedId, role: .member)
-                dismiss()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
 }
 
 private struct ProjectLocalSetupSettings: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var projectService: ProjectService
-    @State private var bindings: [DaemonProjectBinding] = []
-    @State private var isLoading = false
-    @State private var errorMessage: String?
+    @StateObject private var model: ProjectRepositoriesModel
     @State private var bindingToRemove: DaemonProjectBinding?
+
+    init(model: @autoclosure @escaping () -> ProjectRepositoriesModel) {
+        _model = StateObject(wrappedValue: model())
+    }
 
     var body: some View {
         Section {
             Text("These repository bindings apply only on this Mac. Other members bind their own local folders.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if isLoading, bindings.isEmpty {
+            if self.model.isLoading, self.model.bindings.isEmpty {
                 ProgressView()
                     .controlSize(.small)
             } else {
-                ForEach(bindings) { binding in
+                ForEach(self.model.bindings) { binding in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(URL(fileURLWithPath: binding.workspaceRoot).lastPathComponent)
@@ -629,7 +534,7 @@ private struct ProjectLocalSetupSettings: View {
                             }
                             Divider()
                             Button("Remove Repository", role: .destructive) {
-                                bindingToRemove = binding
+                                self.bindingToRemove = binding
                             }
                         } label: {
                             Image(systemName: "ellipsis")
@@ -643,13 +548,13 @@ private struct ProjectLocalSetupSettings: View {
             }
 
             Button {
-                chooseRepositories()
+                self.chooseRepositories()
             } label: {
                 Label("Add Repositories…", systemImage: "plus")
             }
-            .disabled(workspaceContext.activeProjectId == nil || isLoading)
+            .disabled(self.workspaceContext.activeProjectId == nil || self.model.isLoading)
 
-            if let errorMessage {
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .textSelection(.enabled)
                     .foregroundStyle(.red)
@@ -659,44 +564,26 @@ private struct ProjectLocalSetupSettings: View {
             Text("Repositories on This Mac")
         }
         .task(id: [workspaceContext.activeProjectId ?? "", projectService.projectBindingsGeneration.uuidString]) {
-            await load()
+            await self.model.load()
         }
         .confirmationDialog(
             "Remove Repository?",
             isPresented: Binding(
-                get: { bindingToRemove != nil },
-                set: { if !$0 { bindingToRemove = nil } }
+                get: { self.bindingToRemove != nil },
+                set: { if !$0 { self.bindingToRemove = nil } }
             ),
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
                 guard let binding = bindingToRemove else { return }
-                bindingToRemove = nil
-                Task { await remove(binding) }
+                self.bindingToRemove = nil
+                Task { await self.model.remove(binding) }
             }
             Button("Cancel", role: .cancel) {
-                bindingToRemove = nil
+                self.bindingToRemove = nil
             }
         } message: {
             Text("Clumsies will remove the Agent integrations managed in Settings and stop resolving this repository to the Project.")
-        }
-    }
-
-    private func load() async {
-        guard let projectId = workspaceContext.activeProjectId else {
-            bindings = []
-            return
-        }
-        bindings = []
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-        do {
-            bindings = try await projectService.projectBindings(projectId)
-        } catch is CancellationError {
-            return
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -710,32 +597,8 @@ private struct ProjectLocalSetupSettings: View {
         panel.prompt = "Add"
         panel.begin { response in
             guard response == .OK else { return }
-            Task {
-                isLoading = true
-                errorMessage = nil
-                do {
-                    _ = try await projectService.addProjectRepositories(
-                        panel.urls.map(\.path),
-                        projectId: projectId
-                    )
-                    await load()
-                } catch {
-                    errorMessage = error.localizedDescription
-                    isLoading = false
-                }
-            }
+            Task { await model.add(panel.urls, projectId: projectId) }
         }
     }
 
-    private func remove(_ binding: DaemonProjectBinding) async {
-        isLoading = true
-        errorMessage = nil
-        do {
-            try await projectService.removeProjectRepository(binding)
-            await load()
-        } catch {
-            errorMessage = error.localizedDescription
-            isLoading = false
-        }
-    }
 }

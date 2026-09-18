@@ -1,15 +1,7 @@
 import AppKit
 import SwiftUI
 
-private struct DocumentDiffIdentity: Hashable {
-    let item: MemoryListItem
-    let localDocument: EditableMemoryDocument
-    let staleResourceGeneration: UUID?
-    let retryRequest: Int
-}
-
 struct DocumentSessionView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var draftStore: DraftStore
@@ -22,15 +14,9 @@ struct DocumentSessionView: View {
     let item: MemoryListItem
     let mode: WorkbenchTabMode
 
-    @State private var document: EditableMemoryDocument
-    @State private var authoritativeDocument: EditableMemoryDocument
-    @State private var suppressesSaving = false
+    @StateObject private var model: DocumentEditorModel
     @State private var reviewDraft: LocalDraft?
     @State private var reconciliationUpdateRequest = 0
-    @State private var documentDiffPresentation: UnifiedDiffPresentation?
-    @State private var documentPathChanges: [DocumentPathChange] = []
-    @State private var loadsDocumentDiff = false
-    @State private var documentDiffError: String?
     @State private var documentDiffRetryRequest = 0
     @State private var confirmsOrganizationDeletion = false
 
@@ -38,12 +24,10 @@ struct DocumentSessionView: View {
         documentSessions.documentSessionKey(for: item)
     }
 
-    init(store: WorkspaceCoordinator, item: MemoryListItem, mode: WorkbenchTabMode) {
-        self.store = store
+    init(item: MemoryListItem, mode: WorkbenchTabMode, model: @autoclosure @escaping () -> DocumentEditorModel) {
         self.item = item
         self.mode = mode
-        _document = State(initialValue: store.edits.pendingDocument(for: item) ?? item.document)
-        _authoritativeDocument = State(initialValue: item.document)
+        _model = StateObject(wrappedValue: model())
     }
 
     var body: some View {
@@ -51,52 +35,53 @@ struct DocumentSessionView: View {
             if let candidate = documentSessions.pendingDocumentReconciliationCandidates[item.id] {
                 DraftReconciliationView(
                     candidate: candidate,
-                    updateRequest: reconciliationUpdateRequest,
+                    updateRequest: self.reconciliationUpdateRequest,
                     usesContextualUpdateAction: true,
-                    initialResolvedState: documentSessions.documentReconciliationResolution(for: item.id),
+                    initialResolvedState: self.documentSessions.documentReconciliationResolution(for: self.item.id),
                     onResolvedStateChange: {
-                        documentSessions.updateDocumentReconciliationResolution($0, for: item.id)
+                        self.documentSessions.updateDocumentReconciliationResolution($0, for: self.item.id)
                     },
-                    onUpdateStateChange: publishReconciliationToolbarState,
-                    onCancel: closeReconciliation,
-                    onApplied: closeReconciliation
+                    onUpdateStateChange: self.publishReconciliationToolbarState,
+                    onCancel: self.closeReconciliation,
+                    onApplied: self.closeReconciliation
                 ) { resolvedState in
-                    try await reconciler.applyReconciliation(
+                    try await self.reconciler.applyReconciliation(
                         draftId: candidate.draftId,
                         candidate: candidate,
                         resolvedState: resolvedState,
-                        documentItemId: item.id
+                        documentItemId: self.item.id
                     )
                 }
                 .id(candidate.candidateId)
             } else {
-                documentContent
+                self.documentContent
             }
         }
         .onChange(of: item.document) { _, latest in
-            adoptAuthoritativeDocument(latest)
+            self.model.adoptAuthoritativeDocument(latest)
         }
         .onChange(of: memoryCatalog.documentContentGeneration(for: item.id)) { _, _ in
-            adoptAuthoritativeDocument(item.document)
+            self.model.adoptAuthoritativeDocument(self.item.document)
         }
         .onChange(of: workspaceNavigation.pendingDocumentCommand) { _, command in
-            handleDocumentCommand(command)
+            self.handleDocumentCommand(command)
         }
         .onAppear {
-            handleDocumentCommand(workspaceNavigation.pendingDocumentCommand)
+            self.handleDocumentCommand(self.workspaceNavigation.pendingDocumentCommand)
         }
         .onDisappear {
-            flushSave()
-            clearReconciliationToolbarState()
+            self.model.flushSave(item: self.item, mode: self.mode)
+            self.clearReconciliationToolbarState()
         }
         .sheet(item: $reviewDraft) { draft in
             ReviewRequestSheet(
-                initialTitle: document.title,
-                loadCandidates: { [try await loadReviewCandidate(draft)] }
+                initialTitle: self.model.document.title,
+                loadCandidates: { [try await self.model.loadReviewCandidate(draft, item: self.item)] }
             ) { title, description, reconciliations in
                 let reconciliation = reconciliations.first
-                try await submitReview(
+                try await self.model.submitReview(
                     draft,
+                    item: self.item,
                     title: title,
                     description: description,
                     candidate: reconciliation?.candidate,
@@ -107,7 +92,7 @@ struct DocumentSessionView: View {
         .alert("Delete File?", isPresented: $confirmsOrganizationDeletion) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                moveToTrash()
+                self.model.moveToTrash(item: self.item)
             }
         } message: {
             Text(
@@ -119,28 +104,28 @@ struct DocumentSessionView: View {
 
     private var documentContent: some View {
         Group {
-            if mode == .diff {
-                documentDiff
-            } else if item.draft?.isDeletion == true {
+            if self.mode == .diff {
+                self.documentDiff
+            } else if self.item.draft?.isDeletion == true {
                 ContentUnavailableView(
-                    item.draft?.scope == .org
+                    self.item.draft?.scope == .org
                         ? "Pending organization deletion"
                         : "Pending deletion",
                     systemImage: "trash",
                     description: Text(
-                        item.draft?.scope == .org
+                        self.item.draft?.scope == .org
                             ? "Discard the draft proposal to keep this organization memory."
                             : "Discard the draft to keep this memory."
                     )
                 )
-            } else if mode == .preview {
-                MarkdownPreview(source: renderedSource)
+            } else if self.mode == .preview {
+                MarkdownPreview(source: self.renderedSource)
             } else {
-                editor
+                self.editor
                     .disabled(
-                        !draftStore.canEditMemory(item)
-                            || workspaceContext.isSwitchingMemoryContext
-                            || documentSessions.isSynchronizingDocument(item.id)
+                        !self.draftStore.canEditMemory(self.item)
+                            || self.workspaceContext.isSwitchingMemoryContext
+                            || self.documentSessions.isSynchronizingDocument(self.item.id)
                     )
             }
         }
@@ -157,13 +142,13 @@ struct DocumentSessionView: View {
         GeometryReader { geometry in
             ScrollView([.vertical]) {
                 VStack(alignment: .leading, spacing: 0) {
-                    if !documentPathChanges.isEmpty {
+                    if !self.model.documentPathChanges.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(documentPathChanges.indices, id: \.self) { index in
+                            ForEach(self.model.documentPathChanges.indices, id: \.self) { index in
                                 HStack(spacing: 6) {
                                     Image(systemName: "arrow.right")
                                         .foregroundStyle(.secondary)
-                                    Text(pathChangeSummary(documentPathChanges[index]))
+                                    Text(self.pathChangeSummary(self.model.documentPathChanges[index]))
                                         .textSelection(.enabled)
                                 }
                             }
@@ -175,21 +160,21 @@ struct DocumentSessionView: View {
                         .background(Color.accentColor.opacity(0.06))
                     }
 
-                    if let presentation = documentDiffPresentation,
+                    if let presentation = model.documentDiffPresentation,
                        presentation.changedLineCount > 0 {
                         UnifiedDiffView(presentation: presentation)
-                    } else if loadsDocumentDiff {
+                    } else if self.model.loadsDocumentDiff {
                         ProgressView()
                             .controlSize(.small)
-                    } else if let documentDiffError {
+                    } else if let documentDiffError = model.documentDiffError {
                         ContentUnavailableView {
                             Label("Unable to Load Diff", systemImage: "exclamationmark.triangle")
                         } description: {
                             Text(documentDiffError)
                         } actions: {
-                            Button("Retry") { documentDiffRetryRequest += 1 }
+                            Button("Retry") { self.documentDiffRetryRequest += 1 }
                         }
-                    } else if documentPathChanges.isEmpty {
+                    } else if self.model.documentPathChanges.isEmpty {
                         ContentUnavailableView(
                             "No Changes",
                             systemImage: "doc.text",
@@ -200,18 +185,18 @@ struct DocumentSessionView: View {
                 .frame(
                     maxWidth: .infinity,
                     minHeight: geometry.size.height,
-                    alignment: centersDocumentDiffStatus ? .center : .topLeading
+                    alignment: self.centersDocumentDiffStatus ? .center : .topLeading
                 )
             }
         }
         .task(id: identity) {
-            await loadDocumentDiff(for: identity)
+            await self.model.loadDocumentDiff(for: identity)
         }
     }
 
     private var centersDocumentDiffStatus: Bool {
-        documentPathChanges.isEmpty
-            && (documentDiffPresentation?.changedLineCount ?? 0) == 0
+        model.documentPathChanges.isEmpty
+            && (model.documentDiffPresentation?.changedLineCount ?? 0) == 0
     }
 
     /// A path-only change has no content diff. Surface draft and shared
@@ -237,41 +222,12 @@ struct DocumentSessionView: View {
     private var documentDiffIdentity: DocumentDiffIdentity {
         DocumentDiffIdentity(
             item: item,
-            localDocument: document,
+            localDocument: model.document,
             staleResourceGeneration: item.resource.flatMap {
-                memoryCatalog.staleResourceGeneration(for: $0.id)
+                self.memoryCatalog.staleResourceGeneration(for: $0.id)
             },
             retryRequest: documentDiffRetryRequest
         )
-    }
-
-    private func loadDocumentDiff(for identity: DocumentDiffIdentity) async {
-        guard mode == .diff else { return }
-        documentDiffPresentation = nil
-        documentDiffError = nil
-        documentPathChanges = memoryModel.documentPathChanges(for: identity.item)
-        loadsDocumentDiff = true
-
-        do {
-            let result = try await memoryModel.documentDiffPresentation(
-                for: identity.item,
-                localText: identity.localDocument.body
-            )
-            try Task.checkCancellation()
-            guard identity == documentDiffIdentity, mode == .diff else { return }
-            documentDiffPresentation = result?.presentation
-            documentPathChanges = result?.pathChanges ?? []
-            loadsDocumentDiff = false
-        } catch is CancellationError {
-            // `.task(id:)` immediately starts a replacement for a changed
-            // identity. Let that task remain the owner of loading state.
-        } catch {
-            guard !Task.isCancelled,
-                  identity == documentDiffIdentity,
-                  mode == .diff else { return }
-            documentDiffError = error.localizedDescription
-            loadsDocumentDiff = false
-        }
     }
 
     @ViewBuilder
@@ -284,13 +240,13 @@ struct DocumentSessionView: View {
 
     private var editorText: Binding<String> {
         Binding(
-            get: { document.body },
+            get: { self.model.document.body },
             set: { nextBody in
-                guard nextBody != document.body else { return }
-                var nextDocument = document
+                guard nextBody != self.model.document.body else { return }
+                var nextDocument = self.model.document
                 nextDocument.body = nextBody
-                document = nextDocument
-                stageSave(nextDocument)
+                self.model.document = nextDocument
+                self.model.stageSave(nextDocument, item: self.item, mode: self.mode)
             }
         )
     }
@@ -298,28 +254,7 @@ struct DocumentSessionView: View {
     private var renderedSource: String {
         switch item.kind {
         case .context, .rules, .workflows:
-            return document.body
-        }
-    }
-
-    private func adoptAuthoritativeDocument(_ latest: EditableMemoryDocument) {
-        let previous = authoritativeDocument
-        authoritativeDocument = latest
-        // A resource sync can replace the authoritative document while this
-        // session stays alive. Adopt it only when the editor still matches the
-        // previous snapshot so an in-flight local edit is never lost.
-        if document == previous {
-            document = latest
-            return
-        }
-        // A file-tree rename is independent of a dirty Source body. Merge
-        // path/title changes from the authoritative draft while keeping the
-        // user's in-flight text, so the next autosave cannot rename it back.
-        if document.path == previous.path {
-            document.path = latest.path
-        }
-        if document.title == previous.title {
-            document.title = latest.title
+            return model.document.body
         }
     }
 
@@ -330,7 +265,7 @@ struct DocumentSessionView: View {
         case .requestReview(_, let draft):
             reviewDraft = draft
         case .discardDraft(_, let draft):
-            discard(draft)
+            model.discard(draft, item: item)
         case .applyReconciliation:
             reconciliationUpdateRequest += 1
         case .closeReconciliation:
@@ -368,76 +303,4 @@ struct DocumentSessionView: View {
         workspaceNavigation.documentReconciliationToolbarState = nil
     }
 
-    private func stageSave(_ nextDocument: EditableMemoryDocument) {
-        guard !suppressesSaving,
-              draftStore.canEditMemory(item),
-              !workspaceContext.isSwitchingMemoryContext,
-              !documentSessions.isSynchronizingDocument(item.id),
-              mode == .source,
-              nextDocument != item.document else { return }
-        draftStore.stageDocumentSave(item, document: nextDocument)
-    }
-
-    private func flushSave() {
-        guard !suppressesSaving,
-              mode == .source else { return }
-        Task {
-            do {
-                try await draftStore.flushDocumentSave(item)
-            } catch {
-                workspaceFeedback.errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func submitReview(
-        _ draft: LocalDraft,
-        title: String,
-        description: String,
-        candidate: DraftReconciliationCandidate?,
-        resolvedState: ReconciliationResourceState?
-    ) async throws {
-        try await draftStore.flushDocumentSave(item)
-        let latest = draftStore.drafts.first { $0.id == draft.id } ?? draft
-        try await reviewModel.requestReview(
-            for: latest,
-            title: title,
-            description: description,
-            candidate: candidate,
-            resolvedState: resolvedState
-        )
-    }
-
-    private func loadReviewCandidate(_ draft: LocalDraft) async throws -> DraftReconciliationCandidate {
-        try await draftStore.flushDocumentSave(item)
-        let latest = draftStore.drafts.first { $0.id == draft.id } ?? draft
-        return try await reconciler.reconciliationCandidate(for: latest)
-    }
-
-    private func discard(_ draft: LocalDraft) {
-        suppressesSaving = true
-        draftStore.cancelDocumentSave(item)
-        Task {
-            await draftStore.discard(draft)
-            suppressesSaving = false
-        }
-    }
-
-    private func moveToTrash() {
-        guard let activeProjectId = workspaceContext.activeProjectId,
-              item.projectContextId == activeProjectId,
-              draftStore.canEditMemory(item),
-              MemoryFileTreeMenu.canProposeOrganizationDeletion(
-                  item,
-                  inOrgView: false
-              ) else {
-            return
-        }
-        suppressesSaving = true
-        draftStore.cancelDocumentSave(item)
-        Task {
-            await draftStore.delete(item)
-            suppressesSaving = false
-        }
-    }
 }

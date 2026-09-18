@@ -241,3 +241,17 @@ enum MemorySyncPlan {
         return "sha256:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 }
+
+struct StaleResourceSyncSnapshot: Equatable, Sendable {
+    let projectId: String
+    let observedProjectRefCommitId: String?
+    let observedSelectedOrgResourceIds: Set<String>
+    let observedOrgSelectionRevision: Int
+    let authoritativeCommitId: String
+    let authoritativeRefEtag: String?
+    let selectedOrgResourceIds: Set<String>
+    let orgSelectionRevision: Int
+    let generation: UUID
+    let local: MemoryResource?
+    let remote: MemoryResource?
+}

@@ -4,72 +4,61 @@ import SwiftUI
 struct ReviewRequestSheet: View {
     @Environment(\.dismiss) private var dismiss
 
-    let loadCandidates: () async throws -> [DraftReconciliationCandidate]
-    let onSubmit: (String, String, [ReviewDraftReconciliation]) async throws -> Void
+    @StateObject private var model: ReviewRequestModel
 
-    @State private var title: String
-    @State private var description = ""
-    @State private var isSubmitting = false
-    @State private var errorMessage: String?
-    @State private var reconciliationCandidates = [DraftReconciliationCandidate]()
-    @State private var resolvedStatesByCandidateId = [String: ReconciliationResourceState]()
-    @State private var conflictIndex = 0
-
-    init(
-        initialTitle: String,
-        loadCandidates: @escaping () async throws -> [DraftReconciliationCandidate],
-        onSubmit: @escaping (String, String, [ReviewDraftReconciliation]) async throws -> Void
-    ) {
-        _title = State(initialValue: initialTitle)
-        self.loadCandidates = loadCandidates
-        self.onSubmit = onSubmit
+    init(initialTitle: String,
+         loadCandidates: @escaping () async throws -> [DraftReconciliationCandidate],
+         onSubmit: @escaping (String, String, [ReviewDraftReconciliation]) async throws -> Void) {
+        _model = StateObject(wrappedValue: ReviewRequestModel(
+            initialTitle: initialTitle, loadCandidates: loadCandidates, onSubmit: onSubmit
+        ))
     }
 
     var body: some View {
         Group {
-            if reconciliationCandidates.count == 1,
-               let candidate = reconciliationCandidates.first {
+            if self.model.reconciliationCandidates.count == 1,
+               let candidate = model.reconciliationCandidates.first {
                 DraftReconciliationView(
                     candidate: candidate,
-                    onCancel: resetReconciliation,
-                    onApplied: { dismiss() }
+                    onCancel: self.model.resetReconciliation,
+                    onApplied: { self.dismiss() }
                 ) { resolvedState in
-                    try await onSubmit(
-                        normalizedTitle,
-                        normalizedDescription,
+                    try await self.model.onSubmit(
+                        self.model.normalizedTitle,
+                        self.model.normalizedDescription,
                         [.init(candidate: candidate, resolvedState: resolvedState)]
                     )
                 }
                 .frame(minWidth: 780, idealWidth: 980, minHeight: 560, idealHeight: 680)
-            } else if let candidate = activeConflictCandidate {
+            } else if let candidate = model.activeConflictCandidate {
                 DraftReconciliationView(
                     candidate: candidate,
-                    onCancel: resetReconciliation,
-                    onApplied: { conflictIndex += 1 }
+                    onCancel: self.model.resetReconciliation,
+                    onApplied: { self.model.conflictIndex += 1 }
                 ) { resolvedState in
                     if let resolvedState {
-                        resolvedStatesByCandidateId[candidate.candidateId] = resolvedState
+                        self.model.resolvedStatesByCandidateId[candidate.candidateId] = resolvedState
                     }
                 }
                 .id(candidate.candidateId)
                 .frame(minWidth: 780, idealWidth: 980, minHeight: 560, idealHeight: 680)
-            } else if !reconciliationCandidates.isEmpty {
-                batchConfirmation
+            } else if !self.model.reconciliationCandidates.isEmpty {
+                self.batchConfirmation
             } else {
-                requestForm
+                self.requestForm
             }
         }
-        .interactiveDismissDisabled(isSubmitting)
+        .interactiveDismissDisabled(model.isSubmitting)
         .alert(
             "Could Not Request Review",
             isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
+                get: { self.model.errorMessage != nil },
+                set: { if !$0 { self.model.errorMessage = nil } }
             )
         ) {
-            Button("OK") { errorMessage = nil }
+            Button("OK") { self.model.errorMessage = nil }
         } message: {
-            Text(errorMessage ?? "")
+            Text(self.model.errorMessage ?? "")
                 .textSelection(.enabled)
         }
     }
@@ -78,8 +67,8 @@ struct ReviewRequestSheet: View {
         VStack(spacing: 0) {
             Form {
                 Section("Review") {
-                    TextField("Title", text: $title)
-                    TextField("Description", text: $description, axis: .vertical)
+                    TextField("Title", text: self.$model.title)
+                    TextField("Description", text: self.$model.description, axis: .vertical)
                         .lineLimit(4...8)
                 }
             }
@@ -89,19 +78,19 @@ struct ReviewRequestSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { self.dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button {
-                    submit()
+                    Task { if await self.model.submit() { self.dismiss() } }
                 } label: {
-                    if isSubmitting {
+                    if self.model.isSubmitting {
                         ProgressView()
                             .controlSize(.small)
                     } else {
                         Text("Request")
                     }
                 }
-                .disabled(isSubmitting || normalizedTitle.isEmpty)
+                .disabled(self.model.isSubmitting || self.model.normalizedTitle.isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
             .padding(12)
@@ -122,13 +111,13 @@ struct ReviewRequestSheet: View {
 
             Divider()
 
-            List(reconciliationCandidates) { candidate in
+            List(self.model.reconciliationCandidates) { candidate in
                 HStack(spacing: 10) {
                     Image(systemName: candidate.status == .conflicts
                         ? "checkmark.circle.fill"
                         : "arrow.trianglehead.merge")
                         .foregroundStyle(candidate.status == .conflicts ? .green : .secondary)
-                    Text(candidatePath(candidate))
+                    Text(self.candidatePath(candidate))
                         .font(.body.monospaced())
                     Spacer()
                     Text(candidate.status == .conflicts ? "Resolved" : "Clean")
@@ -139,13 +128,13 @@ struct ReviewRequestSheet: View {
             Divider()
 
             HStack {
-                Button("Back") { resetReconciliation() }
+                Button("Back") { self.model.resetReconciliation() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button {
-                    submitBatch()
+                    Task { if await self.model.submitBatch() { self.dismiss() } }
                 } label: {
-                    if isSubmitting {
+                    if self.model.isSubmitting {
                         ProgressView().controlSize(.small)
                     } else {
                         Text("Update and Request Review")
@@ -153,25 +142,11 @@ struct ReviewRequestSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(isSubmitting || reconciliationCandidates.contains { !$0.valid })
+                .disabled(self.model.isSubmitting || self.model.reconciliationCandidates.contains { !$0.valid })
             }
             .padding(12)
         }
         .frame(width: 620, height: 460)
-    }
-
-    private var normalizedTitle: String {
-        title.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var normalizedDescription: String {
-        description.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var activeConflictCandidate: DraftReconciliationCandidate? {
-        let conflicts = reconciliationCandidates.filter { $0.status == .conflicts }
-        guard conflictIndex < conflicts.count else { return nil }
-        return conflicts[conflictIndex]
     }
 
     private func candidatePath(_ candidate: DraftReconciliationCandidate) -> String {
@@ -181,58 +156,4 @@ struct ReviewRequestSheet: View {
             ?? candidate.draftId
     }
 
-    private func resetReconciliation() {
-        reconciliationCandidates = []
-        resolvedStatesByCandidateId = [:]
-        conflictIndex = 0
-    }
-
-    private func submit() {
-        guard !normalizedTitle.isEmpty else { return }
-        isSubmitting = true
-        Task {
-            do {
-                try await onSubmit(normalizedTitle, normalizedDescription, [])
-                dismiss()
-            } catch ReviewRequestError.reconciliationRequired {
-                do {
-                    let candidates = try await loadCandidates()
-                    if candidates.isEmpty {
-                        try await onSubmit(normalizedTitle, normalizedDescription, [])
-                        dismiss()
-                    } else {
-                        reconciliationCandidates = candidates
-                        resolvedStatesByCandidateId = [:]
-                        conflictIndex = 0
-                    }
-                    isSubmitting = false
-                } catch {
-                    errorMessage = error.localizedDescription
-                    isSubmitting = false
-                }
-            } catch {
-                errorMessage = error.localizedDescription
-                isSubmitting = false
-            }
-        }
-    }
-
-    private func submitBatch() {
-        isSubmitting = true
-        let reconciliations = reconciliationCandidates.map { candidate in
-            ReviewDraftReconciliation(
-                candidate: candidate,
-                resolvedState: resolvedStatesByCandidateId[candidate.candidateId]
-            )
-        }
-        Task {
-            do {
-                try await onSubmit(normalizedTitle, normalizedDescription, reconciliations)
-                dismiss()
-            } catch {
-                errorMessage = error.localizedDescription
-                isSubmitting = false
-            }
-        }
-    }
 }

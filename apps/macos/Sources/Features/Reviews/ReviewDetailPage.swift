@@ -1,79 +1,6 @@
 import SwiftUI
 
-private enum ReviewCommentTarget: Hashable {
-    case general
-    case line(Int)
-}
-
-struct ReviewCommentPlacement: Equatable {
-    let general: [ReviewComment]
-    let byLine: [Int: [ReviewComment]]
-    let unplaced: [ReviewComment]
-
-    static func resolve(
-        comments: [ReviewComment],
-        activePath: String?,
-        renderableLines: Set<Int>,
-        minimumInlineVersion: Int
-    ) -> ReviewCommentPlacement {
-        var general: [ReviewComment] = []
-        var byLine: [Int: [ReviewComment]] = [:]
-        var unplaced: [ReviewComment] = []
-
-        for comment in comments {
-            switch (comment.anchorPath, comment.anchorLine) {
-            case (nil, nil):
-                general.append(comment)
-            case let (path?, line?)
-                where path == activePath
-                    && renderableLines.contains(line)
-                    && comment.reviewVersion >= minimumInlineVersion:
-                byLine[line, default: []].append(comment)
-            default:
-                unplaced.append(comment)
-            }
-        }
-
-        return .init(general: general, byLine: byLine, unplaced: unplaced)
-    }
-
-    static func minimumInlineVersion(reviewVersion: Int, status: String) -> Int {
-        let lifecycleVersionsAfterContent: Int
-        switch status {
-        case "approved", "rejected":
-            lifecycleVersionsAfterContent = 1
-        case "merged":
-            lifecycleVersionsAfterContent = 2
-        default:
-            lifecycleVersionsAfterContent = 0
-        }
-        return max(1, reviewVersion - lifecycleVersionsAfterContent)
-    }
-}
-
-struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
-    let id: String
-    let path: String
-
-    static func resolve(
-        reviewId: String,
-        detail: ReviewDraftDetail,
-        loadedPath: String? = nil
-    ) -> ReviewFileDescriptor {
-        let initialPath = detail.operations.first?.resource.path ?? detail.draft.resource.path
-        let proposedPath = detail.operations.reduce(initialPath) { path, operation in
-            if let newPath = operation.newPath { return newPath }
-            if operation.action == "create", let createdPath = operation.resource.path { return createdPath }
-            return path
-        }
-        let path = loadedPath ?? proposedPath ?? detail.draft.resource.id ?? "Untitled"
-        let id = detail.draft.resource.id ?? "review-file:\(reviewId):\(detail.draft.draftId)"
-        return .init(id: id, path: path)
-    }
-}
-
 struct ReviewDetailPage: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
     @EnvironmentObject private var reconciler: DraftReconciliationService
@@ -81,128 +8,52 @@ struct ReviewDetailPage: View {
     let reviewId: String
     let loadsRemoteContent: Bool
 
-    @State private var detail: ReviewDetail?
-    @State private var fileLoader: ReviewFileLoader?
-    @State private var fileLoadTask: Task<Void, Never>?
-    @State private var loadedPaths: [String: String] = [:]
-    @State private var loadingFile = false
-    @State private var fileLoadError: String?
-    @State private var changeSources: ReviewChangeSources?
-    @State private var diffModel: SplitDiffModel?
-    @State private var loading = true
-    @State private var loadError: String?
-    @State private var composing: ReviewCommentTarget?
-    @State private var commentDraft = ""
-    @State private var isSubmittingComment = false
-    @State private var reconciliationCandidate: DraftReconciliationCandidate?
-    @State private var loadsReconciliation = false
-    @State private var selectedFileId: String?
-    @State private var showsGeneralComments = false
-    @State private var detailRequestGeneration = UUID()
+    @StateObject private var model: ReviewDetailModel
 
-    private struct DetailRequest {
-        let generation: UUID
-        let baseline: ReviewDecisionReadiness?
-    }
-
-    private var review: ReviewRecord? {
-        let loadedReview = detail.map { WorkspaceLoader.mapReview($0.review) }
-        let storedReview = reviewModel.reviews.first { $0.id == reviewId }
-        if let loadedReview, let storedReview {
-            return storedReview.version >= loadedReview.version ? storedReview : loadedReview
-        }
-        return storedReview ?? loadedReview
-    }
-
-    private var storedReviewDecisionSignature: ReviewDecisionReadiness? {
-        reviewModel.reviews.first { $0.id == reviewId }.map(ReviewDecisionReadiness.init)
-    }
-
-    private var draftDetails: [ReviewDraftDetail] {
-        guard let detail else { return [] }
-        return detail.drafts ?? [ReviewDraftDetail(draft: detail.draft, operations: detail.operations)]
-    }
-
-    private var fileDescriptors: [ReviewFileDescriptor] {
-        draftDetails.map {
-            ReviewFileDescriptor.resolve(
-                reviewId: reviewId,
-                detail: $0,
-                loadedPath: loadedPaths[$0.draft.draftId]
-            )
-        }
-    }
-
-    private var selectedDraftDetail: ReviewDraftDetail? {
-        guard let selectedFileId else { return draftDetails.first }
-        return draftDetails.first {
-            ReviewFileDescriptor.resolve(reviewId: reviewId, detail: $0).id == selectedFileId
-        }
-    }
-
-    private var commentPlacement: ReviewCommentPlacement {
-        let loadedReview = detail?.review
-        return ReviewCommentPlacement.resolve(
-            comments: detail?.comments ?? [],
-            activePath: changeSources?.proposedPath,
-            renderableLines: Set(diffModel?.rows.compactMap { $0.modified?.lineNumber } ?? []),
-            minimumInlineVersion: ReviewCommentPlacement.minimumInlineVersion(
-                reviewVersion: loadedReview?.version ?? 1,
-                status: loadedReview?.status ?? "open"
-            )
-        )
-    }
-
-    private var generalComments: [ReviewComment] {
-        commentPlacement.general
-    }
-
-    private var commentsByLine: [Int: [ReviewComment]] {
-        commentPlacement.byLine
-    }
-
-    private var unplacedComments: [ReviewComment] {
-        commentPlacement.unplaced
+    init(reviewId: String, loadsRemoteContent: Bool = true, model: @autoclosure @escaping () -> ReviewDetailModel) {
+        self.reviewId = reviewId
+        self.loadsRemoteContent = loadsRemoteContent
+        _model = StateObject(wrappedValue: model())
     }
 
     var body: some View {
         Group {
-            if let candidate = reconciliationCandidate {
+            if let candidate = model.reconciliationCandidate {
                 DraftReconciliationView(
                     candidate: candidate,
                     onCancel: {
-                        reconciliationCandidate = nil
-                        markCurrentDetailDecisionReady()
+                        self.model.reconciliationCandidate = nil
+                        self.model.markCurrentDetailDecisionReady()
                     },
                     onApplied: {
-                        reconciliationCandidate = nil
-                        Task { await refreshDetail() }
+                        self.model.reconciliationCandidate = nil
+                        Task { await self.model.refreshDetail() }
                     }
                 ) { resolvedState in
-                    try await reconciler.applyReconciliation(
+                    try await self.reconciler.applyReconciliation(
                         draftId: candidate.draftId,
                         candidate: candidate,
                         resolvedState: resolvedState,
-                        projectId: draftDetails.first {
+                        projectId: self.model.draftDetails.first {
                             $0.draft.draftId == candidate.draftId
                         }?.draft.projectId
                     )
                 }
-            } else if loading {
+            } else if self.model.loading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let loadError {
+            } else if let loadError = model.loadError {
                 ContentUnavailableView {
                     Label("Unable to Load Review", systemImage: "exclamationmark.triangle")
                 } description: {
                     Text(loadError)
                 } actions: {
                     Button("Try Again") {
-                        Task { await load() }
+                        Task { await self.model.load() }
                     }
                 }
-            } else if let review, detail != nil, !draftDetails.isEmpty {
-                content(review)
+            } else if let review = model.review, model.detail != nil, !model.draftDetails.isEmpty {
+                self.content(review)
             } else {
                 ContentUnavailableView(
                     "Review Unavailable",
@@ -212,57 +63,57 @@ struct ReviewDetailPage: View {
             }
         }
         .task(id: reviewId) {
-            guard loadsRemoteContent else {
-                loading = false
+            guard self.loadsRemoteContent else {
+                self.model.loading = false
                 return
             }
-            await load()
+            await self.model.load()
         }
         .onDisappear {
-            invalidateDetailRequests()
+            self.model.invalidateDetailRequests()
         }
-        .navigationTitle(review?.title ?? "Review")
+        .navigationTitle(model.review?.title ?? "Review")
         .onChange(of: reviewModel.pendingReviewReconciliationId) { _, reviewId in
-            handlePendingReconciliation(reviewId)
+            self.model.handlePendingReconciliation(reviewId)
         }
-        .onChange(of: selectedFileId) { _, _ in
-            selectCurrentFile()
+        .onChange(of: model.selectedFileId) { _, _ in
+            self.model.selectCurrentFile()
         }
-        .onChange(of: storedReviewDecisionSignature) { _, signature in
+        .onChange(of: model.storedReviewDecisionSignature) { _, signature in
             guard let signature,
-                  detail.map({ ReviewDecisionReadiness(review: WorkspaceLoader.mapReview($0.review)) })
+                  model.detail.map({ ReviewDecisionReadiness(review: WorkspaceLoader.mapReview($0.review)) })
                     != signature else { return }
-            invalidateDetailRequests()
-            Task { await refreshDetail() }
+            self.model.invalidateDetailRequests()
+            Task { await self.model.refreshDetail() }
         }
     }
 
     private func content(_ review: ReviewRecord) -> some View {
         return HSplitView {
             ReviewFileNavigator(
-                files: fileDescriptors,
-                selection: $selectedFileId
+                files: self.model.fileDescriptors,
+                selection: self.$model.selectedFileId
             )
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
 
             Group {
-                if let selectedDraftDetail {
+                if let selectedDraftDetail = model.selectedDraftDetail {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
-                            reviewHeader(review)
+                            self.reviewHeader(review)
 
                             if review.freshness == .behind {
-                                readinessChip(
+                                self.readinessChip(
                                     review,
                                     detail: selectedDraftDetail
                                 )
                             }
 
-                            if showsGeneralComments {
-                                generalCommentsPanel
+                            if self.model.showsGeneralComments {
+                                self.generalCommentsPanel
                             }
 
-                            diffPanel(detail: selectedDraftDetail)
+                            self.diffPanel(detail: selectedDraftDetail)
                         }
                         .frame(maxWidth: 1180, alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .top)
@@ -282,8 +133,8 @@ struct ReviewDetailPage: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .onAppear {
-            if selectedFileId == nil {
-                selectedFileId = fileDescriptors.first?.id
+            if self.model.selectedFileId == nil {
+                self.model.selectedFileId = self.model.fileDescriptors.first?.id
             }
         }
     }
@@ -320,19 +171,19 @@ struct ReviewDetailPage: View {
                     ReviewStatusIndicator(status: review.status)
                 }
 
-                Button(action: toggleGeneralComments) {
-                    Image(systemName: reviewWideCommentCount == 0 ? "bubble.badge.plus" : "bubble")
+                Button(action: self.model.toggleGeneralComments) {
+                    Image(systemName: self.model.reviewWideCommentCount == 0 ? "bubble.badge.plus" : "bubble")
                 }
                 .buttonStyle(.borderless)
-                .help(reviewWideCommentCount == 0
+                .help(self.model.reviewWideCommentCount == 0
                     ? "Add a review-wide comment"
-                    : "Show \(reviewWideCommentCount) review-wide comments")
-                .accessibilityLabel(reviewWideCommentCount == 0
+                    : "Show \(self.model.reviewWideCommentCount) review-wide comments")
+                .accessibilityLabel(self.model.reviewWideCommentCount == 0
                     ? "Add a review-wide comment"
-                    : "Show \(reviewWideCommentCount) review-wide comments")
+                    : "Show \(self.model.reviewWideCommentCount) review-wide comments")
             }
 
-            metadata(review)
+            self.metadata(review)
 
             let description = review.description.trimmingCharacters(in: .whitespacesAndNewlines)
             if !description.isEmpty {
@@ -343,7 +194,7 @@ struct ReviewDetailPage: View {
             }
 
             if review.status != "open" {
-                decisionSummary(review)
+                self.decisionSummary(review)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -381,7 +232,7 @@ struct ReviewDetailPage: View {
             Spacer(minLength: 8)
 
             Button("Review Changes…") {
-                loadReconciliation(detail: detail)
+                self.model.loadReconciliation(detail: detail)
             }
             .controlSize(.small)
         }
@@ -401,9 +252,9 @@ struct ReviewDetailPage: View {
         return VStack(alignment: .leading, spacing: 7) {
             if review.status != "merged" {
                 HStack(spacing: 7) {
-                    Image(systemName: decisionSymbol(review.status))
-                        .foregroundStyle(decisionColor(review.status))
-                    Text(decisionTitle(review.status))
+                    Image(systemName: self.decisionSymbol(review.status))
+                        .foregroundStyle(self.decisionColor(review.status))
+                    Text(self.decisionTitle(review.status))
                         .font(.callout.weight(.semibold))
                     if let decider = review.decidedBy {
                         let deciderName = decider.displayName ?? decider.email
@@ -442,10 +293,10 @@ struct ReviewDetailPage: View {
 
                 Spacer()
 
-                if composing != .general {
+                if self.model.composing != .general {
                     Button {
-                        composing = .general
-                        commentDraft = ""
+                        self.model.composing = .general
+                        self.model.commentDraft = ""
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -455,28 +306,28 @@ struct ReviewDetailPage: View {
                 }
             }
 
-            if composing == .general {
+            if self.model.composing == .general {
                 ReviewCommentComposer(
-                    text: $commentDraft,
-                    isSubmitting: isSubmittingComment,
-                    onCancel: { composing = nil; commentDraft = "" },
-                    onSubmit: { Task { await submitComment(line: nil) } }
+                    text: self.$model.commentDraft,
+                    isSubmitting: self.model.isSubmittingComment,
+                    onCancel: { self.model.composing = nil; self.model.commentDraft = "" },
+                    onSubmit: { Task { await self.model.submitComment(line: nil) } }
                 )
             }
 
-            ForEach(generalComments) { comment in
+            ForEach(self.model.generalComments) { comment in
                 ReviewCommentRow(comment: comment) {
-                    composing = .general
-                    commentDraft = ""
+                    self.model.composing = .general
+                    self.model.commentDraft = ""
                 }
             }
 
-            if !unplacedComments.isEmpty {
+            if !self.model.unplacedComments.isEmpty {
                 Text("Comments from an earlier revision or file path")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                ForEach(unplacedComments) { comment in
+                ForEach(self.model.unplacedComments) { comment in
                     VStack(alignment: .leading, spacing: 4) {
                         if let path = comment.anchorPath, let line = comment.anchorLine {
                             Text("\(path):\(line)")
@@ -485,8 +336,8 @@ struct ReviewDetailPage: View {
                                 .textSelection(.enabled)
                         }
                         ReviewCommentRow(comment: comment) {
-                            composing = .general
-                            commentDraft = ""
+                            self.model.composing = .general
+                            self.model.commentDraft = ""
                         }
                     }
                 }
@@ -497,15 +348,15 @@ struct ReviewDetailPage: View {
 
     @ViewBuilder
     private func diffPanel(detail: ReviewDraftDetail) -> some View {
-        if loadingFile {
+        if model.loadingFile {
             ProgressView("Loading file changes…")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 20)
-        } else if let fileLoadError {
+        } else if let fileLoadError = model.fileLoadError {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Unable to Load File", systemImage: "exclamationmark.triangle")
                 Text(fileLoadError).foregroundStyle(.secondary).textSelection(.enabled)
-                Button("Try Again") { selectCurrentFile() }
+                Button("Try Again") { self.model.selectCurrentFile() }
             }
             .padding(.vertical, 20)
         } else if detail.operations.last?.action == "delete" {
@@ -517,262 +368,24 @@ struct ReviewDetailPage: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .padding(.vertical, 20)
-        } else if let diffModel {
+        } else if let diffModel = model.diffModel {
             UnifiedDiffView(
                 model: diffModel,
-                commentsByLine: commentsByLine,
-                composingLine: composingLine,
-                commentDraft: $commentDraft,
-                isSubmittingComment: isSubmittingComment,
-                onRequestComment: { composing = .line($0) },
-                onCancelComment: { composing = nil; commentDraft = "" },
-                onSubmitComment: { line in Task { await submitComment(line: line) } },
-                onReply: { line in composing = .line(line) }
+                commentsByLine: model.commentsByLine,
+                composingLine: model.composingLine,
+                commentDraft: $model.commentDraft,
+                isSubmittingComment: model.isSubmittingComment,
+                onRequestComment: { self.model.composing = .line($0) },
+                onCancelComment: { self.model.composing = nil; self.model.commentDraft = "" },
+                onSubmitComment: { line in Task { await self.model.submitComment(line: line) } },
+                onReply: { line in self.model.composing = .line(line) }
             )
-        } else if changeSources != nil {
+        } else if model.changeSources != nil {
             Text("This Review changes metadata without changing text content.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .padding(.vertical, 20)
         }
-    }
-
-    private var reviewWideCommentCount: Int {
-        generalComments.count + unplacedComments.count
-    }
-
-    private func toggleGeneralComments() {
-        if showsGeneralComments {
-            showsGeneralComments = false
-            return
-        }
-
-        showsGeneralComments = true
-        if reviewWideCommentCount == 0 {
-            composing = .general
-            commentDraft = ""
-        }
-    }
-
-    private var composingLine: Int? {
-        if case .line(let line) = composing { return line }
-        return nil
-    }
-
-    private func load() async {
-        let request = beginDetailRequest()
-        loading = true
-        loadError = nil
-        detail = nil
-        loadedPaths = [:]
-        changeSources = nil
-        diffModel = nil
-        composing = nil
-        commentDraft = ""
-        selectedFileId = nil
-        showsGeneralComments = false
-        defer {
-            if detailRequestGeneration == request.generation {
-                loading = false
-            }
-        }
-        do {
-            let loadedDetail = try await reviewModel.reviewDetail(reviewId)
-            applyLoadedDetail(
-                loadedDetail,
-                request: request
-            )
-        } catch {
-            guard !Task.isCancelled,
-                  detailRequestGeneration == request.generation else { return }
-            clearDecisionReadiness()
-            loadError = error.localizedDescription
-            workspaceFeedback.errorMessage = error.localizedDescription
-        }
-    }
-
-    private func refreshDetail() async {
-        let request = beginDetailRequest()
-        do {
-            let loadedDetail = try await reviewModel.reviewDetail(reviewId)
-            applyLoadedDetail(
-                loadedDetail,
-                request: request
-            )
-        } catch {
-            guard !Task.isCancelled,
-                  detailRequestGeneration == request.generation else { return }
-            clearDecisionReadiness()
-            if detail == nil {
-                loading = false
-                loadError = error.localizedDescription
-            }
-            workspaceFeedback.errorMessage = error.localizedDescription
-        }
-    }
-
-    private func beginDetailRequest() -> DetailRequest {
-        invalidateDetailRequests()
-        return DetailRequest(
-            generation: detailRequestGeneration,
-            baseline: storedReviewDecisionSignature
-        )
-    }
-
-    private func invalidateDetailRequests() {
-        detailRequestGeneration = UUID()
-        fileLoadTask?.cancel()
-        fileLoadTask = nil
-        if let fileLoader { Task { await fileLoader.cancel() } }
-        fileLoader = nil
-        changeSources = nil
-        diffModel = nil
-        fileLoadError = nil
-        loadingFile = false
-        clearDecisionReadiness()
-    }
-
-    private func clearDecisionReadiness() {
-        if reviewModel.reviewDecisionReadiness?.reviewId == reviewId {
-            reviewModel.reviewDecisionReadiness = nil
-        }
-    }
-
-    private func applyLoadedDetail(
-        _ loadedDetail: ReviewDetail,
-        request: DetailRequest
-    ) {
-        guard !Task.isCancelled,
-              detailRequestGeneration == request.generation,
-              storedReviewDecisionSignature == request.baseline else { return }
-        let loadedReview = WorkspaceLoader.mapReview(loadedDetail.review)
-        if let baseline = request.baseline,
-           loadedReview.version < baseline.reviewVersion {
-            loading = false
-            loadError = "The Review changed while its detail was loading. Try again."
-            return
-        }
-
-        detail = loadedDetail
-        loadedPaths = [:]
-        let client = workspaceContext.server
-        fileLoader = ReviewFileLoader { id in
-            try await client.get("/api/v1/commits/\(id)")
-        }
-        loading = false
-        loadError = nil
-        ClientDiagnostics.record("review_directory_loaded", ["file_count": String(draftDetails.count)])
-        let availableIds = Set(fileDescriptors.map(\.id))
-        if selectedFileId == nil || !availableIds.contains(selectedFileId!) {
-            selectedFileId = fileDescriptors.first?.id
-        } else {
-            selectCurrentFile()
-        }
-        reviewModel.replaceReview(with: loadedReview)
-    }
-
-    private func selectCurrentFile() {
-        fileLoadTask?.cancel()
-        changeSources = nil
-        diffModel = nil
-        fileLoadError = nil
-        composing = nil
-        commentDraft = ""
-        clearDecisionReadiness()
-        guard let selectedDraftDetail, let fileLoader else { return }
-        let generation = detailRequestGeneration
-        let fileId = selectedFileId
-        loadingFile = true
-        fileLoadTask = Task {
-            let started = ContinuousClock.now
-            do {
-                let content = try await fileLoader.load(selectedDraftDetail)
-                guard !Task.isCancelled, detailRequestGeneration == generation,
-                      selectedFileId == fileId else { return }
-                changeSources = content.sources
-                diffModel = content.diff
-                loadedPaths[selectedDraftDetail.draft.draftId] = content.sources.proposedPath
-                loadingFile = false
-                markCurrentDetailDecisionReady()
-                let elapsed = started.duration(to: .now).components
-                ClientDiagnostics.record("review_file_loaded", [
-                    "elapsed_ms": String(elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000)
-                ])
-            } catch {
-                guard !Task.isCancelled, detailRequestGeneration == generation,
-                      selectedFileId == fileId else { return }
-                loadingFile = false
-                fileLoadError = error.localizedDescription
-                ClientDiagnostics.record("review_file_load_failed", ClientDiagnostics.failureFields(error))
-            }
-        }
-    }
-
-    private func markCurrentDetailDecisionReady() {
-        guard let detail, changeSources != nil, !loadingFile, fileLoadError == nil else {
-            clearDecisionReadiness()
-            return
-        }
-        let loadedReview = WorkspaceLoader.mapReview(detail.review)
-        guard storedReviewDecisionSignature == ReviewDecisionReadiness(review: loadedReview) else {
-            clearDecisionReadiness()
-            return
-        }
-        reviewModel.reviewDecisionReadiness = ReviewDecisionReadiness(review: loadedReview)
-    }
-
-    private func submitComment(line: Int?) async {
-        guard let detail,
-              !commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return
-        }
-        let renderedReview = WorkspaceLoader.mapReview(detail.review)
-        let anchorPath = line == nil ? nil : changeSources?.proposedPath
-        guard line == nil || anchorPath != nil else {
-            workspaceFeedback.errorMessage = "The proposed file path is unavailable for this line comment."
-            return
-        }
-        isSubmittingComment = true
-        defer { isSubmittingComment = false }
-        do {
-            try await reviewModel.addComment(
-                commentDraft,
-                to: renderedReview,
-                anchorPath: anchorPath,
-                anchorLine: line
-            )
-            composing = nil
-            commentDraft = ""
-            await refreshDetail()
-        } catch {
-            workspaceFeedback.errorMessage = error.localizedDescription
-            if let serverError = error as? ServerClientError,
-               case .response(let status, _) = serverError,
-               status == 409 {
-                await refreshDetail()
-            }
-        }
-    }
-
-    private func loadReconciliation(detail: ReviewDraftDetail?) {
-        guard let detail, !loadsReconciliation else { return }
-        clearDecisionReadiness()
-        loadsReconciliation = true
-        Task {
-            defer { loadsReconciliation = false }
-            do {
-                reconciliationCandidate = try await reconciler.reconciliationCandidate(for: detail)
-            } catch {
-                markCurrentDetailDecisionReady()
-                workspaceFeedback.errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func handlePendingReconciliation(_ reviewId: String?) {
-        guard reviewId == self.reviewId, let detail = selectedDraftDetail else { return }
-        reviewModel.pendingReviewReconciliationId = nil
-        loadReconciliation(detail: detail)
     }
 
     private func decisionTitle(_ status: String) -> String {

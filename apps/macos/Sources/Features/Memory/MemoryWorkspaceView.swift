@@ -2,10 +2,11 @@ import AppKit
 import SwiftUI
 
 struct MemoryNavigator: View {
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
+    @EnvironmentObject private var projectService: ProjectService
     @EnvironmentObject private var documentSessions: DocumentSessions
     @EnvironmentObject private var draftStore: DraftStore
     @EnvironmentObject private var workspaceContext: WorkspaceContext
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     @EnvironmentObject private var memoryModel: MemoryModel
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
@@ -13,7 +14,7 @@ struct MemoryNavigator: View {
     var body: some View {
         content
             .safeAreaInset(edge: .bottom) {
-                DraftInventoryStatusBanner(store: store)
+                DraftInventoryStatusBanner()
             }
             .onChange(of: workspaceNavigation.selectedKind) { _, _ in
                 workspaceNavigation.selectedItemId = nil
@@ -28,7 +29,7 @@ struct MemoryNavigator: View {
         } else if !memoryModel.visibleMemoryItems.isEmpty, !query.isEmpty, items.isEmpty {
             ContentUnavailableView.search(text: query)
         } else {
-            FileTreeView(store: store, items: items)
+            FileTreeView(items: items, operations: MemoryFileOperationsModel(context: workspaceContext, feedback: workspaceFeedback, drafts: draftStore, projects: projectService))
         }
     }
 
@@ -42,8 +43,11 @@ struct MemoryNavigator: View {
 }
 
 struct MemoryMainPane: View {
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
+    @EnvironmentObject private var reviewModel: ReviewsModel
+    @EnvironmentObject private var reconciler: DraftReconciliationService
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var documentSessions: DocumentSessions
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var draftStore: DraftStore
@@ -53,7 +57,7 @@ struct MemoryMainPane: View {
     var body: some View {
         VStack(spacing: 0) {
             if let project = workspaceContext.activeProject, !project.isLoaded {
-                ProjectPreparationView(store: store)
+                ProjectPreparationView()
             } else if !workspaceNavigation.visibleTabs.isEmpty {
                 DocumentTabStrip(
                     tabs: workspaceNavigation.visibleTabs,
@@ -77,7 +81,10 @@ struct MemoryMainPane: View {
                         && item.draft?.documentBaselineAvailable == false
                     if item.contentLoaded || presentsUnavailableStaleDiff
                         || presentsUnavailableDraftDiff {
-                        DocumentSessionView(store: store, item: item, mode: tab.mode)
+                        DocumentSessionView(item: item, mode: tab.mode, model: DocumentEditorModel(
+                            item: item, drafts: draftStore, context: workspaceContext, feedback: workspaceFeedback,
+                            sessions: documentSessions, memory: memoryModel, reviews: reviewModel, reconciliation: reconciler
+                        ))
                             .id(tab.id)
                     } else if item.draft?.documentBaselineAvailable == false {
                         ContentUnavailableView(
@@ -88,7 +95,7 @@ struct MemoryMainPane: View {
                             )
                         )
                     } else {
-                        ResourceLoadingView(store: store, item: item)
+                        ResourceLoadingView(item: item)
                             .id(item.id)
                     }
                 } else {
@@ -113,10 +120,10 @@ struct MemoryMainPane: View {
                 } description: {
                     Text(message)
                 } actions: {
-                    Button("Try Again") { Task { await store.reload() } }
+                    Button("Try Again") { Task { await workspaceActions.reload() } }
                 }
             case .loaded:
-                EmptyMemoryCollectionView(store: store)
+                EmptyMemoryCollectionView()
             }
         } else {
             EmptyWorkspaceView()
@@ -125,7 +132,7 @@ struct MemoryMainPane: View {
 }
 
 private struct DraftInventoryStatusBanner: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var draftStore: DraftStore
 
     @ViewBuilder
@@ -143,7 +150,7 @@ private struct DraftInventoryStatusBanner: View {
             .background(.bar)
         case .failed:
             Button("Draft refresh failed - Try Again") {
-                Task { await store.reload() }
+                Task { await workspaceActions.reload() }
             }
             .buttonStyle(.plain)
             .font(.caption)
@@ -157,7 +164,6 @@ private struct DraftInventoryStatusBanner: View {
 }
 
 private struct ResourceLoadingView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     let item: MemoryListItem
     @State private var failure: String?
@@ -201,12 +207,12 @@ private struct EmptyWorkspaceView: View {
 }
 
 private struct EmptyMemoryCollectionView: View {
-    let store: WorkspaceCoordinator
+    @EnvironmentObject private var memoryModel: MemoryModel
     @EnvironmentObject private var workspaceContext: WorkspaceContext
 
     var body: some View {
         if workspaceContext.activeProjectId != nil {
-            MemoryGuidelinesSetupView(store: store)
+            MemoryGuidelinesSetupView(model: MemoryGuidelinesModel(context: workspaceContext, memory: memoryModel))
         } else {
             ContentUnavailableView(
                 "No Memory",
@@ -218,7 +224,7 @@ private struct EmptyMemoryCollectionView: View {
 }
 
 private struct ProjectPreparationView: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var workspaceContext: WorkspaceContext
 
     var body: some View {
@@ -232,7 +238,7 @@ private struct ProjectPreparationView: View {
             } actions: {
                 if let projectId = workspaceContext.activeProjectId {
                     Button("Try Again") {
-                        Task { await store.selectProject(projectId) }
+                        Task { await workspaceActions.selectProject(projectId) }
                     }
                 }
             }

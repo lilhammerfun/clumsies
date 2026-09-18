@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct BundleNavigator: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var bundleModel: BundlesModel
     @EnvironmentObject private var bundleStore: BundleStore
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
@@ -9,7 +9,7 @@ struct BundleNavigator: View {
     var body: some View {
         Group {
             if bundleStore.bundles.isEmpty {
-                BundleCollectionStatusView(store: store)
+                BundleCollectionStatusView()
             } else if !query.isEmpty, bundles.isEmpty {
                 ContentUnavailableView.search(text: query)
             } else {
@@ -32,11 +32,11 @@ struct BundleNavigator: View {
                 }
                 .listStyle(.inset)
                 .safeAreaInset(edge: .bottom) {
-                    BundleCollectionStatusBanner(store: store)
+                    BundleCollectionStatusBanner()
                 }
             }
         }
-        .task { await store.prepareWorkspaceIndex(includeContent: false) }
+        .task { await workspaceActions.prepareIndex(false) }
     }
 
     private var query: String {
@@ -50,28 +50,25 @@ struct BundleNavigator: View {
 
 struct BundleDetail: View {
     @EnvironmentObject private var bundleStore: BundleStore
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var bundleModel: BundlesModel
     @Binding var showsResourcePicker: Bool
     @Binding var confirmsDeletion: Bool
 
     var body: some View {
         if let bundle = bundleModel.selectedBundle {
-            BundleEditor(
-                store: store,
-                bundle: bundle,
+            BundleEditor(bundle: bundle,
                 showsResourcePicker: $showsResourcePicker,
                 confirmsDeletion: $confirmsDeletion
             )
                 .id(bundle.id)
         } else {
-            BundleCollectionStatusView(store: store)
+            BundleCollectionStatusView()
         }
     }
 }
 
 private struct BundleCollectionStatusView: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var bundleStore: BundleStore
 
     var body: some View {
@@ -84,7 +81,7 @@ private struct BundleCollectionStatusView: View {
             } description: {
                 Text(message)
             } actions: {
-                Button("Try Again") { Task { await store.reload() } }
+                Button("Try Again") { Task { await workspaceActions.reload() } }
             }
         case .loaded:
             ContentUnavailableView(
@@ -97,7 +94,7 @@ private struct BundleCollectionStatusView: View {
 }
 
 private struct BundleCollectionStatusBanner: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var bundleStore: BundleStore
 
     @ViewBuilder
@@ -115,7 +112,7 @@ private struct BundleCollectionStatusBanner: View {
             .background(.bar)
         case .failed:
             Button("Bundle refresh failed - Try Again") {
-                Task { await store.reload() }
+                Task { await workspaceActions.reload() }
             }
             .buttonStyle(.plain)
             .font(.caption)
@@ -129,7 +126,7 @@ private struct BundleCollectionStatusBanner: View {
 }
 
 private struct BundleEditor: View {
-    let store: WorkspaceCoordinator
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var bundleModel: BundlesModel
     @EnvironmentObject private var bundleStore: BundleStore
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
@@ -145,12 +142,10 @@ private struct BundleEditor: View {
     @State private var isDeleting = false
 
     init(
-        store: WorkspaceCoordinator,
         bundle: PersonalBundle,
         showsResourcePicker: Binding<Bool>,
         confirmsDeletion: Binding<Bool>
     ) {
-        self.store = store
         self.bundle = bundle
         _name = State(initialValue: bundle.name)
         _description = State(initialValue: bundle.description)
@@ -263,7 +258,7 @@ private struct BundleEditor: View {
             draft: nil,
             inherited: false
         )
-        Task { await store.reveal(item) }
+        Task { await workspaceActions.reveal(item) }
     }
 
     private func scheduleSave() {

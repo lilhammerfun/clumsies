@@ -229,7 +229,7 @@ struct WorkspaceView: View {
             }
         }
         .sheet(isPresented: $workspaceNavigation.showsProjectCreation) {
-            ProjectCreationSheet(store: store)
+            ProjectCreationSheet(model: ProjectCreationModel(projects: store.projects))
         }
         .onChange(of: workspaceNavigation.selectedSection) { _, _ in
             DispatchQueue.main.async {
@@ -598,9 +598,7 @@ struct WorkspaceView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
             NavigationStack(path: $reviewNavigationPath) {
-                ReviewListPage(
-                    store: store,
-                    reviews: filteredReviews,
+                ReviewListPage(reviews: filteredReviews,
                     searchQuery: reviewSearchQuery,
                     filters: $reviewFilters,
                     toolbarOwnership: reviewToolbarOwnership,
@@ -610,10 +608,9 @@ struct WorkspaceView: View {
                     }
                 )
                 .navigationDestination(for: ReviewRoute.self) { route in
-                    ReviewDetailPage(
-                        store: store,
-                        reviewId: route.reviewId,
-                        loadsRemoteContent: loadsReviewDetail
+                    ReviewDetailPage(reviewId: route.reviewId,
+                        loadsRemoteContent: loadsReviewDetail,
+                        model: ReviewDetailModel(reviewId: route.reviewId, context: store.context, feedback: store.feedback, reconciliation: store.reconciliation, reviews: store.reviews)
                     )
                     .toolbar {
                         if reviewToolbarOwnership.surface == .detail {
@@ -1047,9 +1044,9 @@ struct WorkspaceView: View {
     private var navigator: some View {
         switch workspaceNavigation.selectedSection {
         case .memory:
-            MemoryNavigator(store: store)
+            MemoryNavigator()
         case .bundles:
-            BundleNavigator(store: store)
+            BundleNavigator()
         case .reviews:
             EmptyView()
         case .sessions:
@@ -1062,16 +1059,14 @@ struct WorkspaceView: View {
         switch workspaceNavigation.selectedSection {
         case .memory:
             if workspaceContext.projects.isEmpty, !memoryCatalog.resources.contains(where: { $0.scope == .org }) {
-                ProjectUnavailableView(store: store)
+                ProjectUnavailableView()
             } else if workspaceNavigation.showsProjectSettings, let projectId = workspaceContext.activeProjectId {
-                ProjectSettingsView(store: store, projectId: projectId)
+                ProjectSettingsView(projectId: projectId)
             } else {
-                MemoryMainPane(store: store)
+                MemoryMainPane()
             }
         case .bundles:
-            BundleDetail(
-                store: store,
-                showsResourcePicker: $showsBundleResourcePicker,
+            BundleDetail(showsResourcePicker: $showsBundleResourcePicker,
                 confirmsDeletion: $confirmsBundleDeletion
             )
         case .reviews:

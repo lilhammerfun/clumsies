@@ -483,3 +483,54 @@ final class ReviewsModel: ObservableObject {
         }
     }
 }
+
+enum ReviewMenuAction: Sendable, Equatable {
+    case approve
+    case reject
+    case merge
+    case resubmit
+
+    func isAvailable(
+        for review: ReviewRecord,
+        canDecideReviews: Bool,
+        canMergeReviews: Bool,
+        isAuthor: Bool
+    ) -> Bool {
+        switch self {
+        case .approve:
+            return review.status == "open" && canDecideReviews && canMergeReviews
+        case .reject:
+            return review.status == "open" && canDecideReviews
+        case .merge:
+            return review.status == "approved"
+                && review.approvedResultHash?.isEmpty == false
+                && canMergeReviews
+        case .resubmit:
+            return review.status == "rejected" && isAuthor
+        }
+    }
+}
+
+struct ReviewDecisionReadiness: Equatable, Sendable {
+    let reviewId: String
+    let reviewVersion: Int
+    let status: String
+    let approvedResultHash: String?
+    let freshness: DraftFreshness
+    let reconciliation: DraftReconciliationStatus
+    let currentCommitId: String?
+
+    init(review: ReviewRecord) {
+        reviewId = review.id
+        reviewVersion = review.version
+        status = review.status
+        approvedResultHash = review.approvedResultHash
+        freshness = review.freshness
+        reconciliation = review.reconciliation
+        currentCommitId = review.currentCommitId
+    }
+
+    func matches(_ review: ReviewRecord) -> Bool {
+        self == ReviewDecisionReadiness(review: review)
+    }
+}
