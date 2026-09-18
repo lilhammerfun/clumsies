@@ -2,8 +2,9 @@ mod common;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use server::db::current_schema_migration;
-use server::http::{AdminHealth, HealthStatus, router};
+use common::router;
+use server::app::health::{AdminHealth, HealthStatus};
+use server::infra::database::current_schema_migration;
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -21,7 +22,9 @@ async fn health_after_migrations_reports_database_and_schema_ready() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
     let health: AdminHealth = serde_json::from_slice(&body).unwrap();
     assert_eq!(health.status, HealthStatus::Down);
     assert_eq!(health.database.status, HealthStatus::Ok);
@@ -32,4 +35,5 @@ async fn health_after_migrations_reports_database_and_schema_ready() {
     );
     assert_eq!(health.commit_service.status, HealthStatus::Ok);
     assert_eq!(health.oidc.status, HealthStatus::Down);
+    postgres.shutdown().await;
 }

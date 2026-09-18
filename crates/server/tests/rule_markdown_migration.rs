@@ -215,4 +215,5 @@ Run focused tests before committing.',
             .await
             .unwrap();
     assert!(shared_blob_still_exists);
+    postgres.shutdown().await;
 }

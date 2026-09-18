@@ -108,4 +108,5 @@ async fn draft_operation_ordinal_migration_freezes_legacy_order_per_draft() {
         missing.to_string().contains("ordinal"),
         "unexpected missing-ordinal error: {missing}"
     );
+    postgres.shutdown().await;
 }

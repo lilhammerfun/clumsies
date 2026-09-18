@@ -115,4 +115,5 @@ async fn conflicted_drafts_migrate_once_to_separate_coordination_state() {
         .await
         .is_err()
     );
+    postgres.shutdown().await;
 }

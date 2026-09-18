@@ -1,17 +1,24 @@
-mod common;
-
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use serde::Serialize;
-use server::api::{
-    AccessTokenKind, AccessTokenListResponse, AdminOrg, AdminProject, AdminProjectListResponse,
-    AuditEventListResponse, CreateMemberRequest, CreateProjectMemberRequest, CreateProjectRequest,
-    DeleteResult, Member, MemberListResponse, MemberStatus, MemoryExport, OidcProviderStatus,
-    OrgRole, ProjectMember, ProjectMemberListResponse, ProjectRole, UpdateAdminOrgRequest,
-    UpdateMemberRequest, UpdateProjectMemberRequest, UpdateProjectRequest,
+use server::app::audit_event::dto::AuditEventListResponse;
+use server::app::auth::dto::OidcProviderStatus;
+use server::app::memory::dto::MemoryExport;
+use server::app::organization::dto::{
+    AdminOrg, CreateMemberRequest, Member, MemberListResponse, MemberStatus, OrgRole,
+    UpdateAdminOrgRequest, UpdateMemberRequest,
 };
+use server::app::project::dto::{
+    AdminProject, AdminProjectListResponse, CreateProjectMemberRequest, CreateProjectRequest,
+    ProjectMember, ProjectMemberListResponse, ProjectRole, UpdateProjectMemberRequest,
+    UpdateProjectRequest,
+};
+use server::app::token::dto::{AccessTokenKind, AccessTokenListResponse};
+use server::dto::DeleteResult;
 use tower::ServiceExt;
+
+mod common;
 
 #[tokio::test]
 async fn owner_can_operate_the_complete_admin_contract() {
@@ -315,6 +322,7 @@ async fn owner_can_operate_the_complete_admin_contract() {
     )
     .await;
     assert_eq!(deleted_member.id, member.user_id);
+    postgres.shutdown().await;
 }
 
 #[tokio::test]
@@ -436,6 +444,7 @@ async fn admin_search_filters_before_paging_and_resolves_current_audit_targets()
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
+    postgres.shutdown().await;
 }
 
 #[tokio::test]
@@ -463,6 +472,7 @@ async fn unknown_admin_project_is_not_disclosed() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    postgres.shutdown().await;
 }
 
 #[tokio::test]
@@ -559,6 +569,7 @@ async fn admin_updates_reject_stale_revisions_and_preserve_the_last_owner() {
     assert_eq!(self_uninvite.status(), StatusCode::BAD_REQUEST);
     let self_uninvite_body: serde_json::Value = decode_json(self_uninvite).await;
     assert_eq!(self_uninvite_body["error"]["code"], "invalid_request");
+    postgres.shutdown().await;
 }
 
 #[tokio::test]
@@ -592,6 +603,7 @@ async fn admin_lists_reject_invalid_pagination() {
         let body: serde_json::Value = decode_json(response).await;
         assert_eq!(body["error"]["code"], "invalid_request", "{uri}");
     }
+    postgres.shutdown().await;
 }
 
 async fn get_json<T>(app: Router, uri: &str) -> T
@@ -703,7 +715,9 @@ async fn decode_json<T>(response: axum::response::Response) -> T
 where
     T: serde::de::DeserializeOwned,
 {
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
     serde_json::from_slice(&body).unwrap()
 }
 
@@ -940,4 +954,5 @@ async fn memory_export_contains_verifiable_full_state() {
         export.bundles[0].resource_ids,
         vec![org_memory_id.to_owned(), project_memory_id.to_owned()]
     );
+    postgres.shutdown().await;
 }

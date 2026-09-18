@@ -1,21 +1,19 @@
-use std::sync::OnceLock;
-
 use chrono::{Duration, Utc};
 use openidconnect::core::{
     CoreIdToken, CoreIdTokenClaims, CoreJsonWebKeySet, CoreJwsSigningAlgorithm,
     CoreRsaPrivateSigningKey,
 };
-use openidconnect::reqwest;
 use openidconnect::{
     AccessToken, Audience, EmptyAdditionalClaims, EndUserEmail, EndUserName, EndUserPictureUrl,
     IssuerUrl, JsonWebKeyId, Nonce, PkceCodeChallenge, PrivateSigningKey, StandardClaims,
-    SubjectIdentifier,
+    SubjectIdentifier, reqwest,
 };
 use rand::rngs::OsRng;
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
 use serde_json::{Value, json};
-use server::auth::{AuthError, DiscoveredOidcProvider, OidcIdentityProvider};
+use server::app::auth::{AuthError, DiscoveredOidcProvider, OidcIdentityProvider};
+use std::sync::OnceLock;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};

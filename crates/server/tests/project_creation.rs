@@ -1,14 +1,13 @@
-mod common;
-
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::LOCATION;
 use axum::http::{Request, StatusCode};
 use serde::Serialize;
-use server::api::{CreateProjectRequest, Project};
-use server::auth::AuthPrincipal;
-use server::repository::ServerRepository;
+use server::app::auth::AuthPrincipal;
+use server::app::project::dto::{CreateProjectRequest, Project};
 use tower::ServiceExt;
+
+mod common;
 
 #[tokio::test]
 async fn public_project_creation_is_atomic_and_idempotent() {
@@ -99,6 +98,7 @@ async fn public_project_creation_is_atomic_and_idempotent() {
             .await
             .unwrap();
     assert_eq!(project_count, 1);
+    postgres.shutdown().await;
 }
 
 #[tokio::test]
@@ -113,28 +113,28 @@ async fn failed_creator_membership_rolls_back_the_entire_project() {
         "Default",
     )
     .await;
-    let repository = ServerRepository::new(postgres.pool.clone());
+    let pool = postgres.pool.clone();
     let before = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects")
         .fetch_one(&postgres.pool)
         .await
         .unwrap();
 
-    let result = repository
-        .create_project_from_request(
-            &AuthPrincipal {
-                user_id: "missing-user".to_owned(),
-                org_id: installation.org_id,
-                session_id: "session".to_owned(),
-                token_id: "token".to_owned(),
-                role: "admin".to_owned(),
-            },
-            CreateProjectRequest {
-                name: "Must Roll Back".to_owned(),
-                description: None,
-            },
-            "project-create-rollback",
-        )
-        .await;
+    let result = server::app::project::service::create_project_from_request(
+        &pool,
+        &AuthPrincipal {
+            user_id: "missing-user".to_owned(),
+            org_id: installation.org_id,
+            session_id: "session".to_owned(),
+            token_id: "token".to_owned(),
+            role: "admin".to_owned(),
+        },
+        CreateProjectRequest {
+            name: "Must Roll Back".to_owned(),
+            description: None,
+        },
+        "project-create-rollback",
+    )
+    .await;
     assert!(result.is_err());
 
     let after = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects")
@@ -148,6 +148,7 @@ async fn failed_creator_membership_rolls_back_the_entire_project() {
             .await
             .unwrap();
     assert_eq!(request_count, 0);
+    postgres.shutdown().await;
 }
 
 async fn create_project<T: Serialize>(
@@ -169,5 +170,10 @@ async fn create_project<T: Serialize>(
 }
 
 async fn decode_json<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
-    serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
 }

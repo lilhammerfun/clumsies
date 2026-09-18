@@ -1,5 +1,3 @@
-mod common;
-
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
@@ -7,14 +5,18 @@ use axum::http::{Request, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
-use server::api::{
-    AdminOrg, CreateSetupSessionRequest, CreateSetupSessionResponse, InstallationState,
+use server::app::auth::dto::{TokenGrantType, TokenRequest, TokenResponse};
+use server::app::installation::dto::{
+    CreateSetupSessionRequest, CreateSetupSessionResponse, InstallationState,
     ReplaceSetupConfigurationRequest, SetupConfiguration, SetupOidcAuthorization,
-    SetupOidcAuthorizationRequest, SetupStatus, TokenGrantType, TokenRequest, TokenResponse,
+    SetupOidcAuthorizationRequest, SetupStatus,
 };
+use server::app::organization::dto::AdminOrg;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 use url::Url;
+
+mod common;
 
 const SETUP_CALLBACK: &str = "http://127.0.0.1:49152/callback";
 const SETUP_STATE: &str = "native-setup-state";
@@ -188,6 +190,7 @@ async fn setup_claim_creates_one_oidc_bound_installation_and_locks_it() {
     assert!(second_org.is_err());
 
     assert_eq!(token.org.org_id, org_id);
+    postgres.shutdown().await;
 }
 
 #[tokio::test]
@@ -233,6 +236,7 @@ async fn concurrent_setup_claims_allow_exactly_one_owner() {
             .unwrap();
     assert_eq!(org_count, 1);
     assert_eq!(owner_count, 1);
+    postgres.shutdown().await;
 }
 
 #[tokio::test]
@@ -276,6 +280,7 @@ async fn disallowed_setup_owner_can_correct_configuration_and_retry() {
         begin_setup_oidc(app.clone(), &cookie, &session.csrf_token, SETUP_CALLBACK).await;
     let completed = complete_provider_login(app, &retry_state).await;
     assert_eq!(completed.status(), StatusCode::FOUND);
+    postgres.shutdown().await;
 }
 
 async fn configured_session(
@@ -450,7 +455,12 @@ async fn request_json<T: Serialize>(
 }
 
 async fn decode_json<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
-    serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 fn product_login_uri() -> String {
