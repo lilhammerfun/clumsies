@@ -234,6 +234,10 @@ struct DaemonXPCClient: Sendable {
         try await call(method: "list_recalls", payload: request)
     }
 
+    func recallSession(_ request: GetRecallSessionRequest) async throws -> GetRecallSessionResponse {
+        try await call(method: "get_recall_session", payload: request)
+    }
+
     func recallFragment(_ request: GetRecallFragmentRequest) async throws
         -> GetRecallFragmentResponse {
         try await call(method: "get_recall_fragment", payload: request)

@@ -1,3 +1,5 @@
+//! Activity session summaries, paged details, and recorded memory fragments.
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +11,10 @@ use crate::util::home_dir;
 use crate::{DaemonError, DaemonState, SourceScope};
 
 mod codex;
+mod paging;
+
+pub(crate) use paging::RecallCache;
+pub(super) use paging::{get_recall_session, list_recalls};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum AgentHost {
@@ -50,31 +56,73 @@ fn run_status_str(status: RetrievalRunStatus) -> &'static str {
     }
 }
 
-/// Upper bound on the number of sessions a single Activity list returns, newest
-/// first. The panel is a diagnostic surface, not an unbounded archive dump.
-const DEFAULT_SESSION_LIMIT: usize = 50;
-const MAX_SESSION_LIMIT: usize = 200;
-const MAX_TASKS_PER_SESSION: usize = 500;
-const MAX_ACTIVATIONS_PER_TASK: usize = 100;
-
+/// Filters and continuation for a page of Activity summaries.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ListRecallsRequest {
-    /// Optional workspace root filter. When omitted, every bound workspace is
-    /// included.
+    /// Include only this bound workspace, or all matching workspaces when absent.
     #[serde(default)]
     pub workspace_root: Option<String>,
-    /// Optional Project filter. All repositories bound to the Project are
-    /// included.
+    /// Include only repositories bound to this Project when supplied.
     #[serde(default)]
     pub project_id: Option<String>,
+    /// Requested page size, clamped to the desktop response limit.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Opaque continuation from this filter's previous response.
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+/// One page of summaries; task bodies are fetched only after selection.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ListRecallsResponse {
+    /// Newest sessions first, with a stable order throughout pagination.
+    pub sessions: Vec<RecallSessionSummary>,
+    /// Bound roots included in this listing.
+    pub workspace_roots: Vec<String>,
+    /// Continuation for the next page, absent at the end.
+    pub next_cursor: Option<String>,
+}
+
+/// Lightweight session metadata suitable for the Activity sidebar.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RecallSessionSummary {
+    /// Host that recorded the session.
+    pub host: AgentHost,
+    /// Host-local stable session identity.
+    pub session_id: String,
+    /// Recorded title or a bounded first-prompt preview.
+    pub title: Option<String>,
+    /// Bound repository containing this session.
+    pub workspace_root: String,
+    /// Sorting timestamp, in milliseconds since the Unix epoch.
+    pub created_at: Option<i64>,
+    /// Opaque handle used to request this listing's session details.
+    pub session_token: String,
+}
+
+/// Loads a bounded page of tasks from one selected Activity session.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct GetRecallSessionRequest {
+    /// Handle returned with the list summary; never a caller-supplied file path.
+    pub session_token: String,
+    /// Task offset returned by the previous response; omitted for the first page.
+    #[serde(default)]
+    pub offset: Option<usize>,
+    /// Requested task count, clamped to the desktop response limit.
     #[serde(default)]
     pub limit: Option<u32>,
 }
 
+/// Session metadata and only the requested task bodies.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ListRecallsResponse {
-    pub sessions: Vec<RecallSession>,
-    pub workspace_roots: Vec<String>,
+pub struct GetRecallSessionResponse {
+    /// Selected session with one page of tasks and their retrieval previews.
+    pub session: RecallSession,
+    /// Number of tasks in this session snapshot.
+    pub total_tasks: usize,
+    /// Offset for the next task page, absent at the end.
+    pub next_offset: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -573,9 +621,6 @@ fn parse_session_text(text: &str, workspace_root: &str) -> Option<RecallSession>
                 if !is_human {
                     continue;
                 }
-                if tasks.len() >= MAX_TASKS_PER_SESSION {
-                    continue;
-                }
                 let Some(text_value) = data.get("content").and_then(message_text) else {
                     continue;
                 };
@@ -617,9 +662,6 @@ fn parse_session_text(text: &str, workspace_root: &str) -> Option<RecallSession>
                     });
                 }
                 let task_index = tasks.len() - 1;
-                if tasks[task_index].activations.len() >= MAX_ACTIVATIONS_PER_TASK {
-                    continue;
-                }
                 let activation_index = tasks[task_index].activations.len();
                 tasks[task_index].activations.push(RecallActivation {
                     tool_name: name.to_owned(),
@@ -880,81 +922,6 @@ fn codex_sessions_home(configured_codex_home: Option<&Path>, home: &Path) -> Pat
         .unwrap_or_else(|| home.join(".codex"))
 }
 
-pub(super) async fn list_recalls(
-    state: &DaemonState,
-    request: ListRecallsRequest,
-) -> Result<ListRecallsResponse, DaemonError> {
-    let limit = request
-        .limit
-        .map(|limit| limit as usize)
-        .unwrap_or(DEFAULT_SESSION_LIMIT)
-        .clamp(1, MAX_SESSION_LIMIT);
-
-    let roots = filter_bindings(
-        load_bindings(state).await?,
-        request.workspace_root.as_deref(),
-        request.project_id.as_deref(),
-    );
-
-    let home = home_dir()?;
-    let sessions_root = home.join(".dsh").join("sessions");
-
-    let mut sessions = Vec::new();
-    let mut workspace_roots = Vec::new();
-    for (root, project_id) in &roots {
-        workspace_roots.push(root.clone());
-        let dir = sessions_root.join(encode_workspace_dir(root));
-        for file in list_session_files(&dir)? {
-            match parse_session(&file, root) {
-                Ok(Some(mut session)) => {
-                    enrich_session(state, project_id, &mut session).await;
-                    sessions.push(session);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    // Active DSH logs can be observed between frame appends.
-                    // Keep one transient/corrupt session from blanking every
-                    // other provider in the Activity page.
-                    tracing::warn!(
-                        path = %file.display(),
-                        "skipping unreadable DSH session: {error}"
-                    );
-                }
-            }
-        }
-    }
-
-    let codex_home = codex_sessions_home(state.inner.config.codex_home.as_deref(), &home);
-    match codex::load_sessions(&codex_home, limit, |cwd| {
-        binding_for_cwd(cwd, &roots).is_some()
-    }) {
-        Ok(codex_sessions) => {
-            for codex_session in codex_sessions {
-                let Some((root, project_id)) = binding_for_cwd(&codex_session.cwd, &roots) else {
-                    continue;
-                };
-                let mut session = codex_recall_session(codex_session, root.clone());
-                enrich_session(state, project_id, &mut session).await;
-                sessions.push(session);
-            }
-        }
-        Err(error) => {
-            tracing::warn!("cannot read Codex sessions: {error}");
-        }
-    }
-
-    sessions.sort_by(|a, b| {
-        b.created_at
-            .cmp(&a.created_at)
-            .then_with(|| b.session_id.cmp(&a.session_id))
-    });
-    sessions.truncate(limit);
-
-    Ok(ListRecallsResponse {
-        sessions,
-        workspace_roots,
-    })
-}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -13,7 +13,7 @@ struct MemoryGuidelinesSetupView: View {
     var body: some View {
         Group {
             if isLoading {
-                ContentLoadingView(title: "Checking Memory Guidelines…", layout: .document)
+                ContentLoadingView(title: "Checking Memory Guidelines…")
             } else if let error {
                 ContentUnavailableView {
                     Label("Memory Guidelines Unavailable", systemImage: "doc.badge.ellipsis")

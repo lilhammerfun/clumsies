@@ -16,12 +16,23 @@ Guidelines preview reads bundled Markdown without HTTP. Its previous independent
 | Guidelines | One **Set Up Guidelines** primary action; preview remains a link and includes every starter document. |
 | Starter | One local transaction creates `CLUMSIES.md`, `knowledge/README.md`, `procedures/README.md`, and `lessons/README.md`. Existing guidance and folders are preserved; failures roll back the batch. |
 | Guidelines requests | Presentation reuses loaded metadata. Adoption revalidates shared authority once and passes that revision into the batch. |
-| First loads | Memory, Reviews, Bundles, Activity, and project preparation use a shared list/document skeleton. Refreshes retain existing content. |
+| First loads | Memory, Reviews, Bundles, Activity, and project preparation use a single native indicator in the waiting region. Refreshes retain existing content. |
 | Document failures | Inline errors and retry replace endless loading; readers of the same revision share the request and its failure. Authority changes cancel old tasks. |
 | Activity | Failure, loading, and successful empty results are distinct. Duplicate loads are suppressed, stale results ignored, and refresh failures retain content. |
 | Diagnostics | Successful server response logs now include App elapsed time, covering limiter wait, XPC, and response delivery. |
 
 Starter READMEs explain their folders without inventing project knowledge. Documents enter the existing Draft and review process, not direct publication. See [Memory Guidelines](../guides/memory-guidelines.md).
+
+## Activity follow-up, September 18
+
+Activity now uses summary-only cursor pages and a separate selected-session task
+endpoint. Discovery runs on the blocking pool; continuation pages reuse snapshots.
+Retrieval enrichment occurs only for the requested task page. Project choice is
+restored before the first request, and long sessions are no longer silently capped.
+The generic spinner-plus-skeleton view was replaced with one native indicator.
+See [Activity](../recall.md#loading-and-pagination) for limits and recovery behavior.
+Initial discovery still walks bounded headers; installed-build timing remains to
+be measured rather than inferred from the passing regression tests.
 
 ## Remaining request design work
 
@@ -30,7 +41,6 @@ These are confirmed code findings, not implementations included in this change.
 | Priority | Evidence | Next change |
 |---|---|---|
 | High | `AppDelegate.startAfterNativeSetupCheck`; `WorkspaceLoader.loadAuthenticatedWorkspaceIdentity` and `reconcileManagedAgentAdapters` | Startup awaits `/setup`, then configured adapter maintenance, before identity and workspace loading. Adapter XPC has a 130 s budget. Give maintenance independent status and remove it from first-ready while preserving maintenance during sign-out and offline operation. Coordinate setup detection with offline startup. |
-| High | `crates/daemon/src/recall.rs:list_recalls`, `enrich_session` | The async handler synchronously parses local files; DSH enriches every session before the final limit. Codex limits candidates earlier but still loads content and enriches details for the list. Gather bounded summaries on the blocking pool and load selected details on demand, retaining corrupt-session isolation. |
 | High | `RetrievalDiagnosticsModel.loadMore` | Pagination lacks project/load-generation checks. Separate list and detail generations, invalidate old pages, and retain content after a same-project refresh failure. |
 | Medium | `WorkspaceLoader.load` | With one selected project and one page per memory scope, first-ready needs approximately nine GETs: identity, three initial state/selection requests, two lists, and three verification requests. Some are parallel, but final organization and project checks remain sequential. Parallelize independent checks, then assess a versioned aggregate snapshot without dropping consistency checks. |
 | Medium | `WorkspaceLoader.loadBundles`; `BundleNavigator` | List loading fetches every bundle detail (N+1), and navigation prepares the workspace index. Fetch display summaries first and defer detail/selector data until needed. |
@@ -54,7 +64,7 @@ These historical samples are neither percentiles nor a before/after benchmark. T
 
 ## Loading contract and verification
 
-Use the existing state models and native SwiftUI: stable skeleton for first load; empty state only after successful empty data; inline retry for first-load failure; retained content and progress/error for refresh; invalidated results after a context switch. Decorative skeleton shapes are hidden from accessibility while the loading title remains readable.
+Use the existing state models and native SwiftUI: one native indicator for first load; empty state only after successful empty data; inline retry for first-load failure; retained content and progress/error for refresh; invalidated results after a context switch. The indicator has an accessible label; no decorative skeleton is stacked with it.
 
 Validation includes the complete macOS suite, daemon unit/lifecycle suites, Rust Clippy, and documentation build. New checks cover starter assets and preservation, the Swift/daemon batch payload, rollback, shared document failures, Activity stale/duplicate results and retry, and startup dimensions.
 

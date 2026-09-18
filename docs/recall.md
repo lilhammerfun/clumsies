@@ -16,7 +16,7 @@ Three columns, newest session first:
 | Column | Shows |
 | --- | --- |
 | Sidebar | The existing global sidebar, with Activity selected. |
-| Content | Agent activity for bound workspaces. Each row shows a **DSH** or **Codex** host badge, title, request count, and time. |
+| Content | Agent activity for bound workspaces. Each row shows a **DSH** or **Codex** host badge, title, and time. |
 | Detail | The user request, the exact memory query written by the agent, search duration, and the selected memory chunks rendered inline as Markdown from their historical snapshots. |
 
 The host badge is part of session identity: session ids only need to be unique
@@ -121,7 +121,7 @@ the run's recorded retrieval duration, not model response time or a sum of all
 stage timings. Chunk counts include `reuse` and do not mean newly sent content.
 
 Retrieval history stores only a bounded preview in each candidate row, but it
-also retains the complete resource body used by that run. Each visible chunk
+also retains the complete resource body used by that run. Each visible truncated or empty chunk preview
 loads its complete text for an inline Markdown preview using `run_id + unit_key`
 and the candidate's frozen locator. It never reads the current Memory document,
 which may have changed since the activity occurred. Description-only units have no body byte
@@ -133,6 +133,39 @@ Older logs may not contain `run_id`. They remain visible with any fragments or
 error embedded in their tool result. The daemon uses `(project_id, query)` only
 when it identifies exactly one retrieval run; it never chooses the newest among
 duplicates. Ambiguous logs keep `run_id` and run status absent.
+
+## Loading and pagination
+
+Activity restores the last concrete project selected for this server, organization,
+and account before the first request. If it is unavailable, it uses the current
+Memory project or the first accessible project. **All Projects** is an explicit
+choice for the current session, not the launch default. No projects means no
+initial Activity request.
+
+`list_recalls` returns summaries only, in pages of 20 (maximum 100). Discovery
+reads bounded log headers/previews on the blocking pool, not complete transcripts
+or retrieval records. Its opaque cursor continues an immutable ordering without
+rescanning directories. Explicit refresh discovers a new snapshot.
+
+`get_recall_session` takes a summary's opaque `session_token` and returns one
+page of tasks. Only a selected session is parsed in full; later pages reuse its
+raw snapshot and enrich only that page's retrievals. The old 500-task/100-activation
+truncation is removed. Complete memory chunks are read only when a visible
+preview is truncated or empty.
+
+The daemon retains eight list snapshots and four selected session bodies in
+memory; it does not persist another transcript archive. Evicted handles or a
+restarted daemon require **Refresh Activity**. Binding changes invalidate access
+to an old snapshot. Corrupt individual log headers are skipped; selected-file
+failures appear in the detail region with retry.
+
+First loads use one native progress indicator in the waiting region. Refreshes
+retain content and selection; continuation progress stays at the list/task footer.
+Old responses cannot replace another project's list or another session's detail.
+Apple's [Loading](https://developer.apple.com/design/human-interface-guidelines/loading)
+and [Progress indicators](https://developer.apple.com/design/human-interface-guidelines/progress-indicators)
+guidance informs this choice; the shared view no longer combines a spinner with
+decorative skeleton rows.
 
 ## Scope
 
@@ -148,8 +181,9 @@ duplicates. Ambiguous logs keep `run_id` and run status absent.
 | Concern | Path |
 | --- | --- |
 | Shared projection and DSH reader | `crates/daemon/src/recall.rs` |
+| Summary snapshots and task pagination | `crates/daemon/src/recall/paging.rs` |
 | Codex rollout reader | `crates/daemon/src/recall/codex.rs` |
-| XPC dispatch | `crates/daemon/src/state.rs` (`list_recalls`, `get_recall_fragment`) |
+| XPC dispatch | `crates/daemon/src/state.rs` (`list_recalls`, `get_recall_session`, `get_recall_fragment`) |
 | XPC client and models | `apps/macos/Sources/Infrastructure/DaemonXPCClient.swift`, `DaemonModels.swift` |
 | Sidebar section | `apps/macos/Sources/Domain/MemoryModels.swift` (`WorkspaceSection.sessions`) |
 | Activity UI, host badge, and chunk detail | `apps/macos/Sources/Features/RecallView.swift`, `RecallModel.swift` |

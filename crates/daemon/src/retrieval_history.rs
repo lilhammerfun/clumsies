@@ -2532,12 +2532,23 @@ mod tests {
             workspace_root: None,
             project_id: Some("prj_nested".to_owned()),
             limit: None,
+            cursor: None,
         };
         let activity = crate::recall::list_recalls(&state, request.clone())
             .await
             .unwrap();
         assert_eq!(activity.sessions.len(), 1);
-        let activations = &activity.sessions[0].tasks[0].activations;
+        let detail = crate::recall::get_recall_session(
+            &state,
+            crate::GetRecallSessionRequest {
+                session_token: activity.sessions[0].session_token.clone(),
+                offset: None,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+        let activations = &detail.session.tasks[0].activations;
         assert_eq!(activations.len(), 2);
         assert_eq!(activations[0].run_id.as_deref(), Some(run_id.as_str()));
         assert_eq!(activations[0].total_us, Some(123_456));
@@ -2599,7 +2610,17 @@ mod tests {
         .await
         .unwrap();
         let cleared = crate::recall::list_recalls(&state, request).await.unwrap();
-        let activation = &cleared.sessions[0].tasks[0].activations[0];
+        let detail = crate::recall::get_recall_session(
+            &state,
+            crate::GetRecallSessionRequest {
+                session_token: cleared.sessions[0].session_token.clone(),
+                offset: None,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+        let activation = &detail.session.tasks[0].activations[0];
         assert_eq!(activation.run_id.as_deref(), Some(run_id.as_str()));
         assert_eq!(activation.total_us, None);
         assert_eq!(activation.fragments[0].content, "Recorded tool preview");

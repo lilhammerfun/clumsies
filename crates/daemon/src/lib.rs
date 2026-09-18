@@ -64,8 +64,9 @@ pub use project_storage::{
     DaemonProjectStorageResetRequest,
 };
 pub use recall::{
-    AgentHost, GetRecallFragmentRequest, GetRecallFragmentResponse, ListRecallsRequest,
-    ListRecallsResponse, RecallActivation, RecallFragment, RecallSession, RecallTask,
+    AgentHost, GetRecallFragmentRequest, GetRecallFragmentResponse, GetRecallSessionRequest,
+    GetRecallSessionResponse, ListRecallsRequest, ListRecallsResponse, RecallActivation,
+    RecallFragment, RecallSession, RecallSessionSummary, RecallTask,
 };
 pub use retrieval_history::{
     ClearRetrievalRunsRequest, ClearRetrievalRunsResponse, CreateEvaluationCaseRequest,

@@ -939,7 +939,12 @@ struct WorkspaceView: View {
                 recallSplitVisibility = target
             }
         }
-        .task {
+        .task(id: activityProjectContext) {
+            recallModel.prepare(
+                projectIds: store.projects.map(\.id),
+                preferredProjectId: store.activeProjectId,
+                scope: activityPreferenceScope
+            )
             if !recallModel.hasLoaded { await recallModel.load() }
         }
         .onChange(of: recallSplitVisibility) { _, visibility in
@@ -951,6 +956,14 @@ struct WorkspaceView: View {
                 recallSplitVisibility = target
             }
         }
+    }
+
+    private var activityPreferenceScope: String {
+        "\(ClumsiesIdentifiers.serverURL.absoluteString)|\(store.organization?.orgId ?? "")|\(store.account?.userId ?? "")"
+    }
+
+    private var activityProjectContext: String {
+        activityPreferenceScope + "|" + store.projects.map(\.id).joined(separator: "|")
     }
 
     @ToolbarContentBuilder
@@ -967,7 +980,11 @@ struct WorkspaceView: View {
             Button {
                 Task { await recallModel.load() }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                if recallModel.isLoading && !recallModel.sessions.isEmpty {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
             }
             .disabled(recallModel.isLoading)
             .help("Refresh Activity")
@@ -1178,7 +1195,7 @@ private struct ActivityProjectFilter: View {
             selectedProjectId: model.selectedProjectId,
             unscopedTitle: "All Projects",
             unscopedSystemImage: nil,
-            isLoading: model.isLoading,
+            isLoading: false,
             help: "Filter Activity by Project",
             onCreate: store.canCreateProject ? { store.presentProjectCreation() } : nil
         ) { projectId in

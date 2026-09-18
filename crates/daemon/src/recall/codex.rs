@@ -1,3 +1,5 @@
+//! Reads Codex rollout metadata separately from selected session task bodies.
+
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
@@ -13,8 +15,6 @@ use std::convert::Infallible;
 const SYNTHETIC_TASK_TEXT: &str = "(no recorded user message)";
 const MAX_HEADER_LINES: usize = 16;
 const MAX_HEADER_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_TASKS_PER_SESSION: usize = 500;
-const MAX_ACTIVATIONS_PER_TASK: usize = 100;
 
 /// Whether a rollout still lives in the active session tree or was archived.
 /// Active files always win when both trees contain the same session.
@@ -133,29 +133,34 @@ pub(super) fn read_session_titles(index_path: &Path) -> io::Result<HashMap<Strin
     Ok(titles)
 }
 
+/// Bounded metadata used to filter before reading a session's tasks.
 #[derive(Debug)]
-struct RolloutHeader {
-    session_id: String,
-    cwd: String,
-    is_subagent: bool,
+pub(super) struct RolloutHeader {
+    /// Host-local session identity.
+    pub(super) session_id: String,
+    /// Workspace recorded by the host, resolved against the most specific binding.
+    pub(super) cwd: String,
+    /// Subagents do not form independent human Activity rows.
+    pub(super) is_subagent: bool,
 }
 
+/// A deduplicated log file eligible for a lightweight Activity summary.
 #[derive(Debug)]
-struct RolloutCandidate {
-    file: RolloutFile,
-    header: RolloutHeader,
+pub(super) struct RolloutCandidate {
+    /// Discovered path, source, and modification timestamp.
+    pub(super) file: RolloutFile,
+    /// Identity and binding metadata from the bounded header.
+    pub(super) header: RolloutHeader,
 }
 
-/// Loads the newest matching Codex sessions without reading every rollout in
-/// full. Only the bounded `session_meta` header is read during filtering and
-/// de-duplication; full JSONL reads happen after sorting and applying `limit`.
-/// Live sessions take precedence over archives with the same session id.
-pub(super) fn load_sessions(
+/// Discovers matching sessions using bounded headers, without reading task bodies.
+///
+/// # Errors
+/// Returns directory discovery errors; individually unreadable logs are skipped.
+pub(super) fn list_candidates(
     codex_home: &Path,
-    limit: usize,
     workspace_matches: impl Fn(&str) -> bool,
-) -> io::Result<Vec<CodexSession>> {
-    let titles = read_session_titles(&codex_home.join("session_index.jsonl"))?;
+) -> io::Result<Vec<RolloutCandidate>> {
     let files = discover_rollouts(codex_home)?;
     let mut candidates = HashMap::<String, RolloutCandidate>::new();
 
@@ -190,10 +195,21 @@ pub(super) fn load_sessions(
             .then_with(|| b.header.session_id.cmp(&a.header.session_id))
             .then_with(|| b.file.path.cmp(&a.file.path))
     });
-    candidates.truncate(limit);
+    Ok(candidates)
+}
 
-    let mut sessions = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
+#[cfg(test)]
+fn load_sessions(
+    codex_home: &Path,
+    limit: usize,
+    workspace_matches: impl Fn(&str) -> bool,
+) -> io::Result<Vec<CodexSession>> {
+    let titles = read_session_titles(&codex_home.join("session_index.jsonl"))?;
+    let mut sessions = Vec::new();
+    for candidate in list_candidates(codex_home, workspace_matches)?
+        .into_iter()
+        .take(limit)
+    {
         let file = candidate.file;
         let Ok(Some(mut session)) = parse_rollout_file(&file.path, None, file.created_at) else {
             continue;
@@ -204,8 +220,17 @@ pub(super) fn load_sessions(
         session.title = titles.get(&session.session_id).cloned();
         sessions.push(session);
     }
-
     Ok(sessions)
+}
+
+/// Reads a bounded first-prompt preview when the host has no indexed title.
+///
+/// # Errors
+/// Returns file read errors; callers may still display the session identity.
+pub(super) fn read_title_preview(path: &Path) -> io::Result<Option<String>> {
+    let reader = BufReader::new(fs::File::open(path)?.take(MAX_HEADER_BYTES));
+    let session = parse_rollout_lines(reader.lines().take(32), None, None)?;
+    Ok(session.and_then(|s| s.tasks.first().map(|t| t.text.chars().take(160).collect())))
 }
 
 /// Parses the recall-relevant events from one rollout. Malformed and unrelated
@@ -227,7 +252,11 @@ fn parse_rollout(
     }
 }
 
-fn parse_rollout_file(
+/// Reads the task bodies of one selected session.
+///
+/// # Errors
+/// Returns file open and streaming read errors.
+pub(super) fn parse_rollout_file(
     path: &Path,
     title: Option<&str>,
     file_mtime_millis: Option<i64>,
@@ -285,10 +314,6 @@ where
                         else {
                             continue;
                         };
-                        if tasks.len() >= MAX_TASKS_PER_SESSION {
-                            current_task = None;
-                            continue;
-                        }
                         tasks.push(CodexTask {
                             message_id: format!("codex-task-{}", tasks.len() + 1),
                             text: message.to_owned(),
@@ -355,9 +380,6 @@ where
                         let Some(task_index) = current_task else {
                             continue;
                         };
-                        if tasks[task_index].activations.len() >= MAX_ACTIVATIONS_PER_TASK {
-                            continue;
-                        }
 
                         let result = result.unwrap_or(&Value::Null);
                         let activation = CodexActivation {
@@ -386,10 +408,6 @@ where
                     continue;
                 };
                 has_structured_user_messages = true;
-                if tasks.len() >= MAX_TASKS_PER_SESSION {
-                    current_task = None;
-                    continue;
-                }
                 tasks.push(CodexTask {
                     message_id,
                     text: message,
@@ -826,16 +844,16 @@ mod tests {
     }
 
     #[test]
-    fn bounds_tasks_and_activations_in_large_rollouts() {
+    fn preserves_tasks_and_activations_for_pagination() {
         let mut lines = vec![
             r#"{"type":"session_meta","payload":{"id":"bounded","cwd":"/repo"}}"#.to_owned(),
             r#"{"type":"event_msg","payload":{"type":"user_message","message":"first"}}"#
                 .to_owned(),
         ];
-        for index in 0..=MAX_ACTIVATIONS_PER_TASK {
+        for index in 0..=100 {
             lines.push(activation_line(&format!("call-{index}"), "bounded query"));
         }
-        for index in 1..MAX_TASKS_PER_SESSION {
+        for index in 1..500 {
             lines.push(format!(
                 r#"{{"type":"event_msg","payload":{{"type":"user_message","message":"task {index}"}}}}"#
             ));
@@ -844,18 +862,18 @@ mod tests {
             r#"{"type":"event_msg","payload":{"type":"user_message","message":"overflow"}}"#
                 .to_owned(),
         );
-        lines.push(activation_line("overflow-call", "must be ignored"));
+        lines.push(activation_line("overflow-call", "last task activation"));
 
         let session = parse_rollout(&lines.join("\n"), None, None).unwrap();
-        assert_eq!(session.tasks.len(), MAX_TASKS_PER_SESSION);
-        assert_eq!(session.tasks[0].activations.len(), MAX_ACTIVATIONS_PER_TASK);
+        assert_eq!(session.tasks.len(), 501);
+        assert_eq!(session.tasks[0].activations.len(), 101);
         assert_eq!(
             session
                 .tasks
                 .iter()
                 .map(|task| task.activations.len())
                 .sum::<usize>(),
-            MAX_ACTIVATIONS_PER_TASK
+            102
         );
     }
 

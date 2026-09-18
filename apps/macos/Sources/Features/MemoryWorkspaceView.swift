@@ -159,7 +159,7 @@ private struct ResourceLoadingView: View {
                     Button("Try Again") { Task { await load() } }
                 }
             } else {
-                ContentLoadingView(title: "Loading Memory…", layout: .document)
+                ContentLoadingView(title: "Loading Memory…")
             }
         }
         .task(id: item) { await load() }

@@ -178,6 +178,8 @@ pub(crate) struct DaemonInner {
     pub(crate) retrieval_history_lock: Mutex<()>,
     pub(crate) draft_mutation_lock: Mutex<()>,
     pub(crate) local_setup_lock: Mutex<()>,
+    /// Activity discovery snapshots and selected-session paging cache.
+    pub(crate) recall_cache: Mutex<recall::RecallCache>,
     pub(crate) storage_access: tokio::sync::RwLock<()>,
 }
 
@@ -305,6 +307,7 @@ impl DaemonState {
                 retrieval_history_lock: Mutex::new(()),
                 draft_mutation_lock: Mutex::new(()),
                 local_setup_lock: Mutex::new(()),
+                recall_cache: Mutex::new(recall::RecallCache::default()),
                 storage_access: tokio::sync::RwLock::new(()),
             }),
         };
@@ -1233,6 +1236,17 @@ impl DaemonState {
         recall::list_recalls(self, request).await
     }
 
+    /// Loads a page of tasks only for the selected Activity session.
+    ///
+    /// # Errors
+    /// Returns expired snapshot, binding, or file read errors.
+    pub async fn get_recall_session(
+        &self,
+        request: GetRecallSessionRequest,
+    ) -> Result<GetRecallSessionResponse, DaemonError> {
+        recall::get_recall_session(self, request).await
+    }
+
     pub async fn get_recall_fragment(
         &self,
         request: GetRecallFragmentRequest,
@@ -2035,6 +2049,7 @@ impl DaemonIpcService {
             }
             "get_retrieval_run" => dispatch_async!(self, request.payload, get_retrieval_run),
             "list_recalls" => dispatch_async!(self, request.payload, list_recalls),
+            "get_recall_session" => dispatch_async!(self, request.payload, get_recall_session),
             "get_recall_fragment" => {
                 dispatch_async!(self, request.payload, get_recall_fragment)
             }
