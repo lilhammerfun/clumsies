@@ -8,23 +8,24 @@ final class StartupWindowLayoutTests: XCTestCase {
     func testCompactLoadingResizesTheSameWindowAroundItsCenter() throws {
         let controller = StartupWindowController()
         defer { controller.close() }
-        controller.show(ProgressView("Connecting…"), height: 360)
-        let window = try XCTUnwrap(controller.window)
-        let visibleFrame = try XCTUnwrap(window.screen).visibleFrame
-        // Leave room for the taller form so AppKit does not move it back on screen.
-        window.setFrameOrigin(NSPoint(
-            x: visibleFrame.midX - window.frame.width / 2,
-            y: visibleFrame.midY - window.frame.height / 2
-        ))
-        let compactFrame = window.frame
-        XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 360))
-
-        controller.show(NativeServerAccessView(model: NativeServerAccessModel(
+        let form = NativeServerAccessView(model: NativeServerAccessModel(
             purpose: .appSignIn, destination: .memoryOnly,
             recoveryState: NativeAdministratorRecoveryState()
-        )))
+        ))
+        // Let AppKit place the tallest content before checking centered resizing.
+        controller.show(form)
+        let window = try XCTUnwrap(controller.window)
+        let formFrame = window.frame
+        controller.show(ProgressView("Connecting…"), height: 360)
+        let compactFrame = window.frame
+        XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 360))
+        XCTAssertEqual(compactFrame.midX, formFrame.midX)
+        XCTAssertEqual(compactFrame.midY, formFrame.midY)
+
+        controller.show(form)
         XCTAssertTrue(controller.window === window)
         XCTAssertEqual(window.contentView?.frame.size, StartupWindowController.contentSize)
+        XCTAssertEqual(window.frame, formFrame)
         XCTAssertEqual(window.frame.midX, compactFrame.midX)
         XCTAssertEqual(window.frame.midY, compactFrame.midY)
 
