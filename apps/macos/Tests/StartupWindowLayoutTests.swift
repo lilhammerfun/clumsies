@@ -10,7 +10,12 @@ final class StartupWindowLayoutTests: XCTestCase {
         defer { controller.close() }
         controller.show(ProgressView("Connecting…"), height: 360)
         let window = try XCTUnwrap(controller.window)
-        window.setFrameOrigin(NSPoint(x: 150, y: 360))
+        let visibleFrame = try XCTUnwrap(window.screen).visibleFrame
+        // Leave room for the taller form so AppKit does not move it back on screen.
+        window.setFrameOrigin(NSPoint(
+            x: visibleFrame.midX - window.frame.width / 2,
+            y: visibleFrame.midY - window.frame.height / 2
+        ))
         let compactFrame = window.frame
         XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 360))
 
