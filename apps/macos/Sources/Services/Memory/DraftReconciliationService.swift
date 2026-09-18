@@ -243,3 +243,9 @@ final class DraftReconciliationService: ObservableObject {
         "\"\(commitId ?? "ref-none")\""
     }
 }
+
+enum DraftUploadBarrierDecision: Equatable, Sendable {
+    case wait
+    case ready
+    case failed(String?)
+}

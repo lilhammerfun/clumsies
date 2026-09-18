@@ -128,7 +128,6 @@ private struct PendingDirectoryReview: Identifiable {
 }
 
 struct FileTreeView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var draftStore: DraftStore
@@ -149,7 +148,12 @@ struct FileTreeView: View {
     @State private var proposedDirectoryName = ""
     @State private var pendingAlert: MemoryFileTreeAlert?
     @State private var pendingDirectoryReview: PendingDirectoryReview?
-    @State private var directoryOperationProgress: String?
+    @StateObject private var operations: MemoryFileOperationsModel
+
+    init(items: [MemoryListItem], operations: @autoclosure @escaping () -> MemoryFileOperationsModel) {
+        self.items = items
+        _operations = StateObject(wrappedValue: operations())
+    }
 
     private var roots: [FileTreeNode] {
         FileTreeNode.build(items)
@@ -165,10 +169,10 @@ struct FileTreeView: View {
             ReviewRequestSheet(
                 initialTitle: request.initialTitle,
                 loadCandidates: {
-                    try await reconciler.reconciliationCandidates(for: request.drafts)
+                    try await self.reconciler.reconciliationCandidates(for: request.drafts)
                 }
             ) { title, description, reconciliations in
-                try await reviewModel.requestReview(
+                try await self.reviewModel.requestReview(
                     for: request.drafts,
                     title: title,
                     description: description,
@@ -180,15 +184,15 @@ struct FileTreeView: View {
 
     private var fileTreeContent: some View {
         List(selection: selection) {
-            ForEach(visibleNodes) { entry in
-                fileTreeRow(for: entry)
+            ForEach(self.visibleNodes) { entry in
+                self.fileTreeRow(for: entry)
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color(nsColor: .controlBackgroundColor))
         .safeAreaInset(edge: .bottom) {
-            if let directoryOperationProgress {
+            if let directoryOperationProgress = operations.directoryOperationProgress {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
@@ -203,29 +207,29 @@ struct FileTreeView: View {
             }
         }
         .contextMenu(forSelectionType: String.self) { nodeIds in
-            fileTreeMenu(for: nodeIds)
+            self.fileTreeMenu(for: nodeIds)
         }
         .onAppear {
-            guard !initializedExpansion else { return }
-            expandedDirectoryIds = FileTreeNode.directoryIds(in: roots)
-            initializedExpansion = true
-            synchronizeSelectionWithActiveItem()
+            guard !self.initializedExpansion else { return }
+            self.expandedDirectoryIds = FileTreeNode.directoryIds(in: self.roots)
+            self.initializedExpansion = true
+            self.synchronizeSelectionWithActiveItem()
         }
         .onChange(of: items.map { "\($0.id):\($0.document.path)" }) { _, _ in
-            expandedDirectoryIds.formUnion(FileTreeNode.directoryIds(in: roots))
-            selectedNodeIds.formIntersection(Set(FileTreeNode.allIds(in: roots)))
+            self.expandedDirectoryIds.formUnion(FileTreeNode.directoryIds(in: self.roots))
+            self.selectedNodeIds.formIntersection(Set(FileTreeNode.allIds(in: self.roots)))
             if let selectionAnchorId,
                FileTreeNode.node(withId: selectionAnchorId, in: roots) == nil {
                 self.selectionAnchorId = nil
             }
-            synchronizeSelectionWithActiveItem()
+            self.synchronizeSelectionWithActiveItem()
         }
         .onChange(of: workspaceNavigation.activeVisibleTab?.itemId ?? workspaceNavigation.selectedItemId) { _, _ in
-            synchronizeSelectionWithActiveItem()
+            self.synchronizeSelectionWithActiveItem()
         }
         .onChange(of: workspaceContext.activeProjectId) { _, _ in
-            dismissAlert()
-            pendingDirectoryReview = nil
+            self.dismissAlert()
+            self.pendingDirectoryReview = nil
         }
     }
 
@@ -234,32 +238,32 @@ struct FileTreeView: View {
         .alert(
             pendingAlert?.title ?? "",
             isPresented: Binding(
-                get: { pendingAlert != nil },
-                set: { if !$0 { dismissAlert() } }
+                get: { self.pendingAlert != nil },
+                set: { if !$0 { self.dismissAlert() } }
             ),
             presenting: pendingAlert
         ) { alert in
             switch alert {
             case .itemRename:
-                TextField("File name", text: $proposedName)
-                Button("Cancel", role: .cancel) { dismissAlert() }
-                Button(alert.confirmationTitle) { renameSelectedItem() }
+                TextField("File name", text: self.$proposedName)
+                Button("Cancel", role: .cancel) { self.dismissAlert() }
+                Button(alert.confirmationTitle) { self.renameSelectedItem() }
                     .disabled(
-                        directoryOperationProgress != nil || !isValidProposedName
+                        self.operations.directoryOperationProgress != nil || !self.isValidProposedName
                     )
             case .directoryRename:
-                TextField("Folder name", text: $proposedDirectoryName)
-                Button("Cancel", role: .cancel) { dismissAlert() }
-                Button(alert.confirmationTitle) { renameSelectedDirectory() }
+                TextField("Folder name", text: self.$proposedDirectoryName)
+                Button("Cancel", role: .cancel) { self.dismissAlert() }
+                Button(alert.confirmationTitle) { self.renameSelectedDirectory() }
                     .disabled(
-                        directoryOperationProgress != nil || !isValidProposedDirectoryName
+                        self.operations.directoryOperationProgress != nil || !self.isValidProposedDirectoryName
                     )
             case .organizationDeletion, .directoryDiscard, .directoryDeletion:
-                Button("Cancel", role: .cancel) { dismissAlert() }
+                Button("Cancel", role: .cancel) { self.dismissAlert() }
                 Button(alert.confirmationTitle, role: .destructive) {
-                    confirm(alert)
+                    self.confirm(alert)
                 }
-                .disabled(directoryOperationProgress != nil)
+                .disabled(self.operations.directoryOperationProgress != nil)
             }
         } message: { alert in
             Text(alert.message)
@@ -267,7 +271,7 @@ struct FileTreeView: View {
     }
 
     private func fileTreeRow(for entry: VisibleFileTreeNode) -> some View {
-        let review = entry.node.item?.draft.flatMap { reviewModel.review(for: $0) }
+        let review = entry.node.item?.draft.flatMap { self.reviewModel.review(for: $0) }
         return FileTreeRow(
             entry: entry,
             isExpanded: expandedDirectoryIds.contains(entry.id),
@@ -275,11 +279,11 @@ struct FileTreeView: View {
             review: review,
             onOpenReview: {
                 if let draft = entry.node.item?.draft {
-                    Task { await reviewModel.openReview(for: draft) }
+                    Task { await self.reviewModel.openReview(for: draft) }
                 }
             },
             onDirectoryClick: { modifierFlags in
-                handleDirectoryClick(entry.id, modifierFlags: modifierFlags)
+                self.handleDirectoryClick(entry.id, modifierFlags: modifierFlags)
             }
         )
         .tag(entry.id)
@@ -324,7 +328,7 @@ struct FileTreeView: View {
     }
 
     private func beginRenaming(_ item: MemoryListItem) {
-        guard directoryOperationProgress == nil else { return }
+        guard operations.directoryOperationProgress == nil else { return }
         guard !documentSessions.isSynchronizingDocument(item.id) else {
             workspaceFeedback.errorMessage = DocumentSyncError.mutationWhileSynchronizing.localizedDescription
             return
@@ -335,7 +339,7 @@ struct FileTreeView: View {
     }
 
     private func renameSelectedItem() {
-        guard directoryOperationProgress == nil else { return }
+        guard operations.directoryOperationProgress == nil else { return }
         guard let item = itemToRename else { return }
         guard !documentSessions.isSynchronizingDocument(item.id) else {
             dismissAlert()
@@ -353,23 +357,23 @@ struct FileTreeView: View {
         dismissAlert()
         Task {
             do {
-                try await draftStore.rename(item, to: document.path)
+                try await self.draftStore.rename(item, to: document.path)
             } catch {
-                workspaceFeedback.errorMessage = error.localizedDescription
+                self.workspaceFeedback.errorMessage = error.localizedDescription
             }
         }
     }
 
     private func beginRenamingDirectory(_ directory: FileTreeNode) {
-        guard directoryOperationProgress == nil else { return }
+        guard operations.directoryOperationProgress == nil else { return }
         let targetItems = FileTreeNode.items(
             in: roots,
             selectedNodeIds: [directory.id]
         )
         guard targetItems.allSatisfy({
             MemoryFileTreeMenu.canRename($0, inOrgView: false)
-                && draftStore.canEditMemory($0)
-                && !documentSessions.isSynchronizingDocument($0.id)
+                && self.draftStore.canEditMemory($0)
+                && !self.documentSessions.isSynchronizingDocument($0.id)
         }) else {
             workspaceFeedback.errorMessage = MemoryDirectoryMutationError.readOnly.localizedDescription
             return
@@ -379,7 +383,7 @@ struct FileTreeView: View {
     }
 
     private func renameSelectedDirectory() {
-        guard directoryOperationProgress == nil else { return }
+        guard operations.directoryOperationProgress == nil else { return }
         guard let directoryToRenameId else { return }
         let name = proposedDirectoryName.trimmingCharacters(in: .whitespacesAndNewlines)
         let targetItems = FileTreeNode.items(
@@ -389,17 +393,17 @@ struct FileTreeView: View {
         do {
             guard targetItems.allSatisfy({
                 MemoryFileTreeMenu.canRename($0, inOrgView: false)
-                    && draftStore.canEditMemory($0)
-                    && !documentSessions.isSynchronizingDocument($0.id)
+                    && self.draftStore.canEditMemory($0)
+                    && !self.documentSessions.isSynchronizingDocument($0.id)
             }) else {
                 throw MemoryDirectoryMutationError.readOnly
             }
             let resources = memoryCatalog.resources.filter {
                 $0.scope == .org
-                    || ($0.scope == .project && $0.projectId == workspaceContext.activeProjectId)
+                    || ($0.scope == .project && $0.projectId == self.workspaceContext.activeProjectId)
             }
             let drafts = draftStore.drafts.filter {
-                $0.projectId == workspaceContext.activeProjectId
+                $0.projectId == self.workspaceContext.activeProjectId
                     && $0.status != .discarded
                     && $0.status != .merged
             }
@@ -415,24 +419,7 @@ struct FileTreeView: View {
                 inOrgView: false
             )
             dismissAlert()
-            Task {
-                var completed = 0
-                directoryOperationProgress = "Renaming \(plan.changes.count) memories…"
-                defer { directoryOperationProgress = nil }
-                do {
-                    for (index, change) in plan.changes.enumerated() {
-                        directoryOperationProgress =
-                            "Renaming \(index + 1) of \(plan.changes.count) memories…"
-                        try await draftStore.rename(change.item, to: change.newPath)
-                        completed += 1
-                    }
-                } catch {
-                    let prefix = completed == 0
-                        ? ""
-                        : "Renamed \(completed) of \(plan.changes.count) memories. "
-                    workspaceFeedback.errorMessage = prefix + error.localizedDescription
-                }
-            }
+            Task { await self.operations.renameDirectory(plan) }
         } catch {
             workspaceFeedback.errorMessage = error.localizedDescription
         }
@@ -440,10 +427,10 @@ struct FileTreeView: View {
 
     private var selection: Binding<Set<String>> {
         Binding(
-            get: { selectedNodeIds },
+            get: { self.selectedNodeIds },
             set: { newSelection in
-                let previous = selectedNodeIds
-                selectedNodeIds = newSelection
+                let previous = self.selectedNodeIds
+                self.selectedNodeIds = newSelection
                 guard newSelection.count == 1,
                       let nodeId = newSelection.first,
                       let node = FileTreeNode.node(withId: nodeId, in: roots) else {
@@ -451,10 +438,10 @@ struct FileTreeView: View {
                 }
 
                 if newSelection != previous {
-                    selectionAnchorId = nodeId
+                    self.selectionAnchorId = nodeId
                 }
                 guard newSelection != previous, let item = node.item else { return }
-                workspaceNavigation.open(item)
+                self.workspaceNavigation.open(item)
             }
         )
     }
@@ -479,10 +466,10 @@ struct FileTreeView: View {
 
     private func toggleDirectory(_ nodeId: String) {
         withAnimation(.snappy(duration: 0.14)) {
-            if expandedDirectoryIds.contains(nodeId) {
-                expandedDirectoryIds.remove(nodeId)
+            if self.expandedDirectoryIds.contains(nodeId) {
+                self.expandedDirectoryIds.remove(nodeId)
             } else {
-                expandedDirectoryIds.insert(nodeId)
+                self.expandedDirectoryIds.insert(nodeId)
             }
         }
     }
@@ -505,25 +492,25 @@ struct FileTreeView: View {
         let addableItems = MemoryFileTreeMenu.addable(targetItems, inOrgView: isOrgView)
         let removableItems = MemoryFileTreeMenu.removable(targetItems, inOrgView: isOrgView)
         let trashableItems = MemoryFileTreeMenu.trashable(targetItems, inOrgView: isOrgView)
-            .filter { draftStore.canEditMemory($0) }
+            .filter { self.draftStore.canEditMemory($0) }
         let singleRenameable = singleItem.map {
             MemoryFileTreeMenu.canRename($0, inOrgView: isOrgView)
-                && draftStore.canEditMemory($0)
+                && self.draftStore.canEditMemory($0)
         } ?? false
         let singleTrashable = singleItem.map { item in
             trashableItems.contains { $0.id == item.id }
         } ?? false
         let singleStale = singleItem.map { item in
-            item.resource.map { memoryCatalog.staleResourceIds.contains($0.id) } == true
+            item.resource.map { self.memoryCatalog.staleResourceIds.contains($0.id) } == true
         } ?? false
         let singleSynchronizing = singleItem.map {
-            documentSessions.isSynchronizingDocument($0.id)
+            self.documentSessions.isSynchronizingDocument($0.id)
         } ?? false
         let selectionContainsSynchronizingDocument = targetItems.contains {
-            documentSessions.isSynchronizingDocument($0.id)
+            self.documentSessions.isSynchronizingDocument($0.id)
         }
         let trashSelectionContainsSynchronizingDocument = trashableItems.contains {
-            documentSessions.isSynchronizingDocument($0.id)
+            self.documentSessions.isSynchronizingDocument($0.id)
         }
         let reviewDrafts = MemoryFileTreeMenu.reviewableDrafts(
             targetItems,
@@ -537,13 +524,13 @@ struct FileTreeView: View {
             && !targetItems.isEmpty
             && targetItems.allSatisfy {
                 MemoryFileTreeMenu.canRename($0, inOrgView: isOrgView)
-                    && draftStore.canEditMemory($0)
+                    && self.draftStore.canEditMemory($0)
             }
         let directoryDeletionPlan = selectedDirectory.flatMap { _ in
             MemoryFileTreeMenu.directoryDeletionPlan(targetItems, inOrgView: isOrgView)
         }
         let directoryDeletionAllowed = directoryDeletionPlan?.itemsToDelete.allSatisfy {
-            draftStore.canEditMemory($0)
+            self.draftStore.canEditMemory($0)
         } == true
         let hasDraftAction = !isOrgView
             && (singleItem?.draft != nil || !directoryDrafts.isEmpty)
@@ -553,47 +540,47 @@ struct FileTreeView: View {
         // ---- generic document operations (standard macOS conventions) ----
         if let selectedDirectory {
             if directoryRenameable {
-                Button("Rename Folder…") { beginRenamingDirectory(selectedDirectory) }
+                Button("Rename Folder…") { self.beginRenamingDirectory(selectedDirectory) }
                     .disabled(
-                        directoryOperationProgress != nil
+                        operations.directoryOperationProgress != nil
                             || selectionContainsSynchronizingDocument
                     )
             }
             if let directoryDeletionPlan, directoryDeletionAllowed {
                 Button("Delete Folder…", role: .destructive) {
-                    pendingAlert = .directoryDeletion(
+                    self.pendingAlert = .directoryDeletion(
                         name: selectedDirectory.name,
                         plan: directoryDeletionPlan
                     )
                 }
                 .disabled(
-                    directoryOperationProgress != nil
+                    operations.directoryOperationProgress != nil
                         || selectionContainsSynchronizingDocument
                 )
             }
         } else if let singleItem {
-            Button("Open") { workspaceNavigation.open(singleItem) }
+            Button("Open") { self.workspaceNavigation.open(singleItem) }
             if singleItem.supportsMarkdownPreview {
-                Button("Open Source") { workspaceNavigation.open(singleItem, mode: .source) }
+                Button("Open Source") { self.workspaceNavigation.open(singleItem, mode: .source) }
             }
             if singleRenameable {
-                Button("Rename…") { beginRenaming(singleItem) }
-                    .disabled(directoryOperationProgress != nil || singleSynchronizing)
+                Button("Rename…") { self.beginRenaming(singleItem) }
+                    .disabled(operations.directoryOperationProgress != nil || singleSynchronizing)
             }
             if singleTrashable {
                 Button("Delete…", role: .destructive) {
-                    proposeOrganizationDeletion([singleItem])
+                    self.proposeOrganizationDeletion([singleItem])
                 }
-                .disabled(directoryOperationProgress != nil || singleSynchronizing)
+                .disabled(operations.directoryOperationProgress != nil || singleSynchronizing)
             }
         } else if !targetItems.isEmpty {
-            Button("Open") { targetItems.forEach { workspaceNavigation.open($0) } }
+            Button("Open") { targetItems.forEach { self.workspaceNavigation.open($0) } }
             if !trashableItems.isEmpty {
                 Button(organizationDeletionTitle(count: trashableItems.count), role: .destructive) {
-                    proposeOrganizationDeletion(trashableItems)
+                    self.proposeOrganizationDeletion(trashableItems)
                 }
                 .disabled(
-                    directoryOperationProgress != nil
+                    operations.directoryOperationProgress != nil
                         || trashSelectionContainsSynchronizingDocument
                 )
             }
@@ -601,12 +588,12 @@ struct FileTreeView: View {
 
         if !exportItems.isEmpty {
             Button("Export as ZIP…") {
-                memoryModel.exportMemory(
+                self.memoryModel.exportMemory(
                     exportItems,
                     name: selectedDirectory?.name ?? singleItem?.document.title
                 )
             }
-            .disabled(directoryOperationProgress != nil || !memoryModel.canExportMemory(exportItems))
+            .disabled(operations.directoryOperationProgress != nil || !memoryModel.canExportMemory(exportItems))
         }
 
         // ---- domain operations (Memory scope relationships and drafts) ----
@@ -615,52 +602,52 @@ struct FileTreeView: View {
         }
         if !addableItems.isEmpty {
             Menu(addToProjectTitle(count: addableItems.count)) {
-                if workspaceContext.projects.isEmpty {
+                if self.workspaceContext.projects.isEmpty {
                     Button("No Projects") {}
                         .disabled(true)
                 } else {
-                    ForEach(workspaceContext.projects) { project in
+                    ForEach(self.workspaceContext.projects) { project in
                         Button("Add to \(project.name)") {
-                            addToProject(addableItems, projectId: project.id)
+                            Task { await self.operations.addToProject(addableItems, projectId: project.id) }
                         }
-                        .disabled(!workspaceContext.canManageProject(project.id))
+                        .disabled(!self.workspaceContext.canManageProject(project.id))
                     }
                 }
             }
             .disabled(
-                directoryOperationProgress != nil
-                    || !workspaceContext.projects.contains(where: { workspaceContext.canManageProject($0.id) })
+                operations.directoryOperationProgress != nil
+                    || !workspaceContext.projects.contains(where: { self.workspaceContext.canManageProject($0.id) })
                     || workspaceContext.projects.isEmpty
                     || selectionContainsSynchronizingDocument
             )
         }
         if !removableItems.isEmpty {
             Button(removeFromProjectTitle(count: removableItems.count)) {
-                removeFromProject(removableItems)
+                Task { await self.operations.removeFromProject(removableItems) }
             }
             .disabled(
-                directoryOperationProgress != nil
-                    || workspaceContext.activeProjectId.map { !workspaceContext.canManageProject($0) } != false
+                operations.directoryOperationProgress != nil
+                    || workspaceContext.activeProjectId.map { !self.workspaceContext.canManageProject($0) } != false
                     || selectionContainsSynchronizingDocument
             )
             .help("Remove the reference from this project. The shared file is kept.")
         }
         if !isOrgView, !reviewDrafts.isEmpty {
             Button(reviewRequestTitle(count: reviewDrafts.count)) {
-                pendingDirectoryReview = .init(
+                self.pendingDirectoryReview = .init(
                     drafts: reviewDrafts,
-                    initialTitle: directoryReviewTitle(for: nodeIds, draftCount: reviewDrafts.count)
+                    initialTitle: self.directoryReviewTitle(for: nodeIds, draftCount: reviewDrafts.count)
                 )
             }
             .disabled(
-                directoryOperationProgress != nil
+                operations.directoryOperationProgress != nil
                     || !reviewSelectionIsReady
                     || selectionContainsSynchronizingDocument
             )
         }
         if !isOrgView, let draft = singleItem?.draft, draft.status == .submitted {
             Button("View Review") {
-                Task { await reviewModel.openReview(for: draft) }
+                Task { await self.reviewModel.openReview(for: draft) }
             }
         }
         if let selectedDirectory, !directoryDrafts.isEmpty {
@@ -670,19 +657,19 @@ struct FileTreeView: View {
                     : "Discard \(directoryDrafts.count) Drafts in Folder…",
                 role: .destructive
             ) {
-                pendingAlert = .directoryDiscard(
+                self.pendingAlert = .directoryDiscard(
                     name: selectedDirectory.name,
                     drafts: directoryDrafts
                 )
             }
             .disabled(
-                directoryOperationProgress != nil
+                operations.directoryOperationProgress != nil
                     || selectionContainsSynchronizingDocument
             )
         }
         if let singleItem {
             let resourceIsStale = singleItem.resource.map {
-                memoryCatalog.staleResourceIds.contains($0.id)
+                self.memoryCatalog.staleResourceIds.contains($0.id)
             } == true
             if documentSessions.isSynchronizingDocument(singleItem.id) {
                 Button("Preparing Shared Changes…") {}
@@ -703,13 +690,13 @@ struct FileTreeView: View {
                     } else {
                         Button("Retry Draft Sync") {
                             Task {
-                                _ = await daemonSync.retrySync(
+                                _ = await self.daemonSync.retrySync(
                                     channel: "drafts",
                                     projectId: draft.projectId
                                 )
                             }
                         }
-                        .disabled(directoryOperationProgress != nil)
+                        .disabled(operations.directoryOperationProgress != nil)
                     }
                 case .synced:
                     if draft.serverId == nil {
@@ -721,26 +708,26 @@ struct FileTreeView: View {
                                 ? "Review Shared Changes"
                                 : "Update from Shared Version"
                         ) {
-                            guard directoryOperationProgress == nil else { return }
-                            memoryModel.syncDocument(singleItem)
+                            guard self.operations.directoryOperationProgress == nil else { return }
+                            self.memoryModel.syncDocument(singleItem)
                         }
-                        .disabled(directoryOperationProgress != nil)
+                        .disabled(operations.directoryOperationProgress != nil)
                     }
                 }
             } else if resourceIsStale {
                 Button("Update from Shared Version") {
-                    guard directoryOperationProgress == nil else { return }
-                    memoryModel.syncDocument(singleItem)
+                    guard self.operations.directoryOperationProgress == nil else { return }
+                    self.memoryModel.syncDocument(singleItem)
                 }
-                .disabled(directoryOperationProgress != nil)
+                .disabled(operations.directoryOperationProgress != nil)
             }
             if !isOrgView, let draft = singleItem.draft {
                 Button("Discard Draft") {
-                    guard directoryOperationProgress == nil else { return }
-                    Task { await draftStore.discard(draft) }
+                    guard self.operations.directoryOperationProgress == nil else { return }
+                    Task { await self.draftStore.discard(draft) }
                 }
                 .disabled(
-                    directoryOperationProgress != nil
+                    operations.directoryOperationProgress != nil
                         || singleSynchronizing
                 )
             }
@@ -749,13 +736,13 @@ struct FileTreeView: View {
         if targetItems.isEmpty {
             if let scope = MemoryFileTreeMenu.creationScope(inOrgView: isOrgView) {
                 Button("Propose New Organization Memory") {
-                    guard directoryOperationProgress == nil else { return }
+                    guard self.operations.directoryOperationProgress == nil else { return }
                     Task {
-                        await memoryModel.createMemory(kind: workspaceNavigation.selectedKind, scope: scope)
+                        await self.memoryModel.createMemory(kind: self.workspaceNavigation.selectedKind, scope: scope)
                     }
                 }
                 .disabled(
-                    directoryOperationProgress != nil
+                    operations.directoryOperationProgress != nil
                         || !draftStore.canCreateMemory(kind: workspaceNavigation.selectedKind, scope: scope)
                 )
             }
@@ -801,102 +788,11 @@ struct FileTreeView: View {
         case .itemRename, .directoryRename:
             return
         case .organizationDeletion(let items):
-            deleteItems(items)
+            Task { await self.operations.deleteItems(items) }
         case .directoryDiscard(_, let drafts):
-            discardDrafts(drafts)
+            Task { await self.operations.discardDrafts(drafts) }
         case .directoryDeletion(_, let plan):
-            deleteDirectory(plan)
-        }
-    }
-
-    private func deleteItems(_ items: [MemoryListItem]) {
-        guard directoryOperationProgress == nil else { return }
-        Task {
-            directoryOperationProgress = "Proposing \(items.count) deletions…"
-            defer { directoryOperationProgress = nil }
-            for (index, item) in items.enumerated() {
-                directoryOperationProgress =
-                    "Proposing deletion \(index + 1) of \(items.count)…"
-                guard await draftStore.delete(item) else { return }
-            }
-        }
-    }
-
-    private func discardDrafts(_ drafts: [LocalDraft]) {
-        guard directoryOperationProgress == nil else { return }
-        Task {
-            directoryOperationProgress = "Discarding \(drafts.count) Drafts…"
-            defer { directoryOperationProgress = nil }
-            for (index, draft) in drafts.enumerated() {
-                directoryOperationProgress =
-                    "Discarding Draft \(index + 1) of \(drafts.count)…"
-                guard await draftStore.discard(draft) else {
-                    let detail = workspaceFeedback.errorMessage ?? "The remaining Drafts were not changed."
-                    workspaceFeedback.errorMessage = "Discarded \(index) of \(drafts.count) Drafts. " + detail
-                    return
-                }
-            }
-        }
-    }
-
-    private func deleteDirectory(_ plan: MemoryDirectoryDeletionPlan) {
-        guard directoryOperationProgress == nil else { return }
-        Task {
-            let total = plan.itemsToDelete.count + plan.draftsToDiscard.count
-            var completed = 0
-            directoryOperationProgress = "Applying \(total) folder changes…"
-            defer { directoryOperationProgress = nil }
-            for item in plan.itemsToDelete {
-                directoryOperationProgress =
-                    "Applying folder change \(completed + 1) of \(total)…"
-                guard await draftStore.delete(item) else {
-                    let detail = workspaceFeedback.errorMessage ?? "The remaining files were not changed."
-                    workspaceFeedback.errorMessage =
-                        "Completed \(completed) of \(total) folder changes. " + detail
-                    return
-                }
-                completed += 1
-            }
-            for draft in plan.draftsToDiscard {
-                directoryOperationProgress =
-                    "Applying folder change \(completed + 1) of \(total)…"
-                guard await draftStore.discard(draft) else {
-                    let detail = workspaceFeedback.errorMessage ?? "The remaining files were not changed."
-                    workspaceFeedback.errorMessage =
-                        "Completed \(completed) of \(total) folder changes. " + detail
-                    return
-                }
-                completed += 1
-            }
-        }
-    }
-
-    private func addToProject(_ items: [MemoryListItem], projectId: String) {
-        guard directoryOperationProgress == nil else { return }
-        Task {
-            do {
-                try await projectService.addOrgMemories(
-                    resourceIds: Set(items.map(\.id)),
-                    toProject: projectId
-                )
-            } catch {
-                workspaceFeedback.errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func removeFromProject(_ items: [MemoryListItem]) {
-        guard directoryOperationProgress == nil else { return }
-        guard let projectId = workspaceContext.activeProjectId else { return }
-        Task {
-            do {
-                try await projectService.removeOrgMemories(
-                    resourceIds: Set(items.map(\.id)),
-                    fromProject: projectId
-                )
-            } catch {
-                workspaceFeedback.errorMessage = error.localizedDescription
-            }
+            Task { await self.operations.deleteDirectory(plan) }
         }
     }
 
@@ -976,7 +872,7 @@ private struct FileTreeRow: View {
             rowContent
                 .simultaneousGesture(
                     TapGesture().onEnded {
-                        onDirectoryClick(NSEvent.modifierFlags)
+                        self.onDirectoryClick(NSEvent.modifierFlags)
                     }
                 )
         } else {
@@ -995,24 +891,24 @@ private struct FileTreeRow: View {
         ) {
             HStack(spacing: 5) {
                 SharedUpdateIndicator(
-                    freshness: item?.draft?.freshness,
-                    hasUpstreamResourceChanges: item?.draft?.hasUpstreamResourceChanges == true,
-                    reconciliation: item?.draft?.reconciliation,
-                    isStale: isStale
+                    freshness: self.item?.draft?.freshness,
+                    hasUpstreamResourceChanges: self.item?.draft?.hasUpstreamResourceChanges == true,
+                    reconciliation: self.item?.draft?.reconciliation,
+                    isStale: self.isStale
                 )
-                if rowAccessory == .inReview {
-                    Button(action: onOpenReview) {
+                if self.rowAccessory == .inReview {
+                    Button(action: self.onOpenReview) {
                         DraftReviewIcon()
                             .frame(width: 20, height: 20)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(review.map { "In Review: \($0.title). Click to view Review." }
+                    .help(self.review.map { "In Review: \($0.title). Click to view Review." }
                         ?? "In Review. Click to load and view Review.")
-                    .accessibilityLabel("View Review for \(entry.node.name)")
-                } else if rowAccessory == .draft {
+                    .accessibilityLabel("View Review for \(self.entry.node.name)")
+                } else if self.rowAccessory == .draft {
                     DraftReviewIcon(submitted: false)
-                        .help(rowAccessory.help ?? "Draft")
+                        .help(self.rowAccessory.help ?? "Draft")
                         .accessibilityLabel("Draft — not submitted for review")
                 } else if let help = rowAccessory.help {
                     Image(systemName: "lock.fill")

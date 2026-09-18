@@ -57,7 +57,7 @@ final class ProjectManagementTests: XCTestCase {
             2
         )
         XCTAssertEqual(
-            workspace.components(separatedBy: "ProjectCreationSheet(store: store)").count - 1,
+            workspace.components(separatedBy: "ProjectCreationSheet(model: ProjectCreationModel(projects: store.projects))").count - 1,
             1
         )
     }

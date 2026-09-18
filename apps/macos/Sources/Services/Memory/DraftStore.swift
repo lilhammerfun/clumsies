@@ -851,3 +851,28 @@ final class DraftStore: ObservableObject {
         )
     }
 }
+
+enum MemoryValidationError: LocalizedError, Sendable {
+    case invalidPath(String)
+    case emptyRule
+    case memoryCannotBeRenamed
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPath(let message): message
+        case .emptyRule: "A Rule needs content."
+        case .memoryCannotBeRenamed:
+            "This memory is no longer available to rename."
+        }
+    }
+}
+
+struct DocumentRenamePlan: Equatable, Sendable {
+    let targetId: String
+    let newPath: String
+}
+
+struct DraftInventoryPlan: Equatable, Sendable {
+    let refreshIds: Set<String>
+    let terminalIds: Set<String>
+}

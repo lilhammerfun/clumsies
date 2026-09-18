@@ -210,3 +210,14 @@ final class DaemonSyncService: ObservableObject {
         syncStatusAvailable = false
     }
 }
+
+enum SyncRetryOutcome: Equatable, Sendable {
+    case completed
+    case failed(String)
+    case cancelled
+}
+
+struct SyncRetryKey: Hashable, Sendable {
+    let channel: String
+    let projectId: String?
+}

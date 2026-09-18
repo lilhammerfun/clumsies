@@ -630,7 +630,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         let source = try String(
             contentsOf: macOSRoot.appending(path: "Sources/Features/Memory/MemoryFileTreeView.swift"),
             encoding: .utf8
-        )
+        ).replacingOccurrences(of: "self.", with: "")
         let start = try XCTUnwrap(
             source.range(of: "if !isOrgView, let draft = singleItem.draft {")
         )
@@ -640,9 +640,9 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         let discardAction = source[start.lowerBound..<end.lowerBound]
 
         XCTAssertTrue(
-            discardAction.contains("guard directoryOperationProgress == nil else { return }")
+            discardAction.contains("guard operations.directoryOperationProgress == nil else { return }")
         )
-        XCTAssertTrue(discardAction.contains("directoryOperationProgress != nil"))
+        XCTAssertTrue(discardAction.contains("operations.directoryOperationProgress != nil"))
         XCTAssertTrue(discardAction.contains("|| singleSynchronizing"))
     }
 
@@ -654,24 +654,24 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         let source = try String(
             contentsOf: macOSRoot.appending(path: "Sources/Features/Memory/MemoryFileTreeView.swift"),
             encoding: .utf8
-        )
+        ).replacingOccurrences(of: "self.", with: "")
 
         XCTAssertGreaterThanOrEqual(
             source.components(
-                separatedBy: ".disabled(directoryOperationProgress != nil || singleSynchronizing)"
+                separatedBy: ".disabled(operations.directoryOperationProgress != nil || singleSynchronizing)"
             ).count - 1,
             2
         )
         XCTAssertTrue(source.contains(
-            "directoryOperationProgress != nil\n                        "
+            "operations.directoryOperationProgress != nil\n                        "
                 + "|| trashSelectionContainsSynchronizingDocument"
         ))
         XCTAssertTrue(source.contains(
-            "directoryOperationProgress != nil\n                    "
+            "operations.directoryOperationProgress != nil\n                    "
                 + "|| !reviewSelectionIsReady"
         ))
         XCTAssertTrue(source.contains(
-            "guard directoryOperationProgress == nil else { return }\n"
+            "guard operations.directoryOperationProgress == nil else { return }\n"
                 + "        guard let item = itemToRename"
         ))
     }

@@ -39,13 +39,11 @@ enum RetrievalEvidenceReviewAction: Equatable {
 }
 
 struct NativeRetrievalDiagnosticsView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @StateObject private var retrieval: RetrievalDiagnosticsModel
 
-    init(store: WorkspaceCoordinator) {
-        self.store = store
-        _retrieval = StateObject(wrappedValue: RetrievalDiagnosticsModel(daemon: store.context.daemon))
+    init(model: @autoclosure @escaping () -> RetrievalDiagnosticsModel) {
+        _retrieval = StateObject(wrappedValue: model())
     }
 
     var body: some View {

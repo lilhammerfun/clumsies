@@ -8,37 +8,37 @@ struct ActivitySessionList: View {
 
     var body: some View {
         Group {
-            if model.sessions.isEmpty, let error = model.errorMessage {
+            if self.model.sessions.isEmpty, let error = model.errorMessage {
                 ContentUnavailableView {
                     Label("Activity Unavailable", systemImage: "exclamationmark.triangle")
                 } description: {
                     Text(error)
                 } actions: {
-                    Button("Try Again") { Task { await model.load() } }
+                    Button("Try Again") { Task { await self.model.load() } }
                 }
-            } else if model.sessions.isEmpty && (model.isLoading || !model.hasLoaded) {
+            } else if self.model.sessions.isEmpty && (self.model.isLoading || !self.model.hasLoaded) {
                 ContentLoadingView(title: "Loading Activity…")
-            } else if model.sessions.isEmpty {
+            } else if self.model.sessions.isEmpty {
                 ContentUnavailableView(
-                    model.selectedProjectId == nil ? "No Activity Yet" : "No Activity for This Project",
+                    self.model.selectedProjectId == nil ? "No Activity Yet" : "No Activity for This Project",
                     systemImage: "bubble.left.and.bubble.right",
                     description: Text(
-                        model.selectedProjectId == nil
+                        self.model.selectedProjectId == nil
                             ? "Agent activity from bound projects appears here with user requests and recalled memory."
                             : "Try another project or choose All Projects."
                     )
                 )
             } else {
-                List(selection: $model.selectedSessionId) {
-                    ForEach(model.sessions) { session in
+                List(selection: self.$model.selectedSessionId) {
+                    ForEach(self.model.sessions) { session in
                         ActivitySessionRow(session: session)
                             .tag(session.id)
                     }
                     if let error = model.pageError {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(error).foregroundStyle(.secondary)
-                            Button("Try Again") { Task { await model.loadMoreSessions() } }
-                            Button("Refresh Activity") { Task { await model.load() } }
+                            Button("Try Again") { Task { await self.model.loadMoreSessions() } }
+                            Button("Refresh Activity") { Task { await self.model.load() } }
                         }
                         .font(.caption)
                     } else if let cursor = model.nextCursor {
@@ -46,7 +46,7 @@ struct ActivitySessionList: View {
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .accessibilityLabel("More activity")
-                            .task(id: cursor) { await model.loadMoreSessions() }
+                            .task(id: cursor) { await self.model.loadMoreSessions() }
                     }
                 }
                 .listStyle(.inset)
@@ -55,11 +55,11 @@ struct ActivitySessionList: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !model.sessions.isEmpty {
+            if !self.model.sessions.isEmpty {
                 if let error = model.errorMessage {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(error).foregroundStyle(.secondary)
-                        Button("Try Again") { Task { await model.load() } }
+                        Button("Try Again") { Task { await self.model.load() } }
                     }
                     .font(.caption)
                     .padding(8)
@@ -74,11 +74,11 @@ private struct ActivitySessionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(session.activityDisplayTitle)
+            Text(self.session.activityDisplayTitle)
                 .fontWeight(.medium)
                 .lineLimit(1)
             HStack(spacing: 6) {
-                Text(session.host.activityTitle)
+                Text(self.session.host.activityTitle)
                 if let createdAt = session.createdAt {
                     Text("·")
                     Text(Self.date(createdAt))
@@ -111,7 +111,7 @@ struct ActivitySessionDetail: View {
                             description: Text("No user requests were found in this activity.")
                         )
                     } else {
-                        taskList(session)
+                        self.taskList(session)
                             .navigationTitle("Activity")
                     }
                 } else if let summary = model.selectedSummary {
@@ -119,8 +119,8 @@ struct ActivitySessionDetail: View {
                         Text(summary.activityDisplayTitle).font(.title2.weight(.semibold))
                         if let error = model.detailError {
                             Text(error).foregroundStyle(.secondary)
-                            Button("Try Again") { Task { await model.loadSelectedSession() } }
-                            Button("Refresh Activity") { Task { await model.load() } }
+                            Button("Try Again") { Task { await self.model.loadSelectedSession() } }
+                            Button("Refresh Activity") { Task { await self.model.load() } }
                             Spacer()
                         } else {
                             ContentLoadingView(title: "Activity details")
@@ -137,13 +137,13 @@ struct ActivitySessionDetail: View {
             }
         }
         .id(model.selectedSessionId)
-        .task(id: model.selectedSummary?.sessionToken) { await model.loadSelectedSession() }
+        .task(id: model.selectedSummary?.sessionToken) { await self.model.loadSelectedSession() }
     }
 
     private func taskList(_ session: RecallSession) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ActivitySessionHeader(session: session, totalTasks: model.totalTasks)
+                ActivitySessionHeader(session: session, totalTasks: self.model.totalTasks)
 
                 ForEach(Array(session.tasks.enumerated()), id: \.element.id) { index, task in
                     Divider()
@@ -151,16 +151,16 @@ struct ActivitySessionDetail: View {
                         number: index + 1,
                         task: task,
                         session: session,
-                        model: model
+                        model: self.model
                     )
                 }
                 if let error = model.detailError {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(error).foregroundStyle(.secondary)
                         Button("Try Again") {
-                            Task { await model.retryDetail() }
+                            Task { await self.model.retryDetail() }
                         }
-                        Button("Refresh Activity") { Task { await model.load() } }
+                        Button("Refresh Activity") { Task { await self.model.load() } }
                     }
                     .padding(.vertical)
                 } else if let offset = model.nextTaskOffset {
@@ -169,8 +169,8 @@ struct ActivitySessionDetail: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical)
                         .accessibilityLabel("More requests")
-                        .task(id: offset) { await model.loadMoreTasks() }
-                } else if model.isLoadingDetail {
+                        .task(id: offset) { await self.model.loadMoreTasks() }
+                } else if self.model.isLoadingDetail {
                     ProgressView().controlSize(.small).padding(.vertical)
                 }
             }
@@ -190,13 +190,13 @@ private struct ActivitySessionHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(session.activityDisplayTitle)
+            Text(self.session.activityDisplayTitle)
                 .font(.title2.weight(.semibold))
                 .lineLimit(3)
                 .textSelection(.enabled)
 
             HStack(spacing: 6) {
-                Text(session.host.activityTitle)
+                Text(self.session.host.activityTitle)
                 if let createdAt = session.createdAt {
                     Text("·")
                     Text(Self.date(createdAt))
@@ -205,7 +205,7 @@ private struct ActivitySessionHeader: View {
             .foregroundStyle(.secondary)
 
             Label(
-                "\(totalTasks) request\(totalTasks == 1 ? "" : "s")",
+                "\(self.totalTasks) request\(self.totalTasks == 1 ? "" : "s")",
                 systemImage: "text.bubble"
             )
             .font(.caption)
@@ -229,7 +229,7 @@ private struct ActivityTaskSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Request \(number)")
+                Text("Request \(self.number)")
                     .font(.headline)
                 Spacer()
                 if let time = task.time {
@@ -243,13 +243,13 @@ private struct ActivityTaskSection: View {
                 Label("User request", systemImage: "person.crop.circle")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(task.text)
+                Text(self.task.text)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if task.activations.isEmpty {
+            if self.task.activations.isEmpty {
                 Label(
                     "The agent did not ask Clumsies for memory while handling this request.",
                     systemImage: "brain"
@@ -257,16 +257,16 @@ private struct ActivityTaskSection: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(task.activations) { activation in
+                ForEach(self.task.activations) { activation in
                     ActivityActivationRow(
                         activation: activation,
-                        workspaceRoot: session.workspaceRoot,
-                        model: model,
+                        workspaceRoot: self.session.workspaceRoot,
+                        model: self.model,
                         onOpenRetrieval: {
-                            model.openRetrieval(
-                                session: session,
-                                task: task,
-                                requestNumber: number,
+                            self.model.openRetrieval(
+                                session: self.session,
+                                task: self.task,
+                                requestNumber: self.number,
                                 activation: activation
                             )
                         }
@@ -306,23 +306,23 @@ private struct ActivityActivationRow: View {
                 Text("Agent query")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(activation.query)
+                Text(self.activation.query)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: 10) {
-                if !activation.fragments.isEmpty {
-                    Text("\(activation.fragments.count) selected chunks")
+                if !self.activation.fragments.isEmpty {
+                    Text("\(self.activation.fragments.count) selected chunks")
                 }
                 if let totalUs = activation.totalUs {
                     Text(Duration.microseconds(Int64(clamping: totalUs)).formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
                 }
                 Spacer()
-                if activation.runId != nil {
-                    Button("Retrieval Process", systemImage: "chevron.right", action: onOpenRetrieval)
+                if self.activation.runId != nil {
+                    Button("Retrieval Process", systemImage: "chevron.right", action: self.onOpenRetrieval)
                         .buttonStyle(.borderless)
-                        .accessibilityLabel("View retrieval process for \(activation.query)")
+                        .accessibilityLabel("View retrieval process for \(self.activation.query)")
                 } else {
                     Text("Retrieval record unavailable")
                 }
@@ -344,7 +344,7 @@ private struct ActivityActivationRow: View {
                 .font(.caption)
             }
 
-            if activation.fragments.isEmpty {
+            if self.activation.fragments.isEmpty {
                 Label(
                     "No matching memory chunks were returned.",
                     systemImage: "doc.text.magnifyingglass"
@@ -353,12 +353,12 @@ private struct ActivityActivationRow: View {
                 .foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 8) {
-                    ForEach(activation.fragments) { fragment in
+                    ForEach(self.activation.fragments) { fragment in
                         ActivityFragmentRow(
                             fragment: fragment,
-                            workspaceRoot: workspaceRoot,
-                            runId: activation.runId,
-                            model: model
+                            workspaceRoot: self.workspaceRoot,
+                            runId: self.activation.runId,
+                            model: self.model
                         )
                     }
                 }
@@ -381,24 +381,21 @@ struct ActivityFragmentRow: View {
     let workspaceRoot: String
     let runId: String?
     let model: ActivityModel
-    @State private var fullFragment: RecallFragment?
-    @State private var isLoading = false
-    @State private var loadFailed = false
-    @State private var loadGeneration = UUID()
+    @StateObject private var content = ActivityFragmentModel()
 
-    private var displayedFragment: RecallFragment { fullFragment ?? fragment }
+    private var displayedFragment: RecallFragment { content.fullFragment ?? fragment }
 
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(fragment.displayTitle)
+                    Text(self.fragment.displayTitle)
                         .font(.headline)
-                    Text(fragment.locationTitle)
+                    Text(self.fragment.locationTitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     HStack(spacing: 8) {
-                        Text(fragment.scopeTitle)
+                        Text(self.fragment.scopeTitle)
                         if let rank = fragment.finalRank {
                             Text("Result \(rank)")
                         }
@@ -411,33 +408,33 @@ struct ActivityFragmentRow: View {
                 }
                 .textSelection(.enabled)
 
-                if !displayedFragment.content.isEmpty {
-                    Markdown(displayedFragment.content)
+                if !self.displayedFragment.content.isEmpty {
+                    Markdown(self.displayedFragment.content)
                         .markdownTheme(.gitHub)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    Text(displayedFragment.emptyContentExplanation)
+                    Text(self.displayedFragment.emptyContentExplanation)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
-                if isLoading {
+                if self.content.isLoading {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
                         Text("Loading the recorded chunk…")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                } else if loadFailed {
+                } else if self.content.loadFailed {
                     HStack(alignment: .firstTextBaseline) {
                         Text("The full retrieval record is unavailable. Showing the recorded preview.")
                         Spacer()
-                        Button("Try Again") { Task { await loadFullFragment() } }
+                        Button("Try Again") { Task { await self.loadFullFragment() } }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                } else if displayedFragment.truncated {
+                } else if self.displayedFragment.truncated {
                     Text("Only the recorded preview is available for this chunk.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -446,32 +443,13 @@ struct ActivityFragmentRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)
         }
-        .task(id: runId) { await loadFullFragment() }
+        .task(id: runId) { await self.loadFullFragment() }
     }
 
     private func loadFullFragment() async {
-        guard fullFragment == nil, let runId,
-              fragment.truncated || fragment.content.isEmpty else { return }
-        let generation = UUID()
-        loadGeneration = generation
-        isLoading = true
-        loadFailed = false
-        defer {
-            if loadGeneration == generation { isLoading = false }
-        }
-        do {
-            let loaded = try await model.loadFragment(
-                workspaceRoot: workspaceRoot,
-                runId: runId,
-                unitKey: fragment.unitKey
-            )
-            try Task.checkCancellation()
-            guard loadGeneration == generation else { return }
-            fullFragment = loaded
-        } catch is CancellationError {
-            return
-        } catch {
-            if loadGeneration == generation { loadFailed = true }
+        await content.load(fragment: fragment, runId: runId) {
+            guard let runId else { throw CancellationError() }
+            return try await model.loadFragment(workspaceRoot: workspaceRoot, runId: runId, unitKey: fragment.unitKey)
         }
     }
 }
@@ -490,27 +468,27 @@ struct ActivityRetrievalDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Button("Back to Activity", systemImage: "chevron.left", action: onBack)
+                Button("Back to Activity", systemImage: "chevron.left", action: self.onBack)
                     .buttonStyle(.borderless)
                     .keyboardShortcut("[", modifiers: .command)
-                Text("\(selection.sessionTitle) / Request \(selection.requestNumber)")
+                Text("\(self.selection.sessionTitle) / Request \(self.selection.requestNumber)")
                     .font(.headline)
                     .lineLimit(1)
-                Text(selection.requestText)
+                Text(self.selection.requestText)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                    .help(selection.requestText)
+                    .help(self.selection.requestText)
                     .textSelection(.enabled)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
             Divider()
-            RetrievalRunDetailView(model: retrieval)
+            RetrievalRunDetailView(model: self.retrieval)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle("Retrieval Process")
-        .task(id: selection.runId) { await retrieval.select(runId: selection.runId) }
+        .task(id: selection.runId) { await self.retrieval.select(runId: self.selection.runId) }
     }
 }
 

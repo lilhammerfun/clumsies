@@ -53,38 +53,59 @@ Tests/
   Integration/  # Opt-in live workspace tests
 ```
 
-State and operations move together into their owner:
+State and operations move together into their owner. The frontend-wide ownership
+map includes each feature, not only the main workspace:
 
-| Owner | Responsibility |
+| Area | State and workflow owner | View / platform responsibility |
+| --- | --- | --- |
+| App | AppDelegate and window controllers compose shared services and models | App lifecycle, native menus, windows and termination |
+| Workspace | WorkspaceCoordinator coordinates reload, project switching and save-before-exit; WorkspaceNavigation owns tabs, history and selection | Cross-feature layout, navigation and toolbars |
+| Memory | MemoryModel owns collection actions; DocumentEditorModel owns editor/diff state; MemoryGuidelinesModel owns setup/adoption; MemoryFileOperationsModel owns batch operations | Render documents/tree, focus, selection and confirmation dialogs |
+| Reviews | ReviewsModel owns collection/actions; ReviewDetailModel owns detail/files/comments; ReviewRequestModel owns preflight and batch submission | List/detail presentation and reconciliation sheets |
+| Activity | ActivityModel owns filters/list/detail requests; ActivityFragmentModel owns full-fragment loading | Timeline, event detail and fragment presentation |
+| Bundles | BundlesModel owns selection/page actions; BundleStore owns data and pending saves | Editor form and resource picker |
+| Projects | ProjectCreationModel, ProjectMemberPickerModel, ProjectRepositoriesModel and ProjectStorageModel own their workflows; shared project writes use ProjectService and AdministrationModel | Project settings, form input, native folder pickers and confirmations |
+| Administration | AdministrationModel owns permission-scoped snapshots, members, pagination and mutations | Organization forms, member/token controls and audit presentation |
+| Settings | AgentsSettingsModel owns agent configuration/loading; SettingsNavigation owns navigation and unsaved-form transitions | Preferences, focus and form controls; app-scoped updates use SoftwareUpdateController |
+| Diagnostics | RetrievalDiagnosticsModel owns list/detail pagination, evidence and evaluation operations | Diagnostic presentation and native export dialogs |
+| ServerAccess | NativeServerAccessModel owns sign-in/setup; NativeAdministratorRecoveryState owns the temporary recovery session and requests | Server access forms and recovery controls |
+
+Shared services own work that outlives a page:
+
+| Service | Responsibility |
 | --- | --- |
-| `Features/Workspace/WorkspaceCoordinator` | Shared component lifetime, reload, project switching, save-before-exit and refresh ordering |
-| `Features/Workspace/WorkspaceNavigation` | Tabs, history, selection and toolbar commands |
-| `Features/Memory/MemoryModel` | Memory presentation, creation, export and document Sync interaction |
-| `Features/Reviews/ReviewsModel` | Review loading, selection and actions |
-| `Features/Bundles/BundlesModel` | Bundle selection and page actions |
-| `Features/Administration/AdministrationModel` | Administration loading, pagination and caches |
-| `Features/Activity/ActivityModel` | Activity selection and loading |
-| `Services/Workspace/WorkspaceContext` | Account, organization, permissions, projects and request generations |
-| `Services/Memory/MemoryCatalog` | Resource snapshots, content loading and freshness |
-| `Services/Memory/DraftStore` | Draft inventory, edit buffers, serialized writes and pending saves |
-| `Services/Memory/DocumentSessions` | Document synchronization tasks, locks and reconciliation state |
-| `Services/Memory/MemorySyncService` and `DraftReconciliationService` | Shared resource refresh, draft upload barriers and reconciliation |
-| `Services/Bundles/BundleStore` | Bundle data, mutations and pending saves |
-| `Services/Projects/ProjectService` | Project creation, repositories and Memory selection |
-| `Services/Daemon/DaemonSyncService` | Sync status and retry tasks |
-| `Services/Runtime/AgentIntegrationService` | Agent adapter status and operations |
+| WorkspaceContext and WorkspaceFeedback | Account, organization, permissions, current project, request generations and shared errors |
+| WorkspaceLoader | Read snapshots without owning UI state |
+| MemoryCatalog | Resource snapshots, content loading and freshness |
+| DraftStore | Draft inventory, edit buffers, serialized writes and pending saves |
+| DocumentSessions | Document synchronization tasks, locks and reconciliation state |
+| MemorySyncService and DraftReconciliationService | Shared resource refresh, upload barriers and reconciliation |
+| BundleStore | Bundle data, mutations and pending saves |
+| ProjectService | Project creation, repositories and Memory selection |
+| DaemonSyncService | Sync status and retry tasks |
+| AgentIntegrationService | Agent adapter status and operations |
+| Authentication, Server, ServerAccess, Updates | Network/platform capabilities used by their feature owners |
+
+Libraries contain shared DTOs, configuration, serialization, concurrency helpers,
+diff algorithms/rendering and reusable UI. Feature-specific state stays in the
+owning feature; shared operation types live beside the service that uses them.
 
 The coordinator composes concrete owners and connects completion events; services
-never call back through a workspace facade. `WorkspaceLoader` reads snapshots
-without owning UI state. SwiftUI observes the actual state owners through
-`workspaceEnvironment`, including owners used by derived feature properties.
-AppKit subscribes to those same owners. Both the main and Settings windows share
-the administration model.
+never call back through a workspace facade. Leaf feature views receive their
+specific page model and observe the shared objects they actually read. Only
+cross-feature intents (reload, switch project, prepare index, reveal memory) use
+`WorkspaceActions` in the SwiftUI environment; it forwards no state. Page models
+are held with `StateObject`, so ordinary View reconstruction does not recreate
+their requests or form state. AppKit subscribes to the same shared owners. Both
+the main and Settings windows share the administration model.
 
 Pending edits and synchronization outlive individual views. Project switches and
 sign-out flush pending edits first; failures retain the edits and stop the
 transition. Authority resets clear owner state and invalidate pending work;
 completed writes from an old authority cannot repopulate the new workspace.
+Page-owned requests also reject stale results after project, query or session
+changes. Bulk file operations stop when their original project/authority changes.
+An authoritative rename can update an editor path/title without losing dirty text.
 
 Services must not reference feature views or feature state. Libraries hold
 shared values and building blocks without depending on Services or App startup.
@@ -100,4 +121,7 @@ Run the normal hosted tests from the repository root:
 bash apps/macos/Scripts/test.sh
 ```
 
+The regression suite covers failed-save transitions, owner observation, stale
+storage/repository/search/review/Activity/Diagnostics responses, recovery-session
+reset, editor rename preservation and project changes during bulk operations.
 Live tests require the existing explicit opt-in and are skipped by default.

@@ -262,3 +262,83 @@ struct WorkbenchTab: Identifiable, Hashable, Sendable {
         return self.projectId == projectId
     }
 }
+
+enum ReviewRequestError: LocalizedError, Sendable {
+    case draftNotSynchronized
+    case legacyProjectDraftCannotBePublished
+    case reconciliationRequired
+    case mixedProjects
+    case reviewChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .draftNotSynchronized:
+            "Wait for this draft to finish syncing before requesting a review."
+        case .legacyProjectDraftCannotBePublished:
+            "Legacy Project-scoped drafts are read-only and cannot be published."
+        case .reconciliationRequired:
+            "Merge the latest shared version before requesting a review."
+        case .mixedProjects:
+            "All drafts in a review must belong to the same Project."
+        case .reviewChanged:
+            "This Review changed on the Server. Review its latest state before deciding."
+        }
+    }
+}
+
+enum DocumentSyncError: LocalizedError, Equatable, Sendable {
+    case checkoutNoLongerCurrent
+    case draftUploadFailed(String?)
+    case draftUploadTimedOut
+    case mutationWhileSynchronizing
+
+    var errorDescription: String? {
+        switch self {
+        case .checkoutNoLongerCurrent:
+            "The shared version changed again. Refresh sync status and try again."
+        case .draftUploadFailed(let message):
+            message ?? "The local draft could not be uploaded. Retry sync before reviewing shared changes."
+        case .draftUploadTimedOut:
+            "The local draft is still uploading. Wait a moment and try Sync again."
+        case .mutationWhileSynchronizing:
+            "Shared changes are being prepared for this document. Wait for Sync to finish before editing it."
+        }
+    }
+}
+
+enum ProjectSetupError: LocalizedError, Sendable {
+    case bundledAgentRuntimeMissing
+    case codexHostMissing
+    case bundleNotFound
+    case bundleContainsUnavailableMemory
+
+    var errorDescription: String? {
+        switch self {
+        case .bundledAgentRuntimeMissing:
+            "The clumsiesd Agent runtime is missing from this app build."
+        case .codexHostMissing:
+            "Install or update the Codex app before repairing its Clumsies Plugin."
+        case .bundleNotFound:
+            "The selected Bundle is no longer available."
+        case .bundleContainsUnavailableMemory:
+            "The selected Bundle contains memory that is not available in the Organization."
+        }
+    }
+}
+
+enum ProjectMemorySelectionError: LocalizedError, Sendable {
+    case activeDrafts
+    case invalidOrgResources
+    case projectUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .activeDrafts:
+            "Discard or finish this Project's LocalDraft before removing its Organization Memory."
+        case .invalidOrgResources:
+            "Only current Organization memory can be added to or removed from a Project."
+        case .projectUnavailable:
+            "The selected Project is no longer available."
+        }
+    }
+}

@@ -16,7 +16,7 @@ struct SettingsIcon: View {
 }
 
 struct SettingsWindowView: View {
-    let store: WorkspaceCoordinator
+    @EnvironmentObject private var agentIntegration: AgentIntegrationService
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
@@ -173,14 +173,14 @@ struct SettingsWindowView: View {
         case .pane(.general):
             GeneralSettingsView(softwareUpdateController: softwareUpdateController)
         case .pane(.agent):
-            AgentsSettingsView(store: store)
+            AgentsSettingsView(model: AgentsSettingsModel(context: workspaceContext, integration: agentIntegration))
         case .pane(.advanced):
             SupportSettingsView(onShowLogs: onShowLogs)
         case .pane(.organization):
             if canShowOrganization { organizationLanding }
         case .organization(let section):
             if canShowOrganization {
-                AdministrationView(store: store, section: section,
+                AdministrationView(section: section,
                     onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 })
                     .id(section)
             }
@@ -189,7 +189,7 @@ struct SettingsWindowView: View {
 
     private var organizationLanding: some View {
         Form {
-            OrganizationNameSection(store: store, onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 })
+            OrganizationNameSection(onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 })
             Section {
                 organizationLink(.members, color: .blue)
                 organizationLink(.projects, color: .orange)

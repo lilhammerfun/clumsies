@@ -138,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     return
                 }
                 isChoosingAgents = true
-                presentAuthenticationContent(AgentsSettingsView(store: store) { [weak self] in
+                presentAuthenticationContent(AgentsSettingsView(model: AgentsSettingsModel(context: self.store.context, integration: self.store.agents)) { [weak self] in
                     UserDefaults.standard.set(true, forKey: "ClumsiesAgentSetupCompleted")
                     guard let self else { return }
                     self.isChoosingAgents = false

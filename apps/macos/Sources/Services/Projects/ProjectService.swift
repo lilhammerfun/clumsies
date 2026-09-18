@@ -340,3 +340,17 @@ final class ProjectService: ObservableObject {
         .sorted()
     }
 }
+
+enum ProjectOrgSelectionMutation: Sendable {
+    case add
+    case remove
+
+    func applying(_ resourceIds: Set<String>, to current: Set<String>) -> Set<String> {
+        switch self {
+        case .add:
+            current.union(resourceIds)
+        case .remove:
+            current.subtracting(resourceIds)
+        }
+    }
+}

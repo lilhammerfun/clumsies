@@ -283,7 +283,7 @@ final class AdministrationModel: ObservableObject {
         let previous = projectDetailStates[id] ?? AdministrationPageState()
         guard !previous.isLoading, force || project(id: id) == nil else { return }
         let generation = UUID()
-        let refreshGeneration = refreshGeneration
+        let requestedRefreshGeneration = refreshGeneration
         projectDetailLoadGenerations[id] = generation
         projectDetailStates[id, default: .init()].isLoading = true
         projectDetailStates[id, default: .init()].errorMessage = nil
@@ -299,7 +299,7 @@ final class AdministrationModel: ObservableObject {
                 try await client.raw(method: "GET", path: path)
             }
             guard projectDetailLoadGenerations[id] == generation,
-                  refreshGeneration == refreshGeneration,
+                  refreshGeneration == requestedRefreshGeneration,
                   context.canAccessProjectSettings(id), context.phase != .authenticationRequired else { return }
             projectDetails[id] = result.project
             projectDetailStates[id] = AdministrationPageState(
@@ -310,7 +310,7 @@ final class AdministrationModel: ObservableObject {
             return
         } catch {
             guard projectDetailLoadGenerations[id] == generation,
-                  refreshGeneration == refreshGeneration,
+                  refreshGeneration == requestedRefreshGeneration,
                   context.canAccessProjectSettings(id), context.phase != .authenticationRequired else { return }
             projectDetailStates[id, default: .init()].isStale = true
             projectDetailStates[id, default: .init()].errorMessage = error.localizedDescription
@@ -343,7 +343,7 @@ final class AdministrationModel: ObservableObject {
         guard !loadingProjectIds.contains(projectId) else { return }
 
         let generation = UUID()
-        let refreshGeneration = refreshGeneration
+        let requestedRefreshGeneration = refreshGeneration
         projectMemberLoadGenerations[projectId] = generation
         loadingProjectIds.insert(projectId)
         defer {
@@ -361,7 +361,7 @@ final class AdministrationModel: ObservableObject {
             )
             try Task.checkCancellation()
             guard projectMemberLoadGenerations[projectId] == generation,
-                  refreshGeneration == refreshGeneration,
+                  refreshGeneration == requestedRefreshGeneration,
                   context.canAccessProjectSettings(projectId) else { return }
             projectMembers[projectId] = members.items
             if members.hasStaleServerResponse {
@@ -371,7 +371,7 @@ final class AdministrationModel: ObservableObject {
             return
         } catch {
             guard projectMemberLoadGenerations[projectId] == generation,
-                  refreshGeneration == refreshGeneration else { return }
+                  refreshGeneration == requestedRefreshGeneration else { return }
             projectMembers[projectId] = nil
             projectDetailStates[projectId, default: .init()].isStale = true
             projectDetailStates[projectId, default: .init()].errorMessage = error.localizedDescription

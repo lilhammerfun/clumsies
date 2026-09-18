@@ -638,3 +638,20 @@ final class MemoryModel: ObservableObject {
         }
     }
 }
+
+enum DocumentPathChangeSource: String, Equatable, Sendable {
+    case draft
+    case shared
+    case draftAndShared
+}
+
+struct DocumentPathChange: Equatable, Sendable {
+    let source: DocumentPathChangeSource
+    let from: String?
+    let to: String?
+}
+
+struct DocumentDiffResult: Equatable, Sendable {
+    let presentation: UnifiedDiffPresentation?
+    let pathChanges: [DocumentPathChange]
+}

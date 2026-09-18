@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct AdministrationView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let section: AdministrationSection
@@ -30,25 +29,21 @@ struct AdministrationView: View {
     @ViewBuilder
     private var content: some View {
         if section == .members {
-            AdministrationMembersView(
-                store: store,
-                onUnsavedChangesChange: onUnsavedChangesChange
+            AdministrationMembersView(onUnsavedChangesChange: onUnsavedChangesChange
             )
         } else if section == .audit {
-            AdministrationAuditView(store: store)
+            AdministrationAuditView()
         } else if let snapshot = administration.snapshot, state.isLoaded {
             switch section {
             case .organization:
                 Form {
-                    OrganizationNameSection(store: store, onUnsavedChangesChange: onUnsavedChangesChange)
+                    OrganizationNameSection(onUnsavedChangesChange: onUnsavedChangesChange)
                 }
                 .formStyle(.grouped)
             case .projects:
-                OrganizationProjectsView(store: store)
+                OrganizationProjectsView()
             case .access:
-                AdministrationAccessView(
-                    store: store,
-                    snapshot: snapshot,
+                AdministrationAccessView(snapshot: snapshot,
                     onUnsavedChangesChange: onUnsavedChangesChange
                 )
             case .members, .audit:
@@ -109,7 +104,6 @@ private struct AdministrationErrorBanner: View {
 }
 
 struct OrganizationNameSection: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     var onUnsavedChangesChange: (Bool) -> Void = { _ in }
@@ -125,9 +119,7 @@ struct OrganizationNameSection: View {
                         .disabled(!administration.canMutate(.organization))
                 }
                 .sheet(isPresented: $showsEdit) {
-                    OrganizationEditSheet(
-                        store: store,
-                        organization: organization,
+                    OrganizationEditSheet(organization: organization,
                         editsDomains: false,
                         onUnsavedChangesChange: onUnsavedChangesChange
                     )
@@ -159,7 +151,6 @@ struct OrganizationNameSection: View {
 
 private struct OrganizationEditSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let editsDomains: Bool
@@ -169,12 +160,10 @@ private struct OrganizationEditSheet: View {
     @State private var errorMessage: String?
 
     init(
-        store: WorkspaceCoordinator,
         organization: AdminOrganizationRecord,
         editsDomains: Bool,
         onUnsavedChangesChange: @escaping (Bool) -> Void
     ) {
-        self.store = store
         self.editsDomains = editsDomains
         self.onUnsavedChangesChange = onUnsavedChangesChange
         _original = State(initialValue: organization)
@@ -251,7 +240,6 @@ private struct OrganizationEditSheet: View {
 }
 
 private struct AdministrationMembersView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let onUnsavedChangesChange: (Bool) -> Void
@@ -330,7 +318,7 @@ private struct AdministrationMembersView: View {
                     .padding(.vertical, 2)
                 }
                 if completedQuery == query {
-                    AdministrationLoadMore(store: store, section: .members, query: query)
+                    AdministrationLoadMore(section: .members, query: query)
                 }
                 Button("Add Member…") { showsAddMember = true }
                     .disabled(!allowsMutation)
@@ -352,7 +340,7 @@ private struct AdministrationMembersView: View {
             } catch {}
         }
         .sheet(isPresented: $showsAddMember) {
-            AdministrationAddMemberSheet(store: store, onUnsavedChangesChange: onUnsavedChangesChange)
+            AdministrationAddMemberSheet(onUnsavedChangesChange: onUnsavedChangesChange)
         }
         .confirmationDialog(
             "Disable organization member?",
@@ -410,7 +398,6 @@ private struct AdministrationMembersView: View {
 
 private struct AdministrationAddMemberSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let onUnsavedChangesChange: (Bool) -> Void
@@ -490,7 +477,6 @@ private struct AdministrationAddMemberSheet: View {
 }
 
 private struct AdministrationAccessView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var administration: AdministrationModel
     let snapshot: AdministrationSnapshot
     let onUnsavedChangesChange: (Bool) -> Void
@@ -516,9 +502,7 @@ private struct AdministrationAccessView: View {
                     Text("People must be added as organization members before they can sign in.")
                 }
                 .sheet(isPresented: $showsDomainEdit) {
-                    OrganizationEditSheet(
-                        store: store,
-                        organization: organization,
+                    OrganizationEditSheet(organization: organization,
                         editsDomains: true,
                         onUnsavedChangesChange: onUnsavedChangesChange
                     )
@@ -530,7 +514,6 @@ private struct AdministrationAccessView: View {
 }
 
 private struct AdministrationAuditView: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     @State private var query = ""
@@ -569,7 +552,7 @@ private struct AdministrationAuditView: View {
                     .accessibilityElement(children: .combine)
                 }
                 if completedQuery == query {
-                    AdministrationLoadMore(store: store, section: .audit, query: query)
+                    AdministrationLoadMore(section: .audit, query: query)
                 }
             }
         }
@@ -624,7 +607,6 @@ private struct AdministrationAuditView: View {
 }
 
 private struct AdministrationLoadMore: View {
-    let store: WorkspaceCoordinator
     @EnvironmentObject private var administration: AdministrationModel
     let section: AdministrationSection
     var query: String? = nil

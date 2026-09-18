@@ -40,6 +40,8 @@ final class RetrievalDiagnosticsModel: ObservableObject {
     @Published var errorMessage: String?
 
     private let daemon: DaemonXPCClient
+    private let fetchRuns: @MainActor (RetrievalRunListRequest) async throws -> RetrievalRunListResponse
+    private var listGeneration = UUID()
     private let fetchRun: @MainActor (String) async throws -> RetrievalRunDetail
     private var projectId: String?
     private(set) var nextCursor: String?
@@ -47,16 +49,27 @@ final class RetrievalDiagnosticsModel: ObservableObject {
 
     init(
         daemon: DaemonXPCClient,
+        fetchRuns: (@MainActor (RetrievalRunListRequest) async throws -> RetrievalRunListResponse)? = nil,
         fetchRun: (@MainActor (String) async throws -> RetrievalRunDetail)? = nil
     ) {
         self.daemon = daemon
+        self.fetchRuns = fetchRuns ?? { try await daemon.listRetrievalRuns($0) }
         self.fetchRun = fetchRun ?? { try await daemon.retrievalRun($0) }
     }
 
     func load(projectId: String?) async {
+        if self.projectId != projectId {
+            runs = []
+            nextCursor = nil
+            selectedRunId = nil
+            detail = nil
+            evidenceDrafts = []
+        }
         self.projectId = projectId
         let generation = UUID()
         selectionGeneration = generation
+        listGeneration = generation
+        isLoadingMore = false
         isLoading = true
         errorMessage = nil
         defer {
@@ -65,7 +78,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             }
         }
         do {
-            let response = try await daemon.listRetrievalRuns(
+            let response = try await fetchRuns(
                 RetrievalRunListRequest(
                     projectId: projectId,
                     status: nil,
@@ -73,7 +86,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
                     limit: 100
                 )
             )
-            guard selectionGeneration == generation else { return }
+            guard selectionGeneration == generation, !Task.isCancelled else { return }
             runs = response.items
             nextCursor = response.nextCursor
             let selected = selectedRunId.flatMap { selected in
@@ -87,7 +100,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
                 evidenceDrafts = []
             }
         } catch {
-            guard selectionGeneration == generation else { return }
+            guard selectionGeneration == generation, !Task.isCancelled else { return }
             runs = []
             nextCursor = nil
             detail = nil
@@ -97,12 +110,13 @@ final class RetrievalDiagnosticsModel: ObservableObject {
     }
 
     func loadMore() async {
-        guard let cursor = nextCursor, !isLoadingMore else { return }
+        guard let cursor = nextCursor, !isLoadingMore, !isLoading else { return }
+        let generation = listGeneration
         isLoadingMore = true
         errorMessage = nil
-        defer { isLoadingMore = false }
+        defer { if listGeneration == generation { isLoadingMore = false } }
         do {
-            let response = try await daemon.listRetrievalRuns(
+            let response = try await fetchRuns(
                 RetrievalRunListRequest(
                     projectId: projectId,
                     status: nil,
@@ -110,10 +124,13 @@ final class RetrievalDiagnosticsModel: ObservableObject {
                     limit: 100
                 )
             )
+            try Task.checkCancellation()
+            guard listGeneration == generation else { return }
             let existing = Set(runs.map(\.runId))
             runs.append(contentsOf: response.items.filter { !existing.contains($0.runId) })
             nextCursor = response.nextCursor
         } catch {
+            guard listGeneration == generation, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -137,7 +154,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
         do {
             try await loadDetail(runId: runId, generation: generation)
         } catch {
-            guard selectionGeneration == generation else { return }
+            guard selectionGeneration == generation, !Task.isCancelled else { return }
             detail = nil
             evidenceDrafts = []
             errorMessage = error.localizedDescription
@@ -152,7 +169,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             _ = try await daemon.createEvaluationCase(
                 CreateEvaluationCaseRequest(runId: runId)
             )
-            guard selectionGeneration == generation else { return }
+            guard selectionGeneration == generation, !Task.isCancelled else { return }
             try await loadDetail(runId: runId, generation: generation)
         }
     }
@@ -174,7 +191,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
                     noneMatched: evidence.isEmpty
                 )
             )
-            guard selectionGeneration == generation else { return }
+            guard selectionGeneration == generation, !Task.isCancelled else { return }
             try await loadDetail(runId: runId, generation: generation)
         }
     }

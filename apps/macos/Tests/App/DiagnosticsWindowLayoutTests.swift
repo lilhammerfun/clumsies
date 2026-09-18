@@ -68,12 +68,12 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
         let thirdStarted = expectation(description: "Third run requested")
         let started = ["first": firstStarted, "second": secondStarted, "third": thirdStarted]
         var pending: [String: CheckedContinuation<RetrievalRunDetail, Error>] = [:]
-        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient()) { runId in
+        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(), fetchRun: { runId in
             try await withCheckedThrowingContinuation { continuation in
                 pending[runId] = continuation
                 started[runId]?.fulfill()
             }
-        }
+        })
 
         let first = Task { await model.select(runId: "first") }
         await fulfillment(of: [firstStarted], timeout: 1)
@@ -109,11 +109,11 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
     func testUnavailableRunCanRetryTheSameSelection() async throws {
         var attempts = 0
         let loaded = try retrievalDetail(runId: "retry")
-        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient()) { _ in
+        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(), fetchRun: { _ in
             attempts += 1
             if attempts == 1 { throw URLError(.resourceUnavailable) }
             return loaded
-        }
+        })
 
         await model.select(runId: "retry")
         XCTAssertEqual(model.selectedRunId, "retry")
