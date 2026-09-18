@@ -71,8 +71,7 @@ private struct BundleCollectionStatusView: View {
     var body: some View {
         switch store.bundleLoadState {
         case .loading:
-            ProgressView("Loading Bundles...")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ContentLoadingView(title: "Loading Bundles…")
         case .failed(let message):
             ContentUnavailableView {
                 Label("Bundles Unavailable", systemImage: "exclamationmark.triangle")

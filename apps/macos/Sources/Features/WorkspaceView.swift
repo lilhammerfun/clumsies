@@ -938,9 +938,9 @@ struct WorkspaceView: View {
             if recallSplitVisibility != target {
                 recallSplitVisibility = target
             }
-            if recallModel.sessions.isEmpty {
-                Task { await recallModel.load() }
-            }
+        }
+        .task {
+            if !recallModel.hasLoaded { await recallModel.load() }
         }
         .onChange(of: recallSplitVisibility) { _, visibility in
             deferSidebarExpansionUpdate(visibility != .detailOnly)

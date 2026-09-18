@@ -1320,6 +1320,57 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertFalse(store.loadingResourceIds.contains(resource.id))
     }
 
+    func testFailedMemoryLoadReturnsAnInlineFailureAndCanRetry() async {
+        let store = WorkspaceStore()
+        let resource = orgResource(id: "memory", contentLoaded: false)
+        let item = MemoryListItem(id: resource.id, resource: resource, draft: nil, inherited: false)
+        let failed = await store.loadContentIfNeeded(item) { _ in throw URLError(.notConnectedToInternet) }
+        XCTAssertNotNil(failed)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertTrue(store.loadingResourceIds.isEmpty)
+
+        let retried = await store.loadContentIfNeeded(item) { resource in
+            var loaded = resource
+            loaded.contentLoaded = true
+            loaded.document.body = "Loaded after retry"
+            return loaded
+        }
+        XCTAssertNil(retried)
+        XCTAssertTrue(store.loadingResourceIds.isEmpty)
+    }
+
+    func testConcurrentMemoryReadersShareTheRequestAndItsFailure() async {
+        let store = WorkspaceStore()
+        let resource = orgResource(id: "memory", contentLoaded: false)
+        let item = MemoryListItem(id: resource.id, resource: resource, draft: nil, inherited: false)
+        let started = expectation(description: "Content request started")
+        let secondEntered = expectation(description: "Second reader joined")
+        let release = WorkspaceNavigationTestLatch()
+        let first = Task {
+            await store.loadContentIfNeeded(item) { _ in
+                started.fulfill()
+                await release.wait()
+                throw URLError(.timedOut)
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+        let second = Task {
+            secondEntered.fulfill()
+            return await store.loadContentIfNeeded(item) { resource in
+                XCTFail("A concurrent reader must not start another content request")
+                return resource
+            }
+        }
+        await fulfillment(of: [secondEntered], timeout: 1)
+        await Task.yield()
+        await release.open()
+        let firstFailure = await first.value
+        let secondFailure = await second.value
+        XCTAssertNotNil(firstFailure)
+        XCTAssertEqual(firstFailure, secondFailure)
+        XCTAssertTrue(store.loadingResourceIds.isEmpty)
+    }
+
     func testRenameOnlyDraftDoesNotTreatAnUnloadedOrphanBaselineAsEditableContent() {
         var unloaded = projectResource(
             id: "removed-memory",

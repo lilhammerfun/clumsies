@@ -361,6 +361,7 @@ enum WorkspaceRefreshCadence {
 private struct ResourceLoadRequest: Sendable {
     let resource: MemoryResource
     let generation: UUID
+    let task: Task<String?, Never>
 }
 
 @MainActor
@@ -2762,28 +2763,44 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    func loadContentIfNeeded(_ item: MemoryListItem) async {
+    @discardableResult
+    func loadContentIfNeeded(
+        _ item: MemoryListItem,
+        loadContent: (@Sendable (MemoryResource) async throws -> MemoryResource)? = nil
+    ) async -> String? {
+        guard !Task.isCancelled else { return nil }
         guard item.draft == nil,
               let resource = item.resource,
-              !resource.contentLoaded else { return }
+              !resource.contentLoaded else { return nil }
         if let inFlight = resourceLoadRequests[resource.id],
            Self.resourceGenerationMatches(inFlight.resource, resource) {
-            return
+            return await inFlight.task.value
         }
+        resourceLoadRequests[resource.id]?.task.cancel()
         if let snapshot = staleResourceSnapshot(for: item) {
             guard let local = snapshot.local, local.contentLoaded else {
-                errorMessage = DocumentDiffError.baselineUnavailable.localizedDescription
-                return
+                return DocumentDiffError.baselineUnavailable.localizedDescription
             }
             if let index = resources.firstIndex(where: { $0.id == resource.id }) {
                 resources[index] = local
                 bumpDocumentContentGeneration(for: resource.id)
             }
-            return
+            return nil
         }
         let generation = UUID()
-        resourceLoadRequests[resource.id] = .init(resource: resource, generation: generation)
+        let task = Task { @MainActor [weak self] in
+            await self?.loadResourceContent(resource, generation: generation, loadContent: loadContent)
+        }
+        resourceLoadRequests[resource.id] = .init(resource: resource, generation: generation, task: task)
         loadingResourceIds.insert(resource.id)
+        return await task.value
+    }
+
+    private func loadResourceContent(
+        _ resource: MemoryResource,
+        generation: UUID,
+        loadContent: (@Sendable (MemoryResource) async throws -> MemoryResource)?
+    ) async -> String? {
         defer {
             if resourceLoadRequests[resource.id]?.generation == generation {
                 resourceLoadRequests.removeValue(forKey: resource.id)
@@ -2791,17 +2808,25 @@ final class WorkspaceStore: ObservableObject {
             }
         }
         do {
-            let loaded = try await WorkspaceLoader(
-                daemon: daemon,
-                bootstrap: bootstrap,
-                server: server
-            ).loadContent(for: resource)
+            let loaded: MemoryResource
+            if let loadContent {
+                loaded = try await loadContent(resource)
+            } else {
+                loaded = try await WorkspaceLoader(
+                    daemon: daemon, bootstrap: bootstrap, server: server
+                ).loadContent(for: resource)
+            }
+            try Task.checkCancellation()
+            guard resourceLoadRequests[resource.id]?.generation == generation else { return nil }
             installLoadedResourceIfCurrent(loaded)
         } catch is CancellationError {
-            return
+            return nil
         } catch {
-            errorMessage = error.localizedDescription
+            guard !Task.isCancelled,
+                  resourceLoadRequests[resource.id]?.generation == generation else { return nil }
+            return error.localizedDescription
         }
+        return nil
     }
 
     func closeTab(_ tab: WorkbenchTab) {
@@ -5644,6 +5669,7 @@ final class WorkspaceStore: ObservableObject {
         navigationForwardStack.removeAll()
         showsProjectSettings = false
         clearAllStaleResourceState()
+        resourceLoadRequests.values.forEach { $0.task.cancel() }
         resourceLoadRequests.removeAll()
         loadingResourceIds.removeAll()
         documentSynchronizationTasks.values.forEach { $0.cancel() }
@@ -5679,6 +5705,7 @@ final class WorkspaceStore: ObservableObject {
             )
         }
         clearAllStaleResourceState()
+        resourceLoadRequests.values.forEach { $0.task.cancel() }
         resourceLoadRequests.removeAll()
         loadingResourceIds.removeAll()
         documentSynchronizationTasks.values.forEach { $0.cancel() }

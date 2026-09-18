@@ -19,30 +19,44 @@ final class RecallModel: ObservableObject {
     @Published private(set) var retrievalSelection: RecallRetrievalSelection?
     @Published private(set) var selectedProjectId: String?
     @Published private(set) var isLoading = false
+    @Published private(set) var hasLoaded = false
     @Published var errorMessage: String?
 
     private let daemon: DaemonXPCClient
+    private let fetchSessions: @MainActor (String?) async throws -> ListRecallsResponse
+    private var loadGeneration = UUID()
 
-    init(daemon: DaemonXPCClient) {
+    init(
+        daemon: DaemonXPCClient,
+        fetchSessions: (@MainActor (String?) async throws -> ListRecallsResponse)? = nil
+    ) {
         self.daemon = daemon
+        self.fetchSessions = fetchSessions ?? { try await daemon.listRecalls(.init(projectId: $0)) }
     }
 
     func load() async {
+        guard !isLoading else { return }
         let projectId = selectedProjectId
+        let generation = UUID()
+        loadGeneration = generation
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            if loadGeneration == generation { isLoading = false }
+        }
         do {
-            let response = try await daemon.listRecalls(
-                ListRecallsRequest(projectId: projectId)
-            )
-            guard projectId == selectedProjectId else { return }
+            let response = try await fetchSessions(projectId)
+            try Task.checkCancellation()
+            guard loadGeneration == generation else { return }
             sessions = response.sessions
+            hasLoaded = true
             if selectedSessionId == nil || !sessions.contains(where: { $0.id == selectedSessionId }) {
                 selectedSessionId = sessions.first?.id
             }
+        } catch is CancellationError {
+            return
         } catch {
-            guard projectId == selectedProjectId else { return }
+            guard loadGeneration == generation, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -51,6 +65,10 @@ final class RecallModel: ObservableObject {
         guard projectId != selectedProjectId else { return }
         retrievalSelection = nil
         selectedProjectId = projectId
+        selectedSessionId = nil
+        sessions = []
+        hasLoaded = false
+        isLoading = false
         await load()
     }
 
