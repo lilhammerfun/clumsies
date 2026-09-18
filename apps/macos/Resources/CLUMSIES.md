@@ -12,13 +12,13 @@ Unless the user requests a particular record, leave out temporary progress, raw 
 
 ## Where it belongs
 
-Preserve the existing organization. In a new space, use these paths as needed:
+Preserve the existing organization. Default setup creates these folders with a short README explaining their purpose:
 
 - `knowledge/<topic>.md` for facts, constraints, and decisions.
 - `procedures/<task>.md` for repeatable steps and their verification.
 - `lessons/<failure>.md` for a verified failure, its cause, and prevention.
 
-Create only the documents needed. Use one canonical document per independently maintainable topic. Link related documents instead of copying their rules. Keep this document focused on memory maintenance.
+The folder READMEs are editable orientation notes, not project knowledge or evidence. Add only the documents needed. Use one canonical document per independently maintainable topic. Link related documents instead of copying their rules. Keep this document focused on memory maintenance.
 
 Reusable project skills may use `skills/<name>/SKILL.md` when a task benefits from explicit activation guidance and a reusable procedure. They remain ordinary Clumsies Memory; the path does not install a host skill.
 

@@ -57,7 +57,7 @@ Project 可以约定一份受管 Memory 指南，默认路径为 `CLUMSIES.md`�
 
 若规范返回 `memory_resource_not_found`，说明缺失路径。这只表示当前项目视图中没有该文档，不代表整个组织没有。可以继续检索，并依据用户指令和现有约定完成要求明确、已获授权的修改；只有依赖缺失规范的决定才需要澄清。不要自动创建规范、替换为本地文件，或从缺失的自定义路径回退到默认路径。
 
-用户希望设置规范时，可在 App 的空项目 Memory 页面选择 **Use Default Guidelines** 或 **Use Organization Guidelines**。后者选择组织已有资源，需要项目管理员权限。采用规范是可选操作；内置模板只有在用户采用后才成为 Memory。概念、预览和研究出处见[记忆维护规范](/zh/guides/memory-guidelines)。
+用户希望设置规范时，可在 App 的空项目 Memory 页面选择 **Set Up Guidelines** 或 **Use Team Guidelines**。后者选择组织已有资源，需要项目管理员权限。采用规范是可选操作；内置模板只有在用户采用后才成为 Memory。概念、预览和研究出处见[记忆维护规范](/zh/guides/memory-guidelines)。
 
 ### `activate`
 

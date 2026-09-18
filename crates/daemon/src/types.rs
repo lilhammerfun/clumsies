@@ -1,3 +1,5 @@
+//! Daemon IPC data contracts and validation.
+
 use std::collections::BTreeMap;
 
 use serde::de::DeserializeOwned;
@@ -493,6 +495,17 @@ pub struct DaemonDraftOperationRequest {
     pub resource: DaemonDraftResourceKind,
     pub op: DaemonDraftOperation,
     pub source: Option<DaemonDraftOperationSource>,
+}
+
+/// Desktop request to create one set of Organization Memory proposals atomically.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DaemonCreateMemoryDraftsRequest {
+    /// Project carrying the proposed documents before publication.
+    pub project_id: String,
+    /// Organization head against which the caller checked the document paths.
+    pub base_commit_id: Option<String>,
+    /// Create-only operations; duplicate or already drafted paths are rejected.
+    pub operations: Vec<DaemonDraftOperation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

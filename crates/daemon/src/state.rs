@@ -1,3 +1,6 @@
+//! Daemon state, local mutations, and IPC request dispatch.
+
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
@@ -10,6 +13,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::draft::daemon_draft_scope_from_str;
+use crate::types::DaemonCreateMemoryDraftsRequest;
 
 const STARTUP_CREDENTIAL_LOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const LAZY_CREDENTIAL_LOAD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1523,20 +1527,20 @@ impl DaemonState {
         Ok(request)
     }
 
+    /// Commit a validated operation and wake local indexing and synchronization.
+    ///
+    /// # Errors
+    /// Returns validation or database errors without committing a partial operation.
     async fn persist_draft_operation(
         &self,
-        mut request: DaemonDraftOperationRequest,
+        request: DaemonDraftOperationRequest,
     ) -> Result<DaemonDraftOperationResponse, DaemonError> {
         if request.scope == DaemonDraftScope::Project
             && (request.op.discard.is_none() || request.draft_id.is_none())
         {
             return Err(project_memory_authority_removed_error());
         }
-        let source = request
-            .source
-            .unwrap_or(DaemonDraftOperationSource::Desktop);
-        let requested_base_commit_id = request.base_commit_id;
-        let new_draft_base_commit_id = match requested_base_commit_id.as_deref() {
+        let new_draft_base_commit_id = match request.base_commit_id.as_deref() {
             Some(commit_id) => Some(commit_id.to_owned()),
             None => {
                 commit_sync::current_base_commit_id(
@@ -1553,14 +1557,122 @@ impl DaemonState {
         // the first write would otherwise fail with BUSY_SNAPSHOT (517),
         // which is not retried by busy_timeout.
         let mut tx = self.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let response = self
+            .persist_draft_operation_in_transaction(
+                &mut tx,
+                request,
+                new_draft_base_commit_id.as_deref(),
+            )
+            .await?;
+        tx.commit().await?;
+        self.inner.search_index_notify.notify_one();
+        self.request_sync();
+        Ok(response)
+    }
+
+    /// Create a set of new desktop proposals in one local transaction.
+    ///
+    /// No document or index job becomes visible until all creates succeed.
+    /// Existing drafts are never replaced, including when a caller retries.
+    ///
+    /// # Errors
+    /// Rejects empty batches, non-create operations, invalid or conflicting paths,
+    /// and database failures. Every error rolls back the entire batch.
+    async fn create_memory_drafts(
+        &self,
+        request: DaemonCreateMemoryDraftsRequest,
+    ) -> Result<Vec<DaemonDraftOperationResponse>, DaemonError> {
+        if request.operations.is_empty() {
+            return Err(DaemonError::InvalidRequest(
+                "No documents to create".to_owned(),
+            ));
+        }
+        let mut paths = BTreeSet::new();
+        for op in &request.operations {
+            op.validate(DaemonDraftResourceKind::Memory)?;
+            let create = op.create.as_ref().ok_or_else(|| {
+                DaemonError::InvalidRequest("A document batch supports only creates".to_owned())
+            })?;
+            if !paths.insert(create.path.as_str()) {
+                return Err(DaemonError::InvalidRequest(format!(
+                    "Duplicate document path: {}",
+                    create.path
+                )));
+            }
+        }
+        let _mutation_guard = self.inner.draft_mutation_lock.lock().await;
+        let base_commit_id = match request.base_commit_id.as_deref() {
+            Some(id) => Some(id.to_owned()),
+            None => {
+                commit_sync::current_base_commit_id(
+                    &self.inner.pool,
+                    &request.project_id,
+                    DaemonDraftScope::Org,
+                )
+                .await?
+            }
+        };
+        let mut tx = self.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut responses = Vec::with_capacity(request.operations.len());
+        for op in request.operations {
+            let path = &op.create.as_ref().expect("validated create operation").path;
+            let occupied: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM local_drafts WHERE project_id = $1
+                 AND path = $2 AND status NOT IN ('discarded', 'merged'))",
+            )
+            .bind(&request.project_id)
+            .bind(path)
+            .fetch_one(&mut *tx)
+            .await?;
+            if occupied {
+                return Err(DaemonError::InvalidRequest(format!(
+                    "A draft already exists at {path}"
+                )));
+            }
+            responses.push(
+                self.persist_draft_operation_in_transaction(
+                    &mut tx,
+                    DaemonDraftOperationRequest {
+                        draft_id: None,
+                        base_commit_id: request.base_commit_id.clone(),
+                        project_id: request.project_id.clone(),
+                        scope: DaemonDraftScope::Org,
+                        resource: DaemonDraftResourceKind::Memory,
+                        op,
+                        source: Some(DaemonDraftOperationSource::Desktop),
+                    },
+                    base_commit_id.as_deref(),
+                )
+                .await?,
+            );
+        }
+        tx.commit().await?;
+        self.inner.search_index_notify.notify_one();
+        self.request_sync();
+        Ok(responses)
+    }
+
+    /// Append a validated operation and index invalidation to the caller's transaction.
+    ///
+    /// # Errors
+    /// Returns draft resolution or database failures; the caller owns rollback and commit.
+    async fn persist_draft_operation_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        mut request: DaemonDraftOperationRequest,
+        new_draft_base_commit_id: Option<&str>,
+    ) -> Result<DaemonDraftOperationResponse, DaemonError> {
+        let source = request
+            .source
+            .unwrap_or(DaemonDraftOperationSource::Desktop);
 
         let draft_id = resolve_local_draft(
-            &mut tx,
+            tx,
             LocalDraftResolutionInput {
                 requested_draft_id: request.draft_id.as_deref(),
                 project_id: &request.project_id,
-                requested_base_commit_id: requested_base_commit_id.as_deref(),
-                new_draft_base_commit_id: new_draft_base_commit_id.as_deref(),
+                requested_base_commit_id: request.base_commit_id.as_deref(),
+                new_draft_base_commit_id,
                 scope: request.scope,
                 resource: request.resource,
                 op: &mut request.op,
@@ -1581,7 +1693,7 @@ impl DaemonState {
         .bind(request.resource.as_str())
         .bind(operation_json)
         .bind(source.as_str())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         sqlx::query(
             "UPDATE local_drafts
@@ -1590,13 +1702,10 @@ impl DaemonState {
              WHERE draft_id = $1",
         )
         .bind(&draft_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        search::scheduler::enqueue_project_in_tx(&mut tx, &request.project_id).await?;
-        tx.commit().await?;
-        self.inner.search_index_notify.notify_one();
-        self.request_sync();
+        search::scheduler::enqueue_project_in_tx(tx, &request.project_id).await?;
 
         Ok(DaemonDraftOperationResponse {
             local_operation_id,
@@ -1959,6 +2068,9 @@ impl DaemonIpcService {
             }
             "store_draft_operation" | "desktop_store_draft_operation" => {
                 dispatch_async!(self, request.payload, store_draft_operation)
+            }
+            "desktop_create_memory_drafts" => {
+                dispatch_async!(self, request.payload, create_memory_drafts)
             }
             "server_request" => dispatch_async!(self, request.payload, server_request),
             method => Err(DaemonError::InvalidRequest(format!(

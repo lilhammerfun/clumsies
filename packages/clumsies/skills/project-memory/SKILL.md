@@ -23,7 +23,7 @@ This path is inside the Project's Effective Memory. Follow its applicable user-m
 
 If the guide returns `memory_resource_not_found`, report the missing path. This establishes absence only in the current Project view, not throughout the Organization. Continue retrieval and fully specified, authorized edits using the user's instructions and existing conventions; clarify only decisions that depend on the missing guide. Do not initialize a guide automatically or silently fall back from a custom path to `CLUMSIES.md`.
 
-For requested setup, direct the user to the App's empty Project **Memory** view: **Preview guidelines and their sources** shows the template; **Use Default Guidelines** creates a Draft; **Use Organization Guidelines** selects an existing guide and requires Project administrator access. Adoption is optional. The bundled App template becomes Memory only after adoption; plugin installation does not adopt it.
+For requested setup, direct the user to the App's empty Project **Memory** view: **Preview guidelines and their sources** shows the template; **Set Up Guidelines** creates CLUMSIES.md and starter folder READMEs as Drafts, preserving existing folders; **Use Team Guidelines** selects an existing guide and requires Project administrator access. Adoption is optional. The bundled App template becomes Memory only after adoption; plugin installation does not adopt it.
 
 ## Maintain Clumsies memory when asked
 

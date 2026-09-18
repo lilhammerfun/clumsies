@@ -11,6 +11,8 @@ struct MemoryGuidelinesSetup: Equatable, Sendable {
     let projectId: String
     let path: String
     let action: Action
+    var organizationCommitId: String?
+    var occupiedPaths: Set<String> = []
 
     func hasSameDestination(as other: Self) -> Bool {
         guard projectId == other.projectId, path == other.path else { return false }
@@ -25,6 +27,7 @@ struct MemoryGuidelinesSetup: Equatable, Sendable {
 
 enum MemoryGuidelines {
     static let defaultPath = "CLUMSIES.md"
+    static let starterFolders = ["knowledge", "procedures", "lessons"]
 
     static func configuredPath(_ value: String?) -> String {
         let path = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -40,6 +43,28 @@ enum MemoryGuidelines {
             path: defaultPath,
             body: try String(contentsOf: url, encoding: .utf8)
         )
+    }
+
+    /// Seed only unused folders; the user's existing layout always wins.
+    static func defaultDocuments(occupiedPaths: Set<String> = []) throws -> [EditableMemoryDocument] {
+        guard !occupiedPaths.contains(defaultPath) else {
+            throw MemoryValidationError.invalidPath("CLUMSIES.md already exists. Open the existing guidelines.")
+        }
+        var documents = [try defaultDocument()]
+        for folder in starterFolders where !occupiedPaths.contains(where: {
+            $0 == folder || $0.hasPrefix(folder + "/")
+        }) {
+            guard let url = Bundle.main.url(
+                forResource: "README", withExtension: "md", subdirectory: "MemoryStarter/\(folder)"
+            ) else {
+                throw MemoryValidationError.invalidPath("The bundled \(folder) starter is unavailable.")
+            }
+            documents.append(.init(
+                title: folder.capitalized, path: "\(folder)/README.md",
+                body: try String(contentsOf: url, encoding: .utf8)
+            ))
+        }
+        return documents
     }
 
     /// Resolve the effective project document before considering shared authority.

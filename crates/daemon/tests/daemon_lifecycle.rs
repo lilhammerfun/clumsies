@@ -1,3 +1,5 @@
+//! Isolated daemon lifecycle, persistence, and IPC contract checks.
+
 mod common;
 
 use std::collections::BTreeMap;
@@ -1777,6 +1779,91 @@ fn launchctl_print_parser_reports_runtime_status() {
     assert_eq!(status.state.as_deref(), Some("running"));
     assert_eq!(status.last_exit_code, Some(0));
     assert_eq!(status.last_error, None);
+}
+
+#[tokio::test]
+async fn desktop_memory_draft_batch_is_atomic_and_preserves_existing_paths() {
+    let (_root, _state, service) = common::test_daemon().await;
+    let create = |path: &str| {
+        json!({"create": {
+            "path": path, "content": {"content": format!("# {path}")},
+        }})
+    };
+    let batch = |operations: Vec<serde_json::Value>| {
+        DaemonIpcRequest::new(
+            "desktop_create_memory_drafts",
+            json!({"project_id": "prj_test", "operations": operations}),
+        )
+    };
+
+    let seeded = service
+        .dispatch(batch(vec![create("knowledge/README.md")]))
+        .await;
+    assert!(seeded.ok);
+
+    // The first insert must roll back when a later path conflicts.
+    let conflict = service
+        .dispatch(batch(vec![
+            create("CLUMSIES.md"),
+            create("knowledge/README.md"),
+        ]))
+        .await;
+    assert!(!conflict.ok);
+    let drafts = service
+        .list_drafts(DaemonDraftListQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(drafts.items.len(), 1);
+    assert_eq!(
+        service.sync_status().await.unwrap().pending_operation_count,
+        1
+    );
+
+    for operations in [
+        vec![],
+        vec![create("../invalid.md")],
+        vec![create("same.md"), create("same.md")],
+        vec![json!({"delete": {"id": "existing"}})],
+    ] {
+        assert!(!service.dispatch(batch(operations)).await.ok);
+    }
+    let completed = service
+        .dispatch(batch(vec![
+            create("CLUMSIES.md"),
+            create("procedures/README.md"),
+            create("lessons/README.md"),
+        ]))
+        .await;
+    assert!(completed.ok, "{:?}", completed.error);
+    let responses: Vec<daemon::DaemonDraftOperationResponse> = completed.into_payload().unwrap();
+    assert_eq!(responses.len(), 3);
+    let drafts = service
+        .list_drafts(DaemonDraftListQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(drafts.items.len(), 4);
+    assert_eq!(
+        service.sync_status().await.unwrap().pending_operation_count,
+        4
+    );
+    assert!(
+        !service
+            .dispatch(batch(vec![create("CLUMSIES.md")]))
+            .await
+            .ok
+    );
+    let original = service
+        .get_draft(
+            &drafts
+                .items
+                .iter()
+                .find(|draft| draft.path.as_deref() == Some("knowledge/README.md"))
+                .unwrap()
+                .draft_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(original.operations.len(), 1);
 }
 
 #[tokio::test]

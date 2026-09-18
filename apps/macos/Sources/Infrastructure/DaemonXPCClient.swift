@@ -221,6 +221,10 @@ struct DaemonXPCClient: Sendable {
         try await call(method: "desktop_store_draft_operation", payload: request)
     }
 
+    func createMemoryDrafts(_ request: DaemonCreateMemoryDraftsRequest) async throws -> [DaemonDraftOperationResponse] {
+        try await call(method: "desktop_create_memory_drafts", payload: request)
+    }
+
     func listRetrievalRuns(_ request: RetrievalRunListRequest) async throws
         -> RetrievalRunListResponse {
         try await call(method: "list_retrieval_runs", payload: request)
