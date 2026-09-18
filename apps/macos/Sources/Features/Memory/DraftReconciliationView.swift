@@ -5,6 +5,8 @@ struct DraftReconciliationView: View {
     let candidate: DraftReconciliationCandidate
     let updateRequest: Int
     let usesContextualUpdateAction: Bool
+    let updateButtonTitle: String
+    let initialResolution: ReconciliationResourceState
     let onResolvedStateChange: ((ReconciliationResourceState) -> Void)?
     let onUpdateStateChange: ((Bool, Bool) -> Void)?
     let onCancel: () -> Void
@@ -16,11 +18,20 @@ struct DraftReconciliationView: View {
     @State private var resolvedContent: String
     @State private var isApplying = false
     @State private var errorMessage: String?
+    @State private var confirmsDiscard = false
+    @State private var comparison = Comparison.sharedChanges
+
+    private enum Comparison: String, CaseIterable {
+        case sharedChanges = "Shared changes"
+        case yourChanges = "Your changes"
+        case preview = "Result preview"
+    }
 
     init(
         candidate: DraftReconciliationCandidate,
         updateRequest: Int = 0,
         usesContextualUpdateAction: Bool = false,
+        updateButtonTitle: String = "Update",
         initialResolvedState: ReconciliationResourceState? = nil,
         onResolvedStateChange: ((ReconciliationResourceState) -> Void)? = nil,
         onUpdateStateChange: ((Bool, Bool) -> Void)? = nil,
@@ -31,12 +42,14 @@ struct DraftReconciliationView: View {
         self.candidate = candidate
         self.updateRequest = updateRequest
         self.usesContextualUpdateAction = usesContextualUpdateAction
+        self.updateButtonTitle = updateButtonTitle
         self.onResolvedStateChange = onResolvedStateChange
         self.onUpdateStateChange = onUpdateStateChange
         self.onCancel = onCancel
         self.onApplied = onApplied ?? onCancel
         self.onApply = onApply
         let initial = initialResolvedState ?? candidate.proposedState ?? candidate.draftState
+        self.initialResolution = initial
         _resolvedExists = State(initialValue: initial.exists)
         _resolvedPath = State(initialValue: initial.resource.path ?? "")
         _resolvedContent = State(
@@ -71,8 +84,11 @@ struct DraftReconciliationView: View {
             if !usesContextualUpdateAction {
                 Divider()
                 HStack {
-                    Button("Cancel") { onCancel() }
+                    Button("Cancel") {
+                        if hasEdits { confirmsDiscard = true } else { onCancel() }
+                    }
                         .keyboardShortcut(.cancelAction)
+                        .disabled(isApplying)
                     Spacer()
                     Button {
                         apply()
@@ -80,7 +96,7 @@ struct DraftReconciliationView: View {
                         if isApplying {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text("Update")
+                            Text(updateButtonTitle)
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -101,6 +117,10 @@ struct DraftReconciliationView: View {
             guard usesContextualUpdateAction else { return }
             apply()
         }
+        .confirmationDialog("Discard your conflict resolution edits?", isPresented: $confirmsDiscard) {
+            Button("Discard Edits", role: .destructive) { onCancel() }
+            Button("Keep Editing", role: .cancel) {}
+        }
         .alert(
             "Could Not Update Draft",
             isPresented: Binding(
@@ -118,7 +138,16 @@ struct DraftReconciliationView: View {
     private var canApply: Bool {
         !isApplying
             && candidate.valid
-            && !(candidate.status == .conflicts && resolvedExists && resolvedPath.isEmpty)
+            && !(candidate.status == .conflicts && resolvedExists
+                && resolvedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var hasEdits: Bool {
+        resolvedExists != initialResolution.exists
+            || resolvedPath != (initialResolution.resource.path ?? "")
+            || resolvedContent != Self.resolutionContentTemplate(
+                for: candidate, preferredState: initialResolution
+            ).primaryText
     }
 
     private func publishUpdateState() {
@@ -172,15 +201,32 @@ struct DraftReconciliationView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .frame(height: 34)
+            .padding(.vertical, 8)
+            .disabled(isApplying)
             Divider()
 
             VSplitView {
-                reconciliationDiff(
-                    from: candidate.currentState,
-                    to: resolvedState,
-                    title: "Shared Version → Resolution Preview"
-                )
+                VStack(spacing: 0) {
+                    Picker("Compare versions", selection: $comparison) {
+                        ForEach(Comparison.allCases, id: \.self) { comparison in
+                            Text(comparison.rawValue).tag(comparison)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(10)
+
+                    switch comparison {
+                    case .sharedChanges:
+                        reconciliationDiff(from: candidate.baseState, to: candidate.currentState,
+                                           title: "Original Version → Latest Shared Version")
+                    case .yourChanges:
+                        reconciliationDiff(from: candidate.baseState, to: candidate.draftState,
+                                           title: "Original Version → Your Changes")
+                    case .preview:
+                        reconciliationDiff(from: candidate.currentState, to: resolvedState,
+                                           title: "Latest Shared Version → Final Result")
+                    }
+                }
                 .frame(minHeight: 220, maxHeight: .infinity)
 
                 resolvedContentPane
@@ -238,10 +284,14 @@ struct DraftReconciliationView: View {
 
     private var resolvedContentPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Resolve Draft")
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 10)
-                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Final Result").font(.caption.weight(.medium))
+                Text("Compare both sets of changes, then edit the final content below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Divider()
 
             if resolvedExists {
@@ -249,6 +299,8 @@ struct DraftReconciliationView: View {
                     .font(.system(.body, design: .monospaced))
                     .scrollContentBackground(.hidden)
                     .background(Color(nsColor: .textBackgroundColor))
+                    .disabled(isApplying)
+                    .accessibilityLabel("Final resolved content")
             } else {
                 ContentUnavailableView(
                     "File Removed",

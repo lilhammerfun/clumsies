@@ -134,6 +134,24 @@ lines`. The file navigator already communicates the path and the diff directly
 communicates insertions/removals. Delete-only and metadata-only Reviews retain a
 short explicit empty state because the diff cannot communicate those outcomes.
 
+The file tree marks behind files and detected conflicts. Reconciliation targets
+an active behind file: prefer the selection, then another conflicted file,
+then another behind file. Discarded and merged drafts are not editable targets.
+After saving, reload the Review to update the diff and remaining file markers.
+
+Authors resolve conflicts in a native sheet attached to the Review detail,
+with the Review title and file path visible. The `Shared changes`, `Your
+changes`, and `Result preview` comparisons show original-to-shared,
+original-to-proposed, and shared-to-final differences. The editor below owns
+the final text; path conflicts expose a path field and deletion conflicts
+expose `Keep File`. `Save to Review` uses the existing rebase endpoint and
+still requires approval before publication. Non-authors see a waiting state.
+
+The sheet blocks navigation during editing. Cancel asks before discarding
+edits, saving disables cancellation, and failed saves keep the input. A
+background Review refresh preserves the editor; authority reset clears it.
+The server rejects an outdated candidate if the shared version changes again.
+
 ## 4. Diff and comments
 
 - Replacement rows render both the removal and insertion.
@@ -161,7 +179,7 @@ the UI labels these honestly rather than pretending they are inline comments.
 Decision actions remain native symbol toolbar items with menu-command parity:
 
 - Open: Org owners/admins with `review:decide` and `review:merge` see Reject
-  (`xmark`) and the single prominent Approve (`checkmark`). Approve records the
+  (`xmark`) and Approve (`checkmark`) in the standard toolbar style. Approve records the
   decision and merges into authority in one Server transaction; ordinary
   members remain read/comment participants and see neither authority action.
 - Approved: historical records retain Merge (`arrow.triangle.merge`) when
@@ -175,6 +193,9 @@ detail. Sync remains its own utility slot. Search remains independent and
 trailing-most. Cross-section toolbar grouping and macOS 14-26 placement are
 tracked as a separate workspace-wide design issue; Reviews must not reintroduce
 one catch-all action group while that work is pending.
+
+Reviews hide the redundant global `In Review` icon while retaining sync
+progress, failures, and stale status.
 
 ## 6. State and accessibility
 
@@ -196,8 +217,8 @@ one catch-all action group while that work is pending.
 
 ## 7. Data boundary
 
-The current domain is intentionally honest: one Review is one Draft resource
-with operation history. A true multi-file Review requires a Server-provided
-materialized list of file changes with stable change IDs, per-file source
-states, reconciliation, and comment anchors. That contract expansion must be a
-separate backend change; the macOS client must not infer it from operations.
+A Review can contain multiple drafts from the server-provided `drafts[]`
+metadata. Coordination is aggregated across them, while reconciliation is
+performed per file. The client reloads the Review after each save and does
+not infer a multi-file commit history from draft operations. Legacy singular
+detail fields remain supported by the current client contract.

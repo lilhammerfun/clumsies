@@ -2145,6 +2145,56 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(sources.proposedPath, "notes/b.md")
     }
 
+    func testReviewsHideInReviewStatusButKeepSyncProgressAndProblems() {
+        let inReview = SyncToolbarPresentation.inReview(changeCount: 2)
+        XCTAssertNil(inReview.visible(in: .reviews))
+        XCTAssertEqual(inReview.visible(in: .memory), inReview)
+
+        let visibleStatuses: [SyncToolbarPresentation] = [
+            .syncing(changeCount: 1),
+            .failed(changeCount: 1, message: "Offline"),
+            .unavailable(message: nil),
+            .stale,
+        ]
+        for status in visibleStatuses {
+            XCTAssertEqual(status.visible(in: .reviews), status)
+        }
+    }
+
+    func testReviewReconciliationTargetsOnlyActiveFilesThatNeedUpdating() {
+        func file(_ id: String, status: String = "submitted", freshness: DraftFreshness = .behind,
+                  reconciliation: DraftReconciliationStatus = .unknown) -> ReviewFileDescriptor {
+            ReviewFileDescriptor.resolve(reviewId: "review", detail: .init(
+                draft: .init(
+                    draftId: "draft-\(id)", projectId: "project", baseCommitId: "base", author: user,
+                    title: id, description: "",
+                    resource: .init(scope: "org", id: id, path: "notes/\(id).md"),
+                    status: status,
+                    coordination: coordination(freshness: freshness, reconciliation: reconciliation),
+                    version: 1, createdAt: timestamp, updatedAt: timestamp
+                ), operations: []
+            ))
+        }
+        let current = file("current", freshness: .current)
+        let discarded = file("discarded", status: "discarded", reconciliation: .conflicts)
+        let behind = file("behind")
+        let conflict = file("conflict", reconciliation: .conflicts)
+        let files = [current, discarded, behind, conflict]
+
+        XCTAssertFalse(current.needsUpdate)
+        XCTAssertFalse(discarded.needsUpdate)
+        XCTAssertFalse(discarded.hasConflicts)
+        XCTAssertTrue(conflict.hasConflicts)
+        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(in: files, selectedId: current.id), conflict)
+        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(in: files, selectedId: discarded.id), conflict)
+        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(in: files, selectedId: behind.id), behind)
+        // After resolving a file, the same action advances to another pending file.
+        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(
+            in: [current, discarded, behind, file("conflict", freshness: .current)], selectedId: conflict.id
+        ), behind)
+        XCTAssertNil(ReviewFileDescriptor.reconciliationTarget(in: [current, discarded], selectedId: current.id))
+    }
+
     func testReviewDirectoryIsAvailableWhileSelectedFileWaitsForItsSnapshot() async throws {
         let resource = ServerDraftResourceReference(scope: "org", id: "memory-1", path: "notes/a.md")
         let review = reviewDetail(resource: resource, operations: [

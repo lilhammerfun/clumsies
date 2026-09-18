@@ -97,7 +97,7 @@ diff；同一 Review 版本内，共享已完成和进行中的 commit 请求。
 1. 标题和朴素状态；
 2. 作者、Project、相对更新时间；
 3. 可选描述；
-4. stale/conflict 提示及 `Review Changes…`；
+4. 待更新文件数及 `Review Shared Changes…` / `Resolve Conflicts…`；
 5. 决策人、时间、说明与 immutable result hash；
 6. 当前文件的 unified diff。
 
@@ -106,8 +106,18 @@ diff；同一 Review 版本内，共享已完成和进行中的 commit 请求。
 
 Server 对列表返回聚合 coordination：任一 Draft behind 则 Review behind，任一 Draft
 conflicts 则 Review conflicts；多 Draft 情况不返回一个假装适用于全部文件的单一
-candidate ID。详情中的 reconcile 从当前选中文件开始，完成后重新加载 Review；决策动作
+candidate ID。文件树逐项标注落后或已检测到的冲突。协调优先处理当前选中的落后文件；
+若当前文件已是最新，则定位其他冲突文件，再退回其他落后文件。已丢弃或已合并的 Draft
+不能作为协调目标。完成后重新加载 Review，继续处理剩余文件；决策动作
 只有在已渲染的 Review version/status/freshness 仍与列表记录完全一致时才可用。
+
+冲突处理由作者在 PR 详情内的原生 sheet 完成，不跳转 Memory。面板保留 Review 标题和
+当前文件路径，通过 `Shared changes`、`Your changes`、`Result preview` 分别查看
+原始版本到最新共享版本、原始版本到本次提议、最新共享版本到最终结果的差异。
+下方编辑最终正文；路径冲突编辑路径，删除冲突使用 `Keep File` 决定保留或删除。
+`Save to Review` 调用现有 rebase 接口，只更新待审内容，不发布共享库。保存期间禁止取消，
+取消有改动的编辑会先确认；保存失败保留输入。共享版本再次变化时 Server 拒绝旧候选，
+不会覆盖新版本。非作者显示等待作者处理，不提供无权限的编辑入口。
 
 ## 5. Diff 与评论
 
@@ -131,7 +141,7 @@ candidate ID。详情中的 reconcile 从当前选中文件开始，完成后重
 
 | Review 状态 | 当前动作 |
 | --- | --- |
-| Open | 有 `review:decide` 的用户可 Reject；同时有 `review:decide` 与 `review:merge` 的用户可用唯一突出动作 Approve and Merge |
+| Open | 有 `review:decide` 的用户可 Reject；同时有 `review:decide` 与 `review:merge` 的用户可 Approve and Merge；按钮使用普通工具栏样式，不填充主题色 |
 | Approved | 旧两阶段记录在 result hash 非空且有 `review:merge` 时可 Merge |
 | Rejected | Draft 作者可 Resubmit |
 | Merged | 无决策动作 |
@@ -142,6 +152,7 @@ Review version 和当前 Ref，stale/conflict 时先协调。
 
 Filter 只在列表页，决策只在详情页，Sync 和 Search 是独立工具位。符号按钮必须提供
 `.help()`、accessibility label 和进行中状态。
+Reviews 内不重复显示全局 `In Review` 图标；同步进行中、失败和落后提示仍保留。
 
 ## 7. 状态与验证
 
@@ -163,8 +174,6 @@ Access。
 - Public OpenAPI 声明了 Review list 的 limit/cursor，但当前 HTTP 只读取 `project_id`，SQL
   固定最多返回 200 条且 `has_more` 恒为 false；调用方不能把它宣传为真实分页。
 - 列表层 `ReviewRecord` 尚未保留或展示多 Draft 数量；必须进入详情查看完整文件集合。
-- Review 的 freshness/conflict 是全部 Draft 的聚合值，但当前 `Review Changes…` 只请求
-  当前选中文件的 reconciliation candidate；真正落后的若是另一文件，动作可能失败，
-  界面也不会主动定位该文件。
+- 协调仍逐文件执行；每次保存后重新加载 Review。完整 PR commit 时间线尚未实现。
 - 评论锚点没有 old/new side，删除行只能作为 diff 内容查看。
 - `ReviewDetail` 的单数兼容字段仍扩大了协议表面；移除前需要完成客户端版本迁移。

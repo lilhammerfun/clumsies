@@ -55,6 +55,15 @@ struct ReviewCommentPlacement: Equatable {
 struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     let id: String
     let path: String
+    let needsUpdate: Bool
+    let hasConflicts: Bool
+
+    static func reconciliationTarget(in files: [Self], selectedId: String?) -> Self? {
+        let pending = files.filter(\.needsUpdate)
+        return pending.first { $0.id == selectedId }
+            ?? pending.first { $0.hasConflicts }
+            ?? pending.first
+    }
 
     static func resolve(
         reviewId: String,
@@ -69,7 +78,14 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
         }
         let path = loadedPath ?? proposedPath ?? detail.draft.resource.id ?? "Untitled"
         let id = detail.draft.resource.id ?? "review-file:\(reviewId):\(detail.draft.draftId)"
-        return .init(id: id, path: path)
+        let needsUpdate = ["open", "submitted"].contains(detail.draft.status)
+            && detail.draft.coordination.freshness == .behind
+        return .init(
+            id: id,
+            path: path,
+            needsUpdate: needsUpdate,
+            hasConflicts: needsUpdate && detail.draft.coordination.reconciliation == .conflicts
+        )
     }
 }
 
@@ -158,6 +174,15 @@ final class ReviewDetailModel: ObservableObject {
         guard let selectedFileId else { return draftDetails.first }
         return draftDetails.first {
             ReviewFileDescriptor.resolve(reviewId: self.reviewId, detail: $0).id == selectedFileId
+        }
+    }
+
+    var reconciliationTarget: ReviewDraftDetail? {
+        guard let target = ReviewFileDescriptor.reconciliationTarget(
+            in: fileDescriptors, selectedId: selectedFileId
+        ) else { return nil }
+        return draftDetails.first {
+            ReviewFileDescriptor.resolve(reviewId: reviewId, detail: $0).id == target.id
         }
     }
 
@@ -261,18 +286,18 @@ final class ReviewDetailModel: ObservableObject {
     }
 
     private func beginDetailRequest() -> DetailRequest {
-        invalidateDetailRequests()
+        invalidateDetailRequests(preservingReconciliation: true)
         return DetailRequest(
             generation: detailRequestGeneration,
             baseline: storedReviewDecisionSignature
         )
     }
 
-    func invalidateDetailRequests() {
+    func invalidateDetailRequests(preservingReconciliation: Bool = false) {
         detailRequestGeneration = UUID()
         reconciliationTask?.cancel()
         reconciliationTask = nil
-        reconciliationCandidate = nil
+        if !preservingReconciliation { reconciliationCandidate = nil }
         loadsReconciliation = false
         isSubmittingComment = false
         fileLoadTask?.cancel()
@@ -363,7 +388,8 @@ final class ReviewDetailModel: ObservableObject {
     }
 
     func markCurrentDetailDecisionReady() {
-        guard let detail, changeSources != nil, !loadingFile, fileLoadError == nil else {
+        guard let detail, changeSources != nil, !loadingFile, fileLoadError == nil,
+              reconciliationCandidate == nil, !loadsReconciliation else {
             clearDecisionReadiness()
             return
         }
@@ -412,26 +438,33 @@ final class ReviewDetailModel: ObservableObject {
     }
 
     func loadReconciliation(detail: ReviewDraftDetail?) {
-        guard let detail, !loadsReconciliation else { return }
+        guard let detail, !loadsReconciliation, let review, workspaceContext.isReviewAuthor(review),
+              ["open", "approved", "rejected"].contains(review.status),
+              ReviewFileDescriptor.resolve(reviewId: reviewId, detail: detail).needsUpdate else { return }
+        selectedFileId = ReviewFileDescriptor.resolve(reviewId: reviewId, detail: detail).id
         clearDecisionReadiness()
         loadsReconciliation = true
         let generation = detailRequestGeneration
         reconciliationTask = Task {
-            defer { if self.detailRequestGeneration == generation { self.loadsReconciliation = false } }
+            defer {
+                if self.detailRequestGeneration == generation {
+                    self.loadsReconciliation = false
+                    self.markCurrentDetailDecisionReady()
+                }
+            }
             do {
                 let candidate = try await self.reconciler.reconciliationCandidate(for: detail)
                 guard !Task.isCancelled, self.detailRequestGeneration == generation else { return }
                 self.reconciliationCandidate = candidate
             } catch {
                 guard !Task.isCancelled, self.detailRequestGeneration == generation else { return }
-                self.markCurrentDetailDecisionReady()
                 self.workspaceFeedback.errorMessage = error.localizedDescription
             }
         }
     }
 
     func handlePendingReconciliation(_ reviewId: String?) {
-        guard reviewId == self.reviewId, let detail = selectedDraftDetail else { return }
+        guard reviewId == self.reviewId, let detail = reconciliationTarget else { return }
         reviewModel.pendingReviewReconciliationId = nil
         loadReconciliation(detail: detail)
     }
