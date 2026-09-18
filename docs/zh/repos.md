@@ -8,9 +8,10 @@ Rust workspace 有两个成员：`crates/server` 和 `crates/daemon`。Swift 负
 
 | 路径 | 职责 | 什么时候读 |
 | --- | --- | --- |
-| `apps/macos/Sources/Features/` | SwiftUI 产品页面与用户操作 | 想知道用户看见什么、可以做什么 |
-| `apps/macos/Sources/Domain/` | App 模型、工作区状态与流程协调 | 想跟踪一次点击后的加载、校验和状态变化 |
-| `apps/macos/Sources/Infrastructure/` | 类型化 daemon XPC 客户端等平台接入 | 想知道 Desktop 怎样访问本地运行时 |
+| `apps/macos/Sources/App/` | 启动、窗口、菜单和依赖装配 | 想追踪 App 生命周期 |
+| `apps/macos/Sources/Features/` | 按产品功能聚合视图、状态和操作 | 想找到一个页面的完整流程 |
+| `apps/macos/Sources/Services/` | 共享工作区协调、保存操作和平台客户端 | 想追踪共享状态与 I/O |
+| `apps/macos/Sources/Libraries/` | 共享数据、Diff 算法、日志和 UI 基础组件 | 想复用一个明确用途的组件 |
 | `crates/daemon/src/agent_runtime/` | MCP 契约和短时 Agent 代理 | 想理解 Agent 工具的边界 |
 | `crates/daemon/src/state.rs`、`draft.rs` | 本地状态、Draft 持久化与同步 | 想知道 queued 具体意味着什么 |
 | `crates/daemon/src/commit_sync.rs`、`project_storage.rs` | Commit 安装、本地 generation 和缓存位置 | 想追踪已发布数据怎样到达 Mac |
@@ -30,7 +31,7 @@ Rust workspace 有两个成员：`crates/server` 和 `crates/daemon`。Swift 负
 
 | 问题 | 源码路径 |
 | --- | --- |
-| 用户编辑并请求 Review 后发生什么？ | `Features/WorkspaceView.swift` → `Domain/WorkspaceStore.swift` → `Infrastructure/DaemonXPCClient.swift` |
+| 用户编辑并请求 Review 后发生什么？ | `Features/Workspace/WorkspaceView.swift` → `Services/Workspace/WorkspaceStore.swift` → `Services/Daemon/DaemonXPCClient.swift` |
 | Agent 的 `memory.store` 做了什么？ | `agent_runtime/mcp_contract.rs` → `agent_runtime/mod.rs` → `state.rs::store_draft_operation` → 本地 Draft 队列 |
 | Review 如何校验并发布？ | Server `http.rs` → `changes/http.rs` → `changes/service.rs` → `changes/postgres.rs` |
 | 发布怎样到达选择了文档的 Project？ | Server `memory/postgres.rs` → daemon `commit_sync.rs` → `search/` |
@@ -48,7 +49,7 @@ Server 的分层有明确作用：HTTP handler 解码请求并检查权限，ser
 | Draft 上传、合并、投影更新和两个 daemon 收敛 | `crates/daemon/tests/server_integration.rs` |
 | 本地持久化与进程重启 | `crates/daemon/tests/daemon_lifecycle.rs` |
 | Agent 代理与真实 XPC 边界 | `crates/daemon/tests/agent_runtime_xpc_e2e.rs` |
-| Desktop daemon 契约和状态映射 | `apps/macos/Tests/DaemonContractTests.swift` |
+| Desktop daemon 契约和状态映射 | `apps/macos/Tests/Services/DaemonContractTests.swift` |
 
 测试说明代码承诺了哪些行为，不自动构成生产延迟指标。性能测量及适用范围见[性能文档](/zh/performance/)。
 

@@ -184,7 +184,7 @@ decorative skeleton rows.
 | Summary snapshots and task pagination | `crates/daemon/src/recall/paging.rs` |
 | Codex rollout reader | `crates/daemon/src/recall/codex.rs` |
 | XPC dispatch | `crates/daemon/src/state.rs` (`list_recalls`, `get_recall_session`, `get_recall_fragment`) |
-| XPC client and models | `apps/macos/Sources/Infrastructure/DaemonXPCClient.swift`, `DaemonModels.swift` |
-| Sidebar section | `apps/macos/Sources/Domain/MemoryModels.swift` (`WorkspaceSection.sessions`) |
-| Activity UI, host badge, and chunk detail | `apps/macos/Sources/Features/RecallView.swift`, `RecallModel.swift` |
-| Workspace wiring | `apps/macos/Sources/Features/WorkspaceView.swift` |
+| XPC client and models | `apps/macos/Sources/Services/Daemon/DaemonXPCClient.swift`, `apps/macos/Sources/Libraries/Models/DaemonModels.swift` |
+| Sidebar section | `apps/macos/Sources/Libraries/Models/MemoryModels.swift` (`WorkspaceSection.sessions`) |
+| Activity UI, host badge, and chunk detail | `apps/macos/Sources/Features/Activity/ActivityView.swift`, `ActivityModel.swift` |
+| Workspace wiring | `apps/macos/Sources/Features/Workspace/WorkspaceView.swift` |

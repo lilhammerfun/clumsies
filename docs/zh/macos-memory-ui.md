@@ -189,9 +189,9 @@ Discard 和 deletion proposal 仍按各自 Draft 生命周期处理。Review 详
 
 | 关注点 | 当前代码 |
 | --- | --- |
-| 文件树、菜单、批量目录计划和视觉状态 | `apps/macos/Sources/Features/MemoryWorkspaceView.swift` |
-| Draft、tab、Project selection 与同步编排 | `apps/macos/Sources/Domain/WorkspaceStore.swift` |
-| 文档与会话模型 | `apps/macos/Sources/Domain/MemoryModels.swift` |
-| 同步 accessory | `apps/macos/Sources/Components/SharedUpdateIndicator.swift` |
-| tab 标题与布局 | `apps/macos/Sources/Components/DocumentTabStrip.swift` |
-| 交互测试 | `apps/macos/Tests/FileTreeSelectionTests.swift`、`MemoryFileTreeMenuTests.swift`、`WorkspaceNavigationTests.swift` |
+| 文件树、菜单、批量目录计划和视觉状态 | `apps/macos/Sources/Features/Memory/MemoryFileTreeView.swift`、`MemoryFileTree.swift` |
+| Draft、tab、Project selection 与同步编排 | `apps/macos/Sources/Services/Workspace/WorkspaceStore.swift` |
+| 文档与会话模型 | `apps/macos/Sources/Libraries/Models/MemoryModels.swift` |
+| 同步 accessory | `apps/macos/Sources/Libraries/UI/SharedUpdateIndicator.swift` |
+| tab 标题与布局 | `apps/macos/Sources/Features/Memory/DocumentTabStrip.swift` |
+| 交互测试 | `apps/macos/Tests/Features/FileTreeSelectionTests.swift`、`MemoryFileTreeMenuTests.swift`、`WorkspaceNavigationTests.swift` |

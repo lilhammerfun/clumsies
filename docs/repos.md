@@ -8,9 +8,10 @@ The two Rust workspace members are `crates/server` and `crates/daemon`. Swift ow
 
 | Path | Responsibility | Read it when you want to… |
 | --- | --- | --- |
-| `apps/macos/Sources/Features/` | SwiftUI product screens and user actions | Understand what a person sees and can do |
-| `apps/macos/Sources/Domain/` | App models, workspace state, and workflow coordination | Follow a click through loading, validation, and state updates |
-| `apps/macos/Sources/Infrastructure/` | Typed daemon XPC client and other platform integration | See how Desktop reaches the local runtime |
+| `apps/macos/Sources/App/` | Startup, windows, menus and dependency composition | Follow the App lifecycle |
+| `apps/macos/Sources/Features/` | Views, state and operations grouped by product feature | Find a complete screen workflow |
+| `apps/macos/Sources/Services/` | Shared workspace coordination, persistence operations and platform clients | Trace shared state and I/O |
+| `apps/macos/Sources/Libraries/` | Shared values, diff algorithms, diagnostics and UI building blocks | Reuse a specific building block |
 | `crates/daemon/src/agent_runtime/` | MCP contract and short-lived agent proxies | Understand the agent-facing tool boundary |
 | `crates/daemon/src/state.rs`, `draft.rs` | Local state, durable Draft writes, and synchronization | Understand what “queued” means |
 | `crates/daemon/src/commit_sync.rs`, `project_storage.rs` | Commit installation, local generations, and cache locations | Trace published data reaching a Mac |
@@ -30,7 +31,7 @@ For the deployment rollback checklist, these are useful short routes:
 
 | Question | Source route |
 | --- | --- |
-| What happens when a user edits and requests Review? | `Features/WorkspaceView.swift` → `Domain/WorkspaceStore.swift` → `Infrastructure/DaemonXPCClient.swift` |
+| What happens when a user edits and requests Review? | `Features/Workspace/WorkspaceView.swift` → `Services/Workspace/WorkspaceStore.swift` → `Services/Daemon/DaemonXPCClient.swift` |
 | What does an agent's `memory.store` do? | `agent_runtime/mcp_contract.rs` → `agent_runtime/mod.rs` → `state.rs::store_draft_operation` → local Draft queue |
 | What validates and publishes a Review? | Server `http.rs` → `changes/http.rs` → `changes/service.rs` → `changes/postgres.rs` |
 | How does publication reach selected Projects? | Server `memory/postgres.rs` → daemon `commit_sync.rs` → `search/` |
@@ -48,7 +49,7 @@ The Server pattern is deliberate: HTTP handlers decode requests and enforce acce
 | Draft upload, merge, projection updates, and two-daemon convergence | `crates/daemon/tests/server_integration.rs` |
 | Local persistence and process restart | `crates/daemon/tests/daemon_lifecycle.rs` |
 | Agent proxy and real XPC boundary | `crates/daemon/tests/agent_runtime_xpc_e2e.rs` |
-| Desktop daemon contract and state mapping | `apps/macos/Tests/DaemonContractTests.swift` |
+| Desktop daemon contract and state mapping | `apps/macos/Tests/Services/DaemonContractTests.swift` |
 
 A test tells you what behavior the implementation promises. It does not establish a production latency target; use the [performance documentation](/performance/) for measurement and scope.
 
