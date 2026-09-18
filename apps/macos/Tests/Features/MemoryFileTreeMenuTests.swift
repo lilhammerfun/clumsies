@@ -108,7 +108,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
             resourceItem("pending", scope: .org, inherited: true),
         ]
         let pending = EditableMemoryDocument(title: "Pending", path: "pending.md", body: "Latest editor text")
-        let documents = try await WorkspaceStore.memoryExportDocuments(
+        let documents = try await MemoryModel.memoryExportDocuments(
             items, pendingDocuments: ["pending": pending]
         ) { resource in
             XCTAssertEqual(resource.id, "unloaded")
@@ -127,7 +127,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         let orphan = MemoryListItem(id: "missing", resource: nil, draft: draft, inherited: false)
         for items in [[orphan], [resourceItem("unloaded", scope: .org, inherited: true)]] {
             do {
-                _ = try await WorkspaceStore.memoryExportDocuments(items) { _ in
+                _ = try await MemoryModel.memoryExportDocuments(items) { _ in
                     throw CocoaError(.fileReadNoPermission)
                 }
                 XCTFail("Export must fail when a complete body cannot be read")

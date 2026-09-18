@@ -53,7 +53,7 @@ final class ProjectManagementTests: XCTestCase {
         XCTAssertFalse(filter.contains("All Organization Projects"))
         XCTAssertFalse(workspace.contains("OrganizationProjectsView"))
         XCTAssertEqual(
-            workspace.components(separatedBy: "onCreate: store.canCreateProject").count - 1,
+            workspace.components(separatedBy: "onCreate: workspaceContext.canCreateProject").count - 1,
             2
         )
         XCTAssertEqual(
@@ -63,18 +63,18 @@ final class ProjectManagementTests: XCTestCase {
     }
 
     func testProjectCreationAcceptsMemberAndExistingAdministratorCapabilities() {
-        XCTAssertTrue(WorkspaceStore.projectCreationAllowed(capabilities: ["project:create"]))
-        XCTAssertTrue(WorkspaceStore.projectCreationAllowed(capabilities: ["admin:write"]))
-        XCTAssertTrue(WorkspaceStore.projectCreationAllowed(capabilities: ["project:create", "admin:write"]))
-        XCTAssertFalse(WorkspaceStore.projectCreationAllowed(capabilities: []))
-        XCTAssertFalse(WorkspaceStore.projectCreationAllowed(capabilities: ["memory:read"]))
+        XCTAssertTrue(WorkspaceContext.projectCreationAllowed(capabilities: ["project:create"]))
+        XCTAssertTrue(WorkspaceContext.projectCreationAllowed(capabilities: ["admin:write"]))
+        XCTAssertTrue(WorkspaceContext.projectCreationAllowed(capabilities: ["project:create", "admin:write"]))
+        XCTAssertFalse(WorkspaceContext.projectCreationAllowed(capabilities: []))
+        XCTAssertFalse(WorkspaceContext.projectCreationAllowed(capabilities: ["memory:read"]))
     }
 
     func testProjectManagementUsesProjectRoleWithoutGrantingOrganizationAuthority() {
-        XCTAssertTrue(WorkspaceStore.projectManagementAllowed(capabilities: [], role: .admin))
-        XCTAssertFalse(WorkspaceStore.projectManagementAllowed(capabilities: ["project:create"], role: .member))
-        XCTAssertFalse(WorkspaceStore.projectManagementAllowed(capabilities: ["project:create"], role: nil))
-        XCTAssertTrue(WorkspaceStore.projectManagementAllowed(capabilities: ["admin:write"], role: nil))
+        XCTAssertTrue(WorkspaceContext.projectManagementAllowed(capabilities: [], role: .admin))
+        XCTAssertFalse(WorkspaceContext.projectManagementAllowed(capabilities: ["project:create"], role: .member))
+        XCTAssertFalse(WorkspaceContext.projectManagementAllowed(capabilities: ["project:create"], role: nil))
+        XCTAssertTrue(WorkspaceContext.projectManagementAllowed(capabilities: ["admin:write"], role: nil))
         XCTAssertFalse(AdministrationModel.administrationMutationAllowed(
             capabilities: ["project:create"], hasSnapshot: true, isStale: false
         ))

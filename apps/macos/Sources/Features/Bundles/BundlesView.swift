@@ -1,16 +1,19 @@
 import SwiftUI
 
 struct BundleNavigator: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var bundleModel: BundlesModel
+    @EnvironmentObject private var bundleStore: BundleStore
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
 
     var body: some View {
         Group {
-            if store.bundles.isEmpty {
+            if bundleStore.bundles.isEmpty {
                 BundleCollectionStatusView(store: store)
             } else if !query.isEmpty, bundles.isEmpty {
                 ContentUnavailableView.search(text: query)
             } else {
-                List(selection: $store.selectedBundleId) {
+                List(selection: $bundleModel.selectedBundleId) {
                     ForEach(bundles) { bundle in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(bundle.name)
@@ -22,7 +25,7 @@ struct BundleNavigator: View {
                         .tag(bundle.id)
                         .contextMenu {
                             Button("Delete", role: .destructive) {
-                                Task { await store.deleteBundle(bundle) }
+                                Task { await bundleModel.deleteBundle(bundle) }
                             }
                         }
                     }
@@ -37,21 +40,23 @@ struct BundleNavigator: View {
     }
 
     private var query: String {
-        store.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        workspaceNavigation.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var bundles: [PersonalBundle] {
-        WorkspaceStore.filterBundles(store.bundles, query: query)
+        BundleStore.filterBundles(bundleStore.bundles, query: query)
     }
 }
 
 struct BundleDetail: View {
-    @ObservedObject var store: WorkspaceStore
+    @EnvironmentObject private var bundleStore: BundleStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var bundleModel: BundlesModel
     @Binding var showsResourcePicker: Bool
     @Binding var confirmsDeletion: Bool
 
     var body: some View {
-        if let bundle = store.selectedBundle {
+        if let bundle = bundleModel.selectedBundle {
             BundleEditor(
                 store: store,
                 bundle: bundle,
@@ -66,10 +71,11 @@ struct BundleDetail: View {
 }
 
 private struct BundleCollectionStatusView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var bundleStore: BundleStore
 
     var body: some View {
-        switch store.bundleLoadState {
+        switch bundleStore.bundleLoadState {
         case .loading:
             ContentLoadingView(title: "Loading Bundles…")
         case .failed(let message):
@@ -91,11 +97,12 @@ private struct BundleCollectionStatusView: View {
 }
 
 private struct BundleCollectionStatusBanner: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var bundleStore: BundleStore
 
     @ViewBuilder
     var body: some View {
-        switch store.bundleLoadState {
+        switch bundleStore.bundleLoadState {
         case .loading:
             HStack(spacing: 8) {
                 ProgressView()
@@ -122,7 +129,12 @@ private struct BundleCollectionStatusBanner: View {
 }
 
 private struct BundleEditor: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var bundleModel: BundlesModel
+    @EnvironmentObject private var bundleStore: BundleStore
+    @EnvironmentObject private var memoryCatalog: MemoryCatalog
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
     let bundle: PersonalBundle
 
     @State private var name: String
@@ -133,7 +145,7 @@ private struct BundleEditor: View {
     @State private var isDeleting = false
 
     init(
-        store: WorkspaceStore,
+        store: WorkspaceCoordinator,
         bundle: PersonalBundle,
         showsResourcePicker: Binding<Bool>,
         confirmsDeletion: Binding<Bool>
@@ -199,7 +211,7 @@ private struct BundleEditor: View {
             }
         }
         .formStyle(.grouped)
-        .disabled(store.phase != .ready)
+        .disabled(workspaceContext.phase != .ready)
         .sheet(isPresented: $showsResourcePicker) {
             BundleResourcePicker(resources: selectableResources, selection: $resourceIds)
         }
@@ -220,7 +232,7 @@ private struct BundleEditor: View {
     }
 
     private var selectableResources: [MemoryResource] {
-        store.resources.filter { $0.scope == .org }
+        memoryCatalog.resources.filter { $0.scope == .org }
     }
 
     private var selectedResources: [MemoryResource] {
@@ -256,7 +268,7 @@ private struct BundleEditor: View {
 
     private func scheduleSave() {
         guard !isDeleting else { return }
-        store.stageBundleSave(
+        bundleStore.stageBundleSave(
             bundle,
             name: name,
             description: description,
@@ -268,17 +280,17 @@ private struct BundleEditor: View {
         guard !isDeleting, hasChanges else { return }
         Task {
             do {
-                try await store.flushBundleSave(bundle.id)
+                try await bundleStore.flushBundleSave(bundle.id)
             } catch {
-                store.errorMessage = error.localizedDescription
+                workspaceFeedback.errorMessage = error.localizedDescription
             }
         }
     }
 
     private func deleteBundle() {
         isDeleting = true
-        store.cancelBundleSave(bundle.id)
-        Task { await store.deleteBundle(bundle) }
+        bundleStore.cancelBundleSave(bundle.id)
+        Task { await bundleModel.deleteBundle(bundle) }
     }
 }
 

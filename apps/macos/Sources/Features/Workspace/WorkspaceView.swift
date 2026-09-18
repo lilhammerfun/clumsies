@@ -139,7 +139,19 @@ private enum DocumentSyncReadiness {
 }
 
 struct WorkspaceView: View {
-    @ObservedObject var store: WorkspaceStore
+    @EnvironmentObject private var bundleStore: BundleStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var bundleModel: BundlesModel
+    @EnvironmentObject private var memoryCatalog: MemoryCatalog
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var draftStore: DraftStore
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
+    @EnvironmentObject private var memoryModel: MemoryModel
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
+    @EnvironmentObject private var reconciler: DraftReconciliationService
+    @EnvironmentObject private var daemonSync: DaemonSyncService
+    @EnvironmentObject private var reviewModel: ReviewsModel
+    @EnvironmentObject private var documentSessions: DocumentSessions
     let onSignOut: () -> Void
     let onOpenSettings: () -> Void
     let loadsReviewDetail: Bool
@@ -160,7 +172,7 @@ struct WorkspaceView: View {
     @State private var showsProjectReviewRequest = false
 
     init(
-        store: WorkspaceStore,
+        store: WorkspaceCoordinator,
         onSignOut: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         loadsReviewDetail: Bool = true
@@ -169,38 +181,38 @@ struct WorkspaceView: View {
         self.onSignOut = onSignOut
         self.onOpenSettings = onOpenSettings
         self.loadsReviewDetail = loadsReviewDetail
-        _activityModel = StateObject(wrappedValue: ActivityModel(daemon: store.daemon))
+        _activityModel = StateObject(wrappedValue: ActivityModel(daemon: store.context.daemon))
     }
 
     private var showsDocumentTabs: Bool {
-        store.selectedSection == .memory
-            && !store.visibleTabs.isEmpty
-            && !store.showsProjectSettings
+        workspaceNavigation.selectedSection == .memory
+            && !workspaceNavigation.visibleTabs.isEmpty
+            && !workspaceNavigation.showsProjectSettings
     }
 
     private var showsMemoryContentToolbar: Bool {
-        store.selectedSection == .memory && !store.showsProjectSettings
+        workspaceNavigation.selectedSection == .memory && !workspaceNavigation.showsProjectSettings
     }
 
     private var documentReconciliationState: DocumentReconciliationToolbarState? {
-        guard let state = store.documentReconciliationToolbarState,
-              let currentItem = store.currentItem,
-              state.sessionKey == store.documentSessionKey(for: currentItem) else { return nil }
+        guard let state = workspaceNavigation.documentReconciliationToolbarState,
+              let currentItem = workspaceNavigation.currentItem,
+              state.sessionKey == documentSessions.documentSessionKey(for: currentItem) else { return nil }
         return state
     }
 
     private func deferSidebarExpansionUpdate(_ expanded: Bool) {
-        guard store.sidebarExpanded != expanded else { return }
+        guard workspaceNavigation.sidebarExpanded != expanded else { return }
         DispatchQueue.main.async {
-            if store.sidebarExpanded != expanded {
-                store.sidebarExpanded = expanded
+            if workspaceNavigation.sidebarExpanded != expanded {
+                workspaceNavigation.sidebarExpanded = expanded
             }
         }
     }
 
     var body: some View {
         Group {
-            switch store.selectedSection {
+            switch workspaceNavigation.selectedSection {
             case .reviews:
                 reviewsWorkspace
             case .sessions:
@@ -210,20 +222,20 @@ struct WorkspaceView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let message = store.errorMessage {
+            if let message = workspaceFeedback.errorMessage {
                 WorkspaceOperationErrorBanner(message: message) {
-                    store.dismissErrorMessage()
+                    workspaceFeedback.dismissErrorMessage()
                 }
             }
         }
-        .sheet(isPresented: $store.showsProjectCreation) {
+        .sheet(isPresented: $workspaceNavigation.showsProjectCreation) {
             ProjectCreationSheet(store: store)
         }
-        .onChange(of: store.selectedSection) { _, _ in
+        .onChange(of: workspaceNavigation.selectedSection) { _, _ in
             DispatchQueue.main.async {
-                store.searchQuery = ""
-                if store.selectedSection != .memory {
-                    store.showsProjectSettings = false
+                workspaceNavigation.searchQuery = ""
+                if workspaceNavigation.selectedSection != .memory {
+                    workspaceNavigation.showsProjectSettings = false
                 }
             }
         }
@@ -256,18 +268,18 @@ struct WorkspaceView: View {
                         ToolbarItemGroup {
                             Button {
                                 if let state = documentReconciliationState {
-                                    store.pendingDocumentCommand = .closeReconciliation(
+                                    workspaceNavigation.pendingDocumentCommand = .closeReconciliation(
                                         sessionKey: state.sessionKey
                                     )
                                 } else {
-                                    store.goBack()
+                                    workspaceNavigation.goBack()
                                 }
                             } label: {
                                 Image(systemName: "chevron.left")
                             }
                             .disabled(
                                 documentReconciliationState?.isUpdating == true
-                                    || (documentReconciliationState == nil && !store.canGoBack)
+                                    || (documentReconciliationState == nil && !workspaceNavigation.canGoBack)
                             )
                             .help(documentReconciliationState == nil ? "Go Back" : "Back to Document")
                             .accessibilityLabel(
@@ -275,11 +287,11 @@ struct WorkspaceView: View {
                             )
 
                             Button {
-                                store.goForward()
+                                workspaceNavigation.goForward()
                             } label: {
                                 Image(systemName: "chevron.right")
                             }
-                            .disabled(documentReconciliationState != nil || !store.canGoForward)
+                            .disabled(documentReconciliationState != nil || !workspaceNavigation.canGoForward)
                             .help("Go Forward")
                             .accessibilityLabel("Go Forward")
                         }
@@ -290,7 +302,7 @@ struct WorkspaceView: View {
                     }
 
                     ToolbarItemGroup(placement: .trailingPinned) {
-                        if store.selectedSection == .bundles, store.selectedBundle != nil {
+                        if workspaceNavigation.selectedSection == .bundles, bundleModel.selectedBundle != nil {
                             Button {
                                 showsBundleResourcePicker = true
                             } label: {
@@ -334,7 +346,7 @@ struct WorkspaceView: View {
                             }
                         }
 
-                        if showsDocumentTabs, let item = store.currentItem {
+                        if showsDocumentTabs, let item = workspaceNavigation.currentItem {
                             if let state = documentReconciliationState {
                                 if state.isLoading || state.isUpdating {
                                     ProgressView()
@@ -346,7 +358,7 @@ struct WorkspaceView: View {
                                         )
                                 } else {
                                     Button {
-                                        store.pendingDocumentCommand = .applyReconciliation(
+                                        workspaceNavigation.pendingDocumentCommand = .applyReconciliation(
                                             sessionKey: state.sessionKey
                                         )
                                     } label: {
@@ -367,9 +379,9 @@ struct WorkspaceView: View {
                                         .help("Saving draft changes before sync")
                                         .accessibilityLabel("Saving draft changes before sync")
                                 case .failed:
-                                    if store.isRetryingSync(
+                                    if daemonSync.isRetryingSync(
                                         channel: "drafts",
-                                        projectId: item.draft?.projectId ?? store.activeProjectId
+                                        projectId: item.draft?.projectId ?? workspaceContext.activeProjectId
                                     ) {
                                         ProgressView()
                                             .controlSize(.small)
@@ -379,10 +391,10 @@ struct WorkspaceView: View {
                                     } else {
                                         Button {
                                             Task {
-                                                _ = await store.retrySync(
+                                                _ = await daemonSync.retrySync(
                                                     channel: "drafts",
                                                     projectId: item.draft?.projectId
-                                                        ?? store.activeProjectId
+                                                        ?? workspaceContext.activeProjectId
                                                 )
                                             }
                                         } label: {
@@ -400,7 +412,7 @@ struct WorkspaceView: View {
                                     .accessibilityLabel("Draft is not available on the server yet")
                                 case .ready:
                                     Button {
-                                        store.syncDocument(item)
+                                        memoryModel.syncDocument(item)
                                     } label: {
                                         Image(systemName: item.draft?.reconciliation == .conflicts
                                             ? "exclamationmark.triangle"
@@ -420,7 +432,7 @@ struct WorkspaceView: View {
                             .disabled(
                                 documentReconciliationState != nil
                                     || availableDocumentModes.count < 2
-                                    || store.isSynchronizingDocument(item.id)
+                                    || documentSessions.isSynchronizingDocument(item.id)
                             )
                             .help("Document View")
                             .accessibilityLabel("Document View")
@@ -429,71 +441,71 @@ struct WorkspaceView: View {
 
                         if showsMemoryContentToolbar {
                             Button {
-                                store.exportMemory()
+                                memoryModel.exportMemory()
                             } label: {
-                                if store.isExportingMemory {
+                                if memoryModel.isExportingMemory {
                                     ProgressView().controlSize(.small)
                                 } else {
                                     Image(systemName: "square.and.arrow.down")
                                 }
                             }
-                            .disabled(!store.canExportMemory(store.visibleMemoryItems))
-                            .help(store.activeProjectId == nil
+                            .disabled(!memoryModel.canExportMemory(memoryModel.visibleMemoryItems))
+                            .help(workspaceContext.activeProjectId == nil
                                 ? "Export Organization Memory as ZIP…"
                                 : "Export Project Memory as ZIP…")
-                            .accessibilityLabel(store.activeProjectId == nil
+                            .accessibilityLabel(workspaceContext.activeProjectId == nil
                                 ? "Export Organization Memory as ZIP"
                                 : "Export Project Memory as ZIP")
 
                             Menu {
-                                if let item = store.currentItem {
+                                if let item = workspaceNavigation.currentItem {
                                     Button("Export File as ZIP…") {
-                                        store.exportMemory([item], name: item.document.title)
+                                        memoryModel.exportMemory([item], name: item.document.title)
                                     }
-                                    .disabled(!store.canExportMemory([item]))
+                                    .disabled(!memoryModel.canExportMemory([item]))
                                     Divider()
                                 }
-                                if let item = store.currentItem, hasDocumentActions(item) {
+                                if let item = workspaceNavigation.currentItem, hasDocumentActions(item) {
                                     if let draft = item.draft, draft.status == .submitted {
                                         Button("View Review") {
-                                            Task { await store.openReview(for: draft) }
+                                            Task { await reviewModel.openReview(for: draft) }
                                         }
                                         Divider()
                                     }
                                     if canRequestDocumentReview(item),
                                        let draft = item.draft,
-                                       let sessionKey = store.documentSessionKey(for: item) {
+                                       let sessionKey = documentSessions.documentSessionKey(for: item) {
                                         Button("Request Review…") {
-                                            store.pendingDocumentCommand = .requestReview(
+                                            workspaceNavigation.pendingDocumentCommand = .requestReview(
                                                 sessionKey: sessionKey,
                                                 draft: draft
                                             )
                                         }
-                                        .disabled(store.isSynchronizingDocument(item.id))
+                                        .disabled(documentSessions.isSynchronizingDocument(item.id))
                                         Divider()
                                     }
                                     if canDiscardDocumentDraft(item),
                                        let draft = item.draft,
-                                       let sessionKey = store.documentSessionKey(for: item) {
+                                       let sessionKey = documentSessions.documentSessionKey(for: item) {
                                         Button("Discard Draft") {
-                                            store.pendingDocumentCommand = .discardDraft(
+                                            workspaceNavigation.pendingDocumentCommand = .discardDraft(
                                                 sessionKey: sessionKey,
                                                 draft: draft
                                             )
                                         }
-                                        .disabled(store.isSynchronizingDocument(item.id))
+                                        .disabled(documentSessions.isSynchronizingDocument(item.id))
                                     }
                                     if canProposeOrganizationDeletion(item),
-                                       let sessionKey = store.documentSessionKey(for: item) {
+                                       let sessionKey = documentSessions.documentSessionKey(for: item) {
                                         Button(
                                             "Delete…",
                                             role: .destructive
                                         ) {
-                                            store.pendingDocumentCommand = .moveToTrash(
+                                            workspaceNavigation.pendingDocumentCommand = .moveToTrash(
                                                 sessionKey: sessionKey
                                             )
                                         }
-                                        .disabled(store.isSynchronizingDocument(item.id))
+                                        .disabled(documentSessions.isSynchronizingDocument(item.id))
                                     }
                                     Divider()
                                 }
@@ -518,7 +530,7 @@ struct WorkspaceView: View {
 
                     ToolbarItem(id: "workspace.search", placement: .trailingPinned) {
                         ClassicSearchField(
-                            text: $store.searchQuery,
+                            text: $workspaceNavigation.searchQuery,
                             prompt: workspaceSearchPrompt,
                             accessibilityIdentifier: "workspace-toolbar-search",
                             accessibilityHelp: "Search across the current workspace",
@@ -528,16 +540,16 @@ struct WorkspaceView: View {
                 }
             }
         .onAppear {
-            let target: NavigationSplitViewVisibility = store.sidebarExpanded ? .all : .doubleColumn
+            let target: NavigationSplitViewVisibility = workspaceNavigation.sidebarExpanded ? .all : .doubleColumn
             if splitVisibility != target {
                 splitVisibility = target
             }
         }
-        .onChange(of: store.workspaceSearchFocusToken) { _, _ in
+        .onChange(of: workspaceNavigation.workspaceSearchFocusToken) { _, _ in
             workspaceSearchFocusRequest += 1
         }
-        .onChange(of: store.searchQuery) { _, query in
-            guard store.selectedSection == .memory,
+        .onChange(of: workspaceNavigation.searchQuery) { _, query in
+            guard workspaceNavigation.selectedSection == .memory,
                   !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             Task { await store.prepareWorkspaceIndex(includeContent: true) }
         }
@@ -548,7 +560,7 @@ struct WorkspaceView: View {
                 deferSidebarExpansionUpdate(false)
             }
         }
-        .onChange(of: store.sidebarExpanded) { _, expanded in
+        .onChange(of: workspaceNavigation.sidebarExpanded) { _, expanded in
             let target: NavigationSplitViewVisibility = expanded ? .all : .doubleColumn
             if splitVisibility != target {
                 splitVisibility = target
@@ -561,12 +573,12 @@ struct WorkspaceView: View {
         }
         .sheet(isPresented: $showsProjectReviewRequest) {
             ReviewRequestSheet(
-                initialTitle: "Update \(store.activeProject?.name ?? "project") memory",
+                initialTitle: "Update \(workspaceContext.activeProject?.name ?? "project") memory",
                 loadCandidates: {
-                    try await store.reconciliationCandidates(for: pendingProjectReviewDrafts)
+                    try await reconciler.reconciliationCandidates(for: pendingProjectReviewDrafts)
                 }
             ) { title, description, reconciliations in
-                try await store.requestReview(
+                try await reviewModel.requestReview(
                     for: pendingProjectReviewDrafts,
                     title: title,
                     description: description,
@@ -622,18 +634,18 @@ struct WorkspaceView: View {
             }
         }
         .onAppear {
-            let target: NavigationSplitViewVisibility = store.sidebarExpanded ? .all : .detailOnly
+            let target: NavigationSplitViewVisibility = workspaceNavigation.sidebarExpanded ? .all : .detailOnly
             if reviewSplitVisibility != target {
                 reviewSplitVisibility = target
             }
 
             if let routedReviewId = reviewNavigationPath.last?.reviewId,
-               !store.reviews.contains(where: { $0.id == routedReviewId }) {
+               !reviewModel.reviews.contains(where: { $0.id == routedReviewId }) {
                 reviewNavigationPath.removeAll()
             }
-            if let reviewId = store.selectedReviewId,
+            if let reviewId = reviewModel.selectedReviewId,
                reviewNavigationPath.last?.reviewId != reviewId,
-               store.reviews.contains(where: { $0.id == reviewId }) {
+               reviewModel.reviews.contains(where: { $0.id == reviewId }) {
                 reviewNavigationPath = [ReviewRoute(reviewId: reviewId)]
             }
         }
@@ -641,7 +653,7 @@ struct WorkspaceView: View {
             let expanded = visibility != .detailOnly
             deferSidebarExpansionUpdate(expanded)
         }
-        .onChange(of: store.sidebarExpanded) { _, expanded in
+        .onChange(of: workspaceNavigation.sidebarExpanded) { _, expanded in
             let target: NavigationSplitViewVisibility = expanded ? .all : .detailOnly
             if reviewSplitVisibility != target {
                 reviewSplitVisibility = target
@@ -650,25 +662,25 @@ struct WorkspaceView: View {
         .onChange(of: reviewNavigationPath) { _, path in
             let reviewId = path.last?.reviewId
             DispatchQueue.main.async {
-                if store.selectedReviewId != reviewId {
-                    store.selectedReviewId = reviewId
+                if reviewModel.selectedReviewId != reviewId {
+                    reviewModel.selectedReviewId = reviewId
                 }
                 if reviewId == nil {
-                    store.reviewDecisionReadiness = nil
+                    reviewModel.reviewDecisionReadiness = nil
                 }
             }
             if reviewId == nil {
                 pendingReviewToolbarAction = nil
             }
         }
-        .onChange(of: store.reviewSearchFocusToken) { _, _ in
+        .onChange(of: workspaceNavigation.reviewSearchFocusToken) { _, _ in
             reviewNavigationPath.removeAll()
             DispatchQueue.main.async {
                 reviewSearchFocusRequest += 1
             }
         }
-        .onChange(of: store.selectedReviewId) { _, reviewId in
-            guard store.selectedSection == .reviews else { return }
+        .onChange(of: reviewModel.selectedReviewId) { _, reviewId in
+            guard workspaceNavigation.selectedSection == .reviews else { return }
             guard let reviewId else {
                 if !reviewNavigationPath.isEmpty {
                     reviewNavigationPath.removeAll()
@@ -676,7 +688,7 @@ struct WorkspaceView: View {
                 return
             }
             guard reviewNavigationPath.last?.reviewId != reviewId else { return }
-            guard store.reviews.contains(where: { $0.id == reviewId }) else { return }
+            guard reviewModel.reviews.contains(where: { $0.id == reviewId }) else { return }
             reviewNavigationPath = [ReviewRoute(reviewId: reviewId)]
         }
         .onChange(of: syncToolbarPresentation) { _, presentation in
@@ -687,7 +699,7 @@ struct WorkspaceView: View {
     }
 
     private var workspaceSearchPrompt: String {
-        switch store.selectedSection {
+        switch workspaceNavigation.selectedSection {
         case .memory: "Search Memory"
         case .bundles: "Search Bundles"
         case .reviews: "Search Reviews"
@@ -696,7 +708,7 @@ struct WorkspaceView: View {
     }
 
     private var filteredReviews: [ReviewRecord] {
-        let byFilters = store.reviews.filter(reviewFilters.matches)
+        let byFilters = reviewModel.reviews.filter(reviewFilters.matches)
         let needle = reviewSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
         guard !needle.isEmpty else { return byFilters }
         return byFilters.filter {
@@ -710,15 +722,15 @@ struct WorkspaceView: View {
         return .resolve(
             surface: reviewNavigationPath.isEmpty ? .list : .detail,
             review: review,
-            canDecideReviews: store.canDecideReviews,
-            canMergeReviews: store.canMergeReviews,
-            isAuthor: review.map(store.isReviewAuthor) ?? false
+            canDecideReviews: workspaceContext.canDecideReviews,
+            canMergeReviews: workspaceContext.canMergeReviews,
+            isAuthor: review.map(workspaceContext.isReviewAuthor) ?? false
         )
     }
 
     private var selectedReviewForToolbar: ReviewRecord? {
-        guard let reviewId = store.selectedReviewId else { return nil }
-        return store.reviews.first { $0.id == reviewId }
+        guard let reviewId = reviewModel.selectedReviewId else { return nil }
+        return reviewModel.reviews.first { $0.id == reviewId }
     }
 
     @ToolbarContentBuilder
@@ -740,7 +752,7 @@ struct WorkspaceView: View {
                     }
                     .disabled(
                         pendingReviewToolbarAction != nil
-                            || !store.canPerformReviewMenuAction(.reject)
+                            || !reviewModel.canPerformReviewMenuAction(.reject)
                     )
                     .help(review.freshness == .behind
                         ? "Review the latest shared changes before deciding"
@@ -763,7 +775,7 @@ struct WorkspaceView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(
                         pendingReviewToolbarAction != nil
-                            || !store.canPerformReviewMenuAction(.approve)
+                            || !reviewModel.canPerformReviewMenuAction(.approve)
                     )
                     .help(review.freshness == .behind
                         ? "Review the latest shared changes before deciding"
@@ -786,7 +798,7 @@ struct WorkspaceView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(
                         pendingReviewToolbarAction != nil
-                            || !store.canPerformReviewMenuAction(.merge)
+                            || !reviewModel.canPerformReviewMenuAction(.merge)
                     )
                     .help("Merge the approved changes")
                     .accessibilityLabel("Merge Review")
@@ -807,7 +819,7 @@ struct WorkspaceView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(
                         pendingReviewToolbarAction != nil
-                            || !store.canPerformReviewMenuAction(.resubmit)
+                            || !reviewModel.canPerformReviewMenuAction(.resubmit)
                     )
                     .help("Resubmit this Review")
                     .accessibilityLabel("Resubmit Review")
@@ -879,7 +891,7 @@ struct WorkspaceView: View {
         pendingReviewToolbarAction = action
         Task {
             defer { pendingReviewToolbarAction = nil }
-            await store.performReviewMenuAction(action)
+            await reviewModel.performReviewMenuAction(action)
         }
     }
 
@@ -921,7 +933,7 @@ struct WorkspaceView: View {
                 if let selection = activityModel.retrievalSelection {
                     ActivityRetrievalDetail(
                         selection: selection,
-                        daemon: store.daemon,
+                        daemon: workspaceContext.daemon,
                         onBack: activityModel.closeRetrieval
                     )
                     .frame(minWidth: RetrievalDiagnosticsLayout.mainPaneMinimumWidth)
@@ -934,15 +946,15 @@ struct WorkspaceView: View {
             }
         }
         .onAppear {
-            let target: NavigationSplitViewVisibility = store.sidebarExpanded ? .all : .detailOnly
+            let target: NavigationSplitViewVisibility = workspaceNavigation.sidebarExpanded ? .all : .detailOnly
             if activitySplitVisibility != target {
                 activitySplitVisibility = target
             }
         }
         .task(id: activityProjectContext) {
             activityModel.prepare(
-                projectIds: store.projects.map(\.id),
-                preferredProjectId: store.activeProjectId,
+                projectIds: workspaceContext.projects.map(\.id),
+                preferredProjectId: workspaceContext.activeProjectId,
                 scope: activityPreferenceScope
             )
             if !activityModel.hasLoaded { await activityModel.load() }
@@ -950,7 +962,7 @@ struct WorkspaceView: View {
         .onChange(of: activitySplitVisibility) { _, visibility in
             deferSidebarExpansionUpdate(visibility != .detailOnly)
         }
-        .onChange(of: store.sidebarExpanded) { _, expanded in
+        .onChange(of: workspaceNavigation.sidebarExpanded) { _, expanded in
             let target: NavigationSplitViewVisibility = expanded ? .all : .detailOnly
             if activitySplitVisibility != target {
                 activitySplitVisibility = target
@@ -959,11 +971,11 @@ struct WorkspaceView: View {
     }
 
     private var activityPreferenceScope: String {
-        "\(ClumsiesIdentifiers.serverURL.absoluteString)|\(store.organization?.orgId ?? "")|\(store.account?.userId ?? "")"
+        "\(ClumsiesIdentifiers.serverURL.absoluteString)|\(workspaceContext.organization?.orgId ?? "")|\(workspaceContext.account?.userId ?? "")"
     }
 
     private var activityProjectContext: String {
-        activityPreferenceScope + "|" + store.projects.map(\.id).joined(separator: "|")
+        activityPreferenceScope + "|" + workspaceContext.projects.map(\.id).joined(separator: "|")
     }
 
     @ToolbarContentBuilder
@@ -994,7 +1006,7 @@ struct WorkspaceView: View {
 
     @ToolbarContentBuilder
     private var navigationToolbarContent: some ToolbarContent {
-        switch store.selectedSection {
+        switch workspaceNavigation.selectedSection {
         case .memory:
             ToolbarItem(placement: .navigation) {
                 MemoryProjectFilter(store: store)
@@ -1002,18 +1014,18 @@ struct WorkspaceView: View {
 
             ToolbarItem {
                 Button {
-                    store.showsProjectSettings.toggle()
+                    workspaceNavigation.showsProjectSettings.toggle()
                 } label: {
                     Image(systemName: "gearshape")
                 }
-                .disabled(store.activeProjectId == nil)
+                .disabled(workspaceContext.activeProjectId == nil)
                 .help("Project Settings")
                 .accessibilityLabel("Project Settings")
             }
         case .bundles:
             ToolbarItem {
                 Button {
-                    Task { await store.createBundle() }
+                    Task { await bundleModel.createBundle() }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -1033,7 +1045,7 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private var navigator: some View {
-        switch store.selectedSection {
+        switch workspaceNavigation.selectedSection {
         case .memory:
             MemoryNavigator(store: store)
         case .bundles:
@@ -1047,11 +1059,11 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch store.selectedSection {
+        switch workspaceNavigation.selectedSection {
         case .memory:
-            if store.projects.isEmpty, !store.resources.contains(where: { $0.scope == .org }) {
+            if workspaceContext.projects.isEmpty, !memoryCatalog.resources.contains(where: { $0.scope == .org }) {
                 ProjectUnavailableView(store: store)
-            } else if store.showsProjectSettings, let projectId = store.activeProjectId {
+            } else if workspaceNavigation.showsProjectSettings, let projectId = workspaceContext.activeProjectId {
                 ProjectSettingsView(store: store, projectId: projectId)
             } else {
                 MemoryMainPane(store: store)
@@ -1070,34 +1082,34 @@ struct WorkspaceView: View {
     }
 
     private var availableDocumentModes: [WorkbenchTabMode] {
-        if store.currentItem?.draft?.documentBaselineAvailable == false {
+        if workspaceNavigation.currentItem?.draft?.documentBaselineAvailable == false {
             return [.diff]
         }
-        return store.currentItem?.supportsMarkdownPreview == true
+        return workspaceNavigation.currentItem?.supportsMarkdownPreview == true
             ? [.preview, .source, .diff]
             : [.source, .diff]
     }
 
     private func canRequestDocumentReview(_ item: MemoryListItem) -> Bool {
-        guard store.activeProjectId != nil,
+        guard workspaceContext.activeProjectId != nil,
               let draft = item.draft else {
             return false
         }
         return draft.status == .open
             && draft.scope == .org
-            && WorkspaceStore.canRequestReview(draft)
+            && ReviewsModel.canRequestReview(draft)
     }
 
     private func canProposeOrganizationDeletion(_ item: MemoryListItem) -> Bool {
-        store.canEditMemory(item)
+        draftStore.canEditMemory(item)
             && MemoryFileTreeMenu.canProposeOrganizationDeletion(
                 item,
-                inOrgView: store.activeProjectId == nil
+                inOrgView: workspaceContext.activeProjectId == nil
             )
     }
 
     private func canDiscardDocumentDraft(_ item: MemoryListItem) -> Bool {
-        store.activeProjectId != nil && item.draft != nil
+        workspaceContext.activeProjectId != nil && item.draft != nil
     }
 
     private func hasDocumentActions(_ item: MemoryListItem) -> Bool {
@@ -1107,36 +1119,36 @@ struct WorkspaceView: View {
     }
 
     private var activeProjectReviewDrafts: [LocalDraft] {
-        WorkspaceStore.reviewableProjectDrafts(
-            store.drafts,
-            projectId: store.activeProjectId
+        ReviewsModel.reviewableProjectDrafts(
+            draftStore.drafts,
+            projectId: workspaceContext.activeProjectId
         )
     }
 
     private var documentMode: Binding<WorkbenchTabMode> {
         Binding(
             get: {
-                let mode = store.currentTabMode ?? .preview
+                let mode = workspaceNavigation.currentTabMode ?? .preview
                 return availableDocumentModes.contains(mode) ? mode : .source
             },
-            set: { store.switchDocumentMode($0) }
+            set: { workspaceNavigation.switchDocumentMode($0) }
         )
     }
 
     private var documentNeedsSync: Bool {
-        guard let item = store.currentItem else { return false }
+        guard let item = workspaceNavigation.currentItem else { return false }
         return SharedUpdateStatusPresentation.resolve(
             freshness: item.draft?.freshness,
             hasUpstreamResourceChanges: item.draft?.hasUpstreamResourceChanges == true,
             reconciliation: item.draft?.reconciliation,
             isStale: item.draft == nil
-                && item.resource.map { store.staleResourceIds.contains($0.id) } == true
+                && item.resource.map { memoryCatalog.staleResourceIds.contains($0.id) } == true
         ) != nil
     }
 
     private var documentSyncReadiness: DocumentSyncReadiness {
-        guard let item = store.currentItem else { return .ready }
-        if store.isSynchronizingDocument(item.id) { return .pending }
+        guard let item = workspaceNavigation.currentItem else { return .ready }
+        if documentSessions.isSynchronizingDocument(item.id) { return .pending }
         guard let draft = item.draft else {
             return .ready
         }
@@ -1151,30 +1163,32 @@ struct WorkspaceView: View {
     }
 
     private var syncToolbarPresentation: SyncToolbarPresentation? {
-        guard store.activeProjectId != nil else { return nil }
+        guard workspaceContext.activeProjectId != nil else { return nil }
         return SyncToolbarPresentation.resolve(
-            status: store.runtime?.sync,
-            isAvailable: store.syncStatusAvailable,
-            serverDataSource: store.runtime?.serverDataSource,
-            submittedDraftCount: store.draftInventoryLoadState == .loaded
-                ? store.submittedProjectDrafts.count : 0
+            status: daemonSync.runtime?.sync,
+            isAvailable: daemonSync.syncStatusAvailable,
+            serverDataSource: daemonSync.runtime?.serverDataSource,
+            submittedDraftCount: draftStore.draftInventoryLoadState == .loaded
+                ? reviewModel.submittedProjectDrafts.count : 0
         )
     }
 
 }
 
 private struct MemoryProjectFilter: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
 
     var body: some View {
         ProjectFilterMenu(
-            projects: store.projects,
-            selectedProjectId: store.activeProjectId,
+            projects: workspaceContext.projects,
+            selectedProjectId: workspaceContext.activeProjectId,
             unscopedTitle: "Org",
             unscopedSystemImage: "building.2",
-            isLoading: store.isSwitchingMemoryContext,
+            isLoading: workspaceContext.isSwitchingMemoryContext,
             help: "Filter Memory by Project",
-            onCreate: store.canCreateProject ? { store.presentProjectCreation() } : nil
+            onCreate: workspaceContext.canCreateProject ? { workspaceNavigation.presentProjectCreation() } : nil
         ) { projectId in
             if let projectId {
                 Task { await store.selectProject(projectId) }
@@ -1186,18 +1200,20 @@ private struct MemoryProjectFilter: View {
 }
 
 private struct ActivityProjectFilter: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     @ObservedObject var model: ActivityModel
 
     var body: some View {
         ProjectFilterMenu(
-            projects: store.projects,
+            projects: workspaceContext.projects,
             selectedProjectId: model.selectedProjectId,
             unscopedTitle: "All Projects",
             unscopedSystemImage: nil,
             isLoading: false,
             help: "Filter Activity by Project",
-            onCreate: store.canCreateProject ? { store.presentProjectCreation() } : nil
+            onCreate: workspaceContext.canCreateProject ? { workspaceNavigation.presentProjectCreation() } : nil
         ) { projectId in
             Task { await model.selectProject(projectId) }
         }
@@ -1267,8 +1283,13 @@ private struct WorkspaceOperationErrorBanner: View {
 }
 
 private struct SyncIssuePopover: View {
+    @EnvironmentObject private var draftStore: DraftStore
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
     let presentation: SyncToolbarPresentation
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var daemonSync: DaemonSyncService
+    @EnvironmentObject private var reviewModel: ReviewsModel
     @State private var isReloading = false
     @Environment(\.dismiss) private var dismiss
 
@@ -1285,30 +1306,30 @@ private struct SyncIssuePopover: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if case .inReview = presentation {
-                let reviewIds = Set(store.submittedProjectDrafts.compactMap {
-                    store.review(for: $0)?.id
+                let reviewIds = Set(reviewModel.submittedProjectDrafts.compactMap {
+                    reviewModel.review(for: $0)?.id
                 })
-                ForEach(store.reviews.filter { reviewIds.contains($0.id) }) { review in
+                ForEach(reviewModel.reviews.filter { reviewIds.contains($0.id) }) { review in
                     Button(review.title) {
                         dismiss()
-                        store.openReview(review)
+                        reviewModel.openReview(review)
                     }
                     .help("View Review")
                 }
-                ForEach(store.submittedProjectDrafts.filter { store.review(for: $0) == nil }) { draft in
+                ForEach(reviewModel.submittedProjectDrafts.filter { reviewModel.review(for: $0) == nil }) { draft in
                     Button("View Review for \(draft.document.title)") {
                         dismiss()
-                        Task { await store.openReview(for: draft) }
+                        Task { await reviewModel.openReview(for: draft) }
                     }
                 }
             }
 
-            if store.syncRetryErrorMessage != nil {
+            if daemonSync.syncRetryErrorMessage != nil {
                 Label("Sync still couldn't finish. You can try again.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let message = store.syncRetryErrorMessage ?? presentation.errorDetails {
+            if let message = daemonSync.syncRetryErrorMessage ?? presentation.errorDetails {
                 DisclosureGroup("Error details") {
                     Text(message)
                         .font(.caption)
@@ -1324,17 +1345,17 @@ private struct SyncIssuePopover: View {
                 switch presentation {
                 case .failed, .unavailable:
                     Button {
-                        guard let projectId = store.activeProjectId else { return }
-                        Task { _ = await store.retrySync(projectId: projectId) }
+                        guard let projectId = workspaceContext.activeProjectId else { return }
+                        Task { _ = await daemonSync.retrySync(projectId: projectId) }
                     } label: {
-                        if store.isRetryingSync {
+                        if daemonSync.isRetryingSync {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
                             Text("Try Again")
                         }
                     }
-                    .disabled(store.isRetryingSync)
+                    .disabled(daemonSync.isRetryingSync)
                     .keyboardShortcut(.defaultAction)
                 case .stale:
                     Button {
@@ -1364,7 +1385,9 @@ private struct SyncIssuePopover: View {
 }
 
 private struct GlobalSidebar: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     let onSignOut: () -> Void
     let onOpenSettings: () -> Void
 
@@ -1381,7 +1404,7 @@ private struct GlobalSidebar: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 16, height: 16)
-                    Text(store.organization?.name ?? "Clumsies Lab")
+                    Text(workspaceContext.organization?.name ?? "Clumsies Lab")
                         .fontWeight(.semibold)
                         .lineLimit(1)
                 }
@@ -1400,7 +1423,7 @@ private struct GlobalSidebar: View {
 
     private var accountMenu: some View {
         NativeAccountMenu(
-            account: store.account,
+            account: workspaceContext.account,
             displayName: accountDisplayName,
             onOpenSettings: onOpenSettings,
             onSignOut: onSignOut
@@ -1409,22 +1432,22 @@ private struct GlobalSidebar: View {
     }
 
     private var accountDisplayName: String {
-        if let displayName = store.account?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let displayName = workspaceContext.account?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !displayName.isEmpty {
             return displayName
         }
-        return store.account?.email ?? "Account"
+        return workspaceContext.account?.email ?? "Account"
     }
 
     private var selection: Binding<GlobalSidebarDestination?> {
         Binding(
-            get: { .section(store.selectedSection) },
+            get: { .section(workspaceNavigation.selectedSection) },
             set: { destination in
                 guard let destination else { return }
                 if case .section(let section) = destination {
                     DispatchQueue.main.async {
-                        store.selectedSection = section
-                        store.selectedItemId = nil
+                        workspaceNavigation.selectedSection = section
+                        workspaceNavigation.selectedItemId = nil
                     }
                 }
             }

@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct AdministrationView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let section: AdministrationSection
     var onUnsavedChangesChange: (Bool) -> Void = { _ in }
@@ -60,7 +61,7 @@ struct AdministrationView: View {
             ContentUnavailableView(
                 "\(section.title) Unavailable",
                 systemImage: "building.2.crop.circle",
-                description: Text(store.canAdministerOrganization
+                description: Text(workspaceContext.canAdministerOrganization
                     ? "Refresh to try again." : "Organization administrator access is required.")
             )
         }
@@ -108,7 +109,8 @@ private struct AdministrationErrorBanner: View {
 }
 
 struct OrganizationNameSection: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     var onUnsavedChangesChange: (Bool) -> Void = { _ in }
     @State private var showsEdit = false
@@ -146,7 +148,7 @@ struct OrganizationNameSection: View {
                     Button("Refresh") {
                         Task { await administration.load(section: .organization, force: true) }
                     }
-                    .disabled(state.isLoading || store.isMutatingAdministration || !store.canAdministerOrganization)
+                    .disabled(state.isLoading || workspaceContext.isMutatingAdministration || !workspaceContext.canAdministerOrganization)
                 }
             }
         }
@@ -157,7 +159,8 @@ struct OrganizationNameSection: View {
 
 private struct OrganizationEditSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let editsDomains: Bool
     let onUnsavedChangesChange: (Bool) -> Void
@@ -166,7 +169,7 @@ private struct OrganizationEditSheet: View {
     @State private var errorMessage: String?
 
     init(
-        store: WorkspaceStore,
+        store: WorkspaceCoordinator,
         organization: AdminOrganizationRecord,
         editsDomains: Bool,
         onUnsavedChangesChange: @escaping (Bool) -> Void
@@ -196,7 +199,7 @@ private struct OrganizationEditSheet: View {
                         Text("Enter one domain per line. Leave empty to allow any domain; people must still be added as members. Changes apply the next time a member signs in.")
                     }
                 }
-                .disabled(store.isMutatingAdministration)
+                .disabled(workspaceContext.isMutatingAdministration)
                 if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
             .formStyle(.grouped)
@@ -204,7 +207,7 @@ private struct OrganizationEditSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(store.isMutatingAdministration)
+                    .disabled(workspaceContext.isMutatingAdministration)
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
@@ -212,7 +215,7 @@ private struct OrganizationEditSheet: View {
             .padding(12)
         }
         .frame(width: 460, height: editsDomains ? 320 : 210)
-        .interactiveDismissDisabled(store.isMutatingAdministration)
+        .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
         .onChange(of: hasChanges) { _, dirty in onUnsavedChangesChange(dirty) }
         .onDisappear { onUnsavedChangesChange(false) }
     }
@@ -248,7 +251,8 @@ private struct OrganizationEditSheet: View {
 }
 
 private struct AdministrationMembersView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let onUnsavedChangesChange: (Bool) -> Void
     @State private var query = ""
@@ -272,8 +276,8 @@ private struct AdministrationMembersView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(completedQuery == query ? members : []) { member in
-                    let isCurrentUser = member.id == store.account?.userId
-                    let ownerIsLocked = store.account?.role != AdminOrganizationRole.owner.rawValue
+                    let isCurrentUser = member.id == workspaceContext.account?.userId
+                    let ownerIsLocked = workspaceContext.account?.role != AdminOrganizationRole.owner.rawValue
                         && member.role == .owner
                     let canEditMember = allowsMutation && !isCurrentUser && !ownerIsLocked
 
@@ -369,7 +373,7 @@ private struct AdministrationMembersView: View {
 
     private var assignableRoles: [AdminOrganizationRole] {
         var roles: [AdminOrganizationRole] = [.member, .admin]
-        if store.account?.role == AdminOrganizationRole.owner.rawValue {
+        if workspaceContext.account?.role == AdminOrganizationRole.owner.rawValue {
             roles.append(.owner)
         }
         return roles
@@ -406,7 +410,8 @@ private struct AdministrationMembersView: View {
 
 private struct AdministrationAddMemberSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let onUnsavedChangesChange: (Bool) -> Void
     @State private var email = ""
@@ -429,7 +434,7 @@ private struct AdministrationAddMemberSheet: View {
                 } footer: {
                     Text("This person can sign in with this email using your organization's single sign-on. No invitation email is sent.")
                 }
-                .disabled(store.isMutatingAdministration)
+                .disabled(workspaceContext.isMutatingAdministration)
                 if let errorMessage {
                     AdministrationInlineError(message: errorMessage)
                 }
@@ -440,7 +445,7 @@ private struct AdministrationAddMemberSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(store.isMutatingAdministration)
+                    .disabled(workspaceContext.isMutatingAdministration)
                 Button("Add") { add() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canAdd)
@@ -448,7 +453,7 @@ private struct AdministrationAddMemberSheet: View {
             .padding(12)
         }
         .frame(width: 460, height: 285)
-        .interactiveDismissDisabled(store.isMutatingAdministration)
+        .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
         .onChange(of: email.isEmpty) { _, empty in onUnsavedChangesChange(!empty) }
         .onDisappear { onUnsavedChangesChange(false) }
     }
@@ -461,7 +466,7 @@ private struct AdministrationAddMemberSheet: View {
 
     private var assignableRoles: [AdminOrganizationRole] {
         var roles: [AdminOrganizationRole] = [.member, .admin]
-        if store.account?.role == AdminOrganizationRole.owner.rawValue {
+        if workspaceContext.account?.role == AdminOrganizationRole.owner.rawValue {
             roles.append(.owner)
         }
         return roles
@@ -485,7 +490,7 @@ private struct AdministrationAddMemberSheet: View {
 }
 
 private struct AdministrationAccessView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
     @EnvironmentObject private var administration: AdministrationModel
     let snapshot: AdministrationSnapshot
     let onUnsavedChangesChange: (Bool) -> Void
@@ -525,7 +530,8 @@ private struct AdministrationAccessView: View {
 }
 
 private struct AdministrationAuditView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     @State private var query = ""
     @State private var completedQuery: String?
@@ -602,7 +608,7 @@ private struct AdministrationAuditView: View {
     private func targetName(_ event: AdminAuditEventRecord) -> String {
         if let name = event.targetDisplayName, !name.isEmpty { return name }
         switch event.targetType {
-        case "org": return store.organization?.name ?? "Unavailable organization"
+        case "org": return workspaceContext.organization?.name ?? "Unavailable organization"
         case "user": return "Unavailable member"
         case "project": return "Unavailable project"
         case "project_member": return "Unavailable project member"
@@ -618,7 +624,7 @@ private struct AdministrationAuditView: View {
 }
 
 private struct AdministrationLoadMore: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
     @EnvironmentObject private var administration: AdministrationModel
     let section: AdministrationSection
     var query: String? = nil

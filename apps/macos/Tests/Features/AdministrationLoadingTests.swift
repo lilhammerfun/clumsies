@@ -230,10 +230,10 @@ final class AdministrationLoadingTests: XCTestCase {
 
     @MainActor
     func testAuthorityResetClearsPagesAndRejectsAnInFlightResponse() async {
-        let workspace = WorkspaceStore()
+        let workspace = WorkspaceCoordinator()
         workspace.apply(Self.workspaceSnapshot())
         let gate = AdministrationResponseGate()
-        let model = AdministrationModel(workspace: workspace) { path, query in
+        let model = AdministrationModel(context: workspace.context, onWorkspaceChanged: {}) { path, query in
             if query.contains(where: { $0.name == "q" && $0.value == "slow" }) {
                 await gate.waitForRelease()
             }
@@ -255,9 +255,9 @@ final class AdministrationLoadingTests: XCTestCase {
 
     @MainActor
     func testSameAuthorityReloadPreservesPagesButPermissionLossClearsThem() async {
-        let workspace = WorkspaceStore()
+        let workspace = WorkspaceCoordinator()
         workspace.apply(Self.workspaceSnapshot())
-        let model = AdministrationModel(workspace: workspace) { path, _ in
+        let model = AdministrationModel(context: workspace.context, onWorkspaceChanged: {}) { path, _ in
             Self.response(path: path, memberId: "member")
         }
         await model.load(section: .members)

@@ -16,14 +16,15 @@ struct SettingsIcon: View {
 }
 
 struct SettingsWindowView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
     @ObservedObject var navigation: SettingsNavigation
     let onShowLogs: () -> Void
 
     private var canShowOrganization: Bool {
-        store.canAdministerOrganization && store.phase != .authenticationRequired
+        workspaceContext.canAdministerOrganization && workspaceContext.phase != .authenticationRequired
     }
 
     private var pageTitle: String { navigation.destination.title }
@@ -68,7 +69,7 @@ struct SettingsWindowView: View {
                             } label: {
                                 Image(systemName: "arrow.clockwise")
                             }
-                            .disabled(navigation.hasUnsavedChanges || store.isMutatingAdministration
+                            .disabled(navigation.hasUnsavedChanges || workspaceContext.isMutatingAdministration
                                 || administration.state(for: section).isLoading)
                             .help(navigation.hasUnsavedChanges ? "Save or discard changes before refreshing" : "Refresh")
                             .accessibilityLabel("Refresh \(navigation.destination.title)")
@@ -105,7 +106,7 @@ struct SettingsWindowView: View {
                     set: { if let pane = $0 { navigation.navigate(to: .pane(pane)) } }
                 )) {
                     Section {
-                        if let account = store.account {
+                        if let account = workspaceContext.account {
                             HStack(spacing: 10) {
                                 Image(systemName: "person.crop.circle.fill")
                                     .font(.system(size: 34))
@@ -115,7 +116,7 @@ struct SettingsWindowView: View {
                                     Text(account.displayName ?? account.email)
                                         .fontWeight(.semibold)
                                         .lineLimit(1)
-                                    Text(store.organization?.name ?? "Clumsies")
+                                    Text(workspaceContext.organization?.name ?? "Clumsies")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)

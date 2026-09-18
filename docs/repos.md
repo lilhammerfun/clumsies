@@ -31,7 +31,7 @@ For the deployment rollback checklist, these are useful short routes:
 
 | Question | Source route |
 | --- | --- |
-| What happens when a user edits and requests Review? | `Features/Workspace/WorkspaceView.swift` → `Services/Workspace/WorkspaceStore.swift` → `Services/Daemon/DaemonXPCClient.swift` |
+| What happens when a user edits and requests Review? | `Features/Memory/MemoryModel.swift` → `Services/Memory/DraftStore.swift`; `Features/Reviews/ReviewsModel.swift` → `Services/Server/ServerClient.swift` |
 | What does an agent's `memory.store` do? | `agent_runtime/mcp_contract.rs` → `agent_runtime/mod.rs` → `state.rs::store_draft_operation` → local Draft queue |
 | What validates and publishes a Review? | Server `http.rs` → `changes/http.rs` → `changes/service.rs` → `changes/postgres.rs` |
 | How does publication reach selected Projects? | Server `memory/postgres.rs` → daemon `commit_sync.rs` → `search/` |

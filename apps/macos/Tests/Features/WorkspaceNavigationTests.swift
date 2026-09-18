@@ -192,29 +192,29 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testSubmittedMemoryOpensItsBatchReviewUsingServerDraftIdentity() async throws {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         var review = reviewRecord(status: "open", id: "batch-review", projectId: "project")
         review.draftIds = ["draft", "server-second"]
-        store.replaceReview(with: review)
+        store.reviews.replaceReview(with: review)
         let submitted = localDraft(
             id: "second", targetId: "memory", scope: .org, status: .submitted
         )
 
-        let linked = try XCTUnwrap(store.review(for: submitted))
+        let linked = try XCTUnwrap(store.reviews.review(for: submitted))
         XCTAssertEqual(linked.id, "batch-review")
-        store.selectedReviewId = "previous-review"
-        await store.openReview(for: submitted)
-        XCTAssertEqual(store.selectedReviewId, "batch-review")
-        XCTAssertEqual(store.selectedSection, .reviews)
-        XCTAssertNil(store.review(for: localDraft(
+        store.reviews.selectedReviewId = "previous-review"
+        await store.reviews.openReview(for: submitted)
+        XCTAssertEqual(store.reviews.selectedReviewId, "batch-review")
+        XCTAssertEqual(store.navigation.selectedSection, .reviews)
+        XCTAssertNil(store.reviews.review(for: localDraft(
             id: "second", targetId: "memory", projectId: "other", scope: .org, status: .submitted
         )))
-        XCTAssertNil(store.review(for: localDraft(id: "second", targetId: "memory", scope: .org)))
+        XCTAssertNil(store.reviews.review(for: localDraft(id: "second", targetId: "memory", scope: .org)))
 
         var merged = reviewRecord(status: "merged", id: "batch-review", projectId: "project")
         merged.draftIds = review.draftIds
-        store.replaceReview(with: merged)
-        XCTAssertNil(store.review(for: submitted))
+        store.reviews.replaceReview(with: merged)
+        XCTAssertNil(store.reviews.review(for: submitted))
     }
 
     func testReviewListFiltersDefaultToOpenAndCombineAuthorAndProject() {
@@ -477,9 +477,9 @@ final class WorkspaceNavigationTests: XCTestCase {
             "if showsMemoryContentToolbar {\n                        ToolbarItemGroup {"
         ))
         XCTAssertTrue(source.contains(
-            "if showsMemoryContentToolbar {\n                            Button {\n                                store.exportMemory()"
+            "if showsMemoryContentToolbar {\n                            Button {\n                                memoryModel.exportMemory()"
         ))
-        XCTAssertTrue(source.contains(".disabled(!store.canExportMemory(store.visibleMemoryItems))"))
+        XCTAssertTrue(source.contains(".disabled(!memoryModel.canExportMemory(memoryModel.visibleMemoryItems))"))
         XCTAssertTrue(source.contains(".help(\"Memory Actions\")"))
         XCTAssertTrue(source.contains("Request Review for All Project Changes…"))
         XCTAssertTrue(source.contains(".disabled(activeProjectReviewDrafts.isEmpty)"))
@@ -500,7 +500,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
 
         XCTAssertTrue(workspaceSource.contains(
-            "store.reconciliationCandidates(for: pendingProjectReviewDrafts)"
+            "reconciler.reconciliationCandidates(for: pendingProjectReviewDrafts)"
         ))
         XCTAssertTrue(reviewSource.contains("Text(\"Update and Request Review\")"))
         XCTAssertTrue(reviewSource.contains("resolvedStatesByCandidateId[candidate.candidateId]"))
@@ -508,17 +508,17 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testWorkspaceSearchCommandRequestsToolbarFocus() {
-        let store = WorkspaceStore()
-        let initialFocusToken = store.workspaceSearchFocusToken
+        let store = WorkspaceCoordinator()
+        let initialFocusToken = store.navigation.workspaceSearchFocusToken
 
-        store.focusWorkspaceSearch()
-        let firstFocusToken = store.workspaceSearchFocusToken
+        store.navigation.focusWorkspaceSearch()
+        let firstFocusToken = store.navigation.workspaceSearchFocusToken
 
         XCTAssertNotEqual(firstFocusToken, initialFocusToken)
 
-        store.focusWorkspaceSearch()
+        store.navigation.focusWorkspaceSearch()
 
-        XCTAssertNotEqual(store.workspaceSearchFocusToken, firstFocusToken)
+        XCTAssertNotEqual(store.navigation.workspaceSearchFocusToken, firstFocusToken)
     }
 
     func testWorkspaceSearchFiltersMemoryContent() {
@@ -530,16 +530,16 @@ final class WorkspaceNavigationTests: XCTestCase {
         let notes = item(path: "notes.md")
         let items = [architecture, notes]
 
-        XCTAssertEqual(WorkspaceStore.filterMemoryItems(items, query: "  "), items)
+        XCTAssertEqual(MemoryTreeProjection.filterMemoryItems(items, query: "  "), items)
         XCTAssertEqual(
-            WorkspaceStore.filterMemoryItems(items, query: "RECALL").map(\.id),
+            MemoryTreeProjection.filterMemoryItems(items, query: "RECALL").map(\.id),
             [architecture.id]
         )
         XCTAssertEqual(
-            WorkspaceStore.filterMemoryItems(items, query: "workflow").map(\.id),
+            MemoryTreeProjection.filterMemoryItems(items, query: "workflow").map(\.id),
             [architecture.id]
         )
-        XCTAssertTrue(WorkspaceStore.filterMemoryItems(items, query: "missing").isEmpty)
+        XCTAssertTrue(MemoryTreeProjection.filterMemoryItems(items, query: "missing").isEmpty)
     }
 
     func testWorkspaceSearchFiltersBundles() {
@@ -561,12 +561,12 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
         let bundles = [release, onboarding]
 
-        XCTAssertEqual(WorkspaceStore.filterBundles(bundles, query: "  "), bundles)
+        XCTAssertEqual(BundleStore.filterBundles(bundles, query: "  "), bundles)
         XCTAssertEqual(
-            WorkspaceStore.filterBundles(bundles, query: "PRODUCTION").map(\.id),
+            BundleStore.filterBundles(bundles, query: "PRODUCTION").map(\.id),
             [release.id]
         )
-        XCTAssertTrue(WorkspaceStore.filterBundles(bundles, query: "missing").isEmpty)
+        XCTAssertTrue(BundleStore.filterBundles(bundles, query: "missing").isEmpty)
     }
 
     func testReviewDetailRouteCarriesOnlyTheStableReviewId() {
@@ -587,46 +587,46 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testBackAndForwardFollowTabSelectionHistory() {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         let first = tab(itemId: "first")
         let second = tab(itemId: "second")
-        store.tabs = [first, second]
-        store.activeTabId = first.id
+        store.navigation.tabs = [first, second]
+        store.navigation.activeTabId = first.id
 
-        store.selectTab(second)
+        store.navigation.selectTab(second)
 
-        XCTAssertEqual(store.activeTabId, second.id)
-        XCTAssertTrue(store.canGoBack)
-        XCTAssertFalse(store.canGoForward)
+        XCTAssertEqual(store.navigation.activeTabId, second.id)
+        XCTAssertTrue(store.navigation.canGoBack)
+        XCTAssertFalse(store.navigation.canGoForward)
 
-        store.goBack()
+        store.navigation.goBack()
 
-        XCTAssertEqual(store.activeTabId, first.id)
-        XCTAssertFalse(store.canGoBack)
-        XCTAssertTrue(store.canGoForward)
+        XCTAssertEqual(store.navigation.activeTabId, first.id)
+        XCTAssertFalse(store.navigation.canGoBack)
+        XCTAssertTrue(store.navigation.canGoForward)
 
-        store.goForward()
+        store.navigation.goForward()
 
-        XCTAssertEqual(store.activeTabId, second.id)
-        XCTAssertTrue(store.canGoBack)
-        XCTAssertFalse(store.canGoForward)
+        XCTAssertEqual(store.navigation.activeTabId, second.id)
+        XCTAssertTrue(store.navigation.canGoBack)
+        XCTAssertFalse(store.navigation.canGoForward)
     }
 
     func testNavigationHistoryUsesTheVisibleTabWhenStoredActiveTabIsFromAnotherScope() {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         let hiddenTab = tab(itemId: "other-project", section: .memory, projectId: "other-project")
         let firstLocalTab = tab(itemId: "local-first", section: .memory, projectId: "project")
         let secondLocalTab = tab(itemId: "local-second", section: .memory, projectId: "project")
-        store.tabs = [hiddenTab, firstLocalTab, secondLocalTab]
-        store.selectedSection = .memory
-        store.activeProjectId = "project"
-        store.activeTabId = hiddenTab.id
+        store.navigation.tabs = [hiddenTab, firstLocalTab, secondLocalTab]
+        store.navigation.selectedSection = .memory
+        store.context.activeProjectId = "project"
+        store.navigation.activeTabId = hiddenTab.id
 
-        store.selectTab(firstLocalTab)
-        store.goBack()
+        store.navigation.selectTab(firstLocalTab)
+        store.navigation.goBack()
 
-        XCTAssertEqual(store.activeTabId, secondLocalTab.id)
-        XCTAssertEqual(store.selectedItemId, secondLocalTab.itemId)
+        XCTAssertEqual(store.navigation.activeTabId, secondLocalTab.id)
+        XCTAssertEqual(store.navigation.selectedItemId, secondLocalTab.itemId)
     }
 
     func testProjectSelectionSideEffectsAreSerialized() async {
@@ -663,19 +663,19 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testOpeningMarkdownDefaultsToPreview() {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
 
-        store.open(item(path: "context/architecture.md"))
+        store.navigation.open(item(path: "context/architecture.md"))
 
-        XCTAssertEqual(store.activeVisibleTab?.mode, .preview)
+        XCTAssertEqual(store.navigation.activeVisibleTab?.mode, .preview)
     }
 
     func testOpeningPlainTextDefaultsToSource() {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
 
-        store.open(item(path: "context/notes.txt"))
+        store.navigation.open(item(path: "context/notes.txt"))
 
-        XCTAssertEqual(store.activeVisibleTab?.mode, .source)
+        XCTAssertEqual(store.navigation.activeVisibleTab?.mode, .source)
     }
 
     func testDocumentTabIdentityIsStableAcrossModes() {
@@ -694,21 +694,21 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testOpeningAndSwitchingModesKeepsOneTabPerDocument() {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         let document = item(path: "context/architecture.md")
 
-        store.open(document)
-        let stableId = store.activeTabId
-        store.open(document, mode: .source)
-        store.open(document)
+        store.navigation.open(document)
+        let stableId = store.navigation.activeTabId
+        store.navigation.open(document, mode: .source)
+        store.navigation.open(document)
 
-        XCTAssertEqual(store.activeVisibleTab?.mode, .source)
+        XCTAssertEqual(store.navigation.activeVisibleTab?.mode, .source)
 
-        store.switchDocumentMode(.diff)
+        store.navigation.switchDocumentMode(.diff)
 
-        XCTAssertEqual(store.tabs.count, 1)
-        XCTAssertEqual(store.activeTabId, stableId)
-        XCTAssertEqual(store.activeVisibleTab?.mode, .diff)
+        XCTAssertEqual(store.navigation.tabs.count, 1)
+        XCTAssertEqual(store.navigation.activeTabId, stableId)
+        XCTAssertEqual(store.navigation.activeVisibleTab?.mode, .diff)
     }
 
     func testStaleResourcePlanRejectsAnOlderDaemonCheckout() {
@@ -723,7 +723,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             resources: [checkoutResource(id: "memory", path: "memory.md", hash: "hash-old")]
         )
 
-        let plan = WorkspaceStore.staleResourcePlan(
+        let plan = MemorySyncPlan.staleResourcePlan(
             displayedResources: [displayed],
             projectName: "Project",
             observedProjectRefCommitId: "commit-new",
@@ -747,7 +747,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             resources: [checkoutResource(id: "memory", path: "memory.md", hash: "hash-old")]
         )
 
-        let plan = WorkspaceStore.staleResourcePlan(
+        let plan = MemorySyncPlan.staleResourcePlan(
             displayedResources: [displayed],
             projectName: "Project",
             observedProjectRefCommitId: "commit-new",
@@ -827,7 +827,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             ),
         ]
 
-        let reconciled = WorkspaceStore.reconciledOrgResources(
+        let reconciled = MemorySyncPlan.reconciledOrgResources(
             existing: existing,
             authoritative: authoritative
         )
@@ -846,7 +846,7 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testOrgAuthoritySnapshotRejectsStaleCache() {
-        XCTAssertNil(WorkspaceStore.stableOrgAuthorityCommitId(
+        XCTAssertNil(MemoryCatalog.stableOrgAuthorityCommitId(
             beforeCommitId: "org-commit-new",
             afterCommitId: "org-commit-new",
             responseIsStale: true
@@ -854,12 +854,12 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testOrgAuthoritySnapshotRejectsCommitChangeDuringListing() {
-        XCTAssertEqual(WorkspaceStore.stableOrgAuthorityCommitId(
+        XCTAssertEqual(MemoryCatalog.stableOrgAuthorityCommitId(
             beforeCommitId: "org-commit-new",
             afterCommitId: "org-commit-new",
             responseIsStale: false
         ), "org-commit-new")
-        XCTAssertNil(WorkspaceStore.stableOrgAuthorityCommitId(
+        XCTAssertNil(MemoryCatalog.stableOrgAuthorityCommitId(
             beforeCommitId: "org-commit-before",
             afterCommitId: "org-commit-after",
             responseIsStale: false
@@ -878,7 +878,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             resources: [checkoutResource(id: "memory", path: "memory.md", hash: "other-hash")]
         )
 
-        let plan = WorkspaceStore.staleResourcePlan(
+        let plan = MemorySyncPlan.staleResourcePlan(
             displayedResources: [displayed],
             projectName: "Project",
             observedProjectRefCommitId: "commit-current",
@@ -926,7 +926,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             ]
         )
 
-        let plan = WorkspaceStore.staleResourcePlan(
+        let plan = MemorySyncPlan.staleResourcePlan(
             displayedResources: [renamed, deleted, unchanged, org],
             projectName: "Project",
             observedProjectRefCommitId: "commit-old",
@@ -986,7 +986,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             )]
         )
 
-        let plan = WorkspaceStore.staleResourcePlan(
+        let plan = MemorySyncPlan.staleResourcePlan(
             displayedResources: [local],
             projectName: "Project",
             observedProjectRefCommitId: "project-commit-old",
@@ -1012,7 +1012,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
         let checkout = projectCheckout(commitId: "project-commit-new", resources: [])
 
-        let deletion = WorkspaceStore.staleResourcePlan(
+        let deletion = MemorySyncPlan.staleResourcePlan(
             displayedResources: [local],
             projectName: "Project",
             observedProjectRefCommitId: "project-commit-old",
@@ -1023,7 +1023,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             authoritativeOrgResources: [],
             authoritativeOrgRefCommitId: "org-commit-new"
         )
-        let deselection = WorkspaceStore.staleResourcePlan(
+        let deselection = MemorySyncPlan.staleResourcePlan(
             displayedResources: [local],
             projectName: "Project",
             observedProjectRefCommitId: "project-commit-old",
@@ -1081,7 +1081,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             )]
         )
 
-        XCTAssertNil(WorkspaceStore.staleResourcePlan(
+        XCTAssertNil(MemorySyncPlan.staleResourcePlan(
             displayedResources: [local],
             projectName: "Project",
             observedProjectRefCommitId: "project-commit-old",
@@ -1092,7 +1092,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             authoritativeOrgResources: [historicalAuthority],
             authoritativeOrgRefCommitId: "org-commit-new"
         ))
-        XCTAssertNil(WorkspaceStore.staleResourcePlan(
+        XCTAssertNil(MemorySyncPlan.staleResourcePlan(
             displayedResources: [local],
             projectName: "Project",
             observedProjectRefCommitId: "project-commit-old",
@@ -1136,7 +1136,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             )]
         )
 
-        let plan = WorkspaceStore.staleResourcePlan(
+        let plan = MemorySyncPlan.staleResourcePlan(
             displayedResources: [mislabeledLocal],
             projectName: "Project",
             observedProjectRefCommitId: "project-commit-old",
@@ -1164,7 +1164,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             resources: [checkoutResource(id: "added", path: "added.md", hash: "added-hash")]
         )
 
-        let plan = WorkspaceStore.staleResourcePlan(
+        let plan = MemorySyncPlan.staleResourcePlan(
             displayedResources: [provisional],
             projectName: "Project",
             observedProjectRefCommitId: "commit-old",
@@ -1184,7 +1184,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             commitId: "commit-new",
             resources: [checkoutResource(id: "memory", path: "memory.md", hash: "new")]
         )
-        let first = WorkspaceStore.staleResourcePlan(
+        let first = MemorySyncPlan.staleResourcePlan(
             displayedResources: [displayed],
             projectName: "Project",
             observedProjectRefCommitId: "commit-old",
@@ -1193,7 +1193,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             checkout: checkout,
             generation: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
         ) ?? [:]
-        let second = WorkspaceStore.staleResourcePlan(
+        let second = MemorySyncPlan.staleResourcePlan(
             displayedResources: [displayed],
             projectName: "Project",
             observedProjectRefCommitId: "commit-old",
@@ -1204,12 +1204,12 @@ final class WorkspaceNavigationTests: XCTestCase {
         ) ?? [:]
 
         XCTAssertNotEqual(first["memory"]?.generation, second["memory"]?.generation)
-        XCTAssertTrue(WorkspaceStore.staleResourcePlansMatch(first, second))
+        XCTAssertTrue(MemorySyncPlan.staleResourcePlansMatch(first, second))
     }
 
     func testDocumentPathChangesAttributeRemoteRenameAndDeletionToShared() {
         XCTAssertEqual(
-            WorkspaceStore.documentPathChanges(
+            MemoryModel.documentPathChanges(
                 basePath: "old.md",
                 localPath: "old.md",
                 remotePath: "new.md"
@@ -1217,7 +1217,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             [.init(source: .shared, from: "old.md", to: "new.md")]
         )
         XCTAssertEqual(
-            WorkspaceStore.documentPathChanges(
+            MemoryModel.documentPathChanges(
                 basePath: "old.md",
                 localPath: "old.md",
                 remotePath: nil
@@ -1228,7 +1228,7 @@ final class WorkspaceNavigationTests: XCTestCase {
 
     func testDocumentPathChangesKeepDivergentDraftAndSharedRenamesSeparate() {
         XCTAssertEqual(
-            WorkspaceStore.documentPathChanges(
+            MemoryModel.documentPathChanges(
                 basePath: "base.md",
                 localPath: "draft.md",
                 remotePath: "shared.md"
@@ -1299,12 +1299,12 @@ final class WorkspaceNavigationTests: XCTestCase {
             commitId: "commit-new"
         )
 
-        XCTAssertFalse(WorkspaceStore.resourceGenerationMatches(old, current))
-        XCTAssertTrue(WorkspaceStore.resourceGenerationMatches(current, current))
+        XCTAssertFalse(MemoryCatalog.resourceGenerationMatches(old, current))
+        XCTAssertTrue(MemoryCatalog.resourceGenerationMatches(current, current))
     }
 
     func testCancelledDeferredMemoryLoadDoesNotPresentError() async {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         let resource = orgResource(id: "memory", contentLoaded: false)
         let item = MemoryListItem(
             id: resource.id,
@@ -1315,41 +1315,41 @@ final class WorkspaceNavigationTests: XCTestCase {
 
         await Task { @MainActor in
             withUnsafeCurrentTask { $0?.cancel() }
-            await store.loadContentIfNeeded(item)
+            await store.catalog.loadContentIfNeeded(item)
         }.value
 
-        XCTAssertNil(store.errorMessage)
-        XCTAssertFalse(store.loadingResourceIds.contains(resource.id))
+        XCTAssertNil(store.feedback.errorMessage)
+        XCTAssertFalse(store.catalog.loadingResourceIds.contains(resource.id))
     }
 
     func testFailedMemoryLoadReturnsAnInlineFailureAndCanRetry() async {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         let resource = orgResource(id: "memory", contentLoaded: false)
         let item = MemoryListItem(id: resource.id, resource: resource, draft: nil, inherited: false)
-        let failed = await store.loadContentIfNeeded(item) { _ in throw URLError(.notConnectedToInternet) }
+        let failed = await store.catalog.loadContentIfNeeded(item) { _ in throw URLError(.notConnectedToInternet) }
         XCTAssertNotNil(failed)
-        XCTAssertNil(store.errorMessage)
-        XCTAssertTrue(store.loadingResourceIds.isEmpty)
+        XCTAssertNil(store.feedback.errorMessage)
+        XCTAssertTrue(store.catalog.loadingResourceIds.isEmpty)
 
-        let retried = await store.loadContentIfNeeded(item) { resource in
+        let retried = await store.catalog.loadContentIfNeeded(item) { resource in
             var loaded = resource
             loaded.contentLoaded = true
             loaded.document.body = "Loaded after retry"
             return loaded
         }
         XCTAssertNil(retried)
-        XCTAssertTrue(store.loadingResourceIds.isEmpty)
+        XCTAssertTrue(store.catalog.loadingResourceIds.isEmpty)
     }
 
     func testConcurrentMemoryReadersShareTheRequestAndItsFailure() async {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         let resource = orgResource(id: "memory", contentLoaded: false)
         let item = MemoryListItem(id: resource.id, resource: resource, draft: nil, inherited: false)
         let started = expectation(description: "Content request started")
         let secondEntered = expectation(description: "Second reader joined")
         let release = WorkspaceNavigationTestLatch()
         let first = Task {
-            await store.loadContentIfNeeded(item) { _ in
+            await store.catalog.loadContentIfNeeded(item) { _ in
                 started.fulfill()
                 await release.wait()
                 throw URLError(.timedOut)
@@ -1358,7 +1358,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         await fulfillment(of: [started], timeout: 1)
         let second = Task {
             secondEntered.fulfill()
-            return await store.loadContentIfNeeded(item) { resource in
+            return await store.catalog.loadContentIfNeeded(item) { resource in
                 XCTFail("A concurrent reader must not start another content request")
                 return resource
             }
@@ -1370,7 +1370,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         let secondFailure = await second.value
         XCTAssertNotNil(firstFailure)
         XCTAssertEqual(firstFailure, secondFailure)
-        XCTAssertTrue(store.loadingResourceIds.isEmpty)
+        XCTAssertTrue(store.catalog.loadingResourceIds.isEmpty)
     }
 
     func testRenameOnlyDraftDoesNotTreatAnUnloadedOrphanBaselineAsEditableContent() {
@@ -1442,7 +1442,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             inherited: false
         )
 
-        let plan = WorkspaceStore.documentRenamePlan(
+        let plan = DraftStore.documentRenamePlan(
             for: item,
             currentDraft: nil,
             newPath: "renamed.md"
@@ -1459,7 +1459,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             path: "old.md",
             body: "unsaved body"
         )
-        let retargeted = WorkspaceStore.documentByRetargetingPendingSave(
+        let retargeted = DraftStore.documentByRetargetingPendingSave(
             dirty,
             to: "renamed.md"
         )
@@ -1476,7 +1476,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             inherited: false
         )
 
-        let plan = try XCTUnwrap(WorkspaceStore.documentRenamePlan(
+        let plan = try XCTUnwrap(DraftStore.documentRenamePlan(
             for: item,
             currentDraft: draft,
             newPath: "renamed.md"
@@ -1488,7 +1488,7 @@ final class WorkspaceNavigationTests: XCTestCase {
 
     func testDraftUploadBarrierRequiresASettledServerDraft() {
         XCTAssertEqual(
-            WorkspaceStore.draftUploadBarrierDecision(
+            DraftReconciliationService.draftUploadBarrierDecision(
                 serverDraftId: nil,
                 pendingOperationCount: 1,
                 failedOperationCount: 0,
@@ -1498,7 +1498,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             .wait
         )
         XCTAssertEqual(
-            WorkspaceStore.draftUploadBarrierDecision(
+            DraftReconciliationService.draftUploadBarrierDecision(
                 serverDraftId: "server-draft",
                 pendingOperationCount: 0,
                 failedOperationCount: 0,
@@ -1508,7 +1508,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             .ready
         )
         XCTAssertEqual(
-            WorkspaceStore.draftUploadBarrierDecision(
+            DraftReconciliationService.draftUploadBarrierDecision(
                 serverDraftId: "server-draft",
                 pendingOperationCount: 0,
                 failedOperationCount: 1,
@@ -1543,7 +1543,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             remote: remote
         )
 
-        XCTAssertThrowsError(try WorkspaceStore.staleDocumentDiffTexts(snapshot)) { error in
+        XCTAssertThrowsError(try MemoryModel.staleDocumentDiffTexts(snapshot)) { error in
             XCTAssertEqual(error as? DocumentDiffError, .baselineUnavailable)
         }
     }
@@ -1554,7 +1554,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             targetId: "removed-resource"
         )
 
-        let unrepresented = WorkspaceStore.unrepresentedDrafts(
+        let unrepresented = MemoryTreeProjection.unrepresentedDrafts(
             [missingTarget],
             authoritativeResourceIds: []
         )
@@ -1568,7 +1568,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             targetId: "current-resource"
         )
 
-        let unrepresented = WorkspaceStore.unrepresentedDrafts(
+        let unrepresented = MemoryTreeProjection.unrepresentedDrafts(
             [represented],
             authoritativeResourceIds: ["current-resource"]
         )
@@ -1581,7 +1581,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             id: "local-draft-id",
             targetId: "removed-authoritative-resource"
         )
-        let unrepresented = WorkspaceStore.unrepresentedDrafts(
+        let unrepresented = MemoryTreeProjection.unrepresentedDrafts(
             [missingTarget],
             authoritativeResourceIds: []
         )
@@ -1721,7 +1721,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             inherited: false
         )
 
-        let presented = WorkspaceStore.memoryItemForViewContext(
+        let presented = WorkspaceNavigation.memoryItemForViewContext(
             item,
             activeProjectId: nil
         )
@@ -1736,7 +1736,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         let unselectedOrg = orgResource(id: "unselected-org")
         let project = projectResource(id: "project", path: "project.md", hash: "project-hash")
 
-        let visible = WorkspaceStore.memoryTreeResources(
+        let visible = MemoryTreeProjection.memoryTreeResources(
             [selectedOrg, unselectedOrg, project],
             activeProjectId: nil,
             selectedOrgResourceIds: []
@@ -1756,7 +1756,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             projectId: "other"
         )
 
-        let visible = WorkspaceStore.memoryTreeResources(
+        let visible = MemoryTreeProjection.memoryTreeResources(
             [selectedOrg, unselectedOrg, project, otherProject],
             activeProjectId: "project",
             selectedOrgResourceIds: ["selected-org"]
@@ -1771,14 +1771,14 @@ final class WorkspaceNavigationTests: XCTestCase {
         let org = localDraft(id: "org", targetId: nil, scope: .org)
 
         XCTAssertEqual(
-            WorkspaceStore.memoryTreeDrafts(
+            MemoryTreeProjection.memoryTreeDrafts(
                 [current, other, org],
                 activeProjectId: "project"
             ).map(\.id),
             ["current", "org"]
         )
         XCTAssertEqual(
-            WorkspaceStore.memoryTreeDrafts(
+            MemoryTreeProjection.memoryTreeDrafts(
                 [current, other, org],
                 activeProjectId: nil
             ).map(\.id),
@@ -1802,17 +1802,17 @@ final class WorkspaceNavigationTests: XCTestCase {
             updatedAt: "2026-08-20T00:00:00Z"
         )
 
-        XCTAssertEqual(WorkspaceStore.memoryTabDraft(
+        XCTAssertEqual(MemoryTreeProjection.memoryTabDraft(
             itemId: "memory",
             projectId: "project-p",
             drafts: [projectP, newerProjectQ]
         )?.id, "draft-p")
-        XCTAssertEqual(WorkspaceStore.memoryTabDraft(
+        XCTAssertEqual(MemoryTreeProjection.memoryTabDraft(
             itemId: "memory",
             projectId: "project-q",
             drafts: [projectP, newerProjectQ]
         )?.id, "draft-q")
-        XCTAssertNil(WorkspaceStore.memoryTabDraft(
+        XCTAssertNil(MemoryTreeProjection.memoryTabDraft(
             itemId: "memory",
             projectId: nil,
             drafts: [projectP, newerProjectQ]
@@ -1832,7 +1832,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            WorkspaceStore.preferredMemoryTreeDrafts([newer, older]).map(\.id),
+            MemoryTreeProjection.preferredMemoryTreeDrafts([newer, older]).map(\.id),
             ["newer"]
         )
     }
@@ -1867,8 +1867,8 @@ final class WorkspaceNavigationTests: XCTestCase {
             projectContextId: "project-q"
         )
 
-        let keyP = try XCTUnwrap(WorkspaceStore.memoryDocumentSessionKey(for: projectP))
-        let keyQ = try XCTUnwrap(WorkspaceStore.memoryDocumentSessionKey(for: projectQ))
+        let keyP = try XCTUnwrap(DocumentSessions.memoryDocumentSessionKey(for: projectP))
+        let keyQ = try XCTUnwrap(DocumentSessions.memoryDocumentSessionKey(for: projectQ))
         XCTAssertNotEqual(keyP, keyQ)
         XCTAssertEqual(keyP.itemId, keyQ.itemId)
         XCTAssertEqual(keyP.projectId, "project-p")
@@ -1880,9 +1880,9 @@ final class WorkspaceNavigationTests: XCTestCase {
         let legacyProjectUpdate = localDraft(id: "legacy", targetId: "project-memory")
         let orgCreate = localDraft(id: "org", targetId: nil, scope: .org)
 
-        XCTAssertFalse(WorkspaceStore.canRequestReview(localCreate))
-        XCTAssertFalse(WorkspaceStore.canRequestReview(legacyProjectUpdate))
-        XCTAssertTrue(WorkspaceStore.canRequestReview(orgCreate))
+        XCTAssertFalse(ReviewsModel.canRequestReview(localCreate))
+        XCTAssertFalse(ReviewsModel.canRequestReview(legacyProjectUpdate))
+        XCTAssertTrue(ReviewsModel.canRequestReview(orgCreate))
     }
 
     func testProjectReviewUsesEveryOpenOrganizationDraft() {
@@ -1912,7 +1912,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            WorkspaceStore.reviewableProjectDrafts(
+            ReviewsModel.reviewableProjectDrafts(
                 [older, newer, created, otherProject],
                 projectId: "project"
             ).map(\.id),
@@ -1921,7 +1921,7 @@ final class WorkspaceNavigationTests: XCTestCase {
 
         let legacy = localDraft(id: "legacy", targetId: "legacy-memory")
         XCTAssertEqual(
-            WorkspaceStore.reviewableProjectDrafts(
+            ReviewsModel.reviewableProjectDrafts(
                 [newer, created, legacy],
                 projectId: "project"
             ).map(\.id),
@@ -1942,21 +1942,21 @@ final class WorkspaceNavigationTests: XCTestCase {
     func testProjectMemoryTabRequiresSelectionOrALocalDraft() {
         let org = orgResource(id: "org")
 
-        XCTAssertFalse(WorkspaceStore.memoryTabIsAvailable(
+        XCTAssertFalse(WorkspaceNavigation.memoryTabIsAvailable(
             itemId: org.id,
             projectId: "project",
             selectedOrgResourceIds: [],
             resources: [org],
             drafts: []
         ))
-        XCTAssertTrue(WorkspaceStore.memoryTabIsAvailable(
+        XCTAssertTrue(WorkspaceNavigation.memoryTabIsAvailable(
             itemId: org.id,
             projectId: "project",
             selectedOrgResourceIds: [org.id],
             resources: [org],
             drafts: []
         ))
-        XCTAssertTrue(WorkspaceStore.memoryTabIsAvailable(
+        XCTAssertTrue(WorkspaceNavigation.memoryTabIsAvailable(
             itemId: org.id,
             projectId: "project",
             selectedOrgResourceIds: [],
@@ -1964,14 +1964,14 @@ final class WorkspaceNavigationTests: XCTestCase {
             drafts: [localDraft(id: "draft", targetId: org.id, scope: .org)]
         ))
 
-        XCTAssertFalse(WorkspaceStore.memoryTabIsAvailable(
+        XCTAssertFalse(WorkspaceNavigation.memoryTabIsAvailable(
             itemId: "discarded-create",
             projectId: "project",
             selectedOrgResourceIds: [],
             resources: [],
             drafts: []
         ))
-        XCTAssertTrue(WorkspaceStore.memoryTabIsAvailable(
+        XCTAssertTrue(WorkspaceNavigation.memoryTabIsAvailable(
             itemId: "still-loading",
             projectId: "project",
             selectedOrgResourceIds: [],
@@ -1982,37 +1982,37 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testOrgMemoryTabClosesAfterItsLocalCreateDisappears() {
-        XCTAssertFalse(WorkspaceStore.orgMemoryTabIsAvailable(
+        XCTAssertFalse(WorkspaceNavigation.orgMemoryTabIsAvailable(
             itemId: "discarded-create",
             resources: []
         ))
-        XCTAssertTrue(WorkspaceStore.orgMemoryTabIsAvailable(
+        XCTAssertTrue(WorkspaceNavigation.orgMemoryTabIsAvailable(
             itemId: "org-resource",
             resources: [orgResource(id: "org-resource")]
         ))
-        XCTAssertFalse(WorkspaceStore.orgMemoryTabIsAvailable(
+        XCTAssertFalse(WorkspaceNavigation.orgMemoryTabIsAvailable(
             itemId: "org-draft",
             resources: []
         ))
     }
 
     func testDocumentSynchronizationAdmissionIsProjectContextScoped() {
-        XCTAssertTrue(WorkspaceStore.canStartDocumentSynchronization(
+        XCTAssertTrue(DocumentSessions.canStartDocumentSynchronization(
             isSwitchingMemoryContext: false,
             activeProjectId: "project-p",
             itemProjectContextId: "project-p"
         ))
-        XCTAssertFalse(WorkspaceStore.canStartDocumentSynchronization(
+        XCTAssertFalse(DocumentSessions.canStartDocumentSynchronization(
             isSwitchingMemoryContext: true,
             activeProjectId: "project-p",
             itemProjectContextId: "project-p"
         ))
-        XCTAssertFalse(WorkspaceStore.canStartDocumentSynchronization(
+        XCTAssertFalse(DocumentSessions.canStartDocumentSynchronization(
             isSwitchingMemoryContext: false,
             activeProjectId: "project-q",
             itemProjectContextId: "project-p"
         ))
-        XCTAssertFalse(WorkspaceStore.canStartDocumentSynchronization(
+        XCTAssertFalse(DocumentSessions.canStartDocumentSynchronization(
             isSwitchingMemoryContext: false,
             activeProjectId: nil,
             itemProjectContextId: nil
@@ -2020,17 +2020,17 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testCapturedProjectOperationStopsAfterContextChanges() {
-        XCTAssertTrue(WorkspaceStore.projectContextIsCurrent(
+        XCTAssertTrue(WorkspaceContext.projectContextIsCurrent(
             isSwitchingMemoryContext: false,
             activeProjectId: "project-p",
             expectedProjectId: "project-p"
         ))
-        XCTAssertFalse(WorkspaceStore.projectContextIsCurrent(
+        XCTAssertFalse(WorkspaceContext.projectContextIsCurrent(
             isSwitchingMemoryContext: true,
             activeProjectId: "project-p",
             expectedProjectId: "project-p"
         ))
-        XCTAssertFalse(WorkspaceStore.projectContextIsCurrent(
+        XCTAssertFalse(WorkspaceContext.projectContextIsCurrent(
             isSwitchingMemoryContext: false,
             activeProjectId: "project-q",
             expectedProjectId: "project-p"
@@ -2038,17 +2038,17 @@ final class WorkspaceNavigationTests: XCTestCase {
     }
 
     func testContextSwitchCommitWaitsForEveryReconciliationActivity() {
-        XCTAssertTrue(WorkspaceStore.canCommitMemoryContextSwitch(
+        XCTAssertTrue(DocumentSessions.canCommitMemoryContextSwitch(
             hasDocumentSynchronization: false,
             hasApplyingDocumentReconciliation: false,
             hasStandaloneReconciliationActivity: false
         ))
-        XCTAssertFalse(WorkspaceStore.canCommitMemoryContextSwitch(
+        XCTAssertFalse(DocumentSessions.canCommitMemoryContextSwitch(
             hasDocumentSynchronization: true,
             hasApplyingDocumentReconciliation: false,
             hasStandaloneReconciliationActivity: false
         ))
-        XCTAssertFalse(WorkspaceStore.canCommitMemoryContextSwitch(
+        XCTAssertFalse(DocumentSessions.canCommitMemoryContextSwitch(
             hasDocumentSynchronization: false,
             hasApplyingDocumentReconciliation: false,
             hasStandaloneReconciliationActivity: true
@@ -2077,20 +2077,20 @@ final class WorkspaceNavigationTests: XCTestCase {
             isLoaded: true
         )
 
-        let afterRemoval = WorkspaceStore.retainedMemoryTabs(
+        let afterRemoval = WorkspaceNavigation.retainedMemoryTabs(
             [tab],
             projects: [projectWithoutSelection],
             resources: [resource],
             drafts: []
         )
         XCTAssertTrue(afterRemoval.isEmpty)
-        XCTAssertTrue(WorkspaceStore.retainedMemoryTabs(
+        XCTAssertTrue(WorkspaceNavigation.retainedMemoryTabs(
             afterRemoval,
             projects: [projectWithSelection],
             resources: [resource],
             drafts: []
         ).isEmpty)
-        XCTAssertEqual(WorkspaceStore.retainedMemoryTabs(
+        XCTAssertEqual(WorkspaceNavigation.retainedMemoryTabs(
             [tab],
             projects: [projectWithoutSelection],
             resources: [resource],
@@ -2101,7 +2101,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 scope: .org
             )]
         ), [tab])
-        XCTAssertTrue(WorkspaceStore.retainedMemoryTabs(
+        XCTAssertTrue(WorkspaceNavigation.retainedMemoryTabs(
             [tab],
             projects: [projectWithoutSelection],
             resources: [resource],
@@ -2116,21 +2116,21 @@ final class WorkspaceNavigationTests: XCTestCase {
 
     func testNewContextDraftStartsWithValidNonemptyContent() {
         XCTAssertEqual(
-            WorkspaceStore.defaultDocument(kind: .context, path: "context/untitled.md").body,
+            MemoryModel.defaultDocument(kind: .context, path: "context/untitled.md").body,
             "# Untitled\n"
         )
     }
 
     func testNewDraftPathSkipsFreshOrganizationAndLocalDraftCollisions() {
         XCTAssertEqual(
-            WorkspaceStore.uniqueDefaultPath(
+            MemoryModel.uniqueDefaultPath(
                 base: "untitled.md",
                 occupiedPaths: ["untitled.md", "untitled-2.md"]
             ),
             "untitled-3.md"
         )
         XCTAssertEqual(
-            WorkspaceStore.uniqueDefaultPath(
+            MemoryModel.uniqueDefaultPath(
                 base: "workflow/untitled.md",
                 occupiedPaths: []
             ),
@@ -2140,7 +2140,7 @@ final class WorkspaceNavigationTests: XCTestCase {
 
     func testProjectSelectionRemovalIsBlockedByItsActiveTargetDraft() {
         let resourceIds: Set<String> = ["org-memory"]
-        XCTAssertTrue(WorkspaceStore.hasActiveDraft(
+        XCTAssertTrue(MemoryTreeProjection.hasActiveDraft(
             in: "project-p",
             targetingAny: resourceIds,
             drafts: [localDraft(
@@ -2150,7 +2150,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 scope: .org
             )]
         ))
-        XCTAssertFalse(WorkspaceStore.hasActiveDraft(
+        XCTAssertFalse(MemoryTreeProjection.hasActiveDraft(
             in: "project-p",
             targetingAny: resourceIds,
             drafts: [localDraft(

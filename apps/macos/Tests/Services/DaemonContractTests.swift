@@ -2,6 +2,16 @@ import XCTest
 @testable import Clumsies
 
 final class DaemonContractTests: XCTestCase {
+    private func source(_ path: String, method: String? = nil) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appending(path: "Sources/" + path), encoding: .utf8)
+        guard let method else { return source }
+        let start = try XCTUnwrap(source.range(of: method))
+        let end = try XCTUnwrap(source[start.lowerBound...].range(of: "\n    }"))
+        return String(source[start.lowerBound..<end.upperBound])
+    }
+
     func testNativeClientUsesClumsiesIdentifierNamespace() {
         XCTAssertEqual(ClumsiesIdentifiers.namespace, "ai.clumsies")
         XCTAssertEqual(ClumsiesIdentifiers.appDisplayName, "Clumsies")
@@ -297,19 +307,19 @@ final class DaemonContractTests: XCTestCase {
             role: "member"
         )
 
-        XCTAssertTrue(WorkspaceStore.preservesDeferredAuthority(
+        XCTAssertTrue(WorkspaceLoadPolicy.preservesDeferredAuthority(
             currentAccount: user,
             currentOrganization: currentOrganization,
             nextAccount: renamedAccount,
             nextOrganization: renamedOrganization
         ))
-        XCTAssertFalse(WorkspaceStore.preservesDeferredAuthority(
+        XCTAssertFalse(WorkspaceLoadPolicy.preservesDeferredAuthority(
             currentAccount: user,
             currentOrganization: currentOrganization,
             nextAccount: otherAccount,
             nextOrganization: renamedOrganization
         ))
-        XCTAssertFalse(WorkspaceStore.preservesDeferredAuthority(
+        XCTAssertFalse(WorkspaceLoadPolicy.preservesDeferredAuthority(
             currentAccount: user,
             currentOrganization: currentOrganization,
             nextAccount: renamedAccount,
@@ -318,22 +328,22 @@ final class DaemonContractTests: XCTestCase {
     }
 
     func testStaleAuthorityChangeFailsClosedOnlyForWarmDifferentAuthority() {
-        XCTAssertTrue(WorkspaceStore.rejectsStaleAuthorityChange(
+        XCTAssertTrue(WorkspaceLoadPolicy.rejectsStaleAuthorityChange(
             hadLoadedWorkspace: true,
             sameAuthority: false,
             snapshotWasStale: true
         ))
-        XCTAssertFalse(WorkspaceStore.rejectsStaleAuthorityChange(
+        XCTAssertFalse(WorkspaceLoadPolicy.rejectsStaleAuthorityChange(
             hadLoadedWorkspace: false,
             sameAuthority: false,
             snapshotWasStale: true
         ))
-        XCTAssertFalse(WorkspaceStore.rejectsStaleAuthorityChange(
+        XCTAssertFalse(WorkspaceLoadPolicy.rejectsStaleAuthorityChange(
             hadLoadedWorkspace: true,
             sameAuthority: true,
             snapshotWasStale: true
         ))
-        XCTAssertFalse(WorkspaceStore.rejectsStaleAuthorityChange(
+        XCTAssertFalse(WorkspaceLoadPolicy.rejectsStaleAuthorityChange(
             hadLoadedWorkspace: true,
             sameAuthority: false,
             snapshotWasStale: false
@@ -348,7 +358,7 @@ final class DaemonContractTests: XCTestCase {
         var isPreparingWorkspaceIndex = true
         var orgResourceRefreshGeneration: UUID? = UUID()
 
-        WorkspaceStore.invalidateWorkspaceTransitionState(
+        WorkspaceLoadPolicy.invalidateWorkspaceTransitionState(
             generation: &generation,
             loadingProjectId: &loadingProjectId,
             isSwitchingMemoryContext: &isSwitchingMemoryContext,
@@ -364,36 +374,36 @@ final class DaemonContractTests: XCTestCase {
     }
 
     func testWarmDeferredCollectionsRejectStaleBaseOrResponse() {
-        let warmReloadRequiresFreshData = WorkspaceStore.deferredLoadRequiresFreshData(
+        let warmReloadRequiresFreshData = WorkspaceLoadPolicy.deferredLoadRequiresFreshData(
             hadLoadedWorkspace: true
         )
-        let coldStartRequiresFreshData = WorkspaceStore.deferredLoadRequiresFreshData(
+        let coldStartRequiresFreshData = WorkspaceLoadPolicy.deferredLoadRequiresFreshData(
             hadLoadedWorkspace: false
         )
 
         XCTAssertTrue(warmReloadRequiresFreshData)
         XCTAssertFalse(coldStartRequiresFreshData)
-        XCTAssertFalse(WorkspaceStore.canPublishDeferredLoad(
+        XCTAssertFalse(WorkspaceLoadPolicy.canPublishDeferredLoad(
             requiresFreshData: warmReloadRequiresFreshData,
             baseSnapshotWasStale: false,
             responseWasStale: true
         ))
-        XCTAssertFalse(WorkspaceStore.canPublishDeferredLoad(
+        XCTAssertFalse(WorkspaceLoadPolicy.canPublishDeferredLoad(
             requiresFreshData: true,
             baseSnapshotWasStale: true,
             responseWasStale: false
         ))
-        XCTAssertFalse(WorkspaceStore.canPublishDeferredLoad(
+        XCTAssertFalse(WorkspaceLoadPolicy.canPublishDeferredLoad(
             requiresFreshData: true,
             baseSnapshotWasStale: false,
             responseWasStale: true
         ))
-        XCTAssertTrue(WorkspaceStore.canPublishDeferredLoad(
+        XCTAssertTrue(WorkspaceLoadPolicy.canPublishDeferredLoad(
             requiresFreshData: true,
             baseSnapshotWasStale: false,
             responseWasStale: false
         ))
-        XCTAssertTrue(WorkspaceStore.canPublishDeferredLoad(
+        XCTAssertTrue(WorkspaceLoadPolicy.canPublishDeferredLoad(
             requiresFreshData: coldStartRequiresFreshData,
             baseSnapshotWasStale: true,
             responseWasStale: true
@@ -402,8 +412,8 @@ final class DaemonContractTests: XCTestCase {
 
     @MainActor
     func testSaveStagingIsIgnoredOutsideReadyAndAuthorityClearResetsState() {
-        let store = WorkspaceStore()
-        store.activeProjectId = "project-old"
+        let store = WorkspaceCoordinator()
+        store.context.activeProjectId = "project-old"
         let resource = MemoryResource(
             id: "memory-old",
             scope: .org,
@@ -440,42 +450,42 @@ final class DaemonContractTests: XCTestCase {
             mode: .source,
             title: "Old"
         )
-        store.selectedSection = .reviews
-        store.selectedItemId = resource.id
-        store.selectedBundleId = bundle.id
-        store.selectedReviewId = "review-old"
-        store.pendingReviewReconciliationId = "review-old"
-        store.tabs = [tab]
-        store.activeTabId = tab.id
+        store.navigation.selectedSection = .reviews
+        store.navigation.selectedItemId = resource.id
+        store.bundleSelection.selectedBundleId = bundle.id
+        store.reviews.selectedReviewId = "review-old"
+        store.reviews.pendingReviewReconciliationId = "review-old"
+        store.navigation.tabs = [tab]
+        store.navigation.activeTabId = tab.id
 
-        XCTAssertFalse(store.canEditMemory(item))
-        store.stageDocumentSave(item, document: edited)
-        store.stageBundleSave(
+        XCTAssertFalse(store.edits.canEditMemory(item))
+        store.edits.stageDocumentSave(item, document: edited)
+        store.bundles.stageBundleSave(
             bundle,
             name: "Unsaved old-authority bundle",
             description: "",
             resourceIds: [resource.id]
         )
-        XCTAssertNil(store.pendingDocument(for: item))
+        XCTAssertNil(store.edits.pendingDocument(for: item))
         XCTAssertFalse(store.hasPendingChanges)
 
         store.clearAuthorityScopedWorkspace()
 
-        XCTAssertNil(store.pendingDocument(for: item))
+        XCTAssertNil(store.edits.pendingDocument(for: item))
         XCTAssertFalse(store.hasPendingChanges)
-        XCTAssertNil(store.activeProjectId)
-        XCTAssertEqual(store.selectedSection, .memory)
-        XCTAssertNil(store.selectedItemId)
-        XCTAssertNil(store.selectedBundleId)
-        XCTAssertNil(store.selectedReviewId)
-        XCTAssertNil(store.pendingReviewReconciliationId)
-        XCTAssertNil(store.reviewDecisionReadiness)
-        XCTAssertTrue(store.tabs.isEmpty)
-        XCTAssertNil(store.activeTabId)
-        XCTAssertFalse(store.syncStatusAvailable)
-        XCTAssertEqual(store.draftInventoryLoadState, .loading)
-        XCTAssertEqual(store.bundleLoadState, .loading)
-        XCTAssertEqual(store.reviewLoadState, .loading)
+        XCTAssertNil(store.context.activeProjectId)
+        XCTAssertEqual(store.navigation.selectedSection, .memory)
+        XCTAssertNil(store.navigation.selectedItemId)
+        XCTAssertNil(store.bundleSelection.selectedBundleId)
+        XCTAssertNil(store.reviews.selectedReviewId)
+        XCTAssertNil(store.reviews.pendingReviewReconciliationId)
+        XCTAssertNil(store.reviews.reviewDecisionReadiness)
+        XCTAssertTrue(store.navigation.tabs.isEmpty)
+        XCTAssertNil(store.navigation.activeTabId)
+        XCTAssertFalse(store.refresh.syncStatusAvailable)
+        XCTAssertEqual(store.edits.draftInventoryLoadState, .loading)
+        XCTAssertEqual(store.bundles.bundleLoadState, .loading)
+        XCTAssertEqual(store.reviews.reviewLoadState, .loading)
     }
 
     func testOldDataSourceGenerationCannotMarkNewLoadStale() async {
@@ -630,12 +640,12 @@ final class DaemonContractTests: XCTestCase {
         let revokedAccess = Set<String>()
         let retainedAccess = Set(["project-1"])
 
-        let draftsAfterRevocation = WorkspaceStore.retainingAccessibleProjectRecords(
+        let draftsAfterRevocation = WorkspaceLoadPolicy.retainingAccessibleProjectRecords(
             [draft],
             accessibleProjectIds: revokedAccess,
             projectId: \.projectId
         )
-        let reviewsAfterRevocation = WorkspaceStore.retainingAccessibleProjectRecords(
+        let reviewsAfterRevocation = WorkspaceLoadPolicy.retainingAccessibleProjectRecords(
             [review],
             accessibleProjectIds: revokedAccess,
             projectId: \.projectId
@@ -643,12 +653,12 @@ final class DaemonContractTests: XCTestCase {
 
         XCTAssertTrue(draftsAfterRevocation.isEmpty)
         XCTAssertTrue(reviewsAfterRevocation.isEmpty)
-        XCTAssertEqual(WorkspaceStore.retainingAccessibleProjectRecords(
+        XCTAssertEqual(WorkspaceLoadPolicy.retainingAccessibleProjectRecords(
             [draft],
             accessibleProjectIds: retainedAccess,
             projectId: \.projectId
         ), [draft])
-        XCTAssertEqual(WorkspaceStore.retainingAccessibleProjectRecords(
+        XCTAssertEqual(WorkspaceLoadPolicy.retainingAccessibleProjectRecords(
             [review],
             accessibleProjectIds: retainedAccess,
             projectId: \.projectId
@@ -681,7 +691,7 @@ final class DaemonContractTests: XCTestCase {
         var serverDeleted = deleted
         serverDeleted.document.body = "Server kept record"
 
-        let merged = WorkspaceStore.mergeDeferredRecords(
+        let merged = WorkspaceLoadPolicy.mergeDeferredRecords(
             baseline: [unchanged, edited, deleted],
             current: [unchanged, localEdited, localNew],
             loaded: [serverUpdated, serverEdited, serverDeleted, serverNew]
@@ -709,7 +719,7 @@ final class DaemonContractTests: XCTestCase {
             code: "legacy_adapter_manual_reinstall_required",
             message: "Remove the global entries, then enable each repository from the App."
         )
-        let warning = WorkspaceStore.localAgentAdapterWarning(.init(
+        let warning = AgentIntegrationService.localAgentAdapterWarning(.init(
             conflicts: [conflict],
             inspectionWarning: "The archived integration store could not be inspected."
         ))
@@ -734,20 +744,20 @@ final class DaemonContractTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            WorkspaceStore.errorMessageAfterUpdatingLocalAgentAdapters(
+            AgentIntegrationService.errorMessageAfterUpdatingLocalAgentAdapters(
                 currentErrorMessage: "Document save failed",
                 previous: previous,
                 next: next
             ),
             "Document save failed"
         )
-        XCTAssertNil(WorkspaceStore.errorMessageAfterUpdatingLocalAgentAdapters(
+        XCTAssertNil(AgentIntegrationService.errorMessageAfterUpdatingLocalAgentAdapters(
             currentErrorMessage: "Previous adapter warning",
             previous: previous,
             next: empty
         ))
         XCTAssertEqual(
-            WorkspaceStore.errorMessageAfterUpdatingLocalAgentAdapters(
+            AgentIntegrationService.errorMessageAfterUpdatingLocalAgentAdapters(
                 currentErrorMessage: nil,
                 previous: empty,
                 next: next
@@ -758,11 +768,11 @@ final class DaemonContractTests: XCTestCase {
 
     func testLegacyInspectionDoesNotClearManagedPluginWarning() {
         XCTAssertEqual(
-            WorkspaceStore.combinedAgentAdapterWarning("Codex repair failed", nil),
+            AgentIntegrationService.combinedAgentAdapterWarning("Codex repair failed", nil),
             "Codex repair failed"
         )
         XCTAssertEqual(
-            WorkspaceStore.combinedAgentAdapterWarning(
+            AgentIntegrationService.combinedAgentAdapterWarning(
                 "Codex repair failed",
                 "Legacy inspection failed"
             ),
@@ -798,56 +808,18 @@ final class DaemonContractTests: XCTestCase {
     func testWorkspaceRefreshLoopHasOneOwnerAndBoundedCadence() throws {
         XCTAssertEqual(WorkspaceRefreshCadence.syncStatus, .seconds(2))
         XCTAssertEqual(WorkspaceRefreshCadence.synchronizedData, .seconds(30))
-
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let viewSource = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Features/Workspace/WorkspaceView.swift"),
-            encoding: .utf8
-        )
-        XCTAssertEqual(
-            viewSource.components(separatedBy: "await store.runRefreshLoop()").count - 1,
-            1
-        )
-        XCTAssertFalse(viewSource.contains("await store.refreshSyncStatus()"))
-
-        let storeSource = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let statusStart = try XCTUnwrap(
-            storeSource.range(of: "    func refreshSyncStatus()")
-        )
-        let statusEnd = try XCTUnwrap(
-            storeSource[statusStart.lowerBound...].range(
-                of: "\n    func refreshSynchronizedWorkspaceData()"
-            )
-        )
-        let statusRefresh = storeSource[statusStart.lowerBound..<statusEnd.lowerBound]
-        XCTAssertEqual(
-            storeSource.components(separatedBy: "daemon.syncStatus(projectId: projectId)").count - 1,
-            1
-        )
-        XCTAssertTrue(statusRefresh.contains("!isRefreshingSyncStatus"))
-        XCTAssertTrue(statusRefresh.contains("daemon.syncStatus(projectId: projectId)"))
-        XCTAssertTrue(statusRefresh.contains("catch is CancellationError"))
-        XCTAssertFalse(statusRefresh.contains("refreshOrgResourcesIfNeeded()"))
-        XCTAssertFalse(statusRefresh.contains("refreshDraftInventory("))
-        XCTAssertFalse(statusRefresh.contains("refreshStaleResourcesIfNeeded("))
-
-        let dataStart = statusEnd.lowerBound
-        let dataEnd = try XCTUnwrap(
-            storeSource[dataStart...].range(
-                of: "\n    nonisolated static func stableOrgAuthorityCommitId("
-            )
-        )
-        let dataRefresh = storeSource[dataStart..<dataEnd.lowerBound]
-        XCTAssertTrue(dataRefresh.contains("!isRefreshingSynchronizedWorkspaceData"))
-        XCTAssertTrue(dataRefresh.contains("refreshOrgResourcesIfNeeded()"))
-        XCTAssertTrue(dataRefresh.contains("refreshDraftInventory("))
-        XCTAssertTrue(dataRefresh.contains("refreshStaleResourcesIfNeeded("))
+        let view = try source("Features/Workspace/WorkspaceView.swift")
+        XCTAssertEqual(view.components(separatedBy: "await store.runRefreshLoop()").count - 1, 1)
+        let status = try source("Services/Daemon/DaemonSyncService.swift", method: "func refreshSyncStatus()")
+        XCTAssertEqual(status.components(separatedBy: "daemon.syncStatus(projectId: projectId)").count - 1, 1)
+        XCTAssertTrue(status.contains("!isRefreshingSyncStatus"))
+        XCTAssertTrue(status.contains("catch is CancellationError"))
+        for operation in ["refreshOrgResourcesIfNeeded(", "refreshDraftInventory(", "refreshStaleResourcesIfNeeded("] {
+            XCTAssertFalse(status.contains(operation))
+            let data = try source("Features/Workspace/WorkspaceCoordinator.swift", method: "func refreshSynchronizedWorkspaceData()")
+            XCTAssertTrue(data.contains(operation))
+            XCTAssertTrue(data.contains("!refresh.isRefreshingSynchronizedWorkspaceData"))
+        }
     }
 
     func testWorkspaceNavigationDefersObservableWritesFromViewUpdates() throws {
@@ -869,9 +841,9 @@ final class DaemonContractTests: XCTestCase {
 
         XCTAssertTrue(source.contains("private func deferSidebarExpansionUpdate"))
         XCTAssertTrue(selection.contains("DispatchQueue.main.async"))
-        XCTAssertTrue(selection.contains("store.selectedSection = section"))
+        XCTAssertTrue(selection.contains("workspaceNavigation.selectedSection = section"))
         XCTAssertFalse(source.contains(
-            ".onAppear {\n            store.showsProjectSettings = false"
+            ".onAppear {\n            workspaceNavigation.showsProjectSettings = false"
         ))
     }
 
@@ -947,7 +919,7 @@ final class DaemonContractTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
+            contentsOf: macOSRoot.appending(path: "Sources/Services/Daemon/DaemonSyncService.swift"),
             encoding: .utf8
         )
         let start = try XCTUnwrap(source.range(of: "    func retrySync("))
@@ -965,32 +937,29 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertTrue(retry.contains("for predecessor in predecessors"))
         XCTAssertTrue(retry.contains("clearSyncRetryErrors(channel: channel, projectId: projectId)"))
         let daemonRetry = try XCTUnwrap(
-            retry.range(of: "_ = try await daemon.retrySync(channel: channel, projectId: projectId)")
+            retry.range(of: "_ = try await self.context.daemon.retrySync(channel: channel, projectId: projectId)")
         )
         let completionClear = try XCTUnwrap(
             retry[daemonRetry.upperBound...].range(of: "if channel == \"all\"")
         )
         let statusRefresh = try XCTUnwrap(
-            retry[completionClear.upperBound...].range(of: "await refreshSyncStatus()")
+            retry[completionClear.upperBound...].range(of: "await self.onRetryCompleted?()")
         )
         XCTAssertLessThan(completionClear.lowerBound, statusRefresh.lowerBound)
-        XCTAssertTrue(retry.contains("if errorMessage == nil"))
+        XCTAssertTrue(retry.contains("if self.feedback.errorMessage == nil"))
         XCTAssertFalse(retry.contains("guard !isRetryingSync"))
 
         XCTAssertTrue(source.contains(
-            "@Published private var retryingSyncKeys: Set<SyncRetryKey> = []"
+            "@Published var retryingSyncKeys: Set<SyncRetryKey> = []"
         ))
         XCTAssertTrue(source.contains(
-            "@Published private var syncRetryErrors: [SyncRetryKey: String] = [:]"
+            "retryingSyncKeys.contains { $0.projectId == self.context.activeProjectId }"
         ))
         XCTAssertTrue(source.contains(
-            "retryingSyncKeys.contains { $0.projectId == activeProjectId }"
+            "? feedback.syncRetryErrors.keys.filter { $0.projectId == projectId }"
         ))
         XCTAssertTrue(source.contains(
-            "? syncRetryErrors.keys.filter { $0.projectId == projectId }"
-        ))
-        XCTAssertTrue(source.contains(
-            ".filter { $0.key.projectId == activeProjectId }"
+            ".filter { $0.key.projectId == self.context.activeProjectId }"
         ))
     }
 
@@ -1010,296 +979,96 @@ final class DaemonContractTests: XCTestCase {
 
         for source in [workspace, memory] {
             XCTAssertTrue(source.contains(
-                "store.isRetryingSync(\n"
+                "daemonSync.isRetryingSync(\n"
                     + "                                        channel: \"drafts\""
             ) || source.contains(
-                "store.isRetryingSync(\n"
+                "daemonSync.isRetryingSync(\n"
                     + "                        channel: \"drafts\""
             ))
         }
     }
 
+    @MainActor
     func testAuthorityResetCancelsRetriesAndDismissedBackgroundErrorsStayDismissed() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let clearStart = try XCTUnwrap(source.range(of: "    func clearAuthorityScopedWorkspace()"))
-        let clearEnd = try XCTUnwrap(
-            source[clearStart.lowerBound...].range(of: "\n    func apply(")
-        )
-        let clear = source[clearStart.lowerBound..<clearEnd.lowerBound]
-        XCTAssertTrue(clear.contains("cancelSyncRetries()"))
-        XCTAssertTrue(clear.contains("resetBackgroundErrorPresentation()"))
-
-        let cancelStart = try XCTUnwrap(source.range(of: "    private func cancelSyncRetries()"))
-        let cancelEnd = try XCTUnwrap(
-            source[cancelStart.lowerBound...].range(
-                of: "\n    private func resetBackgroundErrorPresentation()"
-            )
-        )
-        let cancel = source[cancelStart.lowerBound..<cancelEnd.lowerBound]
-        XCTAssertTrue(cancel.contains("syncRetryTasks.values.forEach { $0.task.cancel() }"))
-        XCTAssertTrue(cancel.contains("retryingSyncKeys.removeAll()"))
-        XCTAssertTrue(cancel.contains("syncRetryErrors.removeAll()"))
-
-        let dismissStart = try XCTUnwrap(source.range(of: "    func dismissErrorMessage()"))
-        let dismissEnd = try XCTUnwrap(
-            source[dismissStart.lowerBound...].range(of: "\n    private func presentBackgroundError(")
-        )
-        let dismiss = source[dismissStart.lowerBound..<dismissEnd.lowerBound]
-        XCTAssertTrue(dismiss.contains(
-            "dismissedBackgroundErrorSources.insert(presentation.source)"
-        ))
-
-        let resolveStart = try XCTUnwrap(
-            source.range(of: "    private func resolveBackgroundError(")
-        )
-        let resolveEnd = try XCTUnwrap(
-            source[resolveStart.lowerBound...].range(
-                of: "\n    private func backgroundErrorIsRelevant("
-            )
-        )
-        let resolve = source[resolveStart.lowerBound..<resolveEnd.lowerBound]
-        XCTAssertTrue(resolve.contains("dismissedBackgroundErrorSources.remove(source)"))
-
-        XCTAssertGreaterThanOrEqual(
-            source.components(separatedBy: "presentBackgroundError(").count - 1,
-            4
-        )
-        XCTAssertGreaterThanOrEqual(
-            source.components(separatedBy: "resolveBackgroundError(").count - 1,
-            8
-        )
-        XCTAssertGreaterThanOrEqual(
-            source.components(separatedBy: "catch is CancellationError").count - 1,
-            6
-        )
-        XCTAssertTrue(source.contains(
-            "workspaceReloadGeneration == workspaceGeneration,\n"
-                + "                  projectSelectionGeneration == generation"
-        ))
-
-        let workspace = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Features/Workspace/WorkspaceView.swift"),
-            encoding: .utf8
-        )
-        XCTAssertTrue(workspace.contains("store.dismissErrorMessage()"))
+        let workspace = WorkspaceCoordinator()
+        let feedback = workspace.feedback
+        feedback.presentBackgroundError("Offline", source: .organizationResources)
+        XCTAssertEqual(feedback.errorMessage, "Offline")
+        feedback.dismissErrorMessage()
+        feedback.presentBackgroundError("Offline again", source: .organizationResources)
+        XCTAssertNil(feedback.errorMessage)
+        feedback.resolveBackgroundError(.organizationResources)
+        feedback.presentBackgroundError("New failure", source: .organizationResources)
+        XCTAssertEqual(feedback.errorMessage, "New failure")
+        workspace.refresh.retryingSyncKeys.insert(.init(channel: "drafts", projectId: nil))
+        feedback.syncRetryErrors[.init(channel: "drafts", projectId: nil)] = "Retry failed"
+        workspace.clearAuthorityScopedWorkspace()
+        XCTAssertTrue(workspace.refresh.retryingSyncKeys.isEmpty)
+        XCTAssertTrue(feedback.syncRetryErrors.isEmpty)
+        XCTAssertNil(feedback.errorMessage)
+        feedback.presentBackgroundError("After reset", source: .organizationResources)
+        XCTAssertEqual(feedback.errorMessage, "After reset")
+        let cancellation = try source("Services/Daemon/DaemonSyncService.swift", method: "func cancelSyncRetries()")
+        XCTAssertTrue(cancellation.contains("syncRetryTasks.values.forEach { $0.task.cancel() }"))
     }
 
     func testDiscardRechecksTheDraftInsideTheMutationGate() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let start = try XCTUnwrap(source.range(of: "    func discard(_ draft: LocalDraft)"))
-        let end = try XCTUnwrap(
-            source[start.lowerBound...].range(of: "\n    @discardableResult\n    func retrySync(")
-        )
-        let discard = source[start.lowerBound..<end.lowerBound]
-        let recheck = try XCTUnwrap(
-            discard.range(of: "guard drafts.contains(where: { $0.id == draft.id }) else { return }")
-        )
-        let store = try XCTUnwrap(discard.range(of: "_ = try await daemon.store("))
-
-        XCTAssertLessThan(recheck.lowerBound, store.lowerBound)
+        let discard = try source("Services/Memory/DraftStore.swift", method: "func discard(_ draft: LocalDraft)")
+        let gate = try XCTUnwrap(discard.range(of: "withDraftMutation"))
+        let recheck = try XCTUnwrap(discard.range(of: "guard self.drafts.contains(where: { $0.id == draft.id }) else { return }"))
+        let write = try XCTUnwrap(discard.range(of: "_ = try await self.storeDraft("))
+        XCTAssertLessThan(gate.lowerBound, recheck.lowerBound)
+        XCTAssertLessThan(recheck.lowerBound, write.lowerBound)
     }
 
     func testReconciliationRetryUsesTheDraftProject() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let storeSource = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let start = try XCTUnwrap(storeSource.range(of: "    func applyReconciliation("))
-        let end = try XCTUnwrap(
-            storeSource[start.lowerBound...].range(of: "\n    func reviewDetail(")
-        )
-        let apply = storeSource[start.lowerBound..<end.lowerBound]
-
+        let apply = try source("Services/Memory/DraftReconciliationService.swift", method: "func applyReconciliation(")
         XCTAssertTrue(apply.contains("projectId ?? documentKey?.projectId"))
         XCTAssertTrue(apply.contains("projectId: reconciliationProjectId"))
         XCTAssertFalse(apply.contains("projectId: activeProjectId"))
-
-        let reviewSource = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Features/Reviews/ReviewDetailPage.swift"),
-            encoding: .utf8
-        )
-        XCTAssertTrue(reviewSource.contains(
-            "$0.draft.draftId == candidate.draftId"
-        ))
-        XCTAssertTrue(reviewSource.contains("}?.draft.projectId"))
+        let review = try source("Features/Reviews/ReviewDetailPage.swift")
+        XCTAssertTrue(review.contains("$0.draft.draftId == candidate.draftId"))
+        XCTAssertTrue(review.contains("}?.draft.projectId"))
     }
 
     func testDraftUploadBarrierRechecksAfterRetryPastDeadline() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let start = try XCTUnwrap(
-            source.range(of: "    private func synchronizedDraftForReconciliation(")
-        )
-        let end = try XCTUnwrap(
-            source[start.lowerBound...].range(of: "\n    private func installSynchronizedDraft(")
-        )
-        let barrier = source[start.lowerBound..<end.lowerBound]
-
-        XCTAssertTrue(barrier.contains(
-            "while clock.now < deadline || requiresPostRetryCheck"
-        ))
-        XCTAssertTrue(barrier.contains(
-            "requestedRetry = true\n                    requiresPostRetryCheck = true\n                    continue"
-        ))
-        XCTAssertTrue(barrier.contains(
-            "try await flushDocumentSave(sessionKey)\n                    requestedRetry = false\n                    requiresPostRetryCheck = true\n                    continue"
-        ))
+        let barrier = try source("Services/Memory/DraftReconciliationService.swift", method: "func synchronizedDraftForReconciliation(")
+        XCTAssertTrue(barrier.contains("while clock.now < deadline || requiresPostRetryCheck"))
+        XCTAssertTrue(barrier.contains("requestedRetry = true\n                    requiresPostRetryCheck = true\n                    continue"))
+        XCTAssertTrue(barrier.contains("try await edits.flushDocumentSave(sessionKey)\n                    requestedRetry = false\n                    requiresPostRetryCheck = true\n                    continue"))
     }
 
     func testOrgResourceRefreshIsScopedToWorkspaceGeneration() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let start = try XCTUnwrap(
-            source.range(of: "private func refreshOrgResourcesIfNeeded()")
-        )
-        let end = try XCTUnwrap(
-            source[start.lowerBound...].range(
-                of: "\n    nonisolated static func staleResourcePlan"
-            )
-        )
-        let refresh = source[start.lowerBound..<end.lowerBound]
-
-        XCTAssertTrue(refresh.contains(
-            "let workspaceGeneration = workspaceReloadGeneration"
-        ))
-        XCTAssertGreaterThanOrEqual(
-            refresh.components(separatedBy: "workspaceReloadGeneration == workspaceGeneration")
-                .count - 1,
-            2
-        )
+        let refresh = try source("Services/Memory/MemorySyncService.swift", method: "func refreshOrgResourcesIfNeeded(")
+        XCTAssertTrue(refresh.contains("let workspaceGeneration = context.workspaceReloadGeneration"))
+        XCTAssertGreaterThanOrEqual(refresh.components(separatedBy: "context.workspaceReloadGeneration == workspaceGeneration").count - 1, 2)
     }
 
     func testReloadAndProjectSelectionAreMutuallyExclusive() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let reloadStart = try XCTUnwrap(
-            source.range(of: "func reload(allowsDuringDocumentReconciliation:")
-        )
-        let reloadEnd = try XCTUnwrap(
-            source[reloadStart.lowerBound...].range(of: "\n    func presentProjectCreation()")
-        )
-        let reload = source[reloadStart.lowerBound..<reloadEnd.lowerBound]
-        let selectionGuard =
-            "guard loadingProjectId == nil, !isSwitchingMemoryContext else { return }"
+        let path = "Features/Workspace/WorkspaceCoordinator.swift"
+        let reload = try source(path, method: "func reload(allowsDuringDocumentReconciliation:")
+        let selectionGuard = "guard context.loadingProjectId == nil, !context.isSwitchingMemoryContext else { return }"
         let firstGuard = try XCTUnwrap(reload.range(of: selectionGuard))
-        let secondGuard = try XCTUnwrap(
-            reload[firstGuard.upperBound...].range(of: selectionGuard)
-        )
-        let loading = try XCTUnwrap(reload.range(of: "phase = .loading"))
+        let secondGuard = try XCTUnwrap(reload[firstGuard.upperBound...].range(of: selectionGuard))
+        let loading = try XCTUnwrap(reload.range(of: "context.phase = .loading"))
         let loader = try XCTUnwrap(reload.range(of: "WorkspaceLoader("))
-
-        XCTAssertTrue(reload.contains("guard !isSigningOut else { return }"))
+        XCTAssertTrue(reload.contains("guard !context.isSigningOut else { return }"))
         XCTAssertEqual(reload.components(separatedBy: selectionGuard).count - 1, 2)
         XCTAssertLessThan(secondGuard.lowerBound, loading.lowerBound)
         XCTAssertLessThan(loading.lowerBound, loader.lowerBound)
-        XCTAssertTrue(reload.contains(
-            "guard !preservesLoadedWorkspace || !snapshotWasStale"
-        ))
-
-        let selectStart = try XCTUnwrap(
-            source.range(of: "func selectProject(_ projectId: String) async")
-        )
-        let selectEnd = try XCTUnwrap(
-            source[selectStart.lowerBound...].range(of: "\n    func focusWorkspaceSearch")
-        )
-        XCTAssertTrue(
-            source[selectStart.lowerBound..<selectEnd.lowerBound]
-                .contains("guard phase == .ready else { return }")
-        )
-
-        let orgStart = try XCTUnwrap(
-            source.range(of: "func showOrgMemory() async")
-        )
-        let orgEnd = try XCTUnwrap(
-            source[orgStart.lowerBound...].range(of: "\n    func selectProject")
-        )
-        XCTAssertTrue(
-            source[orgStart.lowerBound..<orgEnd.lowerBound]
-                .contains("guard phase == .ready else { return }")
-        )
+        XCTAssertTrue(reload.contains("guard !preservesLoadedWorkspace || !snapshotWasStale"))
+        for method in ["func selectProject(_ projectId: String) async", "func showOrgMemory() async"] {
+            XCTAssertTrue(try source(path, method: method).contains("guard context.phase == .ready else { return }"))
+        }
     }
 
     func testSaveStagingAndBundleEditingRequireReadyWorkspace() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let storeSource = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
-            encoding: .utf8
-        )
-        let canEditStart = try XCTUnwrap(
-            storeSource.range(of: "func canEditMemory(_ item: MemoryListItem) -> Bool")
-        )
-        let canEditEnd = try XCTUnwrap(
-            storeSource[canEditStart.lowerBound...].range(of: "\n    var selectedItem")
-        )
-        XCTAssertTrue(
-            storeSource[canEditStart.lowerBound..<canEditEnd.lowerBound]
-                .contains("guard phase == .ready else { return false }")
-        )
-
-        let documentStart = try XCTUnwrap(
-            storeSource.range(of: "func stageDocumentSave")
-        )
-        let documentEnd = try XCTUnwrap(
-            storeSource[documentStart.lowerBound...].range(of: "\n    func flushDocumentSave")
-        )
-        XCTAssertTrue(
-            storeSource[documentStart.lowerBound..<documentEnd.lowerBound]
-                .contains("guard phase == .ready, !isSigningOut else { return }")
-        )
-
-        let bundleStart = try XCTUnwrap(storeSource.range(of: "func stageBundleSave"))
-        let bundleEnd = try XCTUnwrap(
-            storeSource[bundleStart.lowerBound...].range(of: "\n    func flushBundleSave")
-        )
-        XCTAssertTrue(
-            storeSource[bundleStart.lowerBound..<bundleEnd.lowerBound]
-                .contains("guard phase == .ready, !isSigningOut else { return }")
-        )
-
-        let bundleViewSource = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Features/Bundles/BundlesView.swift"),
-            encoding: .utf8
-        )
-        XCTAssertTrue(bundleViewSource.contains(".disabled(store.phase != .ready)"))
+        let canEdit = try source("Services/Memory/DraftStore.swift", method: "func canEditMemory(_ item: MemoryListItem)")
+        XCTAssertTrue(canEdit.contains("guard context.phase == .ready else { return false }"))
+        for (path, method) in [("Services/Memory/DraftStore.swift", "func stageDocumentSave"), ("Services/Bundles/BundleStore.swift", "func stageBundleSave")] {
+            XCTAssertTrue(try source(path, method: method).contains("guard context.phase == .ready, !context.isSigningOut else { return }"))
+        }
+        XCTAssertTrue(try source("Features/Bundles/BundlesView.swift").contains(".disabled(workspaceContext.phase != .ready)"))
     }
 
     func testSignOutSerializesFinalConfigClearAndUsesFullAuthorityClear() throws {
@@ -1308,25 +1077,25 @@ final class DaemonContractTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Services/Workspace/WorkspaceStore.swift"),
+            contentsOf: macOSRoot.appending(path: "Sources/Features/Workspace/WorkspaceCoordinator.swift"),
             encoding: .utf8
         )
         let signOutStart = try XCTUnwrap(source.range(of: "func signOut() async"))
         let signOutEnd = try XCTUnwrap(
-            source[signOutStart.lowerBound...].range(of: "\n    func createMemory")
+            source[signOutStart.lowerBound...].range(of: "\n    func flushPendingChanges")
         )
         let signOut = source[signOutStart.lowerBound..<signOutEnd.lowerBound]
         let signOutGuard = try XCTUnwrap(
-            signOut.range(of: "guard !isSigningOut else { return }")
+            signOut.range(of: "guard !context.isSigningOut else { return }")
         )
         let signOutSet = try XCTUnwrap(
-            signOut.range(of: "isSigningOut = true")
+            signOut.range(of: "context.isSigningOut = true")
         )
         let priorPhase = try XCTUnwrap(
-            signOut.range(of: "let priorPhase = phase")
+            signOut.range(of: "let priorPhase = context.phase")
         )
         let signOutDefer = try XCTUnwrap(
-            signOut.range(of: "defer { isSigningOut = false }")
+            signOut.range(of: "defer { self.context.isSigningOut = false }")
         )
         let flush = try XCTUnwrap(signOut.range(of: "await flushPendingChanges()"))
         let loading = try XCTUnwrap(
@@ -1376,31 +1145,10 @@ final class DaemonContractTests: XCTestCase {
         )
         let clear = source[clearStart.lowerBound..<clearEnd.lowerBound]
         let requiredFullClearOperations = [
-            "invalidateWorkspaceTransitionState",
-            "documentSaveTasks.values.forEach { $0.cancel() }",
-            "pendingDocumentSaves.removeAll()",
-            "bundleSaveTasks.values.forEach { $0.cancel() }",
-            "pendingBundleSaves.removeAll()",
-            "account = nil",
-            "organization = nil",
-            "projectRoles.removeAll()",
-            "invalidateAdministrationAuthority()",
-            "orgRefCommitId = nil",
-            #"orgRefEtag = """#,
-            "activeProjectId = nil",
-            "resources.removeAll()",
-            "drafts.removeAll()",
-            "bundles.removeAll()",
-            "reviews.removeAll()",
-            "runtime = nil",
-            "syncStatusAvailable = false",
-            "selectedItemId = nil",
-            "selectedBundleId = nil",
-            "selectedReviewId = nil",
-            "navigationBackStack.removeAll()",
-            "navigationForwardStack.removeAll()",
-            "resourceLoadRequests.removeAll()",
-            "documentSynchronizationTasks.values.forEach { $0.cancel() }",
+            "refresh.resetAuthority()", "feedback.resetBackgroundErrorPresentation()",
+            "edits.resetAuthority()", "bundles.resetAuthority()", "reviews.resetAuthority()",
+            "sessions.resetAuthority()", "navigation.resetAuthority()", "catalog.resetAuthority()",
+            "context.resetAuthority()", "bundleSelection.selectedBundleId = nil",
         ]
         for operation in requiredFullClearOperations {
             XCTAssertTrue(clear.contains(operation), "Missing full clear: \(operation)")
@@ -1822,7 +1570,7 @@ final class DaemonContractTests: XCTestCase {
             inventoryDraft(from: terminal, status: .open),
         ]
 
-        let plan = WorkspaceStore.draftInventoryPlan(
+        let plan = DraftStore.draftInventoryPlan(
             summaries: [unchanged, external, updated, queued, terminal],
             currentDrafts: currentDrafts,
             includeFailed: false
@@ -1846,7 +1594,7 @@ final class DaemonContractTests: XCTestCase {
             )
         )
 
-        let plan = WorkspaceStore.draftInventoryPlan(
+        let plan = DraftStore.draftInventoryPlan(
             summaries: [summary],
             currentDrafts: [current],
             includeFailed: false
@@ -1906,7 +1654,7 @@ final class DaemonContractTests: XCTestCase {
 
     @MainActor
     func testRequestReviewRejectsBehindDraftBeforeCallingTheServer() async {
-        let store = WorkspaceStore()
+        let store = WorkspaceCoordinator()
         let draft = LocalDraft(
             id: "draft-behind",
             projectId: "project-1",
@@ -1930,7 +1678,7 @@ final class DaemonContractTests: XCTestCase {
         )
 
         do {
-            try await store.requestReview(for: draft, title: "Guide", description: "")
+            try await store.reviews.requestReview(for: draft, title: "Guide", description: "")
             XCTFail("behind Draft must be reconciled before Review creation")
         } catch ReviewRequestError.reconciliationRequired {
         } catch {

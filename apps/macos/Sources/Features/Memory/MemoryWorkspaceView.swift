@@ -2,24 +2,30 @@ import AppKit
 import SwiftUI
 
 struct MemoryNavigator: View {
-    @ObservedObject var store: WorkspaceStore
+    @EnvironmentObject private var documentSessions: DocumentSessions
+    @EnvironmentObject private var draftStore: DraftStore
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var memoryCatalog: MemoryCatalog
+    @EnvironmentObject private var memoryModel: MemoryModel
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
 
     var body: some View {
         content
             .safeAreaInset(edge: .bottom) {
                 DraftInventoryStatusBanner(store: store)
             }
-            .onChange(of: store.selectedKind) { _, _ in
-                store.selectedItemId = nil
+            .onChange(of: workspaceNavigation.selectedKind) { _, _ in
+                workspaceNavigation.selectedItemId = nil
             }
     }
 
     @ViewBuilder
     private var content: some View {
-        if !query.isEmpty, items.isEmpty, store.isPreparingWorkspaceIndex {
+        if !query.isEmpty, items.isEmpty, memoryCatalog.isPreparingWorkspaceIndex {
             ProgressView("Preparing Search…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if !store.visibleMemoryItems.isEmpty, !query.isEmpty, items.isEmpty {
+        } else if !memoryModel.visibleMemoryItems.isEmpty, !query.isEmpty, items.isEmpty {
             ContentUnavailableView.search(text: query)
         } else {
             FileTreeView(store: store, items: items)
@@ -27,27 +33,33 @@ struct MemoryNavigator: View {
     }
 
     private var query: String {
-        store.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        workspaceNavigation.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var items: [MemoryListItem] {
-        WorkspaceStore.filterMemoryItems(store.visibleMemoryItems, query: query)
+        MemoryTreeProjection.filterMemoryItems(memoryModel.visibleMemoryItems, query: query)
     }
 }
 
 struct MemoryMainPane: View {
-    @ObservedObject var store: WorkspaceStore
+    @EnvironmentObject private var documentSessions: DocumentSessions
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var memoryCatalog: MemoryCatalog
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
+    @EnvironmentObject private var draftStore: DraftStore
+    @EnvironmentObject private var memoryModel: MemoryModel
+    @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
 
     var body: some View {
         VStack(spacing: 0) {
-            if let project = store.activeProject, !project.isLoaded {
+            if let project = workspaceContext.activeProject, !project.isLoaded {
                 ProjectPreparationView(store: store)
-            } else if !store.visibleTabs.isEmpty {
+            } else if !workspaceNavigation.visibleTabs.isEmpty {
                 DocumentTabStrip(
-                    tabs: store.visibleTabs,
-                    selectedTabId: store.activeVisibleTab?.id,
-                    onSelect: { tab in store.selectTab(tab) },
-                    onClose: store.closeTab
+                    tabs: workspaceNavigation.visibleTabs,
+                    selectedTabId: workspaceNavigation.activeVisibleTab?.id,
+                    onSelect: { tab in workspaceNavigation.selectTab(tab) },
+                    onClose: workspaceNavigation.closeTab
                 )
                 .frame(
                     maxWidth: .infinity,
@@ -57,10 +69,10 @@ struct MemoryMainPane: View {
                 )
                 .background(.bar)
 
-                if let tab = store.activeVisibleTab,
-                   let item = store.item(for: tab) {
+                if let tab = workspaceNavigation.activeVisibleTab,
+                   let item = workspaceNavigation.item(for: tab) {
                     let presentsUnavailableStaleDiff = tab.mode == .diff
-                        && item.resource.map { store.staleResourceIds.contains($0.id) } == true
+                        && item.resource.map { memoryCatalog.staleResourceIds.contains($0.id) } == true
                     let presentsUnavailableDraftDiff = tab.mode == .diff
                         && item.draft?.documentBaselineAvailable == false
                     if item.contentLoaded || presentsUnavailableStaleDiff
@@ -91,8 +103,8 @@ struct MemoryMainPane: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        if store.visibleMemoryItems.isEmpty {
-            switch store.draftInventoryLoadState {
+        if memoryModel.visibleMemoryItems.isEmpty {
+            switch draftStore.draftInventoryLoadState {
             case .loading:
                 ContentLoadingView(title: "Loading Memory…")
             case .failed(let message):
@@ -113,11 +125,12 @@ struct MemoryMainPane: View {
 }
 
 private struct DraftInventoryStatusBanner: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var draftStore: DraftStore
 
     @ViewBuilder
     var body: some View {
-        switch store.draftInventoryLoadState {
+        switch draftStore.draftInventoryLoadState {
         case .loading:
             HStack(spacing: 8) {
                 ProgressView()
@@ -144,7 +157,8 @@ private struct DraftInventoryStatusBanner: View {
 }
 
 private struct ResourceLoadingView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var memoryCatalog: MemoryCatalog
     let item: MemoryListItem
     @State private var failure: String?
 
@@ -167,7 +181,7 @@ private struct ResourceLoadingView: View {
 
     private func load() async {
         failure = nil
-        let message = await store.loadContentIfNeeded(item)
+        let message = await memoryCatalog.loadContentIfNeeded(item)
         guard !Task.isCancelled else { return }
         failure = message
     }
@@ -187,10 +201,11 @@ private struct EmptyWorkspaceView: View {
 }
 
 private struct EmptyMemoryCollectionView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
 
     var body: some View {
-        if store.activeProjectId != nil {
+        if workspaceContext.activeProjectId != nil {
             MemoryGuidelinesSetupView(store: store)
         } else {
             ContentUnavailableView(
@@ -203,10 +218,11 @@ private struct EmptyMemoryCollectionView: View {
 }
 
 private struct ProjectPreparationView: View {
-    @ObservedObject var store: WorkspaceStore
+    let store: WorkspaceCoordinator
+    @EnvironmentObject private var workspaceContext: WorkspaceContext
 
     var body: some View {
-        if store.loadingProjectId == store.activeProjectId {
+        if workspaceContext.loadingProjectId == workspaceContext.activeProjectId {
             ContentLoadingView(title: "Loading Project…")
         } else {
             ContentUnavailableView {
@@ -214,7 +230,7 @@ private struct ProjectPreparationView: View {
             } description: {
                 Text("The project could not be loaded. Try again when the connection is available.")
             } actions: {
-                if let projectId = store.activeProjectId {
+                if let projectId = workspaceContext.activeProjectId {
                     Button("Try Again") {
                         Task { await store.selectProject(projectId) }
                     }

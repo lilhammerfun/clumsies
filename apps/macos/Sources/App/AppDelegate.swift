@@ -4,8 +4,10 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private let store = WorkspaceStore()
-    private lazy var administration = AdministrationModel(workspace: store)
+    private let store = WorkspaceCoordinator()
+    private lazy var administration = AdministrationModel(
+        context: store.context, onWorkspaceChanged: { [weak store] in await store?.reload() }
+    )
     private let softwareUpdateController = SoftwareUpdateController()
     let administratorRecoveryState = NativeAdministratorRecoveryState()
     private var phaseObservation: AnyCancellable?
@@ -71,36 +73,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(newProject(_:)) {
-            return store.canCreateProject && store.phase == .ready
+            return store.context.canCreateProject && store.context.phase == .ready
         }
         if menuItem.action == #selector(newMemory(_:)) {
-            guard store.selectedSection == .memory else { return false }
-            return store.canCreateMemory(kind: store.selectedKind, scope: .org)
+            guard store.navigation.selectedSection == .memory else { return false }
+            return store.edits.canCreateMemory(kind: store.navigation.selectedKind, scope: .org)
         }
         if menuItem.action == #selector(closeActiveTab(_:)) {
             return (NSApp.keyWindow != nil && NSApp.keyWindow !== mainWindow)
-                || store.activeVisibleTab != nil
+                || store.navigation.activeVisibleTab != nil
         }
         if menuItem.action == #selector(toggleSidebar(_:)) {
-            menuItem.title = store.sidebarExpanded ? "Hide Sidebar" : "Show Sidebar"
+            menuItem.title = store.navigation.sidebarExpanded ? "Hide Sidebar" : "Show Sidebar"
         }
         if menuItem.action == #selector(approveReview(_:)) {
-            return store.canPerformReviewMenuAction(.approve)
+            return store.reviews.canPerformReviewMenuAction(.approve)
         }
         if menuItem.action == #selector(rejectReview(_:)) {
-            return store.canPerformReviewMenuAction(.reject)
+            return store.reviews.canPerformReviewMenuAction(.reject)
         }
         if menuItem.action == #selector(mergeReview(_:)) {
-            return store.canPerformReviewMenuAction(.merge)
+            return store.reviews.canPerformReviewMenuAction(.merge)
         }
         if menuItem.action == #selector(resubmitReview(_:)) {
-            return store.canPerformReviewMenuAction(.resubmit)
+            return store.reviews.canPerformReviewMenuAction(.resubmit)
         }
         return true
     }
 
     private func observePhase() {
-        phaseObservation = store.$phase
+        phaseObservation = store.context.$phase
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] phase in
@@ -124,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             mainWindow?.orderOut(nil)
             presentNativeServerAccess(
                 purpose: .appSignIn,
-                destination: .daemon(store.daemon, launchIfNeeded: false)
+                destination: .daemon(store.context.daemon, launchIfNeeded: false)
             ) { [weak self] in
                 guard let self else { return }
                 Task { await self.store.reload() }
@@ -140,17 +142,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     UserDefaults.standard.set(true, forKey: "ClumsiesAgentSetupCompleted")
                     guard let self else { return }
                     self.isChoosingAgents = false
-                    self.present(self.store.phase)
-                })
+                    self.present(self.store.context.phase)
+                }.workspaceEnvironment(store))
                 return
             }
             let wasAuthenticating = startupWindowController.window != nil
             startupWindowController.window?.orderOut(nil)
             startupWindowController.window = nil
             if mainWindow != nil,
-               mainWorkspaceAccountID == store.account?.userId,
-               mainWorkspaceOrganizationID == store.organization?.orgId {
-                mainWindow?.title = store.organization?.name ?? "Clumsies Lab"
+               mainWorkspaceAccountID == store.context.account?.userId,
+               mainWorkspaceOrganizationID == store.context.organization?.orgId {
+                mainWindow?.title = store.context.organization?.name ?? "Clumsies Lab"
                 if wasAuthenticating { mainWindow?.makeKeyAndOrderFront(nil) }
             } else {
                 presentMainWindow()
@@ -175,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if status.state == .setupRequired {
                 presentNativeServerAccess(
                     purpose: .appSignIn,
-                    destination: .daemon(store.daemon, launchIfNeeded: true),
+                    destination: .daemon(store.context.daemon, launchIfNeeded: true),
                     initialSetupStatus: status
                 ) { [weak self] in
                     self?.store.start()
@@ -213,15 +215,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentMainWindow() {
-        mainWorkspaceAccountID = store.account?.userId
-        mainWorkspaceOrganizationID = store.organization?.orgId
+        mainWorkspaceAccountID = store.context.account?.userId
+        mainWorkspaceOrganizationID = store.context.organization?.orgId
         presentMainContent(
             WorkspaceView(
                 store: store,
                 onSignOut: { [weak self] in self?.signOut() },
                 onOpenSettings: { [weak self] in self?.presentSettingsWindow() }
-            ).environmentObject(administration),
-            title: store.organization?.name ?? "Clumsies Lab"
+            ).environmentObject(administration).workspaceEnvironment(store),
+            title: store.context.organization?.name ?? "Clumsies Lab"
         )
     }
 
@@ -296,7 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func showLogsInFinder() {
-        let path = store.runtime?.health.logDir
+        let path = store.refresh.runtime?.health.logDir
         let logURL: URL
         if let path, !path.isEmpty {
             logURL = URL(fileURLWithPath: path)
@@ -373,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             mainWindow.makeKeyAndOrderFront(nil)
             return
         }
-        present(store.phase)
+        present(store.context.phase)
     }
 
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
@@ -546,12 +548,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func newMemory(_ sender: Any?) {
-        guard store.selectedSection == .memory else { return }
-        Task { await store.createMemory(kind: store.selectedKind, scope: .org) }
+        guard store.navigation.selectedSection == .memory else { return }
+        Task { await store.memory.createMemory(kind: store.navigation.selectedKind, scope: .org) }
     }
 
     @objc private func newProject(_ sender: Any?) {
-        store.presentProjectCreation()
+        store.navigation.presentProjectCreation()
     }
 
     @objc private func closeActiveTab(_ sender: Any?) {
@@ -559,7 +561,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             keyWindow.performClose(sender)
             return
         }
-        if !store.closeActiveTab() {
+        if !store.navigation.closeActiveTab() {
             mainWindow?.performClose(sender)
         }
     }
@@ -570,34 +572,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func showSearch(_ sender: Any?) {
         mainWindow?.makeKeyAndOrderFront(nil)
-        switch store.selectedSection {
+        switch store.navigation.selectedSection {
         case .reviews:
-            store.focusReviewSearch()
+            store.navigation.focusReviewSearch()
         case .memory, .bundles:
-            store.focusWorkspaceSearch()
+            store.navigation.focusWorkspaceSearch()
         case .sessions:
             break
         }
     }
 
     @objc private func toggleSidebar(_ sender: Any?) {
-        store.sidebarExpanded.toggle()
+        store.navigation.sidebarExpanded.toggle()
         mainWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func approveReview(_ sender: Any?) {
-        Task { await store.performReviewMenuAction(.approve) }
+        Task { await store.reviews.performReviewMenuAction(.approve) }
     }
 
     @objc private func rejectReview(_ sender: Any?) {
-        Task { await store.performReviewMenuAction(.reject) }
+        Task { await store.reviews.performReviewMenuAction(.reject) }
     }
 
     @objc private func mergeReview(_ sender: Any?) {
-        Task { await store.performReviewMenuAction(.merge) }
+        Task { await store.reviews.performReviewMenuAction(.merge) }
     }
 
     @objc private func resubmitReview(_ sender: Any?) {
-        Task { await store.performReviewMenuAction(.resubmit) }
+        Task { await store.reviews.performReviewMenuAction(.resubmit) }
     }
 }
