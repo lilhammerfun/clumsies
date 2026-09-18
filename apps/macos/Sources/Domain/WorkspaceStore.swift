@@ -2944,8 +2944,7 @@ final class WorkspaceStore: ObservableObject {
 
     private func createMemoryDraft(
         kind: MemoryKind,
-        scope: MemoryScope,
-        initialDocument: EditableMemoryDocument? = nil
+        scope: MemoryScope
     ) async throws -> String? {
         guard scope == .org, canCreateMemory(kind: kind, scope: scope),
               let projectId = activeProjectId else { return nil }
@@ -2964,26 +2963,13 @@ final class WorkspaceStore: ObservableObject {
                 activeProjectId: activeProjectId,
                 expectedProjectId: projectId
             ), workspaceReloadGeneration == generation else { return nil }
-            let document: EditableMemoryDocument
-            if let initialDocument {
-                try validate(kind: kind, document: initialDocument)
-                let occupiedPaths = Set(authority.resources.map(\.document.path))
-                    .union(Self.memoryTreeDrafts(drafts, activeProjectId: projectId).map(\.document.path))
-                guard !occupiedPaths.contains(initialDocument.path) else {
-                    throw MemoryValidationError.invalidPath(
-                        "\(initialDocument.path) already exists. Refresh memory guidelines to use the existing document."
-                    )
-                }
-                document = initialDocument
-            } else {
-                let path = uniqueDefaultPath(
-                    for: kind,
-                    scope: scope,
-                    authoritativeOrgResources: authority.resources,
-                    projectId: projectId
-                )
-                document = Self.defaultDocument(kind: kind, path: path)
-            }
+            let path = uniqueDefaultPath(
+                for: kind,
+                scope: scope,
+                authoritativeOrgResources: authority.resources,
+                projectId: projectId
+            )
+            let document = Self.defaultDocument(kind: kind, path: path)
             let response = try await daemon.store(
                 .init(
                     draftId: nil,
@@ -3015,14 +3001,23 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    /// Inspect both the effective Project and fresh Org authority before offering initialization.
-    func prepareMemoryGuidelines(projectId: String) async throws -> MemoryGuidelinesSetup {
+    /// Use loaded metadata for presentation; adoption revalidates shared authority before writing.
+    func prepareMemoryGuidelines(
+        projectId: String,
+        refreshingAuthority: Bool = false
+    ) async throws -> MemoryGuidelinesSetup {
         let generation = workspaceReloadGeneration
         let config = try await daemon.projectConfig()
-        guard let authority = try await loadStableOrgAuthoritySnapshot(allowingEmptyHead: true) else {
-            throw ServerClientError.invalidResponse("Couldn’t check your organization's memory guidelines. Try again.")
+        var authorityResources = resources.filter { $0.scope == .org }
+        var authorityCommitId = orgRefCommitId
+        if refreshingAuthority {
+            guard let authority = try await loadStableOrgAuthoritySnapshot(allowingEmptyHead: true) else {
+                throw ServerClientError.invalidResponse("Couldn’t check your organization's memory guidelines. Try again.")
+            }
+            authorityResources = authority.resources
+            authorityCommitId = authority.commitId
+            await refreshDraftInventory(includeFailed: true, generation: generation)
         }
-        await refreshDraftInventory(includeFailed: true, generation: generation)
         try Task.checkCancellation()
         guard generation == workspaceReloadGeneration, phase == .ready,
               selectedSection == .memory,
@@ -3036,17 +3031,22 @@ final class WorkspaceStore: ObservableObject {
         case .failed(let message): throw ServerClientError.invalidResponse(message)
         case .loading: throw ServerClientError.invalidResponse("Wait for drafts to finish loading, then try again.")
         }
-        return try MemoryGuidelines.setup(
+        var setup = try MemoryGuidelines.setup(
             projectId: projectId,
             path: MemoryGuidelines.configuredPath(config.memoryGuidelinesPath),
             items: visibleMemoryItems,
-            organizationResources: authority.resources
+            organizationResources: authorityResources
         )
+        setup.organizationCommitId = authorityCommitId
+        setup.occupiedPaths = Set(authorityResources.map(\.document.path))
+            .union(visibleMemoryItems.map(\.document.path))
+            .union(Self.memoryTreeDrafts(drafts, activeProjectId: projectId).map(\.document.path))
+        return setup
     }
 
     /// Recheck the offered action. A changed destination is presented again for the user to choose.
     func useMemoryGuidelines(_ offered: MemoryGuidelinesSetup) async throws -> MemoryGuidelinesSetup {
-        let current = try await prepareMemoryGuidelines(projectId: offered.projectId)
+        let current = try await prepareMemoryGuidelines(projectId: offered.projectId, refreshingAuthority: true)
         guard current.hasSameDestination(as: offered) else { return current }
         let generation = workspaceReloadGeneration
         let itemId: String
@@ -3060,10 +3060,7 @@ final class WorkspaceStore: ObservableObject {
             try await addOrgMemories(resourceIds: [resource.id], toProject: current.projectId)
             itemId = resource.id
         case .createDefault:
-            guard let id = try await createMemoryDraft(
-                kind: .context, scope: .org, initialDocument: MemoryGuidelines.defaultDocument()
-            ) else { throw CancellationError() }
-            itemId = id
+            itemId = try await createMemoryGuidelines(current)
         }
         guard generation == workspaceReloadGeneration,
               activeProjectId == current.projectId,
@@ -3073,6 +3070,39 @@ final class WorkspaceStore: ObservableObject {
         }
         open(item, mode: .preview)
         return current
+    }
+
+    private func createMemoryGuidelines(_ setup: MemoryGuidelinesSetup) async throws -> String {
+        let generation = workspaceReloadGeneration
+        return try await withDraftMutation {
+            guard generation == workspaceReloadGeneration,
+                  activeProjectId == setup.projectId,
+                  canCreateMemory(kind: .context, scope: .org) else { throw CancellationError() }
+            let occupiedPaths = setup.occupiedPaths.union(
+                Self.memoryTreeDrafts(drafts, activeProjectId: setup.projectId).map(\.document.path)
+            )
+            let documents = try MemoryGuidelines.defaultDocuments(occupiedPaths: occupiedPaths)
+            for document in documents { try validate(kind: .context, document: document) }
+            let responses = try await daemon.createMemoryDrafts(.init(
+                projectId: setup.projectId,
+                baseCommitId: setup.organizationCommitId,
+                operations: documents.map {
+                    .create(path: $0.path, content: daemonContent(kind: .context, document: $0), description: nil)
+                }
+            ))
+            guard generation == workspaceReloadGeneration,
+                  activeProjectId == setup.projectId else { throw CancellationError() }
+            let daemon = daemon
+            let details = try await concurrentMap(responses) { try await daemon.draft($0.draftId) }
+            guard generation == workspaceReloadGeneration,
+                  activeProjectId == setup.projectId,
+                  let guideline = responses.first else { throw CancellationError() }
+            let created = details.map { WorkspaceLoader.mapDraft($0, resources: resources) }
+            let createdIds = Set(created.map(\.id))
+            drafts = drafts.filter { !createdIds.contains($0.id) } + created
+            selectedItemId = guideline.draftId
+            return guideline.draftId
+        }
     }
 
     func stageDocumentSave(_ item: MemoryListItem, document: EditableMemoryDocument) {

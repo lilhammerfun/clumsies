@@ -56,7 +56,7 @@ Before maintaining memory, agents read the complete guide via `memory` with `op:
 
 If the guide returns `memory_resource_not_found`, report the missing path. This establishes absence only in the current Project view, not throughout the Organization. Continue retrieval and fully specified, authorized edits using the user's instructions and existing conventions; clarify decisions that depend on the missing guide. Do not automatically create a guide, substitute a local file, or fall back from a missing custom path.
 
-Users who want to set up guidelines can use **Use Default Guidelines** or **Use Organization Guidelines** in the App's empty Project Memory view. The latter selects existing Organization Memory and requires Project administrator access. Adoption is optional; the bundled template is not a Memory resource until adopted. See [Memory Guidelines](/guides/memory-guidelines) for the concept, preview, and research sources.
+Users who want to set up guidelines can use **Set Up Guidelines** or **Use Team Guidelines** in the App's empty Project Memory view. The latter selects existing Organization Memory and requires Project administrator access. Adoption is optional; the bundled template is not a Memory resource until adopted. See [Memory Guidelines](/guides/memory-guidelines) for the concept, preview, and research sources.
 
 ### Activate
 

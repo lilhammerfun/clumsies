@@ -42,6 +42,9 @@ targets:
         buildPhase: resources
       - path: Resources/CLUMSIES.md
         buildPhase: resources
+      - path: Resources/MemoryStarter
+        type: folder
+        buildPhase: resources
       - path: Resources/FileSymbols
         type: folder
         buildPhase: resources

@@ -2,6 +2,36 @@ import XCTest
 @testable import Clumsies
 
 final class MemoryGuidelinesTests: XCTestCase {
+    func testStarterBatchUsesTheDaemonWireContract() throws {
+        let request = DaemonCreateMemoryDraftsRequest(
+            projectId: "project", baseCommitId: "commit",
+            operations: [.create(
+                path: "CLUMSIES.md", content: .init(description: nil, content: "# Guidelines"),
+                description: nil
+            )]
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONCoding.encoder().encode(request)) as? [String: Any])
+        XCTAssertEqual(json["project_id"] as? String, "project")
+        XCTAssertEqual(json["base_commit_id"] as? String, "commit")
+        let operations = try XCTUnwrap(json["operations"] as? [[String: Any]])
+        let create = try XCTUnwrap(operations.first?["create"] as? [String: Any])
+        XCTAssertEqual(create["path"] as? String, "CLUMSIES.md")
+        XCTAssertEqual((create["content"] as? [String: Any])?["content"] as? String, "# Guidelines")
+    }
+
+    func testStarterIncludesRealFoldersAndPreservesExistingContent() throws {
+        let documents = try MemoryGuidelines.defaultDocuments()
+        XCTAssertEqual(documents.map(\.path), [
+            "CLUMSIES.md", "knowledge/README.md", "procedures/README.md", "lessons/README.md",
+        ])
+        XCTAssertTrue(documents.allSatisfy { !$0.body.isEmpty })
+        let partial = try MemoryGuidelines.defaultDocuments(occupiedPaths: [
+            "knowledge/decisions.md", "procedures/README.md", "other/custom.md",
+        ])
+        XCTAssertEqual(partial.map(\.path), ["CLUMSIES.md", "lessons/README.md"])
+        XCTAssertThrowsError(try MemoryGuidelines.defaultDocuments(occupiedPaths: ["CLUMSIES.md"]))
+    }
+
     func testEmptySpaceOffersBundledDocumentAtExactDefaultPath() throws {
         let setup = try plan()
         XCTAssertEqual(setup.action, .createDefault)

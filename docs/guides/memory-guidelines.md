@@ -11,16 +11,25 @@ Start with the Clumsies defaults or use your team's existing guidelines. You can
 ## Start with the defaults
 
 1. Open **Memory** and select an empty Project.
-2. Choose **Preview guidelines and their sources** to read the complete English template and its research references, or choose **Use Default Guidelines** to adopt it directly.
-3. Clumsies creates `CLUMSIES.md` as a Draft and opens it. Use **Source** to edit it whenever your conventions change.
+2. Choose **Preview guidelines and their sources** to read the complete English template and its research references, or choose **Set Up Guidelines** to adopt it directly.
+3. Clumsies creates the starter documents together as Drafts and opens `CLUMSIES.md`. Use **Source** to edit any document whenever your conventions change.
 
-The Draft contributes to this Project's Effective Memory before publication. To share it with other Projects, use the existing [review and publication flow](/quickstart/review-and-publish), then select the published resource in those Projects.
+```text
+CLUMSIES.md
+knowledge/README.md
+procedures/README.md
+lessons/README.md
+```
 
-You can also choose **Create a Memory** or **File → New Memory** to start with your own content. Adopting default guidelines is optional.
+The folder READMEs explain what belongs there; they contain no invented project facts. Preview lets you read each document before setup. Existing folders and custom guidelines are preserved. All new documents are saved in one local transaction, so a failed setup leaves no partial starter.
+
+The Drafts contribute to this Project's Effective Memory before publication. To share them with other Projects, use the existing [review and publication flow](/quickstart/review-and-publish), then select the published resources in those Projects.
+
+You can also choose **File → New Memory** to start with your own content. Adopting default guidelines is optional.
 
 ## Use existing guidelines
 
-Clumsies checks the configured path, current Project drafts, and Organization Memory before offering initialization. Existing guidelines are preserved. If the Organization already has the document, **Use Organization Guidelines** adds that resource to the Project's selection; this requires Project administrator access. It does not create another copy.
+Clumsies checks the configured path, current Project drafts, and Organization Memory before offering initialization. Existing guidelines are preserved. If the Organization already has the document, **Use Team Guidelines** adds that resource to the Project's selection; this requires Project administrator access. It does not create another copy.
 
 A missing custom path is reported so you can restore the document or correct the configuration. It does not silently create the defaults at another path. A Draft that removes or renames the configured document must be resolved first.
 

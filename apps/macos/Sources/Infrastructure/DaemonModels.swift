@@ -534,6 +534,12 @@ struct DaemonDraftOperationResponse: Codable, Sendable {
     let syncStatus: DaemonDraftSyncState
 }
 
+struct DaemonCreateMemoryDraftsRequest: Encodable, Sendable {
+    let projectId: String
+    let baseCommitId: String?
+    let operations: [DaemonDraftOperation]
+}
+
 struct DaemonDraftContent: Codable, Hashable, Sendable {
     let description: String?
     let content: String

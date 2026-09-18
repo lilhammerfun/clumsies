@@ -7,15 +7,13 @@ struct MemoryGuidelinesSetupView: View {
     @State private var error: String?
     @State private var isLoading = true
     @State private var isAdopting = false
-    @State private var preview: EditableMemoryDocument?
-    @State private var showsPreview = false
+    @State private var preview: GuidelinesPreviewContent?
     @State private var destinationChanged = false
 
     var body: some View {
         Group {
             if isLoading {
-                ProgressView("Checking Memory Guidelines…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ContentLoadingView(title: "Checking Memory Guidelines…", layout: .document)
             } else if let error {
                 ContentUnavailableView {
                     Label("Memory Guidelines Unavailable", systemImage: "doc.badge.ellipsis")
@@ -23,7 +21,6 @@ struct MemoryGuidelinesSetupView: View {
                     Text(error)
                 } actions: {
                     Button("Try Again") { Task { await prepare() } }
-                    createMemoryButton
                 }
             } else if let setup {
                 ContentUnavailableView {
@@ -33,25 +30,23 @@ struct MemoryGuidelinesSetupView: View {
                         .frame(maxWidth: 440)
                 } actions: {
                     VStack(spacing: 12) {
-                        HStack {
-                            Button(actionTitle(for: setup)) { Task { await adopt() } }
-                                .buttonStyle(.borderedProminent)
-                                .keyboardShortcut(.defaultAction)
-                                .disabled(!canAdopt(setup) || isAdopting)
-                            createMemoryButton
-                        }
+                        Button(actionTitle(for: setup)) { Task { await adopt() } }
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(!canAdopt(setup) || isAdopting)
                         if setup.action == .createDefault {
                             Button("Preview guidelines and their sources") {
                                 do {
-                                    preview = try MemoryGuidelines.defaultDocument()
-                                    showsPreview = true
+                                    preview = GuidelinesPreviewContent(
+                                        documents: try MemoryGuidelines.defaultDocuments(occupiedPaths: setup.occupiedPaths)
+                                    )
                                 } catch {
                                     self.error = error.localizedDescription
                                 }
                             }
                             .buttonStyle(.link)
                             .disabled(isAdopting)
-                            Text("Creates an editable CLUMSIES.md in this project's memory.")
+                            Text("Creates CLUMSIES.md and starter folders for knowledge, procedures, and lessons.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -73,26 +68,12 @@ struct MemoryGuidelinesSetupView: View {
             }
         }
         .task(id: store.activeProjectId) { await prepare() }
-        .sheet(isPresented: $showsPreview) {
-            if let preview {
-                MemoryGuidelinesPreview(document: preview) {
-                    showsPreview = false
-                    Task { await adopt() }
-                }
+        .sheet(item: $preview) { content in
+            MemoryGuidelinesPreview(documents: content.documents) {
+                preview = nil
+                Task { await adopt() }
             }
         }
-    }
-
-    private var createMemoryButton: some View {
-        Button("Create a Memory") {
-            Task {
-                guard !isAdopting else { return }
-                isAdopting = true
-                defer { isAdopting = false }
-                await store.createMemory(kind: store.selectedKind, scope: .org)
-            }
-        }
-        .disabled(isAdopting || !store.canCreateMemory(kind: store.selectedKind, scope: .org))
     }
 
     private func canAdopt(_ setup: MemoryGuidelinesSetup) -> Bool {
@@ -122,9 +103,9 @@ struct MemoryGuidelinesSetupView: View {
 
     private func actionTitle(for setup: MemoryGuidelinesSetup) -> String {
         switch setup.action {
-        case .createDefault: "Use Default Guidelines"
-        case .useOrganization: "Use Organization Guidelines"
-        case .open: "Open Memory Guidelines"
+        case .createDefault: "Set Up Guidelines"
+        case .useOrganization: "Use Team Guidelines"
+        case .open: "Open Guidelines"
         }
     }
 
@@ -134,7 +115,7 @@ struct MemoryGuidelinesSetupView: View {
         error = nil
         setup = nil
         destinationChanged = false
-        showsPreview = false
+        preview = nil
         do {
             let result = try await store.prepareMemoryGuidelines(projectId: projectId)
             try Task.checkCancellation()
@@ -168,16 +149,32 @@ struct MemoryGuidelinesSetupView: View {
     }
 }
 
+private struct GuidelinesPreviewContent: Identifiable {
+    let id = UUID()
+    let documents: [EditableMemoryDocument]
+}
+
 private struct MemoryGuidelinesPreview: View {
-    let document: EditableMemoryDocument
+    let documents: [EditableMemoryDocument]
     let onUse: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedPath = MemoryGuidelines.defaultPath
+
+    private var document: EditableMemoryDocument {
+        documents.first { $0.path == selectedPath } ?? documents[0]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Memory Guidelines").font(.title2.bold())
             Text("Choose how agents maintain your memory. You can edit these guidelines at any time. App updates will preserve your changes.")
                 .foregroundStyle(.secondary)
+            Picker("Starter document", selection: $selectedPath) {
+                ForEach(documents, id: \.path) { document in
+                    Text(document.title).tag(document.path)
+                }
+            }
+            .pickerStyle(.segmented)
             ScrollView {
                 Markdown(document.body)
                     .markdownTheme(.gitHub)
@@ -190,7 +187,7 @@ private struct MemoryGuidelinesPreview: View {
                 Text(document.path).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Use These Guidelines", action: onUse)
+                Button("Set Up Guidelines", action: onUse)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
             }

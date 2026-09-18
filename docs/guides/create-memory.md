@@ -23,7 +23,7 @@ You are creating Clumsies Memory; this does not create a file in the `clumsies-d
 ## Create and write the Draft
 
 1. Open **Memory** and select **Payments** in the top Project filter. If Project Settings is still open, click its gear button to return to content.
-2. Choose **File → New Memory** in the macOS menu bar, or press **⌘N**. The empty list's **Create a Memory** button also creates a Draft. To start with a document that tells agents how to maintain knowledge, choose **Use Default Guidelines** instead; see [Memory Guidelines](/guides/memory-guidelines).
+2. Choose **File → New Memory** in the macOS menu bar, or press **⌘N**. To start with a document that tells agents how to maintain knowledge, choose **Set Up Guidelines** instead; see [Memory Guidelines](/guides/memory-guidelines).
 3. A Draft with a default filename, usually `untitled.md`, appears in the file tree. Right-click it and choose **Rename…**.
 4. In **Rename Draft**, enter `deployment-rollback.md` in **File name** and click **Rename**. This example uses a root-level filename; do not include `/`.
 5. Right-click the file and choose **Open Source**, or select **Source** in **Document View** for an open file. Replace the body with:
