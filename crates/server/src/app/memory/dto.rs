@@ -182,3 +182,74 @@ impl ResourceScope {
         }
     }
 }
+
+/// Dashboard query; dates use the requested IANA time zone.
+#[derive(Clone, Debug, Deserialize)]
+pub struct MemoryStatisticsQuery {
+    /// Inclusive number of calendar days, including today: 7, 30 or 90.
+    pub days: u32,
+    /// PostgreSQL-recognized IANA time zone, such as Asia/Shanghai.
+    pub time_zone: String,
+}
+
+/// Published inventory and history; retrieval telemetry is owned by the daemon.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemoryStatistics {
+    /// Server observation time as Unix seconds.
+    pub generated_at: i64,
+    /// Local calendar boundaries as Unix seconds, including the exclusive last boundary.
+    pub day_bounds: Vec<i64>,
+    /// Start of the last 7, 30 and 90 calendar days, respectively.
+    pub recency_starts: Vec<i64>,
+    /// Projects visible to this principal, restricted to the requested scope.
+    pub project_ids: Vec<String>,
+    /// Current published documents, with no content bodies.
+    pub resources: Vec<StatisticsResource>,
+    /// Current published inventory count, independent of list pagination.
+    pub memory_count: usize,
+    /// Distinct documents added within the period.
+    pub added_count: usize,
+    /// Distinct documents edited or renamed within the period.
+    pub updated_count: usize,
+    /// Distinct documents removed within the period.
+    pub deleted_count: usize,
+    /// Daily closing inventory; prehistory stays unknown.
+    pub days: Vec<MemoryStatisticsDay>,
+    /// Distinct changed documents per daily or seven-day bucket.
+    pub change_buckets: Vec<MemoryStatisticsChange>,
+    /// Server-known open and conflicted drafts in visible projects.
+    pub open_drafts: i64,
+    /// Server-known submitted drafts in visible projects.
+    pub submitted_drafts: i64,
+}
+
+/// Metadata needed for rankings and directory coverage.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StatisticsResource {
+    /// Stable memory identity.
+    pub id: String,
+    /// Current display title.
+    pub title: String,
+    /// Path in the published snapshot.
+    pub path: String,
+}
+
+/// Inventory at the end of a local calendar day, or now for today.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemoryStatisticsDay {
+    /// Local midnight as Unix seconds.
+    pub date: i64,
+    /// None means the day predates the first retained published snapshot.
+    pub memory_count: Option<usize>,
+}
+
+/// Distinct changes within one chart bucket.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemoryStatisticsChange {
+    /// Bucket start as Unix seconds.
+    pub date: i64,
+    /// One of added, updated or deleted.
+    pub kind: String,
+    /// Distinct document count.
+    pub count: usize,
+}

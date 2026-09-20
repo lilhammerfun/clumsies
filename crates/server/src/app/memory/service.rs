@@ -516,3 +516,24 @@ pub(crate) async fn validate_project_effective_memory(
 
     Ok(())
 }
+
+/// Returns authorized, server-aggregated published memory statistics.
+///
+/// # Errors
+/// Rejects inaccessible projects, invalid periods/time zones and database failures.
+pub(super) async fn memory_statistics(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+    project_id: Option<&str>,
+    query: super::dto::MemoryStatisticsQuery,
+) -> Result<super::dto::MemoryStatistics, ServerError> {
+    if let Some(project_id) = project_id {
+        project::ensure_project_member(pool, principal, project_id).await?;
+    }
+    if !matches!(query.days, 7 | 30 | 90) || query.time_zone.len() > 100 {
+        return Err(ServerError::InvalidRequest(
+            "Expected 7, 30 or 90 days and an IANA time zone".into(),
+        ));
+    }
+    super::statistics::load(pool, principal, project_id, query).await
+}

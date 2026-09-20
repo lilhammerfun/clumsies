@@ -1,6 +1,7 @@
 import Foundation
 
 enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
+    case dashboard
     case inbox
     case memory
     case bundles
@@ -11,6 +12,7 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
+        case .dashboard: "Dashboard"
         case .inbox: "Inbox"
         case .memory: "Memory"
         case .bundles: "Bundles"
@@ -21,6 +23,7 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
 
     var symbol: String {
         switch self {
+        case .dashboard: "chart.bar.xaxis"
         case .inbox: "tray"
         case .memory: "brain"
         case .bundles: "shippingbox"

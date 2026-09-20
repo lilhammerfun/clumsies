@@ -261,8 +261,7 @@ pub(crate) async fn list_resource_rows(
                 content_hash, updated_at
              FROM resources
              WHERE scope = $1 AND project_id = $2 AND status = 'active'
-             ORDER BY path
-             LIMIT 200",
+             ORDER BY path",
         )
         .bind(scope)
         .bind(project_id)
@@ -275,8 +274,7 @@ pub(crate) async fn list_resource_rows(
                 content_hash, updated_at
              FROM resources
              WHERE scope = $1 AND org_id = $2 AND status = 'active'
-             ORDER BY path
-             LIMIT 200",
+             ORDER BY path",
         )
         .bind(scope)
         .bind(org_id)

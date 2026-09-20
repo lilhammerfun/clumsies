@@ -30,6 +30,42 @@ a new task in the bound repository.
 See the [usage guide](../../docs/guides/how-to-use-clumsies.md) for the full
 workflow.
 
+## Dashboard preview
+
+Dashboard uses native Swift Charts for inventory, retrieval activity, directory coverage,
+frequently retrieved documents, published maintenance and retrieval recency. The period
+picker uses local calendar days; coverage and rankings deduplicate document IDs.
+The server's `/api/v1/org/memory-statistics` and
+`/api/v1/projects/{project_id}/memory-statistics` endpoints calculate published inventory,
+commit history, distinct changed documents and synced draft counts. Query parameters are
+`days=7|30|90` and an IANA `time_zone`; PostgreSQL supplies DST-aware calendar boundaries.
+Project inventory includes selected organization memories, excluding draft overlays.
+Project selection changes count as changes to that published snapshot. Days before the
+first retained commit remain unknown. Metadata lists now return the complete inventory.
+
+The daemon's `dashboard_retrieval_statistics` RPC calculates local request outcomes,
+deduplicated document retrievals, directory coverage, rankings and recency in one local
+read transaction. Its scope and calendar boundaries come from the authorized server
+response. The App requests these two summaries and renders them; it does not walk commits
+or download individual retrieval traces. Local retention is 500 requests per project,
+so these figures are retained observations, not complete organization-wide usage.
+The server statistics API must be deployed before installing this App for daily use.
+
+To preview all panels in an isolated local Dev Instance:
+
+```sh
+sh dev/dev-instance.sh up
+python3 dev/seed-dashboard.py /absolute/path/to/this/instance/runtime.json
+```
+
+Restart that Dev App, then select **Dashboard** in its sidebar. The seed uses the local
+fake OIDC provider and Draft/Review APIs, publishes several hundred demo documents,
+creates 9 open and 5 submitted drafts, and installs an explicitly labelled 90-day fixture.
+It accepts only this worktree's loopback instance, with an empty organization or its own
+complete demo dataset. An **Empty project** exercises empty states. Fixture reads require
+a Dev Instance identity and never apply to the stable app. `python3 dev/seed-dashboard.py --check`
+checks deterministic data and inventory invariants without running a server.
+
 ## Source organization
 
 The app follows Slack's [feature organization](https://slack.engineering/happiness-is-a-freshly-organized-codebase/)
@@ -39,7 +75,7 @@ with an App directory for native application composition:
 ```text
 Sources/
   App/          # Entry point, AppDelegate, windows and menus
-  Features/     # Activity, Administration, Bundles, Diagnostics, Memory,
+  Features/     # Activity, Administration, Bundles, Dashboard, Diagnostics, Memory,
                 # Projects, Reviews, ServerAccess, Settings, Workspace
   Services/     # Authentication, Bundles, Daemon, Memory, Projects,
                 # Runtime, Server, ServerAccess, Updates, Workspace

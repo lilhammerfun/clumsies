@@ -17,7 +17,7 @@ enum WorkspaceColumnLayout: Equatable {
     case sidebarContentDetail
 
     init(section: WorkspaceSection) {
-        self = [.reviews, .inbox].contains(section)
+        self = [.reviews, .dashboard, .inbox].contains(section)
             ? .sidebarDetail
             : .sidebarContentDetail
     }
@@ -42,6 +42,7 @@ struct WorkspaceView: View {
     let loadsReviewDetail: Bool
     @StateObject private var activityModel: ActivityModel
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
+    @State private var dashboardSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var reviewSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var activitySplitVisibility: NavigationSplitViewVisibility = .all
     @State private var inboxSplitVisibility: NavigationSplitViewVisibility = .all
@@ -91,6 +92,8 @@ struct WorkspaceView: View {
     var body: some View {
         Group {
             switch workspaceNavigation.selectedSection {
+            case .dashboard:
+                dashboardWorkspace
             case .inbox:
                 inboxWorkspace
             case .reviews:
@@ -121,6 +124,31 @@ struct WorkspaceView: View {
         }
         .task {
             await store.runRefreshLoop()
+        }
+    }
+
+    private var dashboardWorkspace: some View {
+        NavigationSplitView(columnVisibility: $dashboardSplitVisibility) {
+            GlobalSidebar(store: store, onSignOut: onSignOut, onOpenSettings: onOpenSettings)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
+        } detail: {
+            DashboardPage(context: workspaceContext) { id in
+                guard let item = workspaceNavigation.memoryItems.first(where: { $0.id == id }) else { return }
+                workspaceNavigation.selectedSection = .memory
+                workspaceNavigation.open(item)
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigation) { MemoryProjectFilter(store: store) }
+            }
+        }
+        .onAppear {
+            dashboardSplitVisibility = workspaceNavigation.sidebarExpanded ? .all : .detailOnly
+        }
+        .onChange(of: dashboardSplitVisibility) { _, visibility in
+            deferSidebarExpansionUpdate(visibility != .detailOnly)
+        }
+        .onChange(of: workspaceNavigation.sidebarExpanded) { _, expanded in
+            dashboardSplitVisibility = expanded ? .all : .detailOnly
         }
     }
 
@@ -464,6 +492,7 @@ struct WorkspaceView: View {
 
     private var workspaceSearchPrompt: String {
         switch workspaceNavigation.selectedSection {
+        case .dashboard: "Search Dashboard"
         case .memory: "Search Memory"
         case .bundles: "Search Bundles"
         case .reviews: "Search Reviews"
@@ -723,6 +752,8 @@ struct WorkspaceView: View {
     @ToolbarContentBuilder
     private var navigationToolbarContent: some ToolbarContent {
         switch workspaceNavigation.selectedSection {
+        case .dashboard:
+            ToolbarItem { EmptyView() }
         case .memory:
             ToolbarItem(placement: .navigation) {
                 MemoryProjectFilter(store: store)
@@ -762,6 +793,8 @@ struct WorkspaceView: View {
     @ViewBuilder
     private var navigator: some View {
         switch workspaceNavigation.selectedSection {
+        case .dashboard:
+            EmptyView()
         case .memory:
             MemoryNavigator()
         case .bundles:
@@ -776,6 +809,8 @@ struct WorkspaceView: View {
     @ViewBuilder
     private var detail: some View {
         switch workspaceNavigation.selectedSection {
+        case .dashboard:
+            EmptyView()
         case .memory:
             if workspaceContext.projects.isEmpty, !memoryCatalog.resources.contains(where: { $0.scope == .org }) {
                 ProjectUnavailableView()

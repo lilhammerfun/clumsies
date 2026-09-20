@@ -13,6 +13,8 @@ define_routes!(admin_routes, ADMIN_OPERATIONS, {
 });
 
 define_routes!(protected_routes, PROTECTED_OPERATIONS, {
+    "/api/v1/org/memory-statistics" => { get: handler::org_memory_statistics };
+    "/api/v1/projects/{project_id}/memory-statistics" => { get: handler::project_memory_statistics };
     "/api/v1/org/memories" => {
         get: handler::list_org_memories,
     };
