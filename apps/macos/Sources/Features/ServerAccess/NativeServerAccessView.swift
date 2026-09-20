@@ -63,16 +63,16 @@ struct NativeServerAccessView: View {
     private var setupFields: some View {
         VStack(alignment: .leading, spacing: 13) {
             if !model.setupCodeConfigured {
-                setupWarning("Set CLUMSIES_SETUP_CODE in the Server deployment before continuing.")
+                setupWarning(String(localized: "Set CLUMSIES_SETUP_CODE in the Server deployment before continuing."))
             }
             if !model.oidcConfigured {
-                setupWarning("Configure the Server's OIDC deployment settings before continuing.")
+                setupWarning(String(localized: "Configure the Server's OIDC deployment settings before continuing."))
             }
-            labeledSecureField("Setup code", placeholder: "Deployment setup code", text: $model.setupCode)
-            labeledField("Organization", placeholder: "Acme", text: $model.organizationName)
-            labeledField("Default project", placeholder: "Default", text: $model.defaultProjectName)
+            labeledSecureField(String(localized: "Setup code"), placeholder: String(localized: "Deployment setup code"), text: $model.setupCode)
+            labeledField(String(localized: "Organization"), placeholder: "Acme", text: $model.organizationName)
+            labeledField(String(localized: "Default project"), placeholder: String(localized: "Default"), text: $model.defaultProjectName)
             labeledField(
-                "Allowed email domains (optional)",
+                String(localized: "Allowed email domains (optional)"),
                 placeholder: "example.com, subsidiary.example",
                 text: $model.allowedEmailDomains
             )
@@ -163,7 +163,7 @@ private struct NativeAdministratorRecoveryPanel: View {
                     .font(.system(size: 28))
                     .foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(identity ?? "Administrator authenticated")
+                    Text(identity ?? String(localized: "Administrator authenticated"))
                         .font(.callout.weight(.semibold))
                         .textSelection(.enabled)
                     Text("Direct Server recovery · token held only in App memory")
@@ -213,9 +213,9 @@ private struct NativeRecoveryHealthSection: View {
 
     private var checks: [(String, AdminHealthCheck)] {
         [
-            ("Database", health.database),
-            ("Schema", health.schema),
-            ("Commit service", health.commitService),
+            (String(localized: "Database"), health.database),
+            (String(localized: "Schema"), health.schema),
+            (String(localized: "Commit service"), health.commitService),
             ("OIDC", health.oidc),
         ]
     }

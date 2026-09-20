@@ -23,7 +23,7 @@ struct ProjectMemoryCacheSettings: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.prompt = "Choose"
+        panel.prompt = String(localized: "Choose")
         guard await panel.selectionResponse == .OK, let url = panel.url else { return }
         await model.chooseLocation(projectId: projectId, url: url)
     }
@@ -71,7 +71,7 @@ struct ProjectMemoryCacheSettings: View {
                 } else if self.model.isWorking {
                     ProgressView()
                 } else {
-                    Text(self.model.errorMessage ?? "Storage status is unavailable.")
+                    Text(self.model.errorMessage ?? String(localized: "Storage status is unavailable."))
                         .textSelection(.enabled)
                         .foregroundStyle(.secondary)
                 }
@@ -113,21 +113,21 @@ struct ProjectMemoryCacheSettings: View {
 
     private func availabilityLabel(_ availability: DaemonProjectStorageAvailability) -> String {
         switch availability {
-        case .ready: "Ready"
-        case .moving: "Moving"
-        case .unavailable: "Unavailable"
+        case .ready: String(localized: "Ready")
+        case .moving: String(localized: "Moving")
+        case .unavailable: String(localized: "Unavailable")
         }
     }
 
     private func moveLabel(_ state: DaemonProjectStorageMoveState) -> String {
         switch state {
-        case .preparing: "Preparing"
-        case .materializing: "Copying cache"
-        case .verifying: "Verifying"
-        case .switching: "Switching location"
-        case .cleaning: "Cleaning up"
-        case .completed: "Completed"
-        case .failed: "Failed"
+        case .preparing: String(localized: "Preparing")
+        case .materializing: String(localized: "Copying cache")
+        case .verifying: String(localized: "Verifying")
+        case .switching: String(localized: "Switching location")
+        case .cleaning: String(localized: "Cleaning up")
+        case .completed: String(localized: "Completed")
+        case .failed: String(localized: "Failed")
         }
     }
 

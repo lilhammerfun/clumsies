@@ -99,10 +99,10 @@ final class MemoryModel: ObservableObject {
         }, uniquingKeysWith: { _, latest in latest })
         let loader = WorkspaceLoader(daemon: context.daemon, bootstrap: context.bootstrap, server: context.server)
         let panel = NSSavePanel()
-        panel.title = "Export Memory"
-        panel.prompt = "Export"
-        panel.message = "Export current files, including local draft edits. Deleted memories are excluded."
-        let baseName = name ?? (selection == nil ? context.activeProject?.name : nil) ?? "Memory"
+        panel.title = String(localized: "Export Memory")
+        panel.prompt = String(localized: "Export")
+        panel.message = String(localized: "Export current files, including local draft edits. Deleted memories are excluded.")
+        let baseName = name ?? (selection == nil ? context.activeProject?.name : nil) ?? String(localized: "Memory")
         panel.nameFieldStringValue = baseName.replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-") + ".zip"
         panel.allowedContentTypes = [.zip]
@@ -121,7 +121,7 @@ final class MemoryModel: ObservableObject {
                     }.value
                     NSWorkspace.shared.activateFileViewerSelecting([destination])
                 } catch {
-                    self.feedback.errorMessage = "Could Not Export Memory: \(error.localizedDescription)"
+                    self.feedback.errorMessage = String(localized: "Could Not Export Memory: \(error.localizedDescription)")
                 }
             }
         }
@@ -167,7 +167,7 @@ final class MemoryModel: ObservableObject {
             allowingEmptyHead: true
         ) else {
             throw ServerClientError.invalidResponse(
-                "A fresh Organization Memory snapshot is required to create a Draft."
+                String(localized: "A fresh Organization Memory snapshot is required to create a Draft.")
             )
         }
         guard context.workspaceReloadGeneration == generation else { return nil }
@@ -226,7 +226,7 @@ final class MemoryModel: ObservableObject {
         var authorityCommitId = catalog.orgRefCommitId
         if refreshingAuthority {
             guard let authority = try await catalog.loadStableOrgAuthoritySnapshot(allowingEmptyHead: true) else {
-                throw ServerClientError.invalidResponse("Couldn’t check your organization's memory guidelines. Try again.")
+                throw ServerClientError.invalidResponse(String(localized: "Couldn’t check your organization's memory guidelines. Try again."))
             }
             authorityResources = authority.resources
             authorityCommitId = authority.commitId
@@ -243,7 +243,7 @@ final class MemoryModel: ObservableObject {
         switch edits.draftInventoryLoadState {
         case .loaded: break
         case .failed(let message): throw ServerClientError.invalidResponse(message)
-        case .loading: throw ServerClientError.invalidResponse("Wait for drafts to finish loading, then try again.")
+        case .loading: throw ServerClientError.invalidResponse(String(localized: "Wait for drafts to finish loading, then try again."))
         }
         var setup = try MemoryGuidelines.setup(
             projectId: projectId,
@@ -280,7 +280,7 @@ final class MemoryModel: ObservableObject {
               context.activeProjectId == current.projectId,
               navigation.selectedSection == .memory else { throw CancellationError() }
         guard let item = visibleMemoryItems.first(where: { $0.id == itemId }) else {
-            throw ServerClientError.invalidResponse("Memory guidelines were saved, but could not be opened. Refresh the project to open them.")
+            throw ServerClientError.invalidResponse(String(localized: "Memory guidelines were saved, but could not be opened. Refresh the project to open them."))
         }
         navigation.open(item, mode: .preview)
         return current
@@ -328,11 +328,11 @@ final class MemoryModel: ObservableObject {
             activeProjectId: context.activeProjectId,
             itemProjectContextId: item.projectContextId
         ), let key = sessions.documentSessionKey(for: item) else {
-            feedback.errorMessage = "Wait for the Memory context switch to finish before syncing this document."
+            feedback.errorMessage = String(localized: "Wait for the Memory context switch to finish before syncing this document.")
             return
         }
         if sessions.projectOrgSelectionMutatingIds.contains(key.projectId) {
-            feedback.errorMessage = "Wait for the Project memory selection to finish updating before syncing this document."
+            feedback.errorMessage = String(localized: "Wait for the Project memory selection to finish updating before syncing this document.")
             return
         }
         let behindDraft = item.draft.flatMap { $0.freshness == .behind ? $0 : nil }
@@ -623,18 +623,12 @@ final class MemoryModel: ObservableObject {
         kind: MemoryKind,
         path: String
     ) -> EditableMemoryDocument {
-        switch kind {
-        case .context:
-            .init(title: "Untitled", path: path, body: "# Untitled\n")
-        case .rules:
-            .init(title: "Untitled rule", path: path, body: "# Untitled rule\n")
-        case .workflows:
-            .init(
-                title: "Untitled workflow",
-                path: path,
-                body: "# Untitled workflow\n"
-            )
+        let title = switch kind {
+        case .context: String(localized: "Untitled")
+        case .rules: String(localized: "Untitled rule")
+        case .workflows: String(localized: "Untitled workflow")
         }
+        return .init(title: title, path: path, body: "# \(title)\n")
     }
 }
 

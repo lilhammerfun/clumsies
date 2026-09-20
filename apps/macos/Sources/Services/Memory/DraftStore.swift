@@ -72,7 +72,7 @@ final class DraftStore: ObservableObject {
     func stageDocumentSave(_ item: MemoryListItem, document: EditableMemoryDocument) {
         guard context.phase == .ready, !context.isSigningOut else { return }
         guard canEditMemory(item) else {
-            feedback.errorMessage = "You do not have permission to edit this memory."
+            feedback.errorMessage = String(localized: "You do not have permission to edit this memory.")
             return
         }
         guard sessions.synchronizationItemId(for: item) == nil else {
@@ -80,11 +80,11 @@ final class DraftStore: ObservableObject {
             return
         }
         guard !context.isSwitchingMemoryContext else {
-            feedback.errorMessage = "Wait for the Memory context switch to finish before editing."
+            feedback.errorMessage = String(localized: "Wait for the Memory context switch to finish before editing.")
             return
         }
         guard let key = sessions.documentSessionKey(for: item) else {
-            feedback.errorMessage = "Open this memory from a Project before editing it."
+            feedback.errorMessage = String(localized: "Open this memory from a Project before editing it.")
             return
         }
         let generation = UUID()
@@ -158,11 +158,11 @@ final class DraftStore: ObservableObject {
         let flushesSelectionMutation = pendingSaveKey != nil
             && item.projectContextId.map(sessions.projectOrgSelectionMutatingIds.contains) == true
         guard canEditMemory(item) || flushesSelectionMutation else {
-            throw ServerClientError.forbidden("You do not have permission to edit this memory.")
+            throw ServerClientError.forbidden(String(localized: "You do not have permission to edit this memory."))
         }
         if context.isSwitchingMemoryContext, pendingSaveKey == nil {
             throw ServerClientError.forbidden(
-                "Wait for the Memory context switch to finish before editing."
+                String(localized: "Wait for the Memory context switch to finish before editing.")
             )
         }
         if !allowingDuringSynchronization,
@@ -265,15 +265,15 @@ final class DraftStore: ObservableObject {
     func rename(_ item: MemoryListItem, to newPath: String) async throws {
         guard !context.isSwitchingMemoryContext else {
             throw ServerClientError.forbidden(
-                "Wait for the Memory context switch to finish before renaming."
+                String(localized: "Wait for the Memory context switch to finish before renaming.")
             )
         }
         guard canEditMemory(item) else {
-            throw ServerClientError.forbidden("You do not have permission to rename this memory.")
+            throw ServerClientError.forbidden(String(localized: "You do not have permission to rename this memory."))
         }
         guard let sessionKey = sessions.documentSessionKey(for: item) else {
             throw ServerClientError.forbidden(
-                "Open this memory from a Project before renaming it."
+                String(localized: "Open this memory from a Project before renaming it.")
             )
         }
         guard sessions.synchronizationItemId(for: item) == nil else {
@@ -376,11 +376,11 @@ final class DraftStore: ObservableObject {
     func delete(_ item: MemoryListItem) async -> Bool {
         guard item.draft?.isDeletion != true else { return false }
         guard !context.isSwitchingMemoryContext else {
-            feedback.errorMessage = "Wait for the Memory context switch to finish before deleting."
+            feedback.errorMessage = String(localized: "Wait for the Memory context switch to finish before deleting.")
             return false
         }
         guard canEditMemory(item) else {
-            feedback.errorMessage = "You do not have permission to delete this memory."
+            feedback.errorMessage = String(localized: "You do not have permission to delete this memory.")
             return false
         }
         guard sessions.synchronizationItemId(for: item) == nil else {
@@ -648,7 +648,7 @@ final class DraftStore: ObservableObject {
         } catch {
             guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
-                "Couldn’t refresh Drafts. \(error.localizedDescription)"
+                String(localized: "Couldn’t refresh Drafts. \(error.localizedDescription)")
             )
             return
         }
@@ -706,7 +706,7 @@ final class DraftStore: ObservableObject {
         } catch {
             guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
-                "Couldn’t refresh Draft source files. \(error.localizedDescription)"
+                String(localized: "Couldn’t refresh Draft source files. \(error.localizedDescription)")
             )
             return
         }
@@ -725,7 +725,7 @@ final class DraftStore: ObservableObject {
         } catch {
             guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
-                "Couldn’t refresh Draft details. \(error.localizedDescription)"
+                String(localized: "Couldn’t refresh Draft details. \(error.localizedDescription)")
             )
             return
         }
@@ -755,13 +755,13 @@ final class DraftStore: ObservableObject {
             || path.hasPrefix("/")
             || path.hasSuffix("/")
             || segments.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) {
-            throw MemoryValidationError.invalidPath("Use a normalized relative path with / separators.")
+            throw MemoryValidationError.invalidPath(String(localized: "Use a normalized relative path with / separators."))
         }
         if kind == .workflows && !path.hasPrefix("workflow/") {
-            throw MemoryValidationError.invalidPath("Workflow paths must use the workflow/ namespace.")
+            throw MemoryValidationError.invalidPath(String(localized: "Workflow paths must use the workflow/ namespace."))
         }
         if kind == .rules && path.lowercased().hasPrefix("workflow/") {
-            throw MemoryValidationError.invalidPath("Rule paths cannot use the workflow/ namespace.")
+            throw MemoryValidationError.invalidPath(String(localized: "Rule paths cannot use the workflow/ namespace."))
         }
     }
 
@@ -806,7 +806,7 @@ final class DraftStore: ObservableObject {
                     responseWasStale: loaded.hasStaleServerResponse
                 ) else {
                     draftInventoryLoadState = .failed(
-                        "Fresh Draft data was unavailable. Existing Drafts were kept."
+                        String(localized: "Fresh Draft data was unavailable. Existing Drafts were kept.")
                     )
                     return
                 }
@@ -860,9 +860,9 @@ enum MemoryValidationError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .invalidPath(let message): message
-        case .emptyRule: "A Rule needs content."
+        case .emptyRule: String(localized: "A Rule needs content.")
         case .memoryCannotBeRenamed:
-            "This memory is no longer available to rename."
+            String(localized: "This memory is no longer available to rename.")
         }
     }
 }

@@ -44,6 +44,16 @@ enum InboxMessageType: String, CaseIterable, Identifiable, Sendable {
     case syncErrors = "Sync Errors"
 
     var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .reviewRequests: String(localized: "Review Requests")
+        case .reviewComments: String(localized: "Review Comments")
+        case .reviewResults: String(localized: "Review Results")
+        case .sharedUpdates: String(localized: "Remote Updates")
+        case .syncErrors: String(localized: "Sync Errors")
+        }
+    }
 }
 
 struct InboxItem: Identifiable, Sendable {
@@ -64,14 +74,23 @@ struct InboxItem: Identifiable, Sendable {
     var actionTitle: String? {
         guard let destination else { return nil }
         return switch destination {
-        case .review: "Open Review"
-        case .sharedChanges: "Open Memory"
-        case .retrySync: "Retry Sync"
+        case .review: String(localized: "Open Review")
+        case .sharedChanges: String(localized: "Open Memory")
+        case .retrySync: String(localized: "Retry Sync")
         }
     }
 
     var summary: String {
         [message, projectName == title ? nil : projectName].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private static func updatedReviewReason(_ status: String?) -> String {
+        switch status {
+        case "approved": String(localized: "Review approved")
+        case "rejected": String(localized: "Changes requested")
+        case "merged": String(localized: "Review merged")
+        default: String(localized: "Review updated")
+        }
     }
 
     static func server(_ notice: InboxNotification) -> Self {
@@ -82,12 +101,12 @@ struct InboxItem: Identifiable, Sendable {
         default: .reviewResults
         }
         let reason: String = switch notice.kind {
-        case "review_requested": notice.reviewStatus == "open" ? "Review requested" : "Review \(notice.reviewStatus ?? "updated")"
-        case "review_comment": "New review comment"
-        case "review_approved": "Review approved"
-        case "review_rejected": "Changes requested"
-        case "review_merged": "Review merged"
-        default: "Remote Memory updated"
+        case "review_requested": notice.reviewStatus == "open" ? String(localized: "Review requested") : updatedReviewReason(notice.reviewStatus)
+        case "review_comment": String(localized: "New review comment")
+        case "review_approved": String(localized: "Review approved")
+        case "review_rejected": String(localized: "Changes requested")
+        case "review_merged": String(localized: "Review merged")
+        default: String(localized: "Remote Memory updated")
         }
         let shared = notice.kind == "shared_update"
         return .init(

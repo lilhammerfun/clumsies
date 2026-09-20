@@ -69,6 +69,6 @@ final class DashboardModel: ObservableObject {
             dayBounds: memory.dayBounds, recencyStarts: memory.recencyStarts, generatedAt: memory.generatedAt
         ))
         return .init(projectId: projectID, projectName: name, period: period, memory: memory, retrieval: retrieval,
-            notice: result.response.isStaleCache ? "Showing cached server statistics. Refresh when the server is available." : nil)
+            notice: result.response.isStaleCache ? String(localized: "Showing cached server statistics. Refresh when the server is available.") : nil)
     }
 }

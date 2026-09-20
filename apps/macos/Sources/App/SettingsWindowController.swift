@@ -34,10 +34,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var mutationObservation: AnyCancellable?
     var confirmDiscard: () -> Bool = {
         let alert = NSAlert()
-        alert.messageText = "Discard unsaved changes?"
-        alert.informativeText = "Keep editing to save your changes, or discard them."
-        alert.addButton(withTitle: "Keep Editing")
-        alert.addButton(withTitle: "Discard Changes")
+        alert.messageText = String(localized: "Discard unsaved changes?")
+        alert.informativeText = String(localized: "Keep editing to save your changes, or discard them.")
+        alert.addButton(withTitle: String(localized: "Keep Editing"))
+        alert.addButton(withTitle: String(localized: "Discard Changes"))
         return alert.runModal() == .alertSecondButtonReturn
     }
 
@@ -113,9 +113,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         guard !store.context.isMutatingAdministration else {
             window?.makeKeyAndOrderFront(nil)
             let alert = NSAlert()
-            alert.messageText = "Changes are still being saved"
-            alert.informativeText = "Wait for saving to finish before signing out or quitting."
-            alert.addButton(withTitle: "OK")
+            alert.messageText = String(localized: "Changes are still being saved")
+            alert.informativeText = String(localized: "Wait for saving to finish before signing out or quitting.")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.runModal()
             return false
         }

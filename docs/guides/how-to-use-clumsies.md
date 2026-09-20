@@ -30,6 +30,13 @@ Use [Review and publish](/quickstart/review-and-publish) to inspect the current 
 
 An organization owner/admin completes publication. [Review and publish](/quickstart/review-and-publish) covers the decision and the return to Codex to verify the shared content.
 
+## Choose the app language
+
+Clumsies supports English and Simplified Chinese. In macOS **System Settings →
+General → Language & Region → Applications**, add Clumsies and choose **English**
+or **简体中文**. Save your edits and reopen Clumsies to apply the change. You can
+open this system pane from **Clumsies → Settings → General → Language**.
+
 ## When something does not work
 
 Start with [Troubleshooting](/guides/troubleshooting), which groups problems by visible symptoms. For a retrieval or integration failure, also check [Agent integration](/guides/agent-runtime).

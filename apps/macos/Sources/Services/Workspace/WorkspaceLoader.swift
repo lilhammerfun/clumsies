@@ -333,7 +333,7 @@ struct WorkspaceLoader: Sendable {
     ) throws -> String {
         guard allowingStaleCache || !response.isStaleCache else {
             throw ServerClientError.invalidResponse(
-                "A stale cached memory body cannot be attached to the current remote version."
+                String(localized: "A stale cached memory body cannot be attached to the current remote version.")
             )
         }
         let digest = SHA256.hash(data: Data(detail.content.utf8))
@@ -343,7 +343,7 @@ struct WorkspaceLoader: Sendable {
               detail.memory.path == resource.document.path,
               actualContentHash == resource.contentHash else {
             throw ServerClientError.invalidResponse(
-                "The memory body no longer matches the requested remote version."
+                String(localized: "The memory body no longer matches the requested remote version.")
             )
         }
         return detail.content
@@ -428,15 +428,9 @@ struct WorkspaceLoader: Sendable {
         if let daemonError = error as? DaemonXPCError,
            case .daemon(let payload) = daemonError,
            payload.code == "project_agent_adapter_invalid_runtime" {
-            return "The resident daemon rejected the bundled Agent runtime. Archived integration "
-                + "inspection was skipped. Reinstall and restart Clumsies so the App and daemon use "
-                + "the same build. To replace the resident Debug installation, run "
-                + "just install-macos; distributed Release "
-                + "builds must use an accepted release signature."
+            return String(localized: "The resident daemon rejected the bundled Agent runtime. Archived integration inspection was skipped. Reinstall and restart Clumsies so the App and daemon use the same build. To replace the resident Debug installation, run just install-macos; distributed Release builds must use an accepted release signature.")
         }
-        return "Clumsies updated its managed integrations, but could not inspect the "
-            + "archived Zig CLI integration store. Review any old global or repository "
-            + "MCP and hook entries manually. \(error.localizedDescription)"
+        return String(localized: "Clumsies updated its managed integrations, but could not inspect the archived Zig CLI integration store. Review any old global or repository MCP and hook entries manually. \(error.localizedDescription)")
     }
 
     static func loadAuthenticatedWorkspaceIdentity(
@@ -714,7 +708,7 @@ struct WorkspaceLoader: Sendable {
             }
         }
         var document = base?.document ?? .init(
-            title: title(from: summary.path ?? "Untitled"),
+            title: title(from: summary.path ?? String(localized: "Untitled")),
             path: summary.path ?? "untitled.md",
             body: ""
         )

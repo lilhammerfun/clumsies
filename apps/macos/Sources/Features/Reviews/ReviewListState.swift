@@ -10,10 +10,10 @@ enum ReviewStatusFilter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .open: "Open"
-        case .rejected: "Rejected"
-        case .merged: "Merged"
-        case .all: "All"
+        case .open: String(localized: "Open")
+        case .rejected: String(localized: "Rejected")
+        case .merged: String(localized: "Merged")
+        case .all: String(localized: "All")
         }
     }
 
@@ -116,6 +116,15 @@ enum ReviewReconciliationState: String, Hashable, Sendable {
     case conflict = "Conflict"
     case autoRebased = "Auto-rebased"
     case checking = "Checking…"
+
+
+    var title: String {
+        switch self {
+        case .conflict: String(localized: "Conflict")
+        case .autoRebased: String(localized: "Auto-rebased")
+        case .checking: String(localized: "Checking…")
+        }
+    }
 
     var badgeColor: Color? {
         switch self {

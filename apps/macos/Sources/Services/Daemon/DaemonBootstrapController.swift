@@ -16,13 +16,13 @@ enum DaemonBootstrapError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .daemonBinaryMissing:
-            return "The Clumsies daemon is missing from the application bundle."
+            return String(localized: "The Clumsies daemon is missing from the application bundle.")
         case .daemonCommand(let message):
             return message
         case .invalidDevelopmentConfiguration(let missing):
-            return "The Clumsies Dev App is missing required instance settings: \(missing.joined(separator: ", "))."
+            return String(localized: "The Clumsies Dev App is missing required instance settings: \(missing.joined(separator: ", ")).")
         case .invalidStatus:
-            return "The Clumsies daemon returned an invalid LaunchAgent status."
+            return String(localized: "The Clumsies daemon returned an invalid LaunchAgent status.")
         }
     }
 }
@@ -87,7 +87,7 @@ struct DaemonBootstrapController: Sendable {
         guard result.status == 0 else {
             throw DaemonBootstrapError.daemonCommand(
                 result.output.isEmpty
-                    ? "clumsiesd exited with status \(result.status)."
+                    ? String(localized: "clumsiesd exited with status \(result.status).")
                     : result.output
             )
         }

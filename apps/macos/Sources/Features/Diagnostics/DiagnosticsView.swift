@@ -31,9 +31,9 @@ enum RetrievalEvidenceReviewAction: Equatable {
 
     var title: String {
         switch self {
-        case .done: "Done"
-        case .noMatch: "No Match"
-        case .confirm: "Confirm"
+        case .done: String(localized: "Done")
+        case .noMatch: String(localized: "No Match")
+        case .confirm: String(localized: "Confirm")
         }
     }
 }
@@ -69,7 +69,7 @@ private struct RetrievalDiagnosticsView: View {
         NavigationSplitView {
             RetrievalRunList(
                 model: model,
-                scopeTitle: projectName ?? projectId ?? "All Projects",
+                scopeTitle: projectName ?? projectId ?? String(localized: "All Projects"),
                 onRefresh: {
                     Task { await model.load(projectId: projectId) }
                 },
@@ -157,7 +157,7 @@ struct RetrievalRunDetailView: View {
                     Image(systemName: "ellipsis")
                 }
                 .menuIndicator(.hidden)
-                .toolbarHelp("Retrieval Run Actions")
+                .toolbarHelp(String(localized: "Retrieval Run Actions"))
                 .accessibilityLabel("Retrieval Run Actions")
                 .disabled(!hasMoreActions)
             }
@@ -306,13 +306,13 @@ private struct RetrievalRunList: View {
                 Button(action: onRefresh) {
                     Image(systemName: "arrow.clockwise")
                 }
-                .toolbarHelp("Refresh Retrieval Runs")
+                .toolbarHelp(String(localized: "Refresh Retrieval Runs"))
                 .accessibilityLabel("Refresh Retrieval Runs")
 
                 Button(role: .destructive, action: onClearHistory) {
                     Image(systemName: "trash")
                 }
-                .toolbarHelp("Clear Unpinned Retrieval History")
+                .toolbarHelp(String(localized: "Clear Unpinned Retrieval History"))
                 .accessibilityLabel("Clear Unpinned Retrieval History")
                 .disabled(model.runs.isEmpty)
             }
@@ -363,7 +363,7 @@ private struct RetrievalRunContent: View {
             ContentUnavailableView {
                 Label("Retrieval Run Unavailable", systemImage: "exclamationmark.triangle")
             } description: {
-                Text(model.errorMessage ?? "This retrieval record may have been removed.")
+                Text(model.errorMessage ?? String(localized: "This retrieval record may have been removed."))
                     .textSelection(.enabled)
             } actions: {
                 Button("Retry") {
@@ -390,18 +390,18 @@ private struct RetrievalRunSummary: View {
                     .textSelection(.enabled)
                     .lineLimit(2)
                 Spacer()
-                Label(run.status.rawValue.capitalized, systemImage: run.status.symbolName)
+                Label(run.status.title, systemImage: run.status.symbolName)
                     .font(.caption)
                     .foregroundStyle(run.status.tint)
             }
             HStack(spacing: 24) {
                 summaryItem(
-                    "Returned",
-                    "\(run.returnedFragmentCount) fragments · \(run.returnedTokenCount) tokens"
+                    String(localized: "Returned"),
+                    String(localized: "\(run.returnedFragmentCount) fragments · \(run.returnedTokenCount) tokens")
                 )
                 .help("Includes reused chunks already available to the agent. Tokens describe the selected content, not newly sent tokens or model usage.")
-                summaryItem("Corpus", "\(run.resourceCount) resources · \(run.unitCount) units")
-                summaryItem("Total", formatDuration(run.latencies.totalUs))
+                summaryItem(String(localized: "Corpus"), String(localized: "\(run.resourceCount) resources · \(run.unitCount) units"))
+                summaryItem(String(localized: "Total"), formatDuration(run.latencies.totalUs))
             }
         }
         .padding(16)
@@ -427,6 +427,15 @@ enum RetrievalCandidateFilter: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
+    var title: String {
+        switch self {
+        case .all: String(localized: "All")
+        case .selected: String(localized: "Selected")
+        case .excluded: String(localized: "Not Selected")
+        }
+    }
+
+
     func includes(_ candidate: RetrievalCandidate) -> Bool {
         switch self {
         case .all: true
@@ -451,7 +460,7 @@ private struct CandidateTraceTable: View {
                     .font(.headline)
                 Picker("Candidates", selection: $filter) {
                     ForEach(RetrievalCandidateFilter.allCases) { filter in
-                        Text(filter.rawValue).tag(filter)
+                        Text(filter.title).tag(filter)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -538,8 +547,8 @@ private struct CandidateTraceTable: View {
 
     private func result(_ candidate: RetrievalCandidate) -> String {
         candidate.selected
-            ? candidate.deltaAction?.rawValue.capitalized ?? "Selected"
-            : candidate.exclusionReason.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+            ? candidate.deltaAction?.title ?? String(localized: "Selected")
+            : candidate.exclusionReason.label
     }
 }
 
@@ -673,9 +682,9 @@ private extension EvaluationCaseStatus {
 
     var helpText: String {
         switch self {
-        case .draft: "Evidence suggestions are awaiting confirmation"
-        case .needsEvidence: "The suggested evidence did not match"
-        case .ready: "Ready for the Evaluation Set"
+        case .draft: String(localized: "Evidence suggestions are awaiting confirmation")
+        case .needsEvidence: String(localized: "The suggested evidence did not match")
+        case .ready: String(localized: "Ready for the Evaluation Set")
         }
     }
 
@@ -701,20 +710,26 @@ private extension EvaluationEvidenceSuggestion {
     var diagnosis: String {
         switch likelyFailureStage {
         case .fusion:
-            "Likely lost during hybrid fusion"
+            String(localized: "Likely lost during hybrid fusion")
         case .reranking:
-            "Likely rejected during reranking"
+            String(localized: "Likely rejected during reranking")
         case .assembly:
-            "Likely excluded by \(exclusionReason.label)"
+            String(localized: "Likely excluded by \(exclusionReason.label)")
         }
     }
 }
 
 private extension RetrievalExclusionReason {
     var label: String {
-        rawValue
-            .replacingOccurrences(of: "_", with: " ")
-            .capitalized
+        switch self {
+        case .selected: String(localized: "Selected")
+        case .belowRelevance: String(localized: "Below Relevance")
+        case .overlap: String(localized: "Overlap")
+        case .perResourceLimit: String(localized: "Per Resource Limit")
+        case .tokenBudget: String(localized: "Token Budget")
+        case .fragmentLimit: String(localized: "Fragment Limit")
+        case .notReranked: String(localized: "Not Reranked")
+        }
     }
 }
 
@@ -727,7 +742,7 @@ private func formatDuration(_ microseconds: UInt64) -> String {
         return (Double(microseconds) / 1_000)
             .formatted(.number.precision(.fractionLength(1))) + " ms"
     }
-    return "\(microseconds) µs"
+    return String(localized: "\(microseconds) µs")
 }
 
 private extension NSSavePanel {

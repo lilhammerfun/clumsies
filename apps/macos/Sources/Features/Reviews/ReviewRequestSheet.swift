@@ -20,7 +20,7 @@ struct ReviewRequestSheet: View {
                let candidate = model.reconciliationCandidates.first {
                 DraftReconciliationView(
                     candidate: candidate,
-                    updateButtonTitle: "Save and Request Review",
+                    updateButtonTitle: String(localized: "Save and Request Review"),
                     onCancel: self.model.resetReconciliation,
                     onApplied: { self.dismiss() }
                 ) { resolvedState in
@@ -34,7 +34,7 @@ struct ReviewRequestSheet: View {
             } else if let candidate = model.activeConflictCandidate {
                 DraftReconciliationView(
                     candidate: candidate,
-                    updateButtonTitle: "Use This Result",
+                    updateButtonTitle: String(localized: "Use This Result"),
                     onCancel: self.model.resetReconciliation,
                     onApplied: { self.model.conflictIndex += 1 }
                 ) { resolvedState in

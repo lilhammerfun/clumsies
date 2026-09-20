@@ -15,7 +15,7 @@ enum ClumsiesIdentifiers {
         let value = bundleSetting("CLUMSIES_SERVER_URL") ?? stableServerURL.absoluteString
         guard let origin = try? ServerOrigin(validating: value) else {
             preconditionFailure(
-                "CLUMSIES_SERVER_URL must be an HTTPS origin or a loopback HTTP origin."
+                String(localized: "CLUMSIES_SERVER_URL must be an HTTPS origin or a loopback HTTP origin.")
             )
         }
         return origin

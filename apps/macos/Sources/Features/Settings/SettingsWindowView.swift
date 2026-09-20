@@ -50,17 +50,17 @@ struct SettingsWindowView: View {
                     ToolbarItemGroup(placement: .navigation) {
                         Button { navigation.goBack() } label: { Image(systemName: "chevron.left") }
                             .disabled(!navigation.canGoBack)
-                            .toolbarHelp("Back")
+                            .toolbarHelp(String(localized: "Back"))
                             .accessibilityLabel("Back")
                             .keyboardShortcut("[", modifiers: .command)
                         Button { navigation.goForward() } label: { Image(systemName: "chevron.right") }
                             .disabled(!navigation.canGoForward)
-                            .toolbarHelp("Forward")
+                            .toolbarHelp(String(localized: "Forward"))
                             .accessibilityLabel("Forward")
                             .keyboardShortcut("]", modifiers: .command)
                     }
                     if navigation.isSaving {
-                        ToolbarItem { ProgressView().controlSize(.small).toolbarHelp("Saving changes…") }
+                        ToolbarItem { ProgressView().controlSize(.small).toolbarHelp(String(localized: "Saving changes…")) }
                     }
                     if case .organization(let section) = navigation.destination {
                         ToolbarItem {
@@ -71,7 +71,7 @@ struct SettingsWindowView: View {
                             }
                             .disabled(navigation.hasUnsavedChanges || workspaceContext.isMutatingAdministration
                                 || administration.state(for: section).isLoading)
-                            .toolbarHelp(navigation.hasUnsavedChanges ? "Save or discard changes before refreshing" : "Refresh")
+                            .toolbarHelp(navigation.hasUnsavedChanges ? String(localized: "Save or discard changes before refreshing") : String(localized: "Refresh"))
                             .accessibilityLabel("Refresh \(navigation.destination.title)")
                         }
                     }
@@ -94,7 +94,7 @@ struct SettingsWindowView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            ClassicSearchField(text: $navigation.query, prompt: "Search", width: 192,
+            ClassicSearchField(text: $navigation.query, prompt: String(localized: "Search"), width: 192,
                                accessibilityIdentifier: "settings-search")
                 .frame(height: 28)
                 .padding(.horizontal, 14)

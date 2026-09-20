@@ -113,7 +113,7 @@ struct MemoryMainPane: View {
         if memoryModel.visibleMemoryItems.isEmpty {
             switch draftStore.draftInventoryLoadState {
             case .loading:
-                ContentLoadingView(title: "Loading Memory…")
+                ContentLoadingView(title: String(localized: "Loading Memory…"))
             case .failed(let message):
                 ContentUnavailableView {
                     Label("Drafts Unavailable", systemImage: "exclamationmark.triangle")
@@ -179,7 +179,7 @@ private struct ResourceLoadingView: View {
                     Button("Try Again") { Task { await load() } }
                 }
             } else {
-                ContentLoadingView(title: "Loading Memory…")
+                ContentLoadingView(title: String(localized: "Loading Memory…"))
             }
         }
         .task(id: item) { await load() }
@@ -229,7 +229,7 @@ private struct ProjectPreparationView: View {
 
     var body: some View {
         if workspaceContext.loadingProjectId == workspaceContext.activeProjectId {
-            ContentLoadingView(title: "Loading Project…")
+            ContentLoadingView(title: String(localized: "Loading Project…"))
         } else {
             ContentUnavailableView {
                 Label("Project Unavailable", systemImage: "folder.badge.questionmark")

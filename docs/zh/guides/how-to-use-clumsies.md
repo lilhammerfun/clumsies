@@ -30,6 +30,13 @@
 
 发布由组织 owner/admin 完成。[审阅并发布](/zh/quickstart/review-and-publish)包含审查决定，以及回到 Codex 确认共享内容的步骤。
 
+## 切换应用语言
+
+Clumsies 支持英文和简体中文。在 macOS 的**系统设置 → 通用 → 语言与地区 →
+应用程序**中添加 Clumsies，选择 **English** 或**简体中文**。保存编辑后重新打开
+Clumsies，即可使用所选语言。也可以从 **Clumsies → 设置 → 通用 → 语言**打开这个
+系统设置页面。文档正文、项目名称和文件路径保留原有内容。
+
 ## 遇到问题时先检查什么？
 
 从[排查问题](/zh/guides/troubleshooting)按可见现象查找。检索或集成失败时，也可以查 [Agent 接入](/zh/guides/agent-runtime)。

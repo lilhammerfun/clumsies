@@ -10,10 +10,10 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .general: "General"
-        case .agent: "Agents"
-        case .organization: "Organization"
-        case .advanced: "Support"
+        case .general: String(localized: "General")
+        case .agent: String(localized: "Agents")
+        case .organization: String(localized: "Organization")
+        case .advanced: String(localized: "Support")
         }
     }
 
@@ -58,22 +58,22 @@ enum SettingsDestination: Hashable, Identifiable {
     var title: String {
         switch self {
         case .pane(let pane): pane.title
-        case .organization(.organization): "Organization Details"
-        case .organization(.audit): "Audit Log"
+        case .organization(.organization): String(localized: "Organization Details")
+        case .organization(.audit): String(localized: "Audit Log")
         case .organization(let section): section.title
         }
     }
     var subtitle: String {
         switch self {
-        case .pane(.general): "Version and software updates"
-        case .pane(.agent): "Agent integrations for this Mac"
-        case .pane(.organization): "Organization name, members, and sign-in"
-        case .pane(.advanced): "Troubleshooting logs"
-        case .organization(.organization): "Organization name"
-        case .organization(.members): "Invitations, roles, and membership"
-        case .organization(.projects): "Projects and project members"
-        case .organization(.access): "Single sign-on and allowed email domains"
-        case .organization(.audit): "Organization activity and changes"
+        case .pane(.general): String(localized: "Language, version and software updates")
+        case .pane(.agent): String(localized: "Agent integrations for this Mac")
+        case .pane(.organization): String(localized: "Organization name, members, and sign-in")
+        case .pane(.advanced): String(localized: "Troubleshooting logs")
+        case .organization(.organization): String(localized: "Organization name")
+        case .organization(.members): String(localized: "Invitations, roles, and membership")
+        case .organization(.projects): String(localized: "Projects and project members")
+        case .organization(.access): String(localized: "Single sign-on and allowed email domains")
+        case .organization(.audit): String(localized: "Organization activity and changes")
         }
     }
     var symbol: String {
@@ -85,15 +85,15 @@ enum SettingsDestination: Hashable, Identifiable {
 
     private var keywords: String {
         switch self {
-        case .pane(.general): "about automatic download software update version"
-        case .pane(.agent): "plugin repair mcp integration repository"
-        case .pane(.organization): "team administration name rename"
-        case .pane(.advanced): "diagnostics logs help troubleshooting"
-        case .organization(.organization): "name rename"
-        case .organization(.members): "add roles disable users"
-        case .organization(.projects): "create delete project members"
-        case .organization(.access): "SSO login sign-in email domains identity provider"
-        case .organization(.audit): "events activity history"
+        case .pane(.general): String(localized: "about automatic download software update version language English Chinese") + " about automatic download software update version language English Chinese"
+        case .pane(.agent): String(localized: "plugin repair mcp integration repository") + " plugin repair mcp integration repository"
+        case .pane(.organization): String(localized: "team administration name rename") + " team administration name rename"
+        case .pane(.advanced): String(localized: "diagnostics logs help troubleshooting") + " diagnostics logs help troubleshooting"
+        case .organization(.organization): String(localized: "name rename") + " name rename"
+        case .organization(.members): String(localized: "add roles disable users") + " add roles disable users"
+        case .organization(.projects): String(localized: "create delete project members") + " create delete project members"
+        case .organization(.access): String(localized: "SSO login sign-in email domains identity provider") + " SSO login sign-in email domains identity provider"
+        case .organization(.audit): String(localized: "events activity history") + " events activity history"
         }
     }
 

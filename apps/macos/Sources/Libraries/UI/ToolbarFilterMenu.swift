@@ -51,7 +51,7 @@ struct ProjectFilterMenu: View {
     private var selectionTitle: String {
         projects.first { $0.id == selectedProjectId }?.name
             ?? unscopedTitle
-            ?? "Select Project"
+            ?? String(localized: "Select Project")
     }
 
     var body: some View {

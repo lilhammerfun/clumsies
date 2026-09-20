@@ -159,7 +159,7 @@ final class ProjectService: ObservableObject {
         mutation: ProjectOrgSelectionMutation
     ) async throws {
         guard context.canManageProject(projectId) else {
-            throw ServerClientError.forbidden("Project administrator access is required to manage project memory.")
+            throw ServerClientError.forbidden(String(localized: "Project administrator access is required to manage project memory."))
         }
         guard !sessions.hasDocumentSynchronization(in: projectId) else {
             throw DocumentSyncError.mutationWhileSynchronizing
@@ -171,7 +171,7 @@ final class ProjectService: ObservableObject {
         try await withProjectOrgSelectionMutation {
             guard self.context.canManageProject(projectId) else {
                 throw ServerClientError.forbidden(
-                    "Project administrator access is required to manage project memory."
+                    String(localized: "Project administrator access is required to manage project memory.")
                 )
             }
             guard self.context.projects.contains(where: { $0.id == projectId }) else {
@@ -221,7 +221,7 @@ final class ProjectService: ObservableObject {
             }
             guard self.context.canManageProject(projectId) else {
                 throw ServerClientError.forbidden(
-                    "Project administrator access is required to manage project memory."
+                    String(localized: "Project administrator access is required to manage project memory.")
                 )
             }
             guard self.context.projects.contains(where: { $0.id == projectId }) else {

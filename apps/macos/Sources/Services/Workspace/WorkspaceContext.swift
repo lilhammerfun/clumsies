@@ -177,13 +177,13 @@ enum AdministrationError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .forbidden:
-            "Organization administrator access is required."
+            String(localized: "Organization administrator access is required.")
         case .unavailable:
-            "Load this organization page before making changes."
+            String(localized: "Load this organization page before making changes.")
         case .stale:
-            "This organization page is showing cached data. Refresh with a live Server connection before making changes."
+            String(localized: "This organization page is showing cached data. Refresh with a live Server connection before making changes.")
         case .busy:
-            "Another organization operation is still in progress."
+            String(localized: "Another organization operation is still in progress.")
         }
     }
 }

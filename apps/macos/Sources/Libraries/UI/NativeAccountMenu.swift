@@ -34,7 +34,7 @@ struct NativeAccountMenu: NSViewRepresentable {
     private func update(_ button: NativeAccountMenuButton, coordinator: Coordinator) {
         coordinator.configuration = configuration
         button.setContent(account: account, displayName: displayName)
-        button.setAccessibilityLabel("Account menu for \(displayName)")
+        button.setAccessibilityLabel(String(localized: "Account menu for \(displayName)"))
         button.setAccessibilityRole(.popUpButton)
     }
 
@@ -75,9 +75,9 @@ struct NativeAccountMenu: NSViewRepresentable {
                 menu.addItem(identity)
             }
 
-            menu.addItem(actionItem("Settings…", action: #selector(openSettings)))
+            menu.addItem(actionItem(String(localized: "Settings…"), action: #selector(openSettings)))
             menu.addItem(.separator())
-            menu.addItem(actionItem("Sign Out", action: #selector(signOut)))
+            menu.addItem(actionItem(String(localized: "Sign Out"), action: #selector(signOut)))
             return menu
         }
 

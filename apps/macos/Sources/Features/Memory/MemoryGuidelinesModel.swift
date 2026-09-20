@@ -46,7 +46,7 @@ final class MemoryGuidelinesModel: ObservableObject {
             isLoading = false
         } catch is CancellationError {
             guard generation == requestGeneration, workspaceContext.authorityGeneration == authority, workspaceContext.activeProjectId == projectId, !Task.isCancelled else { return }
-            error = "The project changed while checking memory guidelines. Try again."
+            error = String(localized: "The project changed while checking memory guidelines. Try again.")
             isLoading = false
         } catch {
             guard generation == requestGeneration, workspaceContext.authorityGeneration == authority, workspaceContext.activeProjectId == projectId, !Task.isCancelled else { return }

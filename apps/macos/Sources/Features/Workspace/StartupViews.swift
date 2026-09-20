@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct LaunchView: View {
-    @State private var loadingStageText: String = "Connecting to resident daemon…"
+    @State private var loadingStageText: String = String(localized: "Connecting to resident daemon…")
 
     private let brandAccent = Color(red: 0.88, green: 0.32, blue: 0.60)
 
@@ -45,7 +45,7 @@ struct LaunchView: View {
             Task {
                 try? await Task.sleep(nanoseconds: 700_000_000)
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    loadingStageText = "Syncing team memory…"
+                    loadingStageText = String(localized: "Syncing team memory…")
                 }
             }
         }

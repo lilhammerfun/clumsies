@@ -17,7 +17,7 @@ struct ActivitySessionList: View {
                     Button("Try Again") { Task { await self.model.load() } }
                 }
             } else if self.model.sessions.isEmpty && (self.model.isLoading || !self.model.hasLoaded) {
-                ContentLoadingView(title: "Loading Activity…")
+                ContentLoadingView(title: String(localized: "Loading Activity…"))
             } else if self.model.sessions.isEmpty {
                 ContentUnavailableView(
                     self.model.selectedProjectId == nil ? "No Activity Yet" : "No Activity for This Project",
@@ -123,7 +123,7 @@ struct ActivitySessionDetail: View {
                             Button("Refresh Activity") { Task { await self.model.load() } }
                             Spacer()
                         } else {
-                            ContentLoadingView(title: "Activity details")
+                            ContentLoadingView(title: String(localized: "Activity details"))
                         }
                     }
                     .padding(24)
@@ -205,7 +205,7 @@ private struct ActivitySessionHeader: View {
             .foregroundStyle(.secondary)
 
             Label(
-                "\(self.totalTasks) request\(self.totalTasks == 1 ? "" : "s")",
+                "\(self.totalTasks) requests",
                 systemImage: "text.bubble"
             )
             .font(.caption)
@@ -298,7 +298,7 @@ private struct ActivityActivationRow: View {
                 if let status = Self.visibleStatusTitle(activation.runStatus) {
                     Text(status)
                         .font(.caption)
-                        .foregroundStyle(status == "Failed" ? Color.orange : Color.secondary)
+                        .foregroundStyle(["failed", "error"].contains(activation.runStatus?.lowercased() ?? "") ? Color.orange : Color.secondary)
                 }
             }
 
@@ -369,8 +369,8 @@ private struct ActivityActivationRow: View {
     private static func visibleStatusTitle(_ status: String?) -> String? {
         switch status?.lowercased() {
         case nil, "succeeded", "success", "completed": nil
-        case "running": "Searching"
-        case "failed", "error": "Failed"
+        case "running": String(localized: "Searching")
+        case "failed", "error": String(localized: "Failed")
         case let status?: status.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
@@ -503,24 +503,24 @@ extension RecallFragment {
 
     var deliveryTitle: String? {
         switch action?.lowercased() {
-        case "add": "Sent to agent"
-        case "replace": "Updated for agent"
-        case "reuse": "Already available"
+        case "add": String(localized: "Sent to agent")
+        case "replace": String(localized: "Updated for agent")
+        case "reuse": String(localized: "Already available")
         default: nil
         }
     }
 
     fileprivate var emptyContentExplanation: String {
         action?.lowercased() == "reuse"
-            ? "The agent already had this unchanged memory chunk, so its text was not sent again."
-            : "The full text was not preserved in this activity record."
+            ? String(localized: "The agent already had this unchanged memory chunk, so its text was not sent again.")
+            : String(localized: "The full text was not preserved in this activity record.")
     }
 
     fileprivate var scopeTitle: String {
         switch scope {
-        case .org?: "Remote memory"
-        case .project?: "Project memory"
-        case nil: "Memory"
+        case .org?: String(localized: "Remote memory")
+        case .project?: String(localized: "Project memory")
+        case nil: String(localized: "Memory")
         }
     }
 }
@@ -533,7 +533,7 @@ extension RecallSession {
         return tasks.lazy
             .map(\.text)
             .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            ?? "Agent activity"
+            ?? String(localized: "Agent activity")
     }
 }
 
@@ -545,9 +545,9 @@ private extension AgentHost {
         case .claudeCode: "Claude Code"
         case .opencode: "OpenCode"
         case .antigravity: "Antigravity"
-        case .manual: "Manual"
+        case .manual: String(localized: "Manual")
         case .zed: "Zed"
-        case .unknown: "Unknown"
+        case .unknown: String(localized: "Unknown")
         }
     }
 }

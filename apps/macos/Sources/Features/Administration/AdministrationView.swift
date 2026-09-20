@@ -252,7 +252,7 @@ private struct AdministrationMembersView: View {
     var body: some View {
         Form {
             Section {
-                ClassicSearchField(text: $query, prompt: "Search members", width: 300,
+                ClassicSearchField(text: $query, prompt: String(localized: "Search members"), width: 300,
                     accessibilityIdentifier: "organization-members-search")
                     .frame(height: 24)
             }
@@ -282,7 +282,7 @@ private struct AdministrationMembersView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         VStack(alignment: .trailing, spacing: 3) {
-                            Text(member.role.title + (isCurrentUser ? " · You" : ""))
+                            Text(member.role.title + (isCurrentUser ? String(localized: " · You") : ""))
                             if member.status == .disabled || !member.externalIdentityBound {
                                 Text(member.status == .disabled ? "Disabled" : "Not signed in")
                                     .foregroundStyle(.secondary)
@@ -486,14 +486,14 @@ private struct AdministrationAccessView: View {
         Form {
             Section("Sign-in") {
                 if let provider = snapshot.identityProvider {
-                    LabeledContent("Single sign-on", value: provider.configured ? "Configured" : "Not configured")
+                    LabeledContent("Single sign-on", value: provider.configured ? String(localized: "Configured") : String(localized: "Not configured"))
                 }
             }
             if let organization = snapshot.organization {
                 Section {
                     LabeledContent("Allowed email domains") {
                         Text(organization.allowedEmailDomains.isEmpty
-                            ? "Any domain" : organization.allowedEmailDomains.joined(separator: ", "))
+                            ? String(localized: "Any domain") : organization.allowedEmailDomains.joined(separator: ", "))
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Edit…") { showsDomainEdit = true }
                             .disabled(!administration.canMutate(.organization))
@@ -522,7 +522,7 @@ private struct AdministrationAuditView: View {
     var body: some View {
         Form {
             Section {
-                ClassicSearchField(text: $query, prompt: "Search activity", width: 300,
+                ClassicSearchField(text: $query, prompt: String(localized: "Search activity"), width: 300,
                     accessibilityIdentifier: "organization-audit-events-search")
                     .frame(height: 24)
             }
@@ -574,35 +574,35 @@ private struct AdministrationAuditView: View {
 
     private func actionTitle(_ action: String) -> String {
         switch action {
-        case "admin.org_updated": "Updated organization"
-        case "admin.member_created": "Added member"
-        case "admin.member_updated": "Updated member"
-        case "admin.project_created": "Created project"
-        case "admin.project_updated": "Updated project"
-        case "admin.project_deleted": "Deleted project"
-        case "admin.project_member_created": "Added project member"
-        case "admin.project_member_updated": "Updated project member"
-        case "admin.project_member_deleted": "Removed project member"
-        case "admin.token_revoked": "Revoked sign-in credential"
-        default: "Organization activity"
+        case "admin.org_updated": String(localized: "Updated organization")
+        case "admin.member_created": String(localized: "Added member")
+        case "admin.member_updated": String(localized: "Updated member")
+        case "admin.project_created": String(localized: "Created project")
+        case "admin.project_updated": String(localized: "Updated project")
+        case "admin.project_deleted": String(localized: "Deleted project")
+        case "admin.project_member_created": String(localized: "Added project member")
+        case "admin.project_member_updated": String(localized: "Updated project member")
+        case "admin.project_member_deleted": String(localized: "Removed project member")
+        case "admin.token_revoked": String(localized: "Revoked sign-in credential")
+        default: String(localized: "Organization activity")
         }
     }
 
     private func targetName(_ event: AdminAuditEventRecord) -> String {
         if let name = event.targetDisplayName, !name.isEmpty { return name }
         switch event.targetType {
-        case "org": return workspaceContext.organization?.name ?? "Unavailable organization"
-        case "user": return "Unavailable member"
-        case "project": return "Unavailable project"
-        case "project_member": return "Unavailable project member"
-        case "access_token": return "Unavailable sign-in credential"
-        default: return "Unavailable item"
+        case "org": return workspaceContext.organization?.name ?? String(localized: "Unavailable organization")
+        case "user": return String(localized: "Unavailable member")
+        case "project": return String(localized: "Unavailable project")
+        case "project_member": return String(localized: "Unavailable project member")
+        case "access_token": return String(localized: "Unavailable sign-in credential")
+        default: return String(localized: "Unavailable item")
         }
     }
 
     private func actorName(_ event: AdminAuditEventRecord) -> String {
         if let name = event.actorDisplayName ?? event.actorEmail { return name }
-        return event.actorUserId == nil ? "System" : "Unavailable member"
+        return event.actorUserId == nil ? String(localized: "System") : String(localized: "Unavailable member")
     }
 }
 

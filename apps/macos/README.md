@@ -30,6 +30,23 @@ a new task in the bound repository.
 See the [usage guide](../../docs/guides/how-to-use-clumsies.md) for the full
 workflow.
 
+## App language
+
+Clumsies supports English and Simplified Chinese and follows the macOS app language.
+To choose a language just for Clumsies, open **System Settings → General → Language &
+Region → Applications**, add Clumsies, choose **English** or **简体中文**, and reopen it.
+**Clumsies → Settings → General → Language** opens the same system pane.
+Save your edits before reopening. Unsupported languages fall back to English.
+
+`Resources/Localizable.xcstrings` is the translation source. Use literal localized
+SwiftUI text, and `String(localized:)` for AppKit, computed labels and errors.
+Build with Xcode to extract new keys, then provide both English and `zh-Hans`
+translations in the catalog. Use catalog plural variations and whole sentences
+with interpolation; keep protocol values, identifiers, paths and user content
+separate from display labels. Number and date formatting follows the user's locale.
+Run the native tests in English and `LocalizationTests` with `-testLanguage zh-Hans`
+to check packaged resources, plural forms and language-dependent display labels.
+
 ## Dashboard preview
 
 Dashboard uses native Swift Charts for inventory, retrieval activity, directory coverage,

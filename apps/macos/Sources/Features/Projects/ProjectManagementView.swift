@@ -78,7 +78,7 @@ struct ProjectCreationSheet: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.prompt = "Attach"
+        panel.prompt = String(localized: "Attach")
         panel.begin { response in
             guard response == .OK else { return }
             let existing = Set(model.repositories.map(\.standardized.path))
@@ -200,7 +200,7 @@ struct OrganizationProjectsView: View {
             .navigationTitle("Organization Projects")
             .navigationDestination(for: String.self) { projectId in
                 ProjectSettingsView(projectId: projectId, onDeleted: { self.path = [] })
-                    .navigationTitle(self.administration.project(id: projectId)?.name ?? "Project")
+                    .navigationTitle(self.administration.project(id: projectId)?.name ?? String(localized: "Project"))
             }
         }
     }
@@ -222,7 +222,7 @@ private struct ProjectConfigurationSections: View {
         Group {
             if let state = administration.projectDetailStates[project.id], state.isStale {
                 Section {
-                    Text(state.errorMessage ?? "These project details are cached. Refresh before making changes.")
+                    Text(state.errorMessage ?? String(localized: "These project details are cached. Refresh before making changes."))
                         .foregroundStyle(.secondary)
                     Button("Try Again") {
                         Task { await self.administration.loadProject(id: self.project.id, force: true) }
@@ -431,7 +431,7 @@ private struct ProjectMemberSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add project member").font(.headline)
-            ClassicSearchField(text: self.$model.query, prompt: "Search members", width: 404,
+            ClassicSearchField(text: self.$model.query, prompt: String(localized: "Search members"), width: 404,
                 accessibilityIdentifier: "project-member-search")
                 .frame(height: 24)
                 .disabled(self.workspaceContext.isMutatingAdministration)
@@ -594,7 +594,7 @@ private struct ProjectLocalSetupSettings: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.canCreateDirectories = true
-        panel.prompt = "Add"
+        panel.prompt = String(localized: "Add")
         panel.begin { response in
             guard response == .OK else { return }
             Task { await model.add(panel.urls, projectId: projectId) }

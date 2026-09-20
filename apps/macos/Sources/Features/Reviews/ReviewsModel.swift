@@ -118,7 +118,7 @@ final class ReviewsModel: ObservableObject {
                 reviewLoadState = .loaded
             }
             guard let review = review(for: draft) else {
-                feedback.errorMessage = "The Review for this draft is unavailable. It may have already been closed."
+                feedback.errorMessage = String(localized: "The Review for this draft is unavailable. It may have already been closed.")
                 return
             }
             openReview(review)
@@ -319,7 +319,7 @@ final class ReviewsModel: ObservableObject {
             throw ReviewRequestError.legacyProjectDraftCannotBePublished
         }
         guard context.isReviewAuthor(review) else {
-            throw ServerClientError.forbidden("Only the draft author can resubmit this Review.")
+            throw ServerClientError.forbidden(String(localized: "Only the draft author can resubmit this Review."))
         }
         guard detail.draft.coordination.freshness == .current || candidate != nil else {
             throw ReviewRequestError.reconciliationRequired
@@ -402,7 +402,7 @@ final class ReviewsModel: ObservableObject {
     func merge(_ review: ReviewRecord) async throws {
         let authority = context.authorityGeneration
         guard context.canMergeReviews else {
-            throw ServerClientError.forbidden("Your account cannot merge Reviews.")
+            throw ServerClientError.forbidden(String(localized: "Your account cannot merge Reviews."))
         }
         // A Review belongs to its carrying Project, while its Draft targets
         // Organization authority. The coordination commit is the exact Org Ref
@@ -488,7 +488,7 @@ final class ReviewsModel: ObservableObject {
                     responseWasStale: loaded.hasStaleServerResponse
                 ) else {
                     reviewLoadState = .failed(
-                        "Fresh Review data was unavailable. Existing Reviews were kept."
+                        String(localized: "Fresh Review data was unavailable. Existing Reviews were kept.")
                     )
                     return
                 }

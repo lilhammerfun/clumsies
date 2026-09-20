@@ -484,7 +484,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertTrue(source.contains("Export Organization Memory as ZIP…"))
         XCTAssertTrue(source.contains("Export Project Memory as ZIP…"))
         XCTAssertTrue(source.contains(".disabled(!memoryModel.canExportMemory(memoryModel.visibleMemoryItems))"))
-        XCTAssertTrue(source.contains(".toolbarHelp(\"Memory Actions\")"))
+        XCTAssertTrue(source.contains(".toolbarHelp(String(localized: \"Memory Actions\"))"))
         XCTAssertTrue(source.contains("Request Review for All Project Changes…"))
         XCTAssertTrue(source.contains(".disabled(activeProjectReviewDrafts.isEmpty)"))
     }

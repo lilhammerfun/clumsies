@@ -74,7 +74,7 @@ private struct BundleCollectionStatusView: View {
     var body: some View {
         switch bundleStore.bundleLoadState {
         case .loading:
-            ContentLoadingView(title: "Loading Bundles…")
+            ContentLoadingView(title: String(localized: "Loading Bundles…"))
         case .failed(let message):
             ContentUnavailableView {
                 Label("Bundles Unavailable", systemImage: "exclamationmark.triangle")
@@ -247,7 +247,7 @@ private struct BundleEditor: View {
     }
 
     private func resourceLocation(_ resource: MemoryResource) -> String {
-        let scope = resource.scope == .org ? "Organization" : resource.projectName ?? "Project"
+        let scope = resource.scope == .org ? String(localized: "Organization") : resource.projectName ?? String(localized: "Project")
         return "\(scope) · \(resource.kind.singularTitle)"
     }
 
@@ -326,7 +326,7 @@ private struct BundleResourcePicker: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .toolbarHelp("Finish Adding Memory")
+                        .toolbarHelp(String(localized: "Finish Adding Memory"))
                         .keyboardShortcut(.defaultAction)
                 }
             }
@@ -358,6 +358,6 @@ private struct BundleResourcePicker: View {
     }
 
     private func resourceLocation(_ resource: MemoryResource) -> String {
-        resource.scope == .org ? "Organization" : resource.projectName ?? "Project"
+        resource.scope == .org ? String(localized: "Organization") : resource.projectName ?? String(localized: "Project")
     }
 }

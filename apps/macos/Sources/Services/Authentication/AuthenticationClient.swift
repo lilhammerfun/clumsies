@@ -17,14 +17,14 @@ enum AuthenticationError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .callbackServer(let message): message
-        case .invalidAuthorizationURL: "Could not create the organization sign-in URL."
-        case .invalidRequestPath: "The authenticated Server request path is invalid."
-        case .browserLaunchFailed: "Could not open the system browser."
-        case .callbackTimedOut: "Organization sign-in timed out."
-        case .invalidCallback: "The organization sign-in callback is invalid."
-        case .stateMismatch: "The organization sign-in state did not match."
-        case .provider(let message): "Organization sign-in failed: \(message)"
-        case .server(let status, let message): "Server authentication failed (\(status)): \(message)"
+        case .invalidAuthorizationURL: String(localized: "Could not create the organization sign-in URL.")
+        case .invalidRequestPath: String(localized: "The authenticated Server request path is invalid.")
+        case .browserLaunchFailed: String(localized: "Could not open the system browser.")
+        case .callbackTimedOut: String(localized: "Organization sign-in timed out.")
+        case .invalidCallback: String(localized: "The organization sign-in callback is invalid.")
+        case .stateMismatch: String(localized: "The organization sign-in state did not match.")
+        case .provider(let message): String(localized: "Organization sign-in failed: \(message)")
+        case .server(let status, let message): String(localized: "Server authentication failed (\(status)): \(message)")
         }
     }
 }
@@ -271,7 +271,7 @@ struct AuthenticationClient: @unchecked Sendable {
 
     static func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
-            throw AuthenticationError.server(status: 0, message: "No HTTP response was returned.")
+            throw AuthenticationError.server(status: 0, message: String(localized: "No HTTP response was returned."))
         }
         guard (200..<300).contains(http.statusCode) else {
             let apiError = try? JSONCoding.decoder().decode(APIErrorPayload.self, from: data)
@@ -306,7 +306,7 @@ private final class LoopbackCallbackServer: @unchecked Sendable {
     static func open() throws -> LoopbackCallbackServer {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
-            throw AuthenticationError.callbackServer("Could not create the local callback socket.")
+            throw AuthenticationError.callbackServer(String(localized: "Could not create the local callback socket."))
         }
         var reuse: Int32 = 1
         setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
@@ -323,7 +323,7 @@ private final class LoopbackCallbackServer: @unchecked Sendable {
         }
         guard bindResult == 0, listen(descriptor, 1) == 0 else {
             Darwin.close(descriptor)
-            throw AuthenticationError.callbackServer("Could not bind the local callback socket.")
+            throw AuthenticationError.callbackServer(String(localized: "Could not bind the local callback socket."))
         }
 
         var boundAddress = sockaddr_in()
@@ -335,7 +335,7 @@ private final class LoopbackCallbackServer: @unchecked Sendable {
         }
         guard nameResult == 0 else {
             Darwin.close(descriptor)
-            throw AuthenticationError.callbackServer("Could not read the local callback port.")
+            throw AuthenticationError.callbackServer(String(localized: "Could not read the local callback port."))
         }
         return .init(descriptor: descriptor, port: UInt16(bigEndian: boundAddress.sin_port))
     }
@@ -400,10 +400,10 @@ private final class LoopbackCallbackServer: @unchecked Sendable {
 
     private static func respond(to descriptor: Int32, success: Bool) {
         let status = success ? "200 OK" : "400 Bad Request"
-        let title = success ? "Signed in to Clumsies" : "Sign-in failed"
+        let title = success ? String(localized: "Signed in to Clumsies") : String(localized: "Sign-in failed")
         let message = success
-            ? "You can close this window and return to the Clumsies app."
-            : "Return to the Clumsies app to review the error."
+            ? String(localized: "You can close this window and return to the Clumsies app.")
+            : String(localized: "Return to the Clumsies app to review the error.")
         let body = "<!doctype html><meta charset=\"utf-8\"><title>\(title)</title><h1>\(title)</h1><p>\(message)</p>"
         let response = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n\(body)"
         _ = response.withCString { pointer in

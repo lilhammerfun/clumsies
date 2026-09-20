@@ -45,10 +45,10 @@ enum WorkspaceLoadError: LocalizedError, Sendable {
 
     var errorDescription: String? {
         switch self {
-        case .authenticationRequired: "Sign in to connect Clumsies to your organization."
-        case .noProjects: "The signed-in account has no accessible project."
+        case .authenticationRequired: String(localized: "Sign in to connect Clumsies to your organization.")
+        case .noProjects: String(localized: "The signed-in account has no accessible project.")
         case .sharedStateChangedDuringLoad:
-            "Remote memory changed while the workspace was loading. Refresh to load one consistent version."
+            String(localized: "Remote memory changed while the workspace was loading. Refresh to load one consistent version.")
         }
     }
 }

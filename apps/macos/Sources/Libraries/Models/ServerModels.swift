@@ -62,8 +62,8 @@ enum ProjectMemberRole: String, Codable, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .member: "Member"
-        case .admin: "Admin"
+        case .member: String(localized: "Member")
+        case .admin: String(localized: "Admin")
         }
     }
 }
@@ -91,9 +91,9 @@ enum AdminOrganizationRole: String, Codable, CaseIterable, Identifiable, Sendabl
 
     var title: String {
         switch self {
-        case .owner: "Owner"
-        case .admin: "Admin"
-        case .member: "Member"
+        case .owner: String(localized: "Owner")
+        case .admin: String(localized: "Admin")
+        case .member: String(localized: "Member")
         }
     }
 }
@@ -107,9 +107,9 @@ enum AdminMemberStatus: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .invited: "Not signed in yet"
-        case .active: "Active"
-        case .disabled: "Disabled"
+        case .invited: String(localized: "Not signed in yet")
+        case .active: String(localized: "Active")
+        case .disabled: String(localized: "Disabled")
         }
     }
 }
@@ -154,10 +154,10 @@ enum AdminAccessTokenKind: String, Codable, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .access: "Access"
-        case .refresh: "Refresh"
-        case .integration: "Integration"
-        case .webSession: "Web session"
+        case .access: String(localized: "Access")
+        case .refresh: String(localized: "Refresh")
+        case .integration: String(localized: "Integration")
+        case .webSession: String(localized: "Web session")
         }
     }
 }
@@ -201,7 +201,13 @@ enum AdminHealthStatus: String, Codable, Sendable {
     case degraded
     case down
 
-    var title: String { rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .ok: String(localized: "OK")
+        case .degraded: String(localized: "Degraded")
+        case .down: String(localized: "Down")
+        }
+    }
 }
 
 struct AdminHealthCheck: Codable, Hashable, Sendable {

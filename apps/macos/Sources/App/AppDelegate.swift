@@ -96,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 || store.navigation.activeVisibleTab != nil
         }
         if menuItem.action == #selector(toggleSidebar(_:)) {
-            menuItem.title = store.navigation.sidebarExpanded ? "Hide Sidebar" : "Show Sidebar"
+            menuItem.title = store.navigation.sidebarExpanded ? String(localized: "Hide Sidebar") : String(localized: "Show Sidebar")
         }
         if menuItem.action == #selector(approveReview(_:)) {
             return store.reviews.canPerformReviewMenuAction(.approve)
@@ -351,28 +351,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         let open = menu.addItem(
-            withTitle: "Open \(ClumsiesIdentifiers.appDisplayName)",
+            withTitle: String(localized: "Open \(ClumsiesIdentifiers.appDisplayName)"),
             action: #selector(openFromStatusItem(_:)),
             keyEquivalent: ""
         )
         open.target = self
         let settings = menu.addItem(
-            withTitle: "Settings...",
+            withTitle: String(localized: "Settings..."),
             action: #selector(showSettings(_:)),
             keyEquivalent: ""
         )
         settings.target = self
         let revealLogs = menu.addItem(
-            withTitle: "Reveal Logs in Finder",
+            withTitle: String(localized: "Reveal Logs in Finder"),
             action: #selector(showLogsInFinderAction(_:)),
             keyEquivalent: ""
         )
         revealLogs.target = self
-        let exportLogs = menu.addItem(withTitle: "Export Diagnostics…", action: #selector(exportDiagnostics(_:)), keyEquivalent: "")
+        let exportLogs = menu.addItem(withTitle: String(localized: "Export Diagnostics…"), action: #selector(exportDiagnostics(_:)), keyEquivalent: "")
         exportLogs.target = self
         menu.addItem(.separator())
         menu.addItem(
-            withTitle: "Quit \(ClumsiesIdentifiers.appDisplayName)",
+            withTitle: String(localized: "Quit \(ClumsiesIdentifiers.appDisplayName)"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: ""
         )
@@ -416,25 +416,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         mainMenu.addItem(applicationItem)
         let applicationMenu = NSMenu()
         applicationMenu.addItem(
-            withTitle: "About \(ClumsiesIdentifiers.appDisplayName)",
+            withTitle: String(localized: "About \(ClumsiesIdentifiers.appDisplayName)"),
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
         applicationMenu.addItem(.separator())
-        let settings = applicationMenu.addItem(withTitle: "Settings...", action: #selector(showSettings(_:)), keyEquivalent: ",")
+        let settings = applicationMenu.addItem(withTitle: String(localized: "Settings..."), action: #selector(showSettings(_:)), keyEquivalent: ",")
         settings.target = self
-        let updates = applicationMenu.addItem(withTitle: "Check for Updates...", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        let updates = applicationMenu.addItem(withTitle: String(localized: "Check for Updates..."), action: #selector(checkForUpdates(_:)), keyEquivalent: "")
         updates.target = self
         applicationMenu.addItem(.separator())
         applicationMenu.addItem(
-            withTitle: "Hide \(ClumsiesIdentifiers.appDisplayName)",
+            withTitle: String(localized: "Hide \(ClumsiesIdentifiers.appDisplayName)"),
             action: #selector(NSApplication.hide(_:)),
             keyEquivalent: "h"
         )
-        applicationMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h").keyEquivalentModifierMask = [.command, .option]
+        applicationMenu.addItem(withTitle: String(localized: "Hide Others"), action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h").keyEquivalentModifierMask = [.command, .option]
         applicationMenu.addItem(.separator())
         applicationMenu.addItem(
-            withTitle: "Quit \(ClumsiesIdentifiers.appDisplayName)",
+            withTitle: String(localized: "Quit \(ClumsiesIdentifiers.appDisplayName)"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -442,21 +442,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let fileItem = NSMenuItem()
         mainMenu.addItem(fileItem)
-        let fileMenu = NSMenu(title: "File")
-        let newMemory = fileMenu.addItem(withTitle: "New Memory", action: #selector(newMemory(_:)), keyEquivalent: "n")
+        let fileMenu = NSMenu(title: String(localized: "File"))
+        let newMemory = fileMenu.addItem(withTitle: String(localized: "New Memory"), action: #selector(newMemory(_:)), keyEquivalent: "n")
         newMemory.target = self
         let newProject = fileMenu.addItem(
-            withTitle: "New Project…",
+            withTitle: String(localized: "New Project…"),
             action: #selector(newProject(_:)),
             keyEquivalent: "n"
         )
         newProject.keyEquivalentModifierMask = [.command, .shift]
         newProject.target = self
         fileMenu.addItem(.separator())
-        let closeTab = fileMenu.addItem(withTitle: "Close Tab", action: #selector(closeActiveTab(_:)), keyEquivalent: "w")
+        let closeTab = fileMenu.addItem(withTitle: String(localized: "Close Tab"), action: #selector(closeActiveTab(_:)), keyEquivalent: "w")
         closeTab.target = self
         let closeWindow = fileMenu.addItem(
-            withTitle: "Close Window",
+            withTitle: String(localized: "Close Window"),
             action: #selector(NSWindow.performClose(_:)),
             keyEquivalent: "w"
         )
@@ -465,59 +465,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let editItem = NSMenuItem()
         mainMenu.addItem(editItem)
-        let editMenu = NSMenu(title: "Edit")
-        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        let editMenu = NSMenu(title: String(localized: "Edit"))
+        editMenu.addItem(withTitle: String(localized: "Undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: String(localized: "Redo"), action: Selector(("redo:")), keyEquivalent: "Z")
         editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: String(localized: "Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: String(localized: "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: String(localized: "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: String(localized: "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
         let find = editMenu.addItem(
-            withTitle: "Find...",
+            withTitle: String(localized: "Find..."),
             action: #selector(NSTextView.performFindPanelAction(_:)),
             keyEquivalent: "f"
         )
         find.tag = 1
         let findNext = editMenu.addItem(
-            withTitle: "Find Next",
+            withTitle: String(localized: "Find Next"),
             action: #selector(NSTextView.performFindPanelAction(_:)),
             keyEquivalent: "g"
         )
         findNext.tag = 2
         let findPrevious = editMenu.addItem(
-            withTitle: "Find Previous",
+            withTitle: String(localized: "Find Previous"),
             action: #selector(NSTextView.performFindPanelAction(_:)),
             keyEquivalent: "g"
         )
         findPrevious.tag = 3
         findPrevious.keyEquivalentModifierMask = [.command, .shift]
         editMenu.addItem(.separator())
-        let search = editMenu.addItem(withTitle: "Search Clumsies...", action: #selector(showSearch(_:)), keyEquivalent: "k")
+        let search = editMenu.addItem(withTitle: String(localized: "Search Clumsies..."), action: #selector(showSearch(_:)), keyEquivalent: "k")
         search.target = self
         editItem.submenu = editMenu
 
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
-        let viewMenu = NSMenu(title: "View")
-        let sidebar = viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(toggleSidebar(_:)), keyEquivalent: "s")
+        let viewMenu = NSMenu(title: String(localized: "View"))
+        let sidebar = viewMenu.addItem(withTitle: String(localized: "Toggle Sidebar"), action: #selector(toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .option]
         sidebar.target = self
         viewItem.submenu = viewMenu
 
         let reviewItem = NSMenuItem()
         mainMenu.addItem(reviewItem)
-        let reviewMenu = NSMenu(title: "Review")
+        let reviewMenu = NSMenu(title: String(localized: "Review"))
         let approve = reviewMenu.addItem(
-            withTitle: "Approve",
+            withTitle: String(localized: "Approve"),
             action: #selector(approveReview(_:)),
             keyEquivalent: "a"
         )
         approve.keyEquivalentModifierMask = [.command, .option]
         approve.target = self
         let reject = reviewMenu.addItem(
-            withTitle: "Reject",
+            withTitle: String(localized: "Reject"),
             action: #selector(rejectReview(_:)),
             keyEquivalent: "r"
         )
@@ -525,14 +525,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         reject.target = self
         reviewMenu.addItem(.separator())
         let merge = reviewMenu.addItem(
-            withTitle: "Merge",
+            withTitle: String(localized: "Merge"),
             action: #selector(mergeReview(_:)),
             keyEquivalent: "m"
         )
         merge.keyEquivalentModifierMask = [.command, .option]
         merge.target = self
         let resubmit = reviewMenu.addItem(
-            withTitle: "Resubmit",
+            withTitle: String(localized: "Resubmit"),
             action: #selector(resubmitReview(_:)),
             keyEquivalent: "u"
         )
@@ -542,11 +542,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
-        let windowMenu = NSMenu(title: "Window")
-        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        let windowMenu = NSMenu(title: String(localized: "Window"))
+        windowMenu.addItem(withTitle: String(localized: "Minimize"), action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: String(localized: "Zoom"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
-        windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: String(localized: "Bring All to Front"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         windowItem.submenu = windowMenu
         NSApp.windowsMenu = windowMenu
         NSApp.mainMenu = mainMenu

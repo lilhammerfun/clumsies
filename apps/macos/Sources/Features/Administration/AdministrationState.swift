@@ -11,11 +11,11 @@ enum AdministrationSection: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .organization: "Organization Details"
-        case .members: "Members"
-        case .projects: "Projects"
-        case .access: "Sign-in & Access"
-        case .audit: "Activity"
+        case .organization: String(localized: "Organization Details")
+        case .members: String(localized: "Members")
+        case .projects: String(localized: "Projects")
+        case .access: String(localized: "Sign-in & Access")
+        case .audit: String(localized: "Activity")
         }
     }
 

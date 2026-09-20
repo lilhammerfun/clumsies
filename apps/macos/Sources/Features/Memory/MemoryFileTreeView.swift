@@ -34,32 +34,32 @@ enum MemoryFileTreeAlert: Identifiable {
     var title: String {
         switch self {
         case .itemRename(let item):
-            "Rename \(item.document.path.split(separator: "/").last ?? "File")"
+            String(localized: "Rename \(item.document.path.split(separator: "/").last.map(String.init) ?? String(localized: "File"))")
         case .directoryRename:
-            "Rename Folder"
+            String(localized: "Rename Folder")
         case .organizationDeletion(let items):
             items.count == 1
-                ? "Delete File?"
-                : "Delete \(items.count) Files?"
+                ? String(localized: "Delete File?")
+                : String(localized: "Delete \(items.count) Files?")
         case .directoryDiscard(let name, let drafts):
             drafts.count == 1
-                ? "Discard Draft in \(name)?"
-                : "Discard \(drafts.count) Drafts in \(name)?"
+                ? String(localized: "Discard Draft in \(name)?")
+                : String(localized: "Discard \(drafts.count) Drafts in \(name)?")
         case .directoryDeletion(let name, _):
-            "Delete \(name)?"
+            String(localized: "Delete \(name)?")
         }
     }
 
     var confirmationTitle: String {
         switch self {
         case .itemRename, .directoryRename:
-            "Rename"
+            String(localized: "Rename")
         case .organizationDeletion:
-            "Delete"
+            String(localized: "Delete")
         case .directoryDiscard:
-            "Discard Drafts"
+            String(localized: "Discard Drafts")
         case .directoryDeletion:
-            "Delete Folder"
+            String(localized: "Delete Folder")
         }
     }
 
@@ -67,53 +67,37 @@ enum MemoryFileTreeAlert: Identifiable {
         switch self {
         case .itemRename(let item):
             if item.resource == nil {
-                return "This changes the path in the current Project-carried Draft."
+                return String(localized: "This changes the path in the current Project-carried Draft.")
             }
-            return "The rename is saved as a draft. After review and merge, "
-                + "the file will be renamed in every project that includes it."
+            return String(localized: "The rename is saved as a draft. After review and merge, the file will be renamed in every project that includes it.")
         case .directoryRename(_, let items):
             let sharedCount = items.filter { $0.resource != nil }.count
             let draftCount = items.count - sharedCount
             if sharedCount == 0 {
-                return "This preserves every relative file path in the current Project-carried "
-                    + "Drafts. Remote Organization Memory is unchanged."
+                return String(localized: "This preserves every relative file path in the current Project-carried Drafts. Remote Organization Memory is unchanged.")
             }
             if draftCount > 0 {
-                return "This preserves every relative file path, renames \(draftCount) unpublished "
-                    + "Drafts, and creates \(sharedCount) rename proposals. Remote Organization "
-                    + "Memory changes only after review and merge."
+                return String(localized: "This preserves every relative file path, renames \(draftCount) unpublished Drafts, and creates \(sharedCount) rename proposals. Remote Organization Memory changes only after review and merge.")
             }
-            return "This preserves every relative file path and creates Project-carried rename "
-                + "Drafts. Organization Memory changes only after review and merge."
+            return String(localized: "This preserves every relative file path and creates Project-carried rename Drafts. Organization Memory changes only after review and merge.")
         case .organizationDeletion(let items):
-            let subject = items.count == 1
-                ? "this file"
-                : "these \(items.count) files"
-            let object = items.count == 1 ? "it" : "them"
-            return "The deletion is saved as a draft. After review and merge, \(subject) "
-                + "will be deleted from every project that includes \(object)."
+            if items.count == 1 {
+                return String(localized: "The deletion is saved as a draft. After review and merge, this file will be deleted from every project that includes it.")
+            }
+            return String(localized: "The deletion is saved as a draft. After review and merge, these \(items.count) files will be deleted from every project that includes them.")
         case .directoryDiscard:
-            return "This removes the Project-carried Drafts in this folder. "
-                + "Remote Organization Memory is unchanged."
+            return String(localized: "This removes the Project-carried Drafts in this folder. Remote Organization Memory is unchanged.")
         case .directoryDeletion(let name, let plan):
             var effects: [String] = []
             if !plan.itemsToDelete.isEmpty {
-                let noun = plan.itemsToDelete.count == 1 ? "memory" : "memories"
-                effects.append(
-                    "create deletion proposals for \(plan.itemsToDelete.count) remote "
-                        + noun
-                )
+                effects.append(String(localized: "create deletion proposals for \(plan.itemsToDelete.count) remote memories"))
             }
             if !plan.draftsToDiscard.isEmpty {
-                let noun = plan.draftsToDiscard.count == 1 ? "draft" : "drafts"
-                effects.append(
-                    "discard \(plan.draftsToDiscard.count) unpublished "
-                        + noun
-                )
+                effects.append(String(localized: "discard \(plan.draftsToDiscard.count) unpublished drafts"))
             }
-            let joinedEffects = effects.joined(separator: " and ")
-            return "This will \(joinedEffects) in \(name). "
-                + "Remote memories are removed only after review and merge."
+            let joinedEffects = ListFormatter.localizedString(byJoining: effects)
+            return String(localized: "This will \(joinedEffects) in \(name). Remote memories are removed only after review and merge.",
+                          comment: "The first argument is a localized list of actions, such as creating deletion proposals and discarding drafts; the second is a folder name.")
         }
     }
 }
@@ -744,11 +728,11 @@ struct FileTreeView: View {
     }
 
     private func organizationDeletionTitle(count: Int) -> String {
-        count == 1 ? "Delete…" : "Delete \(count) Files…"
+        count == 1 ? String(localized: "Delete…") : String(localized: "Delete \(count) Files…")
     }
 
     private func reviewRequestTitle(count: Int) -> String {
-        count == 1 ? "Request Review…" : "Request Review for \(count) Changes…"
+        count == 1 ? String(localized: "Request Review…") : String(localized: "Request Review for \(count) Changes…")
     }
 
     private func directoryReviewTitle(for nodeIds: Set<String>, draftCount: Int) -> String {
@@ -756,9 +740,9 @@ struct FileTreeView: View {
            let nodeId = nodeIds.first,
            let node = FileTreeNode.node(withId: nodeId, in: roots),
            node.item == nil {
-            return "Update \(node.name)"
+            return String(localized: "Update \(node.name)")
         }
-        return draftCount == 1 ? "Update memory" : "Update \(draftCount) memories"
+        return draftCount == 1 ? String(localized: "Update memory") : String(localized: "Update \(draftCount) memories")
     }
 
     private func proposeOrganizationDeletion(_ items: [MemoryListItem]) {
@@ -781,11 +765,11 @@ struct FileTreeView: View {
     }
 
     private func addToProjectTitle(count: Int) -> String {
-        count == 1 ? "Add to Project" : "Add \(count) Items to Project"
+        count == 1 ? String(localized: "Add to Project") : String(localized: "Add \(count) Items to Project")
     }
 
     private func removeFromProjectTitle(count: Int) -> String {
-        count == 1 ? "Remove from Project" : "Remove \(count) Items from Project"
+        count == 1 ? String(localized: "Remove from Project") : String(localized: "Remove \(count) Items from Project")
     }
 }
 

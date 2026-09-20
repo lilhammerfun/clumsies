@@ -12,17 +12,17 @@ enum ServerOriginError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .empty:
-            "Enter the Server address."
+            String(localized: "Enter the Server address.")
         case .invalidURL:
-            "Enter a complete Server address, such as https://clumsies.example.com."
+            String(localized: "Enter a complete Server address, such as https://clumsies.example.com.")
         case .unsupportedScheme:
-            "The Server address must use HTTPS. HTTP is allowed only for this Mac's loopback address."
+            String(localized: "The Server address must use HTTPS. HTTP is allowed only for this Mac's loopback address.")
         case .insecureRemoteHTTP:
-            "Remote Server addresses must use HTTPS. HTTP is allowed only for localhost or a loopback IP address."
+            String(localized: "Remote Server addresses must use HTTPS. HTTP is allowed only for localhost or a loopback IP address.")
         case .credentialsNotAllowed:
-            "The Server address cannot contain a user name or password."
+            String(localized: "The Server address cannot contain a user name or password.")
         case .originOnly:
-            "Enter only the Server origin, without a path, query, or fragment."
+            String(localized: "Enter only the Server origin, without a path, query, or fragment.")
         }
     }
 }

@@ -12,18 +12,18 @@ struct DraftConflictView: View {
                 Text("One version deletes this file. Choose whether to keep it.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack(alignment: .top, spacing: 12) {
-                    fileChoice("Remote", state: candidate.currentState)
-                    fileChoice("Draft", state: candidate.draftState)
+                    fileChoice(String(localized: "Remote"), state: candidate.currentState)
+                    fileChoice(String(localized: "Draft"), state: candidate.draftState)
                 }
             }
             if hasPathConflict {
                 HStack(alignment: .top, spacing: 12) {
-                    choice("Remote", text: candidate.currentState.resource.path ?? "(No path)",
-                           actionTitle: "Use Remote Path") {
+                    choice(String(localized: "Remote"), text: candidate.currentState.resource.path ?? String(localized: "(No path)"),
+                           actionTitle: String(localized: "Use Remote Path")) {
                         resolution.choosePath(candidate.currentState.resource.path ?? "")
                     }
-                    choice("Draft", text: candidate.draftState.resource.path ?? "(No path)",
-                           actionTitle: "Use Draft Path") {
+                    choice(String(localized: "Draft"), text: candidate.draftState.resource.path ?? String(localized: "(No path)"),
+                           actionTitle: String(localized: "Use Draft Path")) {
                         resolution.choosePath(candidate.draftState.resource.path ?? "")
                     }
                 }
@@ -41,20 +41,20 @@ struct DraftConflictView: View {
             }
             ForEach(resolution.sections) { section in
                 HStack(alignment: .top, spacing: 12) {
-                    choice("Remote", text: section.shared, original: section.base,
-                           actionTitle: "Use Remote Change") {
+                    choice(String(localized: "Remote"), text: section.shared, original: section.base,
+                           actionTitle: String(localized: "Use Remote Change")) {
                         resolution.chooseContent(section.shared, in: section)
                     }
-                    choice("Draft", text: section.proposed, original: section.base,
-                           actionTitle: "Use Draft Change") {
+                    choice(String(localized: "Draft"), text: section.proposed, original: section.base,
+                           actionTitle: String(localized: "Use Draft Change")) {
                         resolution.chooseContent(section.proposed, in: section)
                     }
                 }
             }
             if resolution.unresolvedFields.contains("content") {
                 HStack(alignment: .top, spacing: 12) {
-                    fileChoice("Remote", state: candidate.currentState)
-                    fileChoice("Draft", state: candidate.draftState)
+                    fileChoice(String(localized: "Remote"), state: candidate.currentState)
+                    fileChoice(String(localized: "Draft"), state: candidate.draftState)
                 }
             }
         }
@@ -66,7 +66,7 @@ struct DraftConflictView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary)
-                    .help(original == nil ? title : "Changes from the common original to \(title)")
+                    .help(original == nil ? title : String(localized: "Changes from the common original to \(title)"))
                 Spacer()
                 Button(actionTitle, action: action).controlSize(.small)
             }.padding(12)
@@ -76,7 +76,7 @@ struct DraftConflictView: View {
                     model: SplitDiffModel.make(original: original, modified: text)
                 ))
             } else {
-                Text(text.isEmpty ? "(Removed)" : text)
+                Text(text.isEmpty ? String(localized: "(Removed)") : text)
                     .font(.system(.body, design: .monospaced)).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
@@ -88,7 +88,7 @@ struct DraftConflictView: View {
 
     private func fileChoice(_ title: String, state: ReconciliationResourceState) -> some View {
         choice(title, text: text(in: state), original: text(in: candidate.baseState),
-               actionTitle: state.exists ? "Keep \(title) File" : "Keep File Deleted") {
+               actionTitle: state.exists ? String(localized: "Keep \(title) File") : String(localized: "Keep File Deleted")) {
             resolution.chooseFile(state)
         }
     }
