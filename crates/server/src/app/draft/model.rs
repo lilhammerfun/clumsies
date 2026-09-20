@@ -462,6 +462,7 @@ pub(crate) fn aggregate_draft_coordination(
         has_upstream_resource_changes: false,
         reconciliation: DraftReconciliationStatus::Unknown,
         candidate_id: None,
+        auto_rebased: false,
     });
     DraftCoordination {
         freshness: if coordinations
@@ -472,6 +473,9 @@ pub(crate) fn aggregate_draft_coordination(
         } else {
             DraftFreshness::Current
         },
+        auto_rebased: coordinations
+            .iter()
+            .any(|coordination| coordination.auto_rebased),
         current_commit_id: primary.current_commit_id,
         has_upstream_resource_changes: coordinations
             .iter()
@@ -505,9 +509,8 @@ pub(crate) fn materialize_draft_operations(
     operations: &[DraftOperation],
 ) -> Result<Vec<DraftOperationInput>, ServerError> {
     let Some(first) = operations.first() else {
-        return Err(ServerError::InvalidRequest(
-            "review draft has no operations".to_owned(),
-        ));
+        // Reconciliation can eliminate every operation when Remote already contains the change.
+        return Ok(Vec::new());
     };
     if first.input.action != DraftOperationAction::Create {
         return Ok(operations

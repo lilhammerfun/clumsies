@@ -763,6 +763,28 @@ paths:
                 $ref: "#/components/schemas/ReviewUpdatePlan"
         default:
           $ref: "#/components/responses/Error"
+  /api/v1/reviews/{review_id}/auto-rebases:
+    parameters:
+      - $ref: "#/components/parameters/ReviewId"
+    post:
+      operationId: createReviewAutoRebase
+      summary: Save conflict-free file updates without requiring a manual save.
+      description: The author or an organization owner/admin with access to the carrying Project may trigger this operation. Locks the Review and its proposals, checks expected_review_version, and applies only server-computed clean results against one locked remote reference. Conflicting proposals remain unchanged and are returned as candidates. All clean updates and their audit records commit together; no approval or publication occurs. Repeating against the returned revision does not reapply saved updates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewUpdatePlanRequest"
+      responses:
+        "200":
+          description: Saved Review snapshot and remaining conflict candidates.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewUpdatePlan"
+        default:
+          $ref: "#/components/responses/Error"
   /api/v1/reviews/{review_id}/updates:
     parameters:
       - $ref: "#/components/parameters/ReviewId"
@@ -1465,7 +1487,7 @@ components:
           type: [string, "null"]
     DraftCoordination:
       type: object
-      required: [freshness, current_commit_id, has_upstream_resource_changes, reconciliation, candidate_id]
+      required: [freshness, current_commit_id, has_upstream_resource_changes, reconciliation, candidate_id, auto_rebased]
       properties:
         freshness:
           $ref: "#/components/schemas/DraftFreshness"
@@ -1478,6 +1500,9 @@ components:
           $ref: "#/components/schemas/DraftReconciliationStatus"
         candidate_id:
           type: [string, "null"]
+        auto_rebased:
+          type: boolean
+          description: The current Draft revision was persisted from a conflict-free reconciliation and remains based on the current Ref. At Review level, true when any member has this status; a remaining conflict takes precedence in the UI.
     CreateDraftReconciliationCandidateRequest:
       type: object
       required: [expected_draft_version]

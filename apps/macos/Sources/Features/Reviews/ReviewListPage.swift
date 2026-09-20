@@ -92,6 +92,11 @@ struct ReviewListPage: View {
                                     state: state
                                 )
                             }
+                            .badge(reviewModel.updates[review.id]?.errorMessage != nil
+                                   ? "Retry Needed" : (state.isQueueSignal ? state.title : nil))
+                            .help(reviewModel.updates[review.id]?.errorMessage ?? review.title)
+                            .badgeProminence(state.title == ReviewReconciliationState.conflict.rawValue ? .increased : .decreased)
+                            .task(id: review) { await reviewModel.prepareUpdate(review) }
                             .accessibilityIdentifier("review-row-\(review.id)")
                         }
                     }
@@ -269,21 +274,13 @@ struct ReviewQueueStatePresentation: Equatable {
                 isQueueSignal: false
             )
         }
-        if review.freshness == .behind, review.reconciliation == .conflicts {
-            return .init(
-                title: "Conflicts",
-                symbolName: "exclamationmark.triangle",
-                tone: .negative,
-                isQueueSignal: true
-            )
-        }
-        if review.freshness == .behind {
-            return .init(
-                title: isAuthor ? "Update Required" : "Out of Date",
-                symbolName: "arrow.trianglehead.2.clockwise.rotate.90",
-                tone: .warning,
-                isQueueSignal: true
-            )
+        if let reconciliation = ReviewReconciliationState.resolve(
+            freshness: review.freshness, reconciliation: review.reconciliation, autoRebased: review.autoRebased
+        ) {
+            return .init(title: reconciliation.rawValue,
+                         symbolName: reconciliation == .conflict ? "exclamationmark.triangle" : "checkmark.circle",
+                         tone: reconciliation == .conflict ? .negative : .neutral,
+                         isQueueSignal: true)
         }
 
         switch review.status {
@@ -365,21 +362,11 @@ struct ReviewRow: View {
                     }
                 }
 
-                HStack(spacing: 8) {
-                    Text(context)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .help("Submitted by \(author)")
-
-                    if state.isQueueSignal {
-                        Text("·").foregroundStyle(.tertiary)
-                        Text(state.title)
-                            .foregroundStyle(state.tone.color)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                }
-                .font(.caption)
+                Text(context)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help("Submitted by \(author)")
             }
         }
         .padding(.vertical, 4)

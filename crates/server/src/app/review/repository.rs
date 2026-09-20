@@ -132,6 +132,13 @@ pub(crate) async fn load_review_list_projections(
             current_ref.commit_id AS current_commit_id,
             candidate.status AS candidate_status,
             candidate.candidate_id,
+            EXISTS (
+                SELECT 1 FROM draft_rebases r
+                JOIN draft_reconciliation_candidates c ON c.candidate_id = r.candidate_id
+                WHERE r.draft_id = d.draft_id AND r.resulting_draft_version = d.version
+                  AND c.status = 'clean'
+                  AND d.base_commit_id IS NOT DISTINCT FROM current_ref.commit_id
+            ) AS auto_rebased,
             CASE
                 WHEN d.base_commit_id IS NOT DISTINCT FROM current_ref.commit_id THEN FALSE
                 WHEN base_entry.item_id IS NULL AND current_entry.item_id IS NULL THEN FALSE
@@ -248,6 +255,7 @@ pub(crate) async fn load_review_list_projections(
             has_upstream_resource_changes: row.try_get("has_upstream_resource_changes")?,
             reconciliation,
             candidate_id: row.try_get("candidate_id")?,
+            auto_rebased: row.try_get("auto_rebased")?,
         };
         let projection = projections.entry(row.try_get("review_id")?).or_default();
         projection.0.push(row.try_get("draft_id")?);

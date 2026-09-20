@@ -110,3 +110,16 @@ struct ReviewToolbarOwnership: Equatable {
         }
     }
 }
+
+/// Reconciliation status shared by the Review queue and its file navigator.
+enum ReviewReconciliationState: String, Hashable, Sendable {
+    case conflict = "Conflict"
+    case autoRebased = "Auto-rebased"
+    case checking = "Checking…"
+
+    static func resolve(freshness: DraftFreshness, reconciliation: DraftReconciliationStatus,
+                        autoRebased: Bool) -> Self? {
+        if freshness == .behind { return reconciliation == .conflicts ? .conflict : .checking }
+        return autoRebased ? .autoRebased : nil
+    }
+}

@@ -730,18 +730,18 @@ struct WorkspaceView: View {
                             || !reviewModel.canPerformReviewMenuAction(.approve)
                     )
                     .toolbarHelp(review.freshness == .behind
-                        ? "Approve and Merge Review — update to the latest remote version before deciding"
+                        ? "Approve and Merge Review — available after conflicts are resolved and remote changes are saved"
                         : "Approve and Merge Review")
                     .accessibilityLabel("Approve and Merge Review")
                     .accessibilityIdentifier("review-toolbar-approve")
                 }
             }
-            if reviewModel.updates[review.id] != nil
+            if reviewModel.canSaveConflictResolutions(review)
                 || reviewToolbarOwnership.contains(.decision(.merge))
                 || reviewToolbarOwnership.contains(.decision(.resubmit)) {
                 ToolbarItem(id: "review.actions", placement: .automatic) {
                     Menu {
-                        if let update = reviewModel.updates[review.id] {
+                        if reviewModel.canSaveConflictResolutions(review), let update = reviewModel.updates[review.id] {
                             ReviewUpdateMenuItem(model: update) { detail in
                                 reviewModel.endUpdate(review.id, result: detail)
                             }

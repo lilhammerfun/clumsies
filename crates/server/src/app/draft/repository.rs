@@ -554,6 +554,13 @@ pub(crate) async fn list_drafts(
             current_ref.commit_id AS current_commit_id,
             candidate.status AS candidate_status,
             candidate.candidate_id,
+            EXISTS (
+                SELECT 1 FROM draft_rebases r
+                JOIN draft_reconciliation_candidates c ON c.candidate_id = r.candidate_id
+                WHERE r.draft_id = d.draft_id AND r.resulting_draft_version = d.version
+                  AND c.status = 'clean'
+                  AND d.base_commit_id IS NOT DISTINCT FROM current_ref.commit_id
+            ) AS auto_rebased,
             CASE
                 WHEN d.base_commit_id IS NOT DISTINCT FROM current_ref.commit_id THEN FALSE
                 WHEN base_entry.item_id IS NULL AND current_entry.item_id IS NULL THEN FALSE
@@ -795,6 +802,7 @@ pub(crate) fn draft_coordination_from_projection_row(
         has_upstream_resource_changes: row.try_get("has_upstream_resource_changes")?,
         reconciliation,
         candidate_id: row.try_get("candidate_id")?,
+        auto_rebased: row.try_get("auto_rebased")?,
     })
 }
 
@@ -1706,7 +1714,7 @@ pub(super) struct NewDraftRebase<'a> {
     pub(super) candidate_id: &'a str,
     /// Saved draft revision that permits auditing the state before rebase.
     pub(super) previous_revision_id: &'a str,
-    /// Persisted identity of the author whose ownership is checked by the use case.
+    /// Authorized author or administrator who applied this rebase.
     pub(super) author_user_id: &'a str,
     /// Proposal revision to publish after the current mutation.
     pub(super) next_version: i64,
@@ -1738,4 +1746,26 @@ pub(super) struct NewDraft<'a> {
     pub(super) path: &'a Option<String>,
     /// Client installation identity used to correlate draft synchronization events.
     pub(super) daemon_installation_id: &'a str,
+}
+
+/// Whether this exact proposal revision was persisted from a conflict-free candidate.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn was_auto_rebased(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    version: i64,
+) -> Result<bool, ServerError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM draft_rebases r
+            JOIN draft_reconciliation_candidates c ON c.candidate_id = r.candidate_id
+            WHERE r.draft_id = $1 AND r.resulting_draft_version = $2 AND c.status = 'clean'
+        )",
+    )
+    .bind(draft_id)
+    .bind(version)
+    .fetch_one(&mut **tx)
+    .await?)
 }

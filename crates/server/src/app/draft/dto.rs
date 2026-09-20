@@ -56,6 +56,9 @@ pub struct DraftCoordination {
     pub reconciliation: DraftReconciliationStatus,
     /// Identifier of the reconciliation result being inspected or applied.
     pub candidate_id: Option<String>,
+    /// The current proposal revision was saved from a conflict-free reconciliation.
+    #[serde(default)]
+    pub auto_rebased: bool,
 }
 
 /// Mutation represented by a proposal operation.

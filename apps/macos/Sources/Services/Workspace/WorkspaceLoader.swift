@@ -697,7 +697,8 @@ struct WorkspaceLoader: Sendable {
             reconciliationCandidateId: metadata.coordination.candidateId,
             currentCommitId: metadata.coordination.currentCommitId,
             updatedAt: metadata.updatedAt,
-            draftIds: metadata.draftIds ?? [metadata.draftId]
+            draftIds: metadata.draftIds ?? [metadata.draftId],
+            autoRebased: metadata.coordination.autoRebased == true
         )
     }
 

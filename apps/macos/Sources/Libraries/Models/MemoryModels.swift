@@ -193,6 +193,7 @@ struct ReviewRecord: Identifiable, Hashable, Sendable {
     let currentCommitId: String?
     let updatedAt: String
     var draftIds: [String] = []
+    var autoRebased = false
 }
 
 struct ReviewChangeSources: Sendable {

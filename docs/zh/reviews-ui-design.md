@@ -31,8 +31,8 @@ Submitted by <author> for <project>       Updated <本地日期和时分>
 状态展示按以下优先级折叠为一个 signal：
 
 1. `Merged`；
-2. `Conflicts`；
-3. 作者看到 `Update Required`，其他人看到 `Out of Date`；
+2. `Conflict`；
+3. 保存成功的 `Auto-rebased`；检查中短暂显示 `Checking…`，失败显示 `Retry Needed`；
 4. `Needs Review`；
 5. 旧两阶段记录的 `Ready to Merge` / `Approved`；
 6. `Resubmit` / `Awaiting Author`。
@@ -41,7 +41,7 @@ Submitted by <author> for <project>       Updated <本地日期和时分>
 `approved_result_hash` 的历史记录。Merged 不因为 merge 后 Ref 前进而显示 stale。状态
 必须同时有文字或 accessibility label，不能只靠颜色。
 
-列表页工具栏只拥有 status Filter 和 Search。Filter 提供 Open、Rejected、Merged、All 及各自计数；加载、空列表、过滤后为空和失败分别使用 `ProgressView` 或有
+列表页复用原生工具栏筛选器，依次为 Project、状态、作者，Search 独立显示。Filter 提供 Open、Rejected、Merged、All 及各自计数；加载、空列表、过滤后为空和失败分别使用 `ProgressView` 或有
 上下文的 `ContentUnavailableView`。后台刷新时已有行继续显示，失败 banner 提供重试。
 
 当前列表不显示评论数、未读数、文件数或真实 last-activity：Server 没有这些可靠字段，
@@ -94,7 +94,7 @@ diff；同一 Review 版本内，共享已完成和进行中的 commit 请求。
 1. 标题和朴素状态；
 2. 作者、Project、固定的最后更新时间；
 3. 可选描述；
-4. 有远端变化时提示在详情检查并通过工具栏保存；
+4. 有冲突时在当前文件详情中选择保留的内容；
 5. 决策人、时间、说明与 immutable result hash；
 6. 当前文件的 unified diff。
 
@@ -108,23 +108,25 @@ Draft conflicts 则 Review conflicts。文件树标记只描述各文件状态�
 作者直接在现有文件详情中检查远端变化，不再打开独立 Review 更新窗口，也不显示
 Merged Result 编辑区或混入正文的待选择占位符。文件树同时保留当前文件、自动合并文件和冲突文件。
 
-1. 加载详情时，为全部落后文件准备同一远端版本下的候选。
+1. 作者或组织管理员查看列表行或详情时，系统自动保存无冲突 rebase；返回保存后的详情及尚待处理的冲突。
 2. 有冲突时并排显示 Remote 和 Draft 各自相对共同原版的 Diff，选择按钮与标题同行。
    选择只改变对应冲突片段，保留其他可自动合并的修改。路径和删除冲突明确显示选择；
    路径占用时可输入自定义路径。
 3. 选择完成后直接显示“最新 Remote → 更新后 Draft”的普通 Diff，文件更多菜单的 **Reset File Choices** 允许重新选择。
-4. 自动合并文件沿用普通 Diff，文件树的文件名旁用品牌玫红底 **Auto-rebased** 标签替代同步图标，
-   仅在候选有效且无冲突时显示；tooltip 说明点击工具栏保存后才正式应用。
-   冲突文件用暖朱红底 **Conflict** 标签；均为浓郁纯色底、白字、完整胶囊圆角及轻微边缘和阴影。
-   当前无需更新的文件不加标记。Diff 上方不再单独显示状态行，
-   不显示文件数量统计或额外结果区。
-5. 工具栏 **Review Actions (…) → Save Review Updates** 提交完整有序集合，所有冲突处理完之前禁用。
-   Server 在一个事务中校验成员、版本、远端 Ref 和候选；任一失败全部回滚。
-   保存更新不代表批准或发布。成功后刷新详情和文件标记，当前且可读时才启用批准。
+4. 自动合并文件沿用普通 Diff。列表和文件树统一使用系统文字 badge：
+   **Conflict** 使用 `.badgeProminence(.increased)`，**Auto-rebased** 使用 `.decreased`。
+   颜色、字体和选中态由系统负责，不手绘彩色胶囊、描边或阴影。`Auto-rebased` 来自当前
+   Draft 版本已保存的无冲突 rebase 历史，重启后仍可读取，不能由候选预览推断。
+   混合 Review 在列表中优先显示 Conflict，各文件分别显示实际状态；未 rebase 的当前文件不加标记。
+   Diff 上方不增加状态行、数量统计或结果区。
+5. 自动合并没有手动保存按钮。仅有作者可编辑的冲突时，提供
+   **Review Actions (…) → Save Conflict Resolutions**，全部选择完成后可用。
+   提交完整有序集合，仅冲突文件携带解决结果。Server 原子校验成员、版本、远端 Ref 和候选；
+   失败保留选择。保存后刷新详情，当前且可读时启用批准。自动 rebase 和保存选择都不会批准或发布。
 
 切换文件或 Review 保留未保存的选择。请求失败保留输入，Check Latest Again 在覆盖选择前
 要求确认。退出应用或登出确认未保存选择，保存期间禁止退出。authority reset 清空状态并
-拒绝迟到响应。非作者看到等待作者更新的说明。行评论仍锚定已保存版本；待保存 Diff 不接收新行评论。
+拒绝迟到响应。非作者在仍有冲突时看到等待作者处理的说明。行评论仍锚定已保存版本；待保存 Diff 不接收新行评论。
 
 丢弃成员时从待审集合移除并使原批准失效；丢弃 primary 后由下一存续成员接替。
 最后一个成员也被丢弃时，Review 变为 Rejected，并保留最后成员作为历史记录。
@@ -148,10 +150,10 @@ Merged Result 编辑区或混入正文的待选择占位符。文件树同时保
 
 ## 6. 工具栏与权限
 
-工具栏保留批准和拒绝为直接按钮。保存更新、Merge、Resubmit 收入 **Review Actions (…)** 的文字菜单，
-权限和就绪检查保持一致。Save Review Updates 仅作者有待处理候选时显示；加载、保存及仍有未解决冲突时
+工具栏保留批准和拒绝为直接按钮。保存冲突选择、Merge、Resubmit 收入 **Review Actions (…)** 的文字菜单，
+权限和就绪检查保持一致。Save Conflict Resolutions 仅作者有冲突候选时显示；加载、保存及仍有未解决冲突时
 禁用该菜单项，菜单本身仍可打开查看操作名称。按钮保留 tooltip 和无障碍名称。
-文件详情中不再提供打开额外更新窗口的按钮。
+三点菜单始终放在所属工具栏组的最右侧。文件详情中不再提供打开额外更新窗口的按钮。
 
 Memory 导出操作也收入现有 **Memory Actions (…)** 菜单。需要文字解释结果的操作放入菜单，
 不再为它增加语义模糊的工具栏图标。
@@ -183,7 +185,7 @@ Reviews 内不重复显示全局 `In Review` 图标；同步进行中、失败�
 | 初次加载 | 标注用途的 `ProgressView` |
 | 无 Review / 无过滤结果 | 对应 `ContentUnavailableView`，过滤空可 Show All |
 | 详情失败 | 明确错误与 Retry；清除 decision readiness |
-| stale / conflict | Review 整体说明和工具栏更新入口 |
+| stale / conflict | 无冲突自动保存；有冲突在详情处理并保存选择 |
 | narrow window | 使用系统侧栏和 toolbar overflow，不自造响应式 Web chrome |
 
 自动化覆盖路由只携带 ID、列表状态、工具栏 ownership、状态优先级、rendered-version

@@ -20,7 +20,7 @@ pub use service::{
 };
 
 pub(crate) use service::{
-    apply_draft_rebase_in_tx, apply_operation, create_draft_in_tx,
+    apply_draft_rebase_in_tx, apply_operation, auto_rebase_draft_in_tx, create_draft_in_tx,
     create_reconciliation_candidate_in_tx, draft_result_hash, draft_result_state,
     load_draft_detail, target_ref_for_draft, validate_org_draft_operation_inputs_are_selected,
     validate_stored_org_draft_operations_are_selected,

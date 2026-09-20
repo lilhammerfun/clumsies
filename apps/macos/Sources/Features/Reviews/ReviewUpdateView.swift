@@ -32,6 +32,7 @@ struct ReviewUpdateView<Content: View>: View {
                         get: { model.resolutions[candidate.candidateId] ?? resolution },
                         set: { model.setResolution($0, for: candidate.candidateId) }
                     ))
+                    .disabled(!model.canResolveConflicts)
                 }
             } else if model.plan != nil {
                 currentFile()
@@ -75,14 +76,14 @@ struct ReviewUpdateMenuItem: View {
     let onApplied: (ReviewDetail) -> Void
 
     var body: some View {
-        Button(model.isApplying ? "Saving Review Updates…" : "Save Review Updates") {
+        Button(model.isApplying ? "Saving Conflict Resolutions…" : "Save Conflict Resolutions") {
             Task { if let detail = await model.submit() { onApplied(detail) } }
         }
         .disabled(!model.canApply)
         .help(model.unresolvedCount > 0
-            ? "Save Review Updates — choose Remote or Draft for each conflict before saving"
-            : "Save Review Updates — save all file updates without approving or publishing the Review")
-        .accessibilityLabel("Save Review Updates")
+            ? "Save Conflict Resolutions — choose Remote or Draft for each conflict before saving"
+            : "Save Conflict Resolutions — save your conflict choices without approving or publishing the Review")
+        .accessibilityLabel("Save Conflict Resolutions")
         .accessibilityIdentifier("review-menu-update")
     }
 }

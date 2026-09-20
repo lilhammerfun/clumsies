@@ -45,11 +45,11 @@ use std::collections::BTreeSet;
 /// Lock the shared reference and reviewed proposals before authoring a whole-review update.
 ///
 /// # Errors
-/// Rejects closed reviews, foreign authors, stale review revisions, and unavailable proposals.
+/// Rejects closed reviews, stale review revisions, and unavailable proposals. Callers authorize
+/// the actor against the returned locked review before writing.
 async fn lock_review_update(
     tx: &mut Transaction<'_, Postgres>,
     review_id: &str,
-    author_user_id: &str,
     expected_version: i64,
 ) -> Result<ReviewDetail, ServerError> {
     let coordination = repository::load_coordination(tx, review_id)
@@ -77,11 +77,6 @@ async fn lock_review_update(
         repository::lock_merge_draft(tx, &id).await?;
     }
     let detail = load_review_detail(tx, review_id).await?;
-    if detail.review.author.user_id != author_user_id {
-        return Err(ServerError::Forbidden(
-            "only the review author can update it".to_owned(),
-        ));
-    }
     if detail.drafts.iter().any(|item| {
         !matches!(
             item.draft.status,
@@ -107,13 +102,12 @@ pub async fn create_review_update_plan(
 ) -> Result<super::dto::ReviewUpdatePlan, ServerError> {
     ensure_review_member(pool, principal, review_id).await?;
     let mut tx = pool.begin().await?;
-    let detail = lock_review_update(
-        &mut tx,
-        review_id,
-        &principal.user_id,
-        request.expected_review_version,
-    )
-    .await?;
+    let detail = lock_review_update(&mut tx, review_id, request.expected_review_version).await?;
+    if detail.review.author.user_id != principal.user_id {
+        return Err(ServerError::Forbidden(
+            "only the review author can update it".to_owned(),
+        ));
+    }
     let mut candidates = Vec::new();
     for item in &detail.drafts {
         if item.draft.coordination.freshness == draft::dto::DraftFreshness::Behind {
@@ -125,6 +119,48 @@ pub async fn create_review_update_plan(
                 )
                 .await?,
             );
+        }
+    }
+    let detail = load_review_detail(&mut tx, review_id).await?;
+    tx.commit().await?;
+    Ok(super::dto::ReviewUpdatePlan { detail, candidates })
+}
+
+/// Automatically save conflict-free proposals and return only conflicts requiring author input.
+///
+/// Authors and organization administrators may trigger deterministic rebases. Conflicting
+/// proposals remain unchanged. Rebase history, approval invalidation, and clean updates commit
+/// together without approving or publishing the review.
+///
+/// # Errors
+/// Rejects inaccessible reviews, non-author members, stale revisions, and invalid proposal state.
+pub async fn create_review_auto_rebase(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+    review_id: &str,
+    request: super::dto::CreateReviewUpdatePlanRequest,
+) -> Result<super::dto::ReviewUpdatePlan, ServerError> {
+    ensure_review_member(pool, principal, review_id).await?;
+    let mut tx = pool.begin().await?;
+    let detail = lock_review_update(&mut tx, review_id, request.expected_review_version).await?;
+    if detail.review.author.user_id != principal.user_id {
+        principal.require_org_admin()?;
+    }
+    let mut candidates = Vec::new();
+    for item in &detail.drafts {
+        if item.draft.coordination.freshness != draft::dto::DraftFreshness::Behind {
+            continue;
+        }
+        let candidate = create_reconciliation_candidate_in_tx(
+            &mut tx,
+            &item.draft.draft_id,
+            item.draft.version,
+        )
+        .await?;
+        if candidate.status == draft::dto::ReconciliationCandidateStatus::Clean {
+            draft::auto_rebase_draft_in_tx(&mut tx, principal, &candidate).await?;
+        } else {
+            candidates.push(candidate);
         }
     }
     let detail = load_review_detail(&mut tx, review_id).await?;
@@ -146,13 +182,12 @@ pub async fn create_review_update(
 ) -> Result<ReviewDetail, ServerError> {
     ensure_review_member(pool, principal, review_id).await?;
     let mut tx = pool.begin().await?;
-    let detail = lock_review_update(
-        &mut tx,
-        review_id,
-        &principal.user_id,
-        request.expected_review_version,
-    )
-    .await?;
+    let detail = lock_review_update(&mut tx, review_id, request.expected_review_version).await?;
+    if detail.review.author.user_id != principal.user_id {
+        return Err(ServerError::Forbidden(
+            "only the review author can update it".to_owned(),
+        ));
+    }
     if request
         .drafts
         .iter()

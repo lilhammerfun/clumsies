@@ -52,10 +52,7 @@ struct ReviewDetailPage: View {
         }
         .task(id: reviewModel.updates[reviewId].map(ObjectIdentifier.init)) {
             guard loadsRemoteContent, let update = reviewModel.updates[reviewId] else { return }
-            await update.load()
-            if update.plan?.candidates.isEmpty == true, let detail = update.plan?.detail {
-                reviewModel.endUpdate(reviewId, result: detail)
-            }
+            await reviewModel.prepareUpdate(update.review)
         }
         .onDisappear {
             self.model.invalidateDetailRequests()
@@ -78,8 +75,8 @@ struct ReviewDetailPage: View {
     private func content(_ review: ReviewRecord) -> some View {
         return VStack(spacing: 0) {
             reviewHeader(review).padding(20)
-            if review.freshness == .behind, !workspaceContext.isReviewAuthor(review) {
-                Text("Remote content has changed. Waiting for the author to update this Review.")
+            if review.freshness == .behind, review.reconciliation == .conflicts, !workspaceContext.isReviewAuthor(review) {
+                Text("The author needs to resolve the conflicts in this Review.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20).padding(.bottom, 12)
@@ -88,7 +85,6 @@ struct ReviewDetailPage: View {
             HSplitView {
             ReviewFileNavigator(
                 files: self.model.fileDescriptors,
-                update: reviewModel.updates[reviewId],
                 selection: self.$model.selectedFileId
             )
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
@@ -347,7 +343,9 @@ struct ReviewDetailPage: View {
                 onReply: { line in self.model.composing = .line(line) }
             )
         } else if model.changeSources != nil {
-            Text("This Review changes metadata without changing text content.")
+            Text(detail.operations.isEmpty
+                 ? "Remote already includes this file’s changes."
+                 : "This Review changes metadata without changing text content.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .padding(.vertical, 20)
@@ -384,58 +382,17 @@ struct ReviewDetailPage: View {
 
 private struct ReviewFileNavigator: View {
     let files: [ReviewFileDescriptor]
-    let update: ReviewUpdateModel?
     @Binding var selection: String?
 
     var body: some View {
         PathTreeView(
-            items: files.map { PathTreeItem(id: $0.id, path: $0.path) },
+            items: files.map { file in
+                PathTreeItem(id: file.id, path: file.path,
+                             badge: file.reconciliationState?.rawValue,
+                             badgeProminence: file.reconciliationState == .conflict ? .increased : .decreased)
+            },
             selection: $selection
-        ) { item in
-            if let file = files.first(where: { $0.id == item.id }), file.needsUpdate {
-                if let update {
-                    ReviewFileUpdateIndicator(model: update, file: file)
-                } else if file.hasConflicts {
-                    ReviewFileUpdateTag(isConflict: true)
-                }
-            }
-        }
+        )
         .accessibilityIdentifier("review-file-tree")
-    }
-}
-
-private struct ReviewFileUpdateIndicator: View {
-    @ObservedObject var model: ReviewUpdateModel
-    let file: ReviewFileDescriptor
-
-    var body: some View {
-        let candidate = model.candidates.first { $0.draftId == file.draftId }
-        if let candidate, candidate.valid, candidate.status == .clean {
-            ReviewFileUpdateTag(isConflict: false)
-        } else if candidate?.status == .conflicts || (model.plan == nil && file.hasConflicts) {
-            ReviewFileUpdateTag(isConflict: true)
-        }
-    }
-}
-
-private struct ReviewFileUpdateTag: View {
-    let isConflict: Bool
-
-    private var fill: Color {
-        isConflict ? .red : .yellow
-    }
-
-    var body: some View {
-        Text(isConflict ? "Conflict" : "Auto-rebased")
-            .font(.system(size: 9, weight: .medium, design: .rounded))
-            .foregroundStyle(.black.opacity(0.9))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(fill, in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.5))
-            .shadow(color: fill.opacity(0.14), radius: 0.7, y: 0.5)
-            .fixedSize()
-            .help(isConflict
-                ? "Choose which changes to keep in this file"
-                : "Remote changes are included automatically. Save Review Updates to apply them.")
     }
 }

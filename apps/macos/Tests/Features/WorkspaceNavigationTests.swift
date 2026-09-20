@@ -269,7 +269,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 isAuthor: false,
                 canMerge: false
             ).title,
-            "Conflicts"
+            "Conflict"
         )
         XCTAssertEqual(
             ReviewQueueStatePresentation.resolve(
@@ -285,7 +285,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 isAuthor: false,
                 canMerge: true
             ).title,
-            "Out of Date"
+            "Checking…"
         )
         XCTAssertEqual(
             ReviewQueueStatePresentation.resolve(
@@ -293,7 +293,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 isAuthor: true,
                 canMerge: true
             ).title,
-            "Update Required"
+            "Checking…"
         )
         XCTAssertEqual(
             ReviewQueueStatePresentation.resolve(

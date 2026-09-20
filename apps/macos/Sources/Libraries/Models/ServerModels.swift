@@ -452,6 +452,7 @@ struct DraftCoordination: Codable, Hashable, Sendable {
     let hasUpstreamResourceChanges: Bool
     let reconciliation: DraftReconciliationStatus
     let candidateId: String?
+    var autoRebased: Bool? = nil
 }
 
 struct ReconciliationResourceState: Codable, Hashable, Sendable {
