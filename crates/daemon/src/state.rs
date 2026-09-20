@@ -2044,6 +2044,9 @@ impl DaemonIpcService {
             "rebuild_search_index" => {
                 dispatch_async!(self, request.payload, rebuild_search_index)
             }
+            "dashboard_retrieval_statistics" => {
+                dispatch_async!(self, request.payload, dashboard_retrieval_statistics)
+            }
             "list_retrieval_runs" => {
                 dispatch_async!(self, request.payload, list_retrieval_runs)
             }

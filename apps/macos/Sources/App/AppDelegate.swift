@@ -593,7 +593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             store.navigation.focusReviewSearch()
         case .memory, .bundles:
             store.navigation.focusWorkspaceSearch()
-        case .sessions:
+        case .sessions, .dashboard:
             break
         }
     }

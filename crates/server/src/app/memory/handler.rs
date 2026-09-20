@@ -6,7 +6,7 @@ use crate::app::memory::dto::ReplaceProjectOrgSelectionRequest;
 use crate::http::{HttpError, parse_if_match};
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 
 /// Unified Memory migration tooling: neutral, verifiable export of the org's
@@ -123,5 +123,34 @@ pub(super) async fn replace_project_org_selection(
             request,
         )
         .await?,
+    ))
+}
+
+/// Returns organization statistics from the authenticated organization.
+///
+/// # Errors
+/// Returns validation, authorization or database failures through the standard envelope.
+pub(super) async fn org_memory_statistics(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Query(query): Query<dto::MemoryStatisticsQuery>,
+) -> Result<Json<dto::MemoryStatistics>, HttpError> {
+    Ok(Json(
+        service::memory_statistics(&state.pool, &principal, None, query).await?,
+    ))
+}
+
+/// Returns statistics for a project the principal can access.
+///
+/// # Errors
+/// Returns validation, authorization or database failures through the standard envelope.
+pub(super) async fn project_memory_statistics(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Path(project_id): Path<String>,
+    Query(query): Query<dto::MemoryStatisticsQuery>,
+) -> Result<Json<dto::MemoryStatistics>, HttpError> {
+    Ok(Json(
+        service::memory_statistics(&state.pool, &principal, Some(&project_id), query).await?,
     ))
 }

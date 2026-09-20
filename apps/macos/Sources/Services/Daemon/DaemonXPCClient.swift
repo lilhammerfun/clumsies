@@ -194,6 +194,10 @@ struct DaemonXPCClient: Sendable {
         try await call(method: "desktop_create_memory_drafts", payload: request)
     }
 
+    func dashboardRetrievalStatistics(_ request: DashboardRetrievalRequest) async throws -> DashboardRetrievalStatistics {
+        try await call(method: "dashboard_retrieval_statistics", payload: request)
+    }
+
     func listRetrievalRuns(_ request: RetrievalRunListRequest) async throws
         -> RetrievalRunListResponse {
         try await call(method: "list_retrieval_runs", payload: request)

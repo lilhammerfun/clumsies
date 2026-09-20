@@ -6,6 +6,7 @@ pub(crate) mod model;
 mod repository;
 pub(crate) mod routes;
 mod service;
+mod statistics;
 
 pub(crate) use repository::{
     list_bundle_memories, load_project_org_selection, lock_org_draft_selection_coordination,
