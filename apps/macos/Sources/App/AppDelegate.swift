@@ -372,17 +372,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func restorePrimaryWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        if let window = startupWindowController.window {
-            window.deminiaturize(nil)
-            window.makeKeyAndOrderFront(nil)
-            return
+        if !Self.restoreExistingWindow(startup: startupWindowController.window, workspace: mainWindow) {
+            present(store.context.phase)
         }
-        if let mainWindow, mainWindow.isVisible {
-            mainWindow.deminiaturize(nil)
-            mainWindow.makeKeyAndOrderFront(nil)
-            return
-        }
-        present(store.context.phase)
+    }
+
+    static func restoreExistingWindow(startup: NSWindow?, workspace: NSWindow?) -> Bool {
+        guard let window = startup ?? workspace else { return false }
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+        return true
     }
 
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
