@@ -396,10 +396,7 @@ private struct ReviewFileNavigator: View {
                 if let update {
                     ReviewFileUpdateIndicator(model: update, file: file)
                 } else if file.hasConflicts {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .help("Conflicts with the remote version")
-                        .accessibilityLabel("Conflicts")
+                    ReviewFileUpdateTag(isConflict: true)
                 }
             }
         }
@@ -414,18 +411,25 @@ private struct ReviewFileUpdateIndicator: View {
     var body: some View {
         let candidate = model.candidates.first { $0.draftId == file.draftId }
         if let candidate, candidate.valid, candidate.status == .clean {
-            Text("Auto-rebased")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(.quaternary, in: Capsule())
-                .fixedSize()
-                .help("Remote changes are included automatically. Save Review Updates to apply them.")
+            ReviewFileUpdateTag(isConflict: false)
         } else if candidate?.status == .conflicts || (model.plan == nil && file.hasConflicts) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .help("Conflicts with the remote version")
-                .accessibilityLabel("Conflicts")
+            ReviewFileUpdateTag(isConflict: true)
         }
+    }
+}
+
+private struct ReviewFileUpdateTag: View {
+    let isConflict: Bool
+
+    var body: some View {
+        Text(isConflict ? "Conflict" : "Auto-rebased")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background((isConflict ? Color.orange : Color.blue).opacity(0.18), in: Capsule())
+            .fixedSize()
+            .help(isConflict
+                ? "Choose which changes to keep in this file"
+                : "Remote changes are included automatically. Save Review Updates to apply them.")
     }
 }

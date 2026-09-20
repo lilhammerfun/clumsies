@@ -31,6 +31,7 @@ struct ClassicSearchField: NSViewRepresentable {
         field.translatesAutoresizingMaskIntoConstraints = false
         field.widthAnchor.constraint(equalToConstant: width).isActive = true
         field.setAccessibilityIdentifier(accessibilityIdentifier)
+        field.toolTip = accessibilityHelp ?? prompt
         if let accessibilityHelp {
             field.setAccessibilityHelp(accessibilityHelp)
         }
@@ -38,6 +39,8 @@ struct ClassicSearchField: NSViewRepresentable {
     }
 
     func updateNSView(_ field: NSSearchField, context: Context) {
+        field.toolTip = accessibilityHelp ?? prompt
+        field.setAccessibilityHelp(accessibilityHelp)
         if field.stringValue != text,
            field.currentEditor() == nil || text.isEmpty {
             field.stringValue = text

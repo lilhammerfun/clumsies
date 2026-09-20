@@ -19,7 +19,7 @@ struct ReviewStatusFilterControl: View {
                 )
             }
         }
-        .help("Filter Reviews: \(label(for: selection))")
+        .toolbarHelp("Filter Reviews: \(label(for: selection))")
         .accessibilityLabel("Filter Reviews")
         .accessibilityValue(label(for: selection))
         .accessibilityIdentifier("review-toolbar-filter")

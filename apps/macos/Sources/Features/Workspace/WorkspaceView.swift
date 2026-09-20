@@ -270,7 +270,7 @@ struct WorkspaceView: View {
                                 Image(systemName: "chevron.left")
                             }
                             .disabled(!workspaceNavigation.canGoBack)
-                            .help("Go Back")
+                            .toolbarHelp("Go Back")
                             .accessibilityLabel("Go Back")
 
                             Button {
@@ -279,7 +279,7 @@ struct WorkspaceView: View {
                                 Image(systemName: "chevron.right")
                             }
                             .disabled(!workspaceNavigation.canGoForward)
-                            .help("Go Forward")
+                            .toolbarHelp("Go Forward")
                             .accessibilityLabel("Go Forward")
                         }
                     }
@@ -295,7 +295,8 @@ struct WorkspaceView: View {
                             } label: {
                                 Image(systemName: "plus")
                             }
-                            .help("Add Memory")
+                            .toolbarHelp("Add Memory")
+                            .accessibilityLabel("Add Memory")
 
                             Menu {
                                 Button("Delete Bundle", role: .destructive) {
@@ -305,7 +306,8 @@ struct WorkspaceView: View {
                                 Image(systemName: "ellipsis")
                             }
                             .menuIndicator(.hidden)
-                            .help("Bundle Actions")
+                            .toolbarHelp("Bundle Actions")
+                            .accessibilityLabel("Bundle Actions")
                         }
 
                         if let syncToolbarPresentation {
@@ -314,7 +316,7 @@ struct WorkspaceView: View {
                                 ProgressView()
                                     .controlSize(.small)
                                     .frame(width: 24, height: 24)
-                                    .help(syncToolbarPresentation.label)
+                                    .toolbarHelp(syncToolbarPresentation.label)
                                     .accessibilityLabel(syncToolbarPresentation.label)
                             case .failed, .unavailable, .stale, .inReview:
                                 Button {
@@ -322,7 +324,7 @@ struct WorkspaceView: View {
                                 } label: {
                                     syncToolbarPresentation.icon
                                 }
-                                .help(syncToolbarPresentation.label)
+                                .toolbarHelp(syncToolbarPresentation.label)
                                 .accessibilityLabel(syncToolbarPresentation.label)
                                 .popover(isPresented: $showsSyncIssuePopover, arrowEdge: .top) {
                                     SyncIssuePopover(
@@ -340,7 +342,7 @@ struct WorkspaceView: View {
                                     ProgressView()
                                         .controlSize(.small)
                                         .frame(width: 24, height: 24)
-                                        .help("Saving draft changes before sync")
+                                        .toolbarHelp("Saving draft changes before sync")
                                         .accessibilityLabel("Saving draft changes before sync")
                                 case .failed:
                                     if daemonSync.isRetryingSync(
@@ -350,7 +352,7 @@ struct WorkspaceView: View {
                                         ProgressView()
                                             .controlSize(.small)
                                             .frame(width: 24, height: 24)
-                                            .help("Retrying sync")
+                                            .toolbarHelp("Retrying sync")
                                             .accessibilityLabel("Retrying sync")
                                     } else {
                                         Button {
@@ -364,7 +366,7 @@ struct WorkspaceView: View {
                                         } label: {
                                             Image(systemName: "arrow.clockwise")
                                         }
-                                        .help("Retry sync")
+                                        .toolbarHelp("Retry sync")
                                         .accessibilityLabel("Retry sync")
                                     }
                                 case .unavailable:
@@ -372,7 +374,7 @@ struct WorkspaceView: View {
                                         Image(systemName: "exclamationmark.triangle")
                                     }
                                     .disabled(true)
-                                    .help("Draft is not available on the server yet")
+                                    .toolbarHelp("Draft is not available on the server yet")
                                     .accessibilityLabel("Draft is not available on the server yet")
                                 case .ready:
                                     Button {
@@ -382,7 +384,7 @@ struct WorkspaceView: View {
                                             ? "exclamationmark.triangle"
                                             : "arrow.trianglehead.2.clockwise.rotate.90")
                                     }
-                                    .help(item.draft?.reconciliation == .conflicts ? "Review conflicting changes" : "Sync")
+                                    .toolbarHelp(item.draft?.reconciliation == .conflicts ? "Review conflicting changes" : "Sync")
                                     .accessibilityLabel(item.draft?.reconciliation == .conflicts ? "Review conflicting changes" : "Sync")
                                 }
                             }
@@ -397,7 +399,7 @@ struct WorkspaceView: View {
                                 availableDocumentModes.count < 2
                                     || documentSessions.isSynchronizingDocument(item.id)
                             )
-                            .help("Document View")
+                            .toolbarHelp("Document View")
                             .accessibilityLabel("Document View")
 
                         }
@@ -413,7 +415,7 @@ struct WorkspaceView: View {
                                 }
                             }
                             .disabled(!memoryModel.canExportMemory(memoryModel.visibleMemoryItems))
-                            .help(workspaceContext.activeProjectId == nil
+                            .toolbarHelp(workspaceContext.activeProjectId == nil
                                 ? "Export Organization Memory as ZIP…"
                                 : "Export Project Memory as ZIP…")
                             .accessibilityLabel(workspaceContext.activeProjectId == nil
@@ -482,7 +484,7 @@ struct WorkspaceView: View {
                                 Image(systemName: "ellipsis")
                             }
                             .menuIndicator(.hidden)
-                            .help("Memory Actions")
+                            .toolbarHelp("Memory Actions")
                             .accessibilityLabel("Memory Actions")
                         }
                     }
@@ -722,9 +724,9 @@ struct WorkspaceView: View {
                         pendingReviewToolbarAction != nil
                             || !reviewModel.canPerformReviewMenuAction(.reject)
                     )
-                    .help(review.freshness == .behind
-                        ? "Update this Review to the latest remote version before deciding"
-                        : "Reject this Review")
+                    .toolbarHelp(review.freshness == .behind
+                        ? "Reject Review — update to the latest remote version before deciding"
+                        : "Reject Review")
                     .accessibilityLabel("Reject Review")
                     .accessibilityIdentifier("review-toolbar-reject")
                 }
@@ -744,9 +746,9 @@ struct WorkspaceView: View {
                         pendingReviewToolbarAction != nil
                             || !reviewModel.canPerformReviewMenuAction(.approve)
                     )
-                    .help(review.freshness == .behind
-                        ? "Update this Review to the latest remote version before deciding"
-                        : "Approve and merge this Review")
+                    .toolbarHelp(review.freshness == .behind
+                        ? "Approve and Merge Review — update to the latest remote version before deciding"
+                        : "Approve and Merge Review")
                     .accessibilityLabel("Approve and Merge Review")
                     .accessibilityIdentifier("review-toolbar-approve")
                 }
@@ -767,7 +769,7 @@ struct WorkspaceView: View {
                         pendingReviewToolbarAction != nil
                             || !reviewModel.canPerformReviewMenuAction(.merge)
                     )
-                    .help("Merge the approved changes")
+                    .toolbarHelp("Merge the approved changes")
                     .accessibilityLabel("Merge Review")
                     .accessibilityIdentifier("review-toolbar-merge")
                 }
@@ -788,7 +790,7 @@ struct WorkspaceView: View {
                         pendingReviewToolbarAction != nil
                             || !reviewModel.canPerformReviewMenuAction(.resubmit)
                     )
-                    .help("Resubmit this Review")
+                    .toolbarHelp("Resubmit this Review")
                     .accessibilityLabel("Resubmit Review")
                     .accessibilityIdentifier("review-toolbar-resubmit")
                 }
@@ -813,7 +815,7 @@ struct WorkspaceView: View {
                     ProgressView()
                         .controlSize(.small)
                         .frame(width: 24, height: 24)
-                        .help(syncToolbarPresentation.label)
+                        .toolbarHelp(syncToolbarPresentation.label)
                         .accessibilityLabel(syncToolbarPresentation.label)
                         .accessibilityIdentifier("review-toolbar-sync")
                 case .failed, .unavailable, .stale, .inReview:
@@ -822,7 +824,7 @@ struct WorkspaceView: View {
                     } label: {
                         syncToolbarPresentation.icon
                     }
-                    .help(syncToolbarPresentation.label)
+                    .toolbarHelp(syncToolbarPresentation.label)
                     .accessibilityLabel(syncToolbarPresentation.label)
                     .accessibilityIdentifier("review-toolbar-sync")
                     .popover(isPresented: $showsSyncIssuePopover, arrowEdge: .top) {
@@ -966,7 +968,7 @@ struct WorkspaceView: View {
                 }
             }
             .disabled(activityModel.isLoading)
-            .help("Refresh Activity")
+            .toolbarHelp("Refresh Activity")
             .accessibilityLabel("Refresh Activity")
         }
     }
@@ -986,7 +988,7 @@ struct WorkspaceView: View {
                     Image(systemName: "gearshape")
                 }
                 .disabled(workspaceContext.activeProjectId == nil)
-                .help("Project Settings")
+                .toolbarHelp("Project Settings")
                 .accessibilityLabel("Project Settings")
             }
         case .bundles:
@@ -996,7 +998,7 @@ struct WorkspaceView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("New Bundle")
+                .toolbarHelp("New Bundle")
                 .accessibilityLabel("New Bundle")
             }
         case .reviews:
@@ -1238,7 +1240,7 @@ private struct WorkspaceOperationErrorBanner: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
-            .help("Dismiss")
+            .toolbarHelp("Dismiss")
             .accessibilityLabel("Dismiss operation failure")
         }
         .padding(10)
@@ -1279,7 +1281,7 @@ private struct SyncIssuePopover: View {
                         dismiss()
                         reviewModel.openReview(review)
                     }
-                    .help("View Review")
+                    .toolbarHelp("View Review")
                 }
                 ForEach(reviewModel.submittedProjectDrafts.filter { reviewModel.review(for: $0) == nil }) { draft in
                     Button("View Review for \(draft.document.title)") {
