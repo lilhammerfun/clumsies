@@ -100,12 +100,29 @@ gh workflow run release.yml --ref main -f distribution=preview -f ref=main
 
 CI builds an Apple Silicon App and daemon, ad-hoc signs them, creates and mounts
 the DMG, verifies its contents, signing, and architecture, then publishes
-a GitHub pre-release tagged `macos-preview-<run-number>` with a DMG and SHA-256
-checksum. Preview builds need no Apple or Sparkle secrets. Intel previews are not
-available because the current ONNX Runtime dependency has no prebuilt
-`x86_64-apple-darwin` library. They do not change
-the latest stable release or publish an automatic-update feed. Users update
-by downloading another DMG.
+a GitHub pre-release tagged `macos-preview-<run-number>` with a DMG, SHA-256
+checksum. Downloadable Preview DMGs need no Apple or Sparkle secrets. Intel
+previews are not available because the current ONNX Runtime dependency has no
+prebuilt `x86_64-apple-darwin` library. They do not change the latest stable release.
+
+The primary update action is **Update** beside the user's account at the bottom
+of the sidebar. It shares the updater with Settings → General → Check for Updates.
+Sparkle downloads and verifies the update in the App, then **Install and Relaunch**
+replaces the App and restarts it. The account menu remains available by clicking
+the avatar or name; its old trailing chevron is removed.
+
+To offer Preview releases through this flow, configure the repository Actions
+secret `SPARKLE_PRIVATE_KEY` with the key matching the App's `SUPublicEDKey`.
+CI signs the existing DMG and publishes `preview-appcast.xml` on the dedicated
+`macos-updates` release. Debug/Preview apps use this fixed feed, and verify the
+archive signature before extraction. A missing key leaves DMG publishing available
+and the existing update feed unchanged; an invalid key fails feed generation.
+No informational/“Learn More” update is generated. The signing key is maintained
+by developers once, not configured by users.
+
+Release apps use `appcast.xml` on the same dedicated release, so unrelated CLI
+releases cannot redirect the update feed. Existing apps still using
+`releases/latest/download/appcast.xml` need the new Preview DMG installed once.
 
 The preview uses the Debug runtime contract, as `just install-macos` does,
 with the regular `ai.clumsies.desktop` App identity and bundled daemon.
@@ -125,6 +142,8 @@ the ZIP, so the DMG cannot create a duplicate update for the same version.
 The workflow can also be dispatched
 with `distribution=notarized` from the current default-branch tip to produce a signed candidate. Manual
 candidates include both DMG and ZIP, without publishing a GitHub Release or appcast.
+Tagged releases also update the fixed `macos-updates/appcast.xml` feed and are
+explicitly marked Latest for older clients still using the original feed URL.
 
 The DMG contains `Clumsies.app` and an `Applications` shortcut. Users drag the
 App into Applications, eject the disk image, and open the installed App.

@@ -1387,6 +1387,7 @@ private struct GlobalSidebar: View {
     let store: WorkspaceCoordinator
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
+    @EnvironmentObject private var softwareUpdateController: SoftwareUpdateController
     let onSignOut: () -> Void
     let onOpenSettings: () -> Void
 
@@ -1421,13 +1422,25 @@ private struct GlobalSidebar: View {
     }
 
     private var accountMenu: some View {
-        NativeAccountMenu(
-            account: workspaceContext.account,
-            displayName: accountDisplayName,
-            onOpenSettings: onOpenSettings,
-            onSignOut: onSignOut
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        HStack(spacing: 0) {
+            NativeAccountMenu(
+                account: workspaceContext.account,
+                displayName: accountDisplayName,
+                onOpenSettings: onOpenSettings,
+                onSignOut: onSignOut
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button("Update", action: softwareUpdateController.checkForUpdates)
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(.accentColor)
+            .controlSize(.small)
+            .disabled(!softwareUpdateController.canCheckForUpdates)
+            .help("Check for updates or continue installing an update")
+            .accessibilityIdentifier("softwareUpdateButton")
+            .padding(.trailing, 10)
+        }
     }
 
     private var accountDisplayName: String {

@@ -152,10 +152,6 @@ private struct NativeAccountMenuLabel: View {
         HStack(spacing: 9) {
             UserIdentityLabel(account: account, displayName: displayName)
             Spacer()
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
         }
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
