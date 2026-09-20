@@ -5,15 +5,15 @@ struct PathTreeItem: Identifiable, Hashable, Sendable {
     let path: String
     let fallbackName: String?
     let badge: String?
-    let badgeProminence: BadgeProminence
+    let badgeColor: Color?
 
     init(id: String, path: String, fallbackName: String? = nil,
-         badge: String? = nil, badgeProminence: BadgeProminence = .decreased) {
+         badge: String? = nil, badgeColor: Color? = nil) {
         self.id = id
         self.path = path
         self.fallbackName = fallbackName
         self.badge = badge
-        self.badgeProminence = badgeProminence
+        self.badgeColor = badgeColor
     }
 }
 
@@ -153,10 +153,10 @@ struct PathTreeView: View {
                         path: item.path,
                         depth: entry.depth,
                         isDirectory: false,
-                        isExpanded: false
+                        isExpanded: false,
+                        badge: item.badge,
+                        badgeColor: item.badgeColor
                     )
-                    .badge(item.badge)
-                    .badgeProminence(item.badgeProminence)
                     .tag(item.id)
                     .accessibilityIdentifier("path-tree-item-\(item.id)")
                     .listRowInsets(.init(top: 0, leading: 5, bottom: 0, trailing: 5))
@@ -224,6 +224,8 @@ struct PathTreeRowLabel<Accessory: View>: View {
     let isDirectory: Bool
     let isExpanded: Bool
     let titleColor: Color
+    let badge: String?
+    let badgeColor: Color?
     private let accessory: Accessory
 
     init(
@@ -233,6 +235,8 @@ struct PathTreeRowLabel<Accessory: View>: View {
         isDirectory: Bool,
         isExpanded: Bool,
         titleColor: Color = .primary,
+        badge: String? = nil,
+        badgeColor: Color? = nil,
         @ViewBuilder accessory: () -> Accessory
     ) {
         self.name = name
@@ -241,6 +245,8 @@ struct PathTreeRowLabel<Accessory: View>: View {
         self.isDirectory = isDirectory
         self.isExpanded = isExpanded
         self.titleColor = titleColor
+        self.badge = badge
+        self.badgeColor = badgeColor
         self.accessory = accessory()
     }
 
@@ -261,6 +267,10 @@ struct PathTreeRowLabel<Accessory: View>: View {
                 .truncationMode(.middle)
                 .foregroundStyle(titleColor)
 
+            if let badge {
+                InlineStatusBadge(text: badge, color: badgeColor)
+            }
+
             Spacer(minLength: 4)
             accessory
         }
@@ -279,7 +289,9 @@ extension PathTreeRowLabel where Accessory == EmptyView {
         depth: Int,
         isDirectory: Bool,
         isExpanded: Bool,
-        titleColor: Color = .primary
+        titleColor: Color = .primary,
+        badge: String? = nil,
+        badgeColor: Color? = nil
     ) {
         self.init(
             name: name,
@@ -287,7 +299,9 @@ extension PathTreeRowLabel where Accessory == EmptyView {
             depth: depth,
             isDirectory: isDirectory,
             isExpanded: isExpanded,
-            titleColor: titleColor
+            titleColor: titleColor,
+            badge: badge,
+            badgeColor: badgeColor
         ) {
             EmptyView()
         }

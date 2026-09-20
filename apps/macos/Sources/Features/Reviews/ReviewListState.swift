@@ -117,6 +117,14 @@ enum ReviewReconciliationState: String, Hashable, Sendable {
     case autoRebased = "Auto-rebased"
     case checking = "Checking…"
 
+    var badgeColor: Color? {
+        switch self {
+        case .conflict: Color(nsColor: .systemRed)
+        case .autoRebased: Color(nsColor: .systemPurple)
+        case .checking: nil
+        }
+    }
+
     static func resolve(freshness: DraftFreshness, reconciliation: DraftReconciliationStatus,
                         autoRebased: Bool) -> Self? {
         if freshness == .behind { return reconciliation == .conflicts ? .conflict : .checking }

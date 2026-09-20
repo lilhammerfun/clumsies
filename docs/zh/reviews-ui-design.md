@@ -20,12 +20,12 @@ Reviews 使用统一的原生导航层级：
 
 ## 2. Review 列表
 
-列表使用原生 inset `List` 和系统分隔线，不绘制网页式卡片、胶囊状态或空白区域斑马纹。
+列表使用原生 inset `List` 和系统分隔线，不绘制网页式卡片或空白区域斑马纹。
 一行回答五个问题：改什么、属于哪个 Project、谁提交、何时更新、当前下一步是什么。
 
 ```text
-[生命周期图标] Review 标题                 可选待办状态
-Submitted by <author> for <project>       Updated <本地日期和时分>
+[生命周期图标] Review 标题 [可选状态标记]     <本地日期和时分>
+<project> · <author>
 ```
 
 状态展示按以下优先级折叠为一个 signal：
@@ -113,9 +113,9 @@ Merged Result 编辑区或混入正文的待选择占位符。文件树同时保
    选择只改变对应冲突片段，保留其他可自动合并的修改。路径和删除冲突明确显示选择；
    路径占用时可输入自定义路径。
 3. 选择完成后直接显示“最新 Remote → 更新后 Draft”的普通 Diff，文件更多菜单的 **Reset File Choices** 允许重新选择。
-4. 自动合并文件沿用普通 Diff。列表和文件树统一使用系统文字 badge：
-   **Conflict** 使用 `.badgeProminence(.increased)`，**Auto-rebased** 使用 `.decreased`。
-   颜色、字体和选中态由系统负责，不手绘彩色胶囊、描边或阴影。`Auto-rebased` 来自当前
+4. 自动合并文件沿用普通 Diff。列表和文件树统一使用紧贴标题或文件名的 `InlineStatusBadge`：
+   **Conflict** 使用系统红色，**Auto-rebased** 使用系统紫色，统一白色 10 pt 半粗字和小型胶囊，无描边或阴影。
+   原生 List badge 固定在行尾，因此行内位置使用共享组件。`Auto-rebased` 来自当前
    Draft 版本已保存的无冲突 rebase 历史，重启后仍可读取，不能由候选预览推断。
    混合 Review 在列表中优先显示 Conflict，各文件分别显示实际状态；未 rebase 的当前文件不加标记。
    Diff 上方不增加状态行、数量统计或结果区。
