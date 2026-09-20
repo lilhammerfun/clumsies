@@ -329,13 +329,58 @@ paths:
                 $ref: "#/components/schemas/DeleteResult"
         default:
           $ref: "#/components/responses/Error"
+  /api/v1/org/memory-statistics:
+    get:
+      operationId: orgMemoryStatistics
+      summary: Published organization inventory and history.
+      description: Counts use published snapshots, excluding draft overlays. Retrieval telemetry is local to each daemon. Historical days before the first retained commit are null. Project selection changes count as snapshot additions/removals.
+      parameters:
+        - name: days
+          in: query
+          required: true
+          schema: {type: integer, enum: [7, 30, 90]}
+        - name: time_zone
+          in: query
+          required: true
+          schema: {type: string, example: Asia/Shanghai, maxLength: 100}
+      responses:
+        "200":
+          description: Complete aggregate statistics for the authenticated scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryStatistics"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/projects/{project_id}/memory-statistics:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: projectMemoryStatistics
+      summary: Published project inventory, including selected organization memory.
+      description: Counts use published snapshots, excluding draft overlays. Retrieval telemetry is local to each daemon. Historical days before the first retained commit are null. Project selection changes count as snapshot additions/removals.
+      parameters:
+        - name: days
+          in: query
+          required: true
+          schema: {type: integer, enum: [7, 30, 90]}
+        - name: time_zone
+          in: query
+          required: true
+          schema: {type: string, example: Asia/Shanghai, maxLength: 100}
+      responses:
+        "200":
+          description: Complete aggregate statistics for the authenticated scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryStatistics"
+        default:
+          $ref: "#/components/responses/Error"
   /api/v1/org/memories:
     get:
       operationId: listOrgMemories
       summary: List organization memories.
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: Organization memory page.
@@ -370,9 +415,6 @@ paths:
     get:
       operationId: listProjectMemories
       summary: List project memories.
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: Project memory page.
@@ -2217,3 +2259,55 @@ components:
     ReviewStatus:
       type: string
       enum: [open, approved, rejected, merged]
+
+    MemoryStatistics:
+      type: object
+      required: [generated_at, day_bounds, recency_starts, project_ids, resources, memory_count, added_count, updated_count, deleted_count, days, change_buckets, open_drafts, submitted_drafts]
+      properties:
+        generated_at: {type: integer, format: int64, description: Server observation time in Unix seconds.}
+        day_bounds:
+          type: array
+          description: Local calendar midnights as Unix seconds including an exclusive final boundary; DST-aware.
+          items: {type: integer, format: int64}
+        recency_starts:
+          type: array
+          description: Starts of the last 7, 30 and 90 local calendar days.
+          items: {type: integer, format: int64}
+          minItems: 3
+          maxItems: 3
+        project_ids:
+          type: array
+          description: Only projects visible to the current user in this scope.
+          items: {type: string}
+        resources:
+          type: array
+          items:
+            type: object
+            required: [id, title, path]
+            properties:
+              id: {type: string}
+              title: {type: string}
+              path: {type: string}
+        memory_count: {type: integer, minimum: 0}
+        added_count: {type: integer, minimum: 0}
+        updated_count: {type: integer, minimum: 0}
+        deleted_count: {type: integer, minimum: 0}
+        open_drafts: {type: integer, minimum: 0, description: Server-known open and conflicted drafts in visible projects.}
+        submitted_drafts: {type: integer, minimum: 0}
+        days:
+          type: array
+          items:
+            type: object
+            required: [date, memory_count]
+            properties:
+              date: {type: integer, format: int64}
+              memory_count: {type: integer, minimum: 0, nullable: true}
+        change_buckets:
+          type: array
+          items:
+            type: object
+            required: [date, kind, count]
+            properties:
+              date: {type: integer, format: int64}
+              kind: {type: string, enum: [added, updated, deleted]}
+              count: {type: integer, minimum: 0}

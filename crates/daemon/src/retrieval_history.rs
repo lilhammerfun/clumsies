@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{DaemonError, DaemonState, MemoryKind, SourceLocator, SourceScope};
 
-const RETRIEVAL_RUN_RETENTION_PER_PROJECT: i64 = 500;
+pub(crate) const RETRIEVAL_RUN_RETENTION_PER_PROJECT: i64 = 500;
 const RETRIEVAL_EXCERPT_CHARS: usize = 1_200;
 const EVALUATION_FIXTURE_VERSION: u32 = 2;
 const EVALUATION_SUGGESTION_LIMIT: usize = 5;
