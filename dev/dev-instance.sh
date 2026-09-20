@@ -11,7 +11,7 @@ die() {
 
 usage() {
   cat >&2 <<'EOF'
-usage: dev/dev-instance.sh up [--preview DESCRIPTOR.json]
+usage: dev/dev-instance.sh up [--review-playground | --preview DESCRIPTOR.json]
        dev/dev-instance.sh status
        dev/dev-instance.sh logs
        dev/dev-instance.sh test-live
@@ -697,8 +697,13 @@ install_executable() {
 
 run_up() {
   preview_source=
+  review_playground=0
   case $# in
     0) ;;
+    1)
+      [ "$1" = --review-playground ] || usage
+      review_playground=1
+      ;;
     2)
       [ "$1" = --preview ] || usage
       preview_source=$2
@@ -924,6 +929,10 @@ run_up() {
     build >> "$logs_dir/build.log" 2>&1
   [ -d "$app_path" ] || die "Xcode did not produce $app_path"
   [ -x "$app_path/Contents/Resources/clumsiesd" ] || die "the Dev App does not contain an executable daemon"
+
+  if [ "$review_playground" = 1 ]; then
+    "$python" "$repo_root/dev/seed-review-playground.py" --prepare-app
+  fi
 
   open -n \
     --stdout "$app_stdout" \

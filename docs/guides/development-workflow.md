@@ -53,6 +53,29 @@ just dev-macos-preview path/to/preview.json
 data and test credentials and must run before deleting the worktree. Only
 `just install-macos` may replace the stable Debug installation.
 
+### Ready-to-review test instance
+
+Use `just dev-macos-reviews` when handing a Review UI build to someone for testing.
+It completes local Server setup, signs in the fake-OIDC owner through the daemon,
+skips agent selection, and seeds 12 numbered Reviews. The tester does not need a
+setup code, credentials, or terminal commands. Repeating the command signs in
+again and preserves the existing playground.
+
+Open **Reviews** in the Dev App. Each Review description explains its expected
+behavior. Scenarios include mixed current/conflicting files, automatic merges,
+multiple text conflicts, rename conflicts, deletion on either side, discarded
+members, ready-to-approve changes, an already-updated Review, a rejected Review,
+and two independent additions at the same path. Show **Rejected** or **All** to
+find scenario 11. Inspect scenarios before publishing: publishing advances Remote
+for this shared test organization, so other Reviews may need updating again.
+
+To test an update becoming stale while its editor is open, run
+`python3 dev/seed-review-playground.py --advance-remote`, then apply the old result.
+The editor should preserve your input and offer to check the latest version.
+The instance's `review-playground.json` records Review IDs and expectations;
+it contains no credentials. This fixture command accepts only the current
+worktree's loopback Local instance, never a Preview or production Server.
+
 ## Validation
 
 | Layer | Command |
