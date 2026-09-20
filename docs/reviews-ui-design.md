@@ -34,16 +34,18 @@ alternating row backgrounds: AppKit continues their stripes through empty table
 space, making nonexistent Reviews look like blank rows. Pin the separator's
 leading alignment to the row rather than allowing the trailing author to shorten it.
 
-The list is a review queue. Each row answers four scan questions: what changed,
-where it belongs, who submitted it, and what needs attention next. Keep the row
+The list is a review queue. Each row answers five scan questions: what changed,
+where it belongs, who submitted it, when it was updated, and what needs attention next. Keep the row
 to two lines:
 
 ```
 [lifecycle icon] review title [status]           [small avatar] author
-project
+project                                        Updated <local date and time>
 ```
 
-- Keep the fixed Review update time in the detail header, not the list row.
+- Show the fixed Review update time below the author, right-aligned on the second
+  line, labeled Updated. It is the last record update, not creation time or a live
+  elapsed-time counter. Keep the update time in the detail header too.
 - Keep the complete description in the detail page; do not add a list excerpt.
 - Put the Project below the title and the author on the right using the shared
   `UserIdentityLabel` with a small 20 pt avatar (the default remains 24 pt).
