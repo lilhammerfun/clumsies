@@ -591,7 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch store.navigation.selectedSection {
         case .reviews:
             store.navigation.focusReviewSearch()
-        case .memory, .bundles:
+        case .memory, .bundles, .inbox:
             store.navigation.focusWorkspaceSearch()
         case .sessions, .dashboard:
             break

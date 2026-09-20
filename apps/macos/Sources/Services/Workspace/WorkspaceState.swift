@@ -48,7 +48,7 @@ enum WorkspaceLoadError: LocalizedError, Sendable {
         case .authenticationRequired: "Sign in to connect Clumsies to your organization."
         case .noProjects: "The signed-in account has no accessible project."
         case .sharedStateChangedDuringLoad:
-            "Shared memory changed while the workspace was loading. Refresh to load one consistent version."
+            "Remote memory changed while the workspace was loading. Refresh to load one consistent version."
         }
     }
 }

@@ -78,9 +78,10 @@ final class DaemonSyncService: ObservableObject {
     @discardableResult
     func retrySync(
         channel: String = "all",
-        projectId: String? = nil
+        projectId: String? = nil,
+        allProjects: Bool = false
     ) async -> SyncRetryOutcome {
-        let projectId = projectId ?? context.activeProjectId
+        let projectId = allProjects ? nil : projectId ?? context.activeProjectId
         let key = SyncRetryKey(channel: channel, projectId: projectId)
         if let inFlight = syncRetryTasks[key] {
             return await inFlight.task.value
@@ -105,7 +106,7 @@ final class DaemonSyncService: ObservableObject {
                 if channel == "all" {
                     self.clearSyncRetryErrors(channel: channel, projectId: projectId)
                 }
-                if self.context.activeProjectId == projectId {
+                if allProjects || self.context.activeProjectId == projectId {
                     await self.onRetryCompleted?()
                     try Task.checkCancellation()
                 }

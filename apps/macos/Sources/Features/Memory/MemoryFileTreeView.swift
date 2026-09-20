@@ -76,34 +76,31 @@ enum MemoryFileTreeAlert: Identifiable {
             let draftCount = items.count - sharedCount
             if sharedCount == 0 {
                 return "This preserves every relative file path in the current Project-carried "
-                    + "Drafts. Shared Organization Memory is unchanged."
+                    + "Drafts. Remote Organization Memory is unchanged."
             }
             if draftCount > 0 {
                 return "This preserves every relative file path, renames \(draftCount) unpublished "
-                    + "Drafts, and creates \(sharedCount) rename proposals. Shared Organization "
+                    + "Drafts, and creates \(sharedCount) rename proposals. Remote Organization "
                     + "Memory changes only after review and merge."
             }
             return "This preserves every relative file path and creates Project-carried rename "
                 + "Drafts. Organization Memory changes only after review and merge."
         case .organizationDeletion(let items):
             let subject = items.count == 1
-                ? "this organization memory"
-                : "these \(items.count) organization memories"
-            let proposal = items.count == 1
-                ? "a deletion draft proposal"
-                : "deletion draft proposals"
+                ? "this file"
+                : "these \(items.count) files"
             let object = items.count == 1 ? "it" : "them"
-            return "This creates \(proposal). If reviewed and merged, \(subject) "
-                + "will be removed for every project that includes \(object)."
+            return "The deletion is saved as a draft. After review and merge, \(subject) "
+                + "will be deleted from every project that includes \(object)."
         case .directoryDiscard:
             return "This removes the Project-carried Drafts in this folder. "
-                + "Shared Organization Memory is unchanged."
+                + "Remote Organization Memory is unchanged."
         case .directoryDeletion(let name, let plan):
             var effects: [String] = []
             if !plan.itemsToDelete.isEmpty {
                 let noun = plan.itemsToDelete.count == 1 ? "memory" : "memories"
                 effects.append(
-                    "create deletion proposals for \(plan.itemsToDelete.count) shared "
+                    "create deletion proposals for \(plan.itemsToDelete.count) remote "
                         + noun
                 )
             }
@@ -116,7 +113,7 @@ enum MemoryFileTreeAlert: Identifiable {
             }
             let joinedEffects = effects.joined(separator: " and ")
             return "This will \(joinedEffects) in \(name). "
-                + "Shared memories are removed only after review and merge."
+                + "Remote memories are removed only after review and merge."
         }
     }
 }
@@ -271,17 +268,9 @@ struct FileTreeView: View {
     }
 
     private func fileTreeRow(for entry: VisibleFileTreeNode) -> some View {
-        let review = entry.node.item?.draft.flatMap { self.reviewModel.review(for: $0) }
         return FileTreeRow(
             entry: entry,
             isExpanded: expandedDirectoryIds.contains(entry.id),
-            isStale: resourceIsStale(for: entry.node.item),
-            review: review,
-            onOpenReview: {
-                if let draft = entry.node.item?.draft {
-                    Task { await self.reviewModel.openReview(for: draft) }
-                }
-            },
             onDirectoryClick: { modifierFlags in
                 self.handleDirectoryClick(entry.id, modifierFlags: modifierFlags)
             }
@@ -289,11 +278,6 @@ struct FileTreeView: View {
         .tag(entry.id)
         .listRowInsets(.init(top: 0, leading: 5, bottom: 0, trailing: 5))
         .listRowSeparator(.hidden)
-    }
-
-    private func resourceIsStale(for item: MemoryListItem?) -> Bool {
-        guard let item, item.draft == nil, let resource = item.resource else { return false }
-        return memoryCatalog.staleResourceIds.contains(resource.id)
     }
 
     private var isValidProposedName: Bool {
@@ -630,7 +614,7 @@ struct FileTreeView: View {
                     || workspaceContext.activeProjectId.map { !self.workspaceContext.canManageProject($0) } != false
                     || selectionContainsSynchronizingDocument
             )
-            .help("Remove the reference from this project. The shared file is kept.")
+            .help("Remove the reference from this project. The remote file is kept.")
         }
         if !isOrgView, !reviewDrafts.isEmpty {
             Button(reviewRequestTitle(count: reviewDrafts.count)) {
@@ -831,37 +815,9 @@ enum MemoryFileTreeTitleTone: Equatable {
     }
 }
 
-enum MemoryFileTreeRowAccessory: Equatable {
-    case none
-    case legacyProjectReadOnly
-    case draft
-    case inReview
-
-    static func resolve(item: MemoryListItem?) -> Self {
-        if item?.resource?.scope == .project { return .legacyProjectReadOnly }
-        switch item?.draft?.status {
-        case .open: return .draft
-        case .submitted: return .inReview
-        default: return .none
-        }
-    }
-
-    var help: String? {
-        switch self {
-        case .none: nil
-        case .legacyProjectReadOnly: "Legacy Project memory — read-only"
-        case .draft: "Draft — not submitted for review"
-        case .inReview: "In Review — awaiting review and merge"
-        }
-    }
-}
-
 private struct FileTreeRow: View {
     let entry: VisibleFileTreeNode
     let isExpanded: Bool
-    let isStale: Bool
-    let review: ReviewRecord?
-    let onOpenReview: () -> Void
     let onDirectoryClick: (NSEvent.ModifierFlags) -> Void
 
     private var item: MemoryListItem? { entry.node.item }
@@ -887,46 +843,10 @@ private struct FileTreeRow: View {
             depth: entry.depth,
             isDirectory: item == nil,
             isExpanded: isExpanded,
-            titleColor: titleColor
+            titleColor: MemoryFileTreeTitleTone.resolve(item: item).color
         ) {
-            HStack(spacing: 5) {
-                SharedUpdateIndicator(
-                    freshness: self.item?.draft?.freshness,
-                    hasUpstreamResourceChanges: self.item?.draft?.hasUpstreamResourceChanges == true,
-                    reconciliation: self.item?.draft?.reconciliation,
-                    isStale: self.isStale
-                )
-                if self.rowAccessory == .inReview {
-                    Button(action: self.onOpenReview) {
-                        DraftReviewIcon()
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(self.review.map { "In Review: \($0.title). Click to view Review." }
-                        ?? "In Review. Click to load and view Review.")
-                    .accessibilityLabel("View Review for \(self.entry.node.name)")
-                } else if self.rowAccessory == .draft {
-                    DraftReviewIcon(submitted: false)
-                        .help(self.rowAccessory.help ?? "Draft")
-                        .accessibilityLabel("Draft — not submitted for review")
-                } else if let help = rowAccessory.help {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .help(help)
-                        .accessibilityLabel(help)
-                }
-            }
+            EmptyView()
         }
-        .help(rowAccessory.help ?? entry.node.name)
-    }
-
-    private var titleColor: Color {
-        MemoryFileTreeTitleTone.resolve(item: item).color
-    }
-
-    private var rowAccessory: MemoryFileTreeRowAccessory {
-        MemoryFileTreeRowAccessory.resolve(item: item)
+        .help(entry.node.name)
     }
 }

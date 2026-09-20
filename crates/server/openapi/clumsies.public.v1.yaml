@@ -8,6 +8,80 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /api/v1/me/inbox:
+    get:
+      operationId: listInbox
+      summary: List personal notifications with current project access checks.
+      description: Includes read and archived subjects. Pages use stable subject keys; clients sort by occurred_at and refresh the complete collection.
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        "200":
+          description: Accessible personal notifications.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor: { type: [string, "null"] }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [notification_id, project_id, project_name, kind, target_id, title, actor_name, version, read_version, archived_version, needs_action, review_status, occurred_at]
+                      properties:
+                        notification_id: { type: string }
+                        project_id: { type: string }
+                        project_name: { type: string }
+                        kind: { type: string, enum: [review_requested, review_comment, review_approved, review_rejected, review_merged, shared_update] }
+                        target_id: { type: string }
+                        title: { type: string }
+                        actor_name: { type: [string, "null"] }
+                        version: { type: integer, minimum: 1 }
+                        read_version: { type: integer, minimum: 0 }
+                        archived_version: { type: integer, minimum: 0 }
+                        needs_action: { type: boolean }
+                        review_status: { type: [string, "null"] }
+                        occurred_at: { type: string, format: date-time }
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/me/inbox/{notification_id}:
+    patch:
+      operationId: updateInboxReceipt
+      summary: Acknowledge only the notification version actually displayed.
+      parameters:
+        - name: notification_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, action]
+              properties:
+                version: { type: integer, minimum: 1 }
+                action: { type: string, enum: [read, unread, archive, restore] }
+      responses:
+        "200":
+          description: Receipt persisted without changing the source business object.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated: { type: boolean }
+        default:
+          $ref: "#/components/responses/Error"
   /oauth2/authorization/oidc:
     get:
       operationId: beginOidcAuthorization

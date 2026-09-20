@@ -333,7 +333,7 @@ struct WorkspaceLoader: Sendable {
     ) throws -> String {
         guard allowingStaleCache || !response.isStaleCache else {
             throw ServerClientError.invalidResponse(
-                "A stale cached memory body cannot be attached to the current shared version."
+                "A stale cached memory body cannot be attached to the current remote version."
             )
         }
         let digest = SHA256.hash(data: Data(detail.content.utf8))
@@ -343,7 +343,7 @@ struct WorkspaceLoader: Sendable {
               detail.memory.path == resource.document.path,
               actualContentHash == resource.contentHash else {
             throw ServerClientError.invalidResponse(
-                "The memory body no longer matches the requested shared version."
+                "The memory body no longer matches the requested remote version."
             )
         }
         return detail.content

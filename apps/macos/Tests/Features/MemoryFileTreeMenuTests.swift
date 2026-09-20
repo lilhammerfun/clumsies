@@ -589,7 +589,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         )
         XCTAssertEqual(discard.title, "Discard Draft in notes?")
         XCTAssertEqual(discard.confirmationTitle, "Discard Drafts")
-        XCTAssertTrue(discard.message.contains("Shared Organization Memory is unchanged"))
+        XCTAssertTrue(discard.message.contains("Remote Organization Memory is unchanged"))
 
         let deletion = MemoryFileTreeAlert.directoryDeletion(
             name: "notes",

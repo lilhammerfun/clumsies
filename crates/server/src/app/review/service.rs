@@ -822,6 +822,8 @@ pub(crate) async fn create_review_comment_in_tx(
         .into_iter()
         .find(|comment| comment.comment_id == comment_id)
         .ok_or_else(|| ServerError::not_found("review_comment", &comment_id))?;
+    crate::app::inbox::notify_review(tx, review_id, author_user_id, "review_comment", &comment_id)
+        .await?;
     Ok(comment)
 }
 
@@ -906,6 +908,18 @@ pub(crate) async fn create_review_decision_in_tx(
     .await?;
 
     let detail = load_review_detail(tx, review_id).await?;
+    crate::app::inbox::notify_review(
+        tx,
+        review_id,
+        decided_by_user_id,
+        if request.decision == ReviewDecision::Approved {
+            "review_approved"
+        } else {
+            "review_rejected"
+        },
+        &format!("decision:{}", detail.review.version),
+    )
+    .await?;
     Ok(detail)
 }
 
@@ -1149,6 +1163,14 @@ pub(crate) async fn create_review_in_tx(
     }
 
     let detail = load_review_detail(tx, &review_id).await?;
+    crate::app::inbox::notify_review(
+        tx,
+        &review_id,
+        author_user_id,
+        "review_requested",
+        &format!("review_requested:{}", detail.review.version),
+    )
+    .await?;
     Ok(CommitOutcome::Success(detail))
 }
 
@@ -1379,6 +1401,14 @@ pub(crate) async fn create_review_submission_in_tx(
     }
 
     let detail = load_review_detail(tx, review_id).await?;
+    crate::app::inbox::notify_review(
+        tx,
+        review_id,
+        author_user_id,
+        "review_requested",
+        &format!("review_requested:{}", detail.review.version),
+    )
+    .await?;
     Ok(CommitOutcome::Success(detail))
 }
 
@@ -1524,7 +1554,14 @@ pub(crate) async fn create_review_merge_in_tx(
         ResourceScope::Org => {
             let commit_id = create_org_commit(tx, &org_id, current_head.as_deref()).await?;
             advance_org_ref(tx, &org_id, &commit_id).await?;
-            refresh_projects_for_org_resource_changes(tx, &org_id, &org_resource_impact).await?;
+            refresh_projects_for_org_resource_changes(
+                tx,
+                &org_id,
+                &org_resource_impact,
+                actor_user_id,
+                &commit_id,
+            )
+            .await?;
             if !created_resource_ids.is_empty() {
                 select_created_org_resources_for_project(
                     tx,
@@ -1533,6 +1570,8 @@ pub(crate) async fn create_review_merge_in_tx(
                     &created_resource_ids,
                 )
                 .await?;
+                crate::app::inbox::notify_shared_update(tx, &project_id, &commit_id, actor_user_id)
+                    .await?;
             }
             commit_id
         }
@@ -1571,6 +1610,8 @@ pub(crate) async fn create_review_merge_in_tx(
         .await?;
     }
 
+    crate::app::inbox::notify_review(tx, review_id, actor_user_id, "review_merged", &commit_id)
+        .await?;
     Ok(CommitOutcome::Success(ReviewMergeData {
         commit_id,
         applied_operation_count: materialized_operations.len() as i64,

@@ -12,135 +12,15 @@ extension ToolbarItemPlacement {
     }
 }
 
-enum SyncToolbarPresentation: Equatable {
-    case syncing(changeCount: Int)
-    case inReview(changeCount: Int)
-    case failed(changeCount: Int, message: String?)
-    case unavailable(message: String?)
-    case stale
-
-    static func resolve(
-        status: DaemonSyncStatus?,
-        isAvailable: Bool,
-        serverDataSource: String?,
-        submittedDraftCount: Int = 0
-    ) -> Self? {
-        guard isAvailable else { return .unavailable(message: nil) }
-
-        guard let status else {
-            return serverDataSource == "stale" ? .stale : .unavailable(message: nil)
-        }
-        if status.failedOperationCount > 0 || status.draftSync.state == "failed" {
-            return .failed(
-                changeCount: status.failedOperationCount,
-                message: status.draftSync.lastError?.message
-            )
-        }
-        if status.draftSync.state == "degraded" {
-            return .unavailable(message: status.draftSync.lastError?.message)
-        }
-        if status.pendingOperationCount > 0
-            || ["queued", "syncing", "retrying"].contains(status.draftSync.state) {
-            return .syncing(changeCount: status.pendingOperationCount)
-        }
-        if ["failed", "degraded"].contains(status.commitSync.state) {
-            return .unavailable(message: status.commitSync.lastError?.message)
-        }
-        if status.draftSync.state != "idle"
-            || !["idle", "queued", "syncing", "retrying"].contains(status.commitSync.state) {
-            return .unavailable(message: nil)
-        }
-
-        if serverDataSource == "stale" { return .stale }
-        if status.commitSync.state == "idle", submittedDraftCount > 0 {
-            return .inReview(changeCount: submittedDraftCount)
-        }
-        return nil
-    }
-
-    func visible(in section: WorkspaceSection) -> Self? {
-        if section == .reviews, case .inReview = self { return nil }
-        return self
-    }
-
-    var isSyncing: Bool {
-        if case .syncing = self { return true }
-        return false
-    }
-
-    var symbolName: String {
-        switch self {
-        case .syncing: "arrow.triangle.2.circlepath"
-        case .inReview: "checkmark.bubble"
-        case .failed: "cloud.exclamationmark"
-        case .unavailable(let message): message == nil ? "questionmark.circle" : "cloud.exclamationmark"
-        case .stale: "clock.arrow.circlepath"
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .syncing(let count):
-            count == 1 ? "Syncing 1 change" : count > 1 ? "Syncing \(count) changes" : "Syncing changes"
-        case .inReview(let count):
-            count == 1 ? "Synced · 1 change in review" : "Synced · \(count) changes in review"
-        case .failed:
-            "Changes haven't synced"
-        case .unavailable(let message):
-            message == nil ? "Sync status unavailable" : "Sync needs attention"
-        case .stale:
-            "Showing saved content"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .syncing:
-            return "Your changes are syncing in the background."
-        case .inReview:
-            return "These changes have synced. Review and merge them to publish."
-        case .failed(let count, _):
-            return count == 1
-                ? "One change couldn't be synced. Try again."
-                : count > 1
-                    ? "\(count) changes couldn't be synced. Try again."
-                    : "Your changes couldn't be synced. Try again."
-        case .unavailable(let message):
-            return message == nil
-                ? "Clumsies can't check whether your changes are synced. Try again to check."
-                : "Clumsies couldn't finish syncing. Try again, or check the error details."
-        case .stale:
-            return "The latest content couldn't be loaded. What you see may be out of date."
-        }
-    }
-
-    var errorDetails: String? {
-        let message: String?
-        switch self {
-        case .failed(_, let value), .unavailable(let value): message = value
-        case .syncing, .inReview, .stale: message = nil
-        }
-        return message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? message : nil
-    }
-
-}
-
 enum WorkspaceColumnLayout: Equatable {
     case sidebarDetail
     case sidebarContentDetail
 
     init(section: WorkspaceSection) {
-        self = section == .reviews || section == .dashboard
+        self = [.reviews, .dashboard, .inbox].contains(section)
             ? .sidebarDetail
             : .sidebarContentDetail
     }
-}
-
-private enum DocumentSyncReadiness {
-    case ready
-    case pending
-    case failed
-    case unavailable
 }
 
 struct WorkspaceView: View {
@@ -154,9 +34,9 @@ struct WorkspaceView: View {
     @EnvironmentObject private var memoryModel: MemoryModel
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     @EnvironmentObject private var reconciler: DraftReconciliationService
-    @EnvironmentObject private var daemonSync: DaemonSyncService
     @EnvironmentObject private var reviewModel: ReviewsModel
     @EnvironmentObject private var documentSessions: DocumentSessions
+    @EnvironmentObject private var inbox: InboxStore
     let onSignOut: () -> Void
     let onOpenSettings: () -> Void
     let loadsReviewDetail: Bool
@@ -165,9 +45,9 @@ struct WorkspaceView: View {
     @State private var dashboardSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var reviewSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var activitySplitVisibility: NavigationSplitViewVisibility = .all
+    @State private var inboxSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var showsBundleResourcePicker = false
     @State private var confirmsBundleDeletion = false
-    @State private var showsSyncIssuePopover = false
     @State private var reviewNavigationPath: [ReviewRoute] = []
     @State private var workspaceSearchFocusRequest = 0
     @State private var reviewSearchQuery = ""
@@ -214,6 +94,8 @@ struct WorkspaceView: View {
             switch workspaceNavigation.selectedSection {
             case .dashboard:
                 dashboardWorkspace
+            case .inbox:
+                inboxWorkspace
             case .reviews:
                 reviewsWorkspace
             case .sessions:
@@ -267,6 +149,23 @@ struct WorkspaceView: View {
         }
         .onChange(of: workspaceNavigation.sidebarExpanded) { _, expanded in
             dashboardSplitVisibility = expanded ? .all : .detailOnly
+        }
+    }
+
+    private var inboxWorkspace: some View {
+        NavigationSplitView(columnVisibility: $inboxSplitVisibility) {
+            GlobalSidebar(store: store, onSignOut: onSignOut, onOpenSettings: onOpenSettings)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
+        } detail: {
+            InboxView(store: inbox,
+                searchFocusToken: workspaceNavigation.workspaceSearchFocusToken,
+                open: { try await store.openInboxDestination($0) })
+                .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onAppear { inboxSplitVisibility = workspaceNavigation.sidebarExpanded ? .all : .detailOnly }
+        .onChange(of: inboxSplitVisibility) { _, value in deferSidebarExpansionUpdate(value != .detailOnly) }
+        .onChange(of: workspaceNavigation.sidebarExpanded) { _, expanded in
+            inboxSplitVisibility = expanded ? .all : .detailOnly
         }
     }
 
@@ -327,85 +226,7 @@ struct WorkspaceView: View {
                             .accessibilityLabel("Add Memory")
                         }
 
-                        if let syncToolbarPresentation {
-                            switch syncToolbarPresentation {
-                            case .syncing:
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .frame(width: 24, height: 24)
-                                    .toolbarHelp(syncToolbarPresentation.label)
-                                    .accessibilityLabel(syncToolbarPresentation.label)
-                            case .failed, .unavailable, .stale, .inReview:
-                                Button {
-                                    showsSyncIssuePopover.toggle()
-                                } label: {
-                                    syncToolbarPresentation.icon
-                                }
-                                .toolbarHelp(syncToolbarPresentation.label)
-                                .accessibilityLabel(syncToolbarPresentation.label)
-                                .popover(isPresented: $showsSyncIssuePopover, arrowEdge: .top) {
-                                    SyncIssuePopover(
-                                        presentation: syncToolbarPresentation,
-                                        store: store
-                                    )
-                                }
-                            }
-                        }
-
                         if showsDocumentTabs, let item = workspaceNavigation.currentItem {
-                            if documentNeedsSync {
-                                switch documentSyncReadiness {
-                                case .pending:
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .frame(width: 24, height: 24)
-                                        .toolbarHelp("Saving draft changes before sync")
-                                        .accessibilityLabel("Saving draft changes before sync")
-                                case .failed:
-                                    if daemonSync.isRetryingSync(
-                                        channel: "drafts",
-                                        projectId: item.draft?.projectId ?? workspaceContext.activeProjectId
-                                    ) {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                            .frame(width: 24, height: 24)
-                                            .toolbarHelp("Retrying sync")
-                                            .accessibilityLabel("Retrying sync")
-                                    } else {
-                                        Button {
-                                            Task {
-                                                _ = await daemonSync.retrySync(
-                                                    channel: "drafts",
-                                                    projectId: item.draft?.projectId
-                                                        ?? workspaceContext.activeProjectId
-                                                )
-                                            }
-                                        } label: {
-                                            Image(systemName: "arrow.clockwise")
-                                        }
-                                        .toolbarHelp("Retry sync")
-                                        .accessibilityLabel("Retry sync")
-                                    }
-                                case .unavailable:
-                                    Button {} label: {
-                                        Image(systemName: "exclamationmark.triangle")
-                                    }
-                                    .disabled(true)
-                                    .toolbarHelp("Draft is not available on the server yet")
-                                    .accessibilityLabel("Draft is not available on the server yet")
-                                case .ready:
-                                    Button {
-                                        memoryModel.syncDocument(item)
-                                    } label: {
-                                        Image(systemName: item.draft?.reconciliation == .conflicts
-                                            ? "exclamationmark.triangle"
-                                            : "arrow.trianglehead.2.clockwise.rotate.90")
-                                    }
-                                    .toolbarHelp(item.draft?.reconciliation == .conflicts ? "Review conflicting changes" : "Sync")
-                                    .accessibilityLabel(item.draft?.reconciliation == .conflicts ? "Review conflicting changes" : "Sync")
-                                }
-                            }
-
                             Picker("Document View", selection: documentMode) {
                                 ForEach(availableDocumentModes, id: \.self) { mode in
                                     Text(mode.title).tag(mode)
@@ -550,11 +371,6 @@ struct WorkspaceView: View {
                 splitVisibility = target
             }
         }
-        .onChange(of: syncToolbarPresentation) { _, presentation in
-            if presentation == nil || presentation?.isSyncing == true {
-                showsSyncIssuePopover = false
-            }
-        }
         .sheet(isPresented: $showsProjectReviewRequest) {
             ReviewRequestSheet(
                 initialTitle: "Update \(workspaceContext.activeProject?.name ?? "project") memory",
@@ -672,11 +488,6 @@ struct WorkspaceView: View {
             guard reviewModel.reviews.contains(where: { $0.id == reviewId }) else { return }
             reviewNavigationPath = [ReviewRoute(reviewId: reviewId)]
         }
-        .onChange(of: syncToolbarPresentation) { _, presentation in
-            if presentation == nil || presentation?.isSyncing == true {
-                showsSyncIssuePopover = false
-            }
-        }
     }
 
     private var workspaceSearchPrompt: String {
@@ -686,6 +497,7 @@ struct WorkspaceView: View {
         case .bundles: "Search Bundles"
         case .reviews: "Search Reviews"
         case .sessions: "Search Activity"
+        case .inbox: "Search Inbox"
         }
     }
 
@@ -802,43 +614,7 @@ struct WorkspaceView: View {
 
     @ToolbarContentBuilder
     private func reviewUtilityToolbarContent(hasLeadingActions: Bool) -> some ToolbarContent {
-        if #available(macOS 26.0, *),
-           syncToolbarPresentation != nil,
-           hasLeadingActions {
-            ToolbarSpacer(.fixed, placement: .automatic)
-        }
-
-        if let syncToolbarPresentation {
-            ToolbarItem(id: "review.sync", placement: .automatic) {
-                switch syncToolbarPresentation {
-                case .syncing:
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 24, height: 24)
-                        .toolbarHelp(syncToolbarPresentation.label)
-                        .accessibilityLabel(syncToolbarPresentation.label)
-                        .accessibilityIdentifier("review-toolbar-sync")
-                case .failed, .unavailable, .stale, .inReview:
-                    Button {
-                        showsSyncIssuePopover.toggle()
-                    } label: {
-                        syncToolbarPresentation.icon
-                    }
-                    .toolbarHelp(syncToolbarPresentation.label)
-                    .accessibilityLabel(syncToolbarPresentation.label)
-                    .accessibilityIdentifier("review-toolbar-sync")
-                    .popover(isPresented: $showsSyncIssuePopover, arrowEdge: .top) {
-                        SyncIssuePopover(
-                            presentation: syncToolbarPresentation,
-                            store: store
-                        )
-                    }
-                }
-            }
-        }
-
-        if #available(macOS 26.0, *),
-           syncToolbarPresentation != nil || hasLeadingActions {
+        if #available(macOS 26.0, *), hasLeadingActions {
             ToolbarSpacer(.fixed, placement: .automatic)
         }
 
@@ -1007,7 +783,7 @@ struct WorkspaceView: View {
             ToolbarItem {
                 EmptyView()
             }
-        case .sessions:
+        case .sessions, .inbox:
             ToolbarItem {
                 EmptyView()
             }
@@ -1025,7 +801,7 @@ struct WorkspaceView: View {
             BundleNavigator()
         case .reviews:
             EmptyView()
-        case .sessions:
+        case .sessions, .inbox:
             EmptyView()
         }
     }
@@ -1049,7 +825,7 @@ struct WorkspaceView: View {
             )
         case .reviews:
             EmptyView()
-        case .sessions:
+        case .sessions, .inbox:
             EmptyView()
         }
     }
@@ -1108,43 +884,6 @@ struct WorkspaceView: View {
         )
     }
 
-    private var documentNeedsSync: Bool {
-        guard let item = workspaceNavigation.currentItem else { return false }
-        return SharedUpdateStatusPresentation.resolve(
-            freshness: item.draft?.freshness,
-            hasUpstreamResourceChanges: item.draft?.hasUpstreamResourceChanges == true,
-            reconciliation: item.draft?.reconciliation,
-            isStale: item.draft == nil
-                && item.resource.map { memoryCatalog.staleResourceIds.contains($0.id) } == true
-        ) != nil
-    }
-
-    private var documentSyncReadiness: DocumentSyncReadiness {
-        guard let item = workspaceNavigation.currentItem else { return .ready }
-        if documentSessions.isSynchronizingDocument(item.id) { return .pending }
-        guard let draft = item.draft else {
-            return .ready
-        }
-        switch draft.syncStatus {
-        case .queued, .syncing, .retrying:
-            return .pending
-        case .failed:
-            return .failed
-        case .synced:
-            return draft.serverId == nil ? .unavailable : .ready
-        }
-    }
-
-    private var syncToolbarPresentation: SyncToolbarPresentation? {
-        guard workspaceContext.activeProjectId != nil else { return nil }
-        return SyncToolbarPresentation.resolve(
-            status: daemonSync.runtime?.sync,
-            isAvailable: daemonSync.syncStatusAvailable,
-            serverDataSource: daemonSync.runtime?.serverDataSource,
-            submittedDraftCount: draftStore.draftInventoryLoadState == .loaded
-                ? reviewModel.submittedProjectDrafts.count : 0
-        )?.visible(in: workspaceNavigation.selectedSection)
-    }
 
 }
 
@@ -1193,28 +932,6 @@ private struct ActivityProjectFilter: View {
     }
 }
 
-private extension SyncToolbarPresentation {
-    @ViewBuilder
-    var icon: some View {
-        if case .inReview = self {
-            DraftReviewIcon()
-        } else {
-            Image(systemName: symbolName)
-                .foregroundStyle(tint)
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .syncing: .secondary
-        case .inReview: Color(nsColor: .systemGreen)
-        case .failed: .red
-        case .unavailable: .secondary
-        case .stale: .secondary
-        }
-    }
-}
-
 private struct WorkspaceOperationErrorBanner: View {
     let message: String
     let onDismiss: () -> Void
@@ -1255,110 +972,9 @@ private struct WorkspaceOperationErrorBanner: View {
     }
 }
 
-private struct SyncIssuePopover: View {
-    @EnvironmentObject private var draftStore: DraftStore
-    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
-    let presentation: SyncToolbarPresentation
-    let store: WorkspaceCoordinator
-    @EnvironmentObject private var workspaceContext: WorkspaceContext
-    @EnvironmentObject private var daemonSync: DaemonSyncService
-    @EnvironmentObject private var reviewModel: ReviewsModel
-    @State private var isReloading = false
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                presentation.icon
-                Text(presentation.label)
-                    .font(.headline)
-            }
-
-            Text(presentation.detail)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if case .inReview = presentation {
-                let reviewIds = Set(reviewModel.submittedProjectDrafts.compactMap {
-                    reviewModel.review(for: $0)?.id
-                })
-                ForEach(reviewModel.reviews.filter { reviewIds.contains($0.id) }) { review in
-                    Button(review.title) {
-                        dismiss()
-                        reviewModel.openReview(review)
-                    }
-                    .toolbarHelp("View Review")
-                }
-                ForEach(reviewModel.submittedProjectDrafts.filter { reviewModel.review(for: $0) == nil }) { draft in
-                    Button("View Review for \(draft.document.title)") {
-                        dismiss()
-                        Task { await reviewModel.openReview(for: draft) }
-                    }
-                }
-            }
-
-            if daemonSync.syncRetryErrorMessage != nil {
-                Label("Sync still couldn't finish. You can try again.", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let message = daemonSync.syncRetryErrorMessage ?? presentation.errorDetails {
-                DisclosureGroup("Error details") {
-                    Text(message)
-                        .font(.caption)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Divider()
-
-            HStack {
-                Spacer()
-                switch presentation {
-                case .failed, .unavailable:
-                    Button {
-                        guard let projectId = workspaceContext.activeProjectId else { return }
-                        Task { _ = await daemonSync.retrySync(projectId: projectId) }
-                    } label: {
-                        if daemonSync.isRetryingSync {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text("Try Again")
-                        }
-                    }
-                    .disabled(daemonSync.isRetryingSync)
-                    .keyboardShortcut(.defaultAction)
-                case .stale:
-                    Button {
-                        isReloading = true
-                        Task {
-                            await store.reload()
-                            isReloading = false
-                        }
-                    } label: {
-                        if isReloading {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text("Get Latest Content")
-                        }
-                    }
-                    .disabled(isReloading)
-                    .keyboardShortcut(.defaultAction)
-                case .syncing, .inReview:
-                    EmptyView()
-                }
-            }
-        }
-        .padding(16)
-        .frame(width: 360)
-    }
-}
-
 private struct GlobalSidebar: View {
     let store: WorkspaceCoordinator
+    @EnvironmentObject private var inbox: InboxStore
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     @EnvironmentObject private var softwareUpdateController: SoftwareUpdateController
@@ -1370,6 +986,7 @@ private struct GlobalSidebar: View {
             Section {
                 ForEach(WorkspaceSection.allCases) { section in
                     SidebarDestinationLabel(section: section)
+                        .badge(section == .inbox ? inbox.unreadCount : 0)
                         .tag(GlobalSidebarDestination.section(section))
                 }
             } header: {

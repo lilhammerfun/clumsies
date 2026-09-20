@@ -165,6 +165,8 @@ final class WorkspaceNavigationTests: XCTestCase {
 
     func testReviewsUseSidebarWithPushNavigatedDetail() {
         XCTAssertEqual(WorkspaceColumnLayout(section: .reviews), .sidebarDetail)
+        XCTAssertEqual(WorkspaceColumnLayout(section: .inbox), .sidebarDetail)
+        XCTAssertEqual(WorkspaceColumnLayout(section: .dashboard), .sidebarDetail)
 
         for section in [
             WorkspaceSection.memory,

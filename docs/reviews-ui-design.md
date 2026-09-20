@@ -81,7 +81,8 @@ project                                        <local date and time>
 - Reuse the native toolbar filter menus in Project, status, Author order. These
   filters combine with search; no additional filter row is needed.
 - Search is an independent window-level action and remains the trailing-most
-  Review tool. Sync and decision actions are not grouped with Filter.
+  Review tool. Decision actions are not grouped with Filter; background sync
+  notifications live in Inbox.
 - Loading without cached Reviews uses a labeled `ProgressView`. Existing cached
   rows remain visible during refresh. Empty and filtered-empty states use
   `ContentUnavailableView`; a search miss uses the native search-empty state.

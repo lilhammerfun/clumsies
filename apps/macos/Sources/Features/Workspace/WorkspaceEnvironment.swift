@@ -40,6 +40,7 @@ extension View {
             .environmentObject(workspace.agents)
             .environmentObject(workspace.refresh)
             .environmentObject(workspace.feedback)
+            .environmentObject(workspace.inbox)
             .environmentObject(workspace.navigation)
             .environmentObject(workspace.memory)
     }

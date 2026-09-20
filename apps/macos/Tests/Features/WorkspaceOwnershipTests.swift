@@ -26,6 +26,64 @@ final class WorkspaceOwnershipTests: XCTestCase {
         XCTAssertEqual(workspace.edits.pendingDocument(for: item), document)
         XCTAssertTrue(workspace.hasPendingChanges)
         XCTAssertNotNil(workspace.feedback.errorMessage)
+
+        workspace.navigation.selectedSection = .inbox
+        for destination in [InboxDestination.sharedChanges(projectId: "second"), .review("review")] {
+            do {
+                try await workspace.openInboxDestination(destination)
+                XCTFail("Inbox navigation must stop when pending edits cannot be saved.")
+            } catch { }
+            XCTAssertEqual(workspace.navigation.selectedSection, .inbox)
+            XCTAssertEqual(workspace.context.activeProjectId, "first")
+            XCTAssertEqual(workspace.edits.pendingDocument(for: item), document)
+        }
+    }
+
+    func testInboxSharedUpdatesOpenOnlyAffectedFilesInExistingMemoryDiffTabs() throws {
+        let workspace = WorkspaceCoordinator()
+        let existing = prepare(workspace)
+        defer { workspace.clearAuthorityScopedWorkspace() }
+        workspace.navigation.open(existing)
+        let existingTab = try XCTUnwrap(workspace.navigation.activeVisibleTab)
+        workspace.context.projects[0] = ProjectState(id: "first", name: "First",
+            refCommitId: "commit", refEtag: "ref", selectedOrgResourceIds: ["memory", "a", "z", "foreign"],
+            orgSelectionRevision: 1, isLoaded: true)
+        for id in ["z", "a", "foreign"] {
+            workspace.catalog.resources.append(MemoryResource(id: id, scope: .org,
+                projectId: nil, projectName: nil, kind: .context, contentHash: "hash",
+                updatedAt: "2026-09-18T00:00:00Z", refCommitId: "commit", contentLoaded: true,
+                document: .init(title: id, path: "\(id).md", body: "Local content")))
+            workspace.catalog.staleResourceSnapshots[id] = .init(
+                projectId: id == "foreign" ? "second" : "first", observedProjectRefCommitId: "commit",
+                observedSelectedOrgResourceIds: [], observedOrgSelectionRevision: 1,
+                authoritativeCommitId: "new", authoritativeRefEtag: nil,
+                selectedOrgResourceIds: [], orgSelectionRevision: 1,
+                generation: UUID(), local: nil, remote: nil)
+        }
+        let resources = workspace.catalog.resources
+        workspace.navigation.selectedSection = .inbox
+        workspace.navigation.searchQuery = "old search"
+
+        workspace.revealInboxSharedUpdates(in: "second")
+        XCTAssertEqual(workspace.navigation.selectedSection, .inbox, "A different project must not hijack navigation.")
+        workspace.revealInboxSharedUpdates(in: "first")
+
+        XCTAssertEqual(workspace.navigation.selectedSection, .memory)
+        XCTAssertEqual(workspace.navigation.searchQuery, "")
+        XCTAssertEqual(workspace.navigation.tabs.map(\.itemId), ["memory", "a", "z"])
+        XCTAssertEqual(workspace.navigation.tabs.first, existingTab)
+        XCTAssertTrue(workspace.navigation.tabs.dropFirst().allSatisfy { $0.mode == .diff && $0.projectId == "first" })
+        XCTAssertEqual(workspace.navigation.activeVisibleTab?.itemId, "a")
+        XCTAssertEqual(workspace.navigation.selectedItemId, "a")
+        XCTAssertEqual(workspace.catalog.resources, resources, "Opening a notification must not apply shared changes.")
+        XCTAssertEqual(workspace.catalog.staleResourceSnapshots.count, 3)
+
+        let tabs = workspace.navigation.tabs
+        workspace.catalog.staleResourceSnapshots = [:]
+        workspace.navigation.selectedSection = .inbox
+        workspace.revealInboxSharedUpdates(in: "first")
+        XCTAssertEqual(workspace.navigation.selectedSection, .memory)
+        XCTAssertEqual(workspace.navigation.tabs, tabs, "An already current project needs no extra page or tabs.")
     }
 
     func testAuthorityResetCancelsPendingSavesAndDocumentWork() async throws {

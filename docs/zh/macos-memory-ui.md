@@ -16,7 +16,7 @@ Memory 工作区不是直接编辑共享权威的文件管理器。界面分为�
 
 Organization 视图没有明确的 Draft carrier，因此保持只读。Project 视图中的编辑也不会
 原位修改 Organization 权威：选中的 Organization 资源与该 Project 的 LocalDraft 叠加后
-形成可编辑文档。旧 Project-scoped authority 仍可见，但只作为兼容层展示，并带锁图标；
+形成可编辑文档。旧 Project-scoped authority 仍可见，但只作为兼容层展示，打开文档后显示只读说明；
 它不能通过当前发布链继续修改或提交。
 
 界面仍以 Context、Rule、Workflow 等 kind 和路径约定组织创建入口，但这些只是统一
@@ -37,18 +37,15 @@ Server 对象。首次出现时展开已有目录；资源或 Draft 路径变化
 
 上下文菜单把普通文档操作和 Memory 领域操作分开：Open、Open Source、Rename Folder、
 Delete Folder 属于文件树层；Add/Remove Project、Request Review、Discard Draft、Review
-Shared Changes 属于领域层。删除共享资源始终创建 Organization deletion Draft，不在客户
+Remote Changes 属于领域层。删除共享资源始终创建 Organization deletion Draft，不在客户
 端直接删除权威。
 
 文件菜单使用 `Rename…` 和 `Delete…`，确认框说明修改先保存为草稿，审核合并后影响所有
 引用该文件的项目。`Remove from Project` 只移除当前项目的引用。
 
-文件名颜色表示尚未发布的新增、修改或删除。未提交草稿在右侧显示灰色 Draft 图标；
-已提交草稿显示绿色 PR 图标，悬停显示 Review 标题，点击图标或选择 `View Review` 打开
-对应审核。批量 Review 中的每个文件都能关联到同一审核；合并或放弃后清除草稿标记。
-
-同步完成后仍有待审核修改时，状态提示为 `Synced · N changes in review`，并提供对应
-Review 的入口。同步失败或数据过期时优先显示问题；同步本身不会提交或合并 Review。
+文件树保留文件类型图标和改动颜色：新增绿色、修改黄色、删除红色；提交评审后仍保留颜色，直到合并。文件名尾部不再显示状态图标。Review、远程共享更新和同步失败通知集中到
+[Inbox](../inbox.md)，全局侧栏显示未读数量。工具栏不再因后台同步状态增加按钮。
+文档顶部不增加状态栏，评审和共享更新操作保留在现有文档菜单、文件右键菜单中。
 
 ### ZIP 导出
 
@@ -106,31 +103,23 @@ Organization 视图不提供“新建”；Project 中的旧 Project 权威也�
 一个跨文件事务。某一步失败时，之前的步骤可能已经完成；界面显示 `Completed n of m`
 一类进度和错误，调用方不能把批量操作理解为全成或全败。
 
-## 5. 标题颜色与同步指示
+## 5. 通知与文档状态
 
-文件名颜色只表达当前 Project Draft 的变更类型：
+Inbox 跨项目汇总通知，支持消息类型筛选、未读、归档和搜索。列表固定两行，单击只选择，
+通过明确的按钮打开原始 Review，或直接进入对应项目的 Memory，用现有 Diff 标签查看有远程更新的文件。
+Inbox 不设消息详情页，也不在行内展开。
+成功进入原始 Review 或 Memory 后才标为已读。工具栏和右键菜单支持多选、标为已读／未读、
+归档和移回 Inbox；归档不改变已读状态，且可以撤销。新的评论、审核结果或共享发布会让通知重新出现。
+这些操作不会提交、合并、丢弃或更新 Memory。
 
-| 条件 | 标题颜色 |
-| --- | --- |
-| 没有 Draft | 系统 primary，包括继承自 Organization 的干净资源 |
-| 新建 Draft（没有 target） | 绿色 |
-| 更新或改名 Draft | 琥珀色 |
-| 删除 Draft | 红色 |
+本机草稿的创建、编辑、改名、删除和提交状态不产生通知，Inbox 不读取或汇总草稿列表。
+远程发布改变了项目正在引用的记忆时，才通知该项目的相关成员；未引用该记忆的项目不受影响。
+共享正文、路径或删除状态的变化可以进入 Diff 或协调；仅仅 Draft base Ref 落后不产生提醒。
+服务器通知与本机提醒的持久化方式、收件人和首版边界见 [Inbox 说明](../inbox.md)。
 
-Draft 类型优先于其他视觉状态。颜色不是唯一信号：删除、同步和只读状态还必须通过菜单、
-图标、help 与 accessibility label 表达。
-
-右侧同步 accessory 与标题颜色是正交信息，按以下优先级折叠：
-
-1. Draft behind 且 reconciliation 有冲突：橙色警告三角，提示 shared update conflicts；
-2. Draft behind 且权威资源正文或路径已变：灰色同步图标，提示文件的 shared version 已变；
-3. Draft 只因 base Ref 落后：同一灰色同步图标，提示 Draft base behind；
-4. 没有 behind Draft，但本地资源快照 stale：灰色同步图标，提示有更新的 shared version；
-5. 其他情况不显示同步 accessory。
-
-`freshness` 与 `hasUpstreamResourceChanges` 是两个事实：前者表示 Draft base 是否落后，
-后者表示目标资源本身是否发生变化。不能只凭一个同步图标推断冲突。旧 Project 权威另用
-灰色锁图标表示只读，不复用 Draft 颜色。
+文档不额外显示草稿、评审或共享更新状态栏。现有菜单中的 `View Review` 打开审核，
+`Review Remote Changes` 进入协调，`Update from Remote Version` 显式更新远程版本。
+删除草稿在文档正文中说明待删除状态。正在处理的冲突和保存失败仍在操作位置展示。
 
 ## 6. 文档会话与同步
 
@@ -144,7 +133,7 @@ tab 的 Project 身份为空。因此打开相同 resource ID 的 Org 视图与 
 该 Project 没有仍存活的 Draft，才清理对应 tab。
 
 编辑保存进入本机 Draft/outbox，再由 daemon 与 Server 同步。资源 stale 或 Draft behind
-时，工具栏提供同步或冲突处理入口。Memory 的冲突处理使用独立原生窗口，带关闭、最小化、
+时，菜单提供 Update from Remote Version 或 Review Remote Changes。Memory 的冲突处理使用独立原生窗口，带关闭、最小化、
 缩放及全屏控件；主窗口保持可用，关闭原文档 tab 也不丢失解决进度。窗口记住尺寸与位置，
 比较区和结果区分别滚动，并可拖动分隔线调整空间。
 Remote 与 Draft 的冲突片段并排显示，各自用 unified diff 展示相对共同原文的增删，选择按钮
@@ -174,17 +163,15 @@ Discard 和 deletion proposal 仍按各自 Draft 生命周期处理。Review 详
 - 列表 selection、tab 和文档同步状态都以稳定资源/Draft 身份关联，不以标题或路径作唯一
   身份；
 - 路径变化后刷新 tab 标题和文件树位置，失效上下文会被裁剪；
-- 符号 accessory 带 `.help()` 和 accessibility label；颜色不承担唯一语义；
+- Inbox 未读状态及文档操作都有文字或 accessibility label；颜色不承担唯一语义；
 - 目录批量操作显示连续进度，失败信息保留已完成数量；
-- selection、目录递归目标、菜单权限、tab 隔离、颜色和同步 accessory 均有纯逻辑或
+- selection、目录递归目标、菜单权限、tab 隔离、通知回执和文档共享状态 均有纯逻辑或
   View 测试覆盖。
 
 ## 9. 当前缺口
 
 以下是设计目标与当前实现之间仍然存在的差距，不应写成已交付行为：
 
-- 干净的 inherited Organization 文件目前仍是 primary 颜色，也没有 `building.2` 徽标；
-  “继承文件灰色并带作用域徽标”的旧视觉方案尚未实现。
 - tab 标题目前只有文档标题，Preview 模式追加 `Preview`；没有 `Org ·` 或 Project 名称
   前缀。虽然会话已经隔离，同名跨作用域 tab 仍可能难以辨认。
 - 即使目标 Project 只有一个，Add to Project 仍会打开二级菜单，没有单目标快捷动作。
@@ -201,6 +188,6 @@ Discard 和 deletion proposal 仍按各自 Draft 生命周期处理。Review 详
 | Project 切换与刷新编排 | `apps/macos/Sources/Features/Workspace/WorkspaceCoordinator.swift` |
 | 文档 Sync 与共享刷新 | `apps/macos/Sources/Features/Memory/MemoryModel.swift`、`Services/Memory/MemorySyncService.swift` |
 | 文档与会话模型 | `apps/macos/Sources/Libraries/Models/MemoryModels.swift` |
-| 同步 accessory | `apps/macos/Sources/Libraries/UI/SharedUpdateIndicator.swift` |
+| 用户通知 | `apps/macos/Sources/Features/Inbox/InboxView.swift`、`Services/Inbox/InboxStore.swift` |
 | tab 标题与布局 | `apps/macos/Sources/Features/Memory/DocumentTabStrip.swift` |
 | 交互测试 | `apps/macos/Tests/Features/FileTreeSelectionTests.swift`、`MemoryFileTreeMenuTests.swift`、`WorkspaceNavigationTests.swift` |

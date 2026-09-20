@@ -30,6 +30,7 @@ src/
 │   ├── commit/              # Snapshots, history and references
 │   ├── draft/               # Drafts, operation batches and reconciliation
 │   ├── review/              # Review, decisions and publication
+│   ├── inbox/               # Personal notifications and versioned receipts
 │   ├── token/               # Administrator token management
 │   ├── audit_event/         # Administrator audit feed
 │   └── health/              # Dependency status

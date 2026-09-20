@@ -30,6 +30,7 @@ struct DocumentSessionView: View {
 
     var body: some View {
         documentContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: item.document) { _, latest in
             self.model.adoptAuthoritativeDocument(latest)
         }
@@ -67,10 +68,7 @@ struct DocumentSessionView: View {
                 self.model.moveToTrash(item: self.item)
             }
         } message: {
-            Text(
-                "This creates a deletion draft proposal. If reviewed and merged, "
-                    + "the organization memory will be removed for every project that includes it."
-            )
+            Text(MemoryFileTreeAlert.organizationDeletion(items: [item]).message)
         }
     }
 
@@ -80,14 +78,12 @@ struct DocumentSessionView: View {
                 self.documentDiff
             } else if self.item.draft?.isDeletion == true {
                 ContentUnavailableView(
-                    self.item.draft?.scope == .org
-                        ? "Pending organization deletion"
-                        : "Pending deletion",
+                    "Marked for deletion",
                     systemImage: "trash",
                     description: Text(
                         self.item.draft?.scope == .org
-                            ? "Discard the draft proposal to keep this organization memory."
-                            : "Discard the draft to keep this memory."
+                            ? "This file will be deleted from remote Memory when the Review is merged.\nChoose Discard Draft to cancel the deletion."
+                            : "Choose Discard Draft to cancel the deletion."
                     )
                 )
             } else if self.mode == .preview {

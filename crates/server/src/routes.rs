@@ -80,6 +80,7 @@ pub(crate) fn router_with_services(
         ));
     let protected_routes = Router::new()
         .merge(crate::app::auth::routes::protected_routes())
+        .merge(crate::app::inbox::routes::protected_routes())
         .merge(crate::app::project::routes::protected_routes())
         .merge(crate::app::memory::routes::protected_routes())
         .merge(crate::app::bundle::routes::protected_routes())
@@ -103,6 +104,7 @@ fn all_operations() -> Vec<HttpOperation> {
     operations.extend_from_slice(crate::app::auth::routes::PUBLIC_OPERATIONS);
     operations.extend_from_slice(crate::app::auth::routes::ADMIN_OPERATIONS);
     operations.extend_from_slice(crate::app::auth::routes::PROTECTED_OPERATIONS);
+    operations.extend_from_slice(crate::app::inbox::routes::PROTECTED_OPERATIONS);
     operations.extend_from_slice(crate::app::organization::routes::ADMIN_OPERATIONS);
     operations.extend_from_slice(crate::app::project::routes::ADMIN_OPERATIONS);
     operations.extend_from_slice(crate::app::project::routes::PROTECTED_OPERATIONS);

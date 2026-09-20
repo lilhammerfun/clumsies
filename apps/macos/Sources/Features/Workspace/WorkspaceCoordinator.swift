@@ -10,6 +10,7 @@ final class WorkspaceCoordinator {
     let context: WorkspaceContext
     let edits: DraftStore
     let feedback: WorkspaceFeedback
+    let inbox: InboxStore
     let memory: MemoryModel
     let navigation: WorkspaceNavigation
     let projects: ProjectService
@@ -25,6 +26,7 @@ final class WorkspaceCoordinator {
         self.context = context
         let catalog = MemoryCatalog(context: context)
         self.catalog = catalog
+        self.inbox = InboxStore(context: context, catalog: catalog)
         let feedback = WorkspaceFeedback(context: context)
         self.feedback = feedback
         let sessions = DocumentSessions(context: context)
@@ -434,6 +436,7 @@ final class WorkspaceCoordinator {
                 guard !Task.isCancelled else { return }
                 if clock.now >= nextSynchronizedDataRefresh {
                     await refreshSynchronizedWorkspaceData()
+                    await inbox.refresh()
                     nextSynchronizedDataRefresh = clock.now.advanced(
                         by: WorkspaceRefreshCadence.synchronizedData
                     )
@@ -482,6 +485,7 @@ final class WorkspaceCoordinator {
         refresh.resetAuthority()
         feedback.resetBackgroundErrorPresentation()
         edits.resetAuthority()
+        inbox.reset()
         bundles.resetAuthority()
         reviews.resetAuthority()
         sessions.resetAuthority()
@@ -513,6 +517,7 @@ final class WorkspaceCoordinator {
         catalog.apply(snapshot)
         navigation.applyWorkspace()
         refresh.applyRuntime(snapshot.runtime)
+        inbox.prepare(serverURL: snapshot.runtime.health.serverUrl)
         agents.applyLocalAgentAdapterResult(.init(
             conflicts: snapshot.legacyAgentAdapterConflicts,
             inspectionWarning: snapshot.legacyAgentAdapterInspectionWarning

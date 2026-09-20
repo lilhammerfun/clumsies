@@ -132,6 +132,43 @@ final class FileTreeSelectionTests: XCTestCase {
     }
 
     @MainActor
+    func testDeletionPlaceholderKeepsDocumentTabsAtTheTopWhenResizing() throws {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.phase = .ready
+        workspace.context.projects = [.init(id: "project", name: "Project", refCommitId: "base", refEtag: "base",
+            selectedOrgResourceIds: ["memory"], orgSelectionRevision: 0, isLoaded: true)]
+        workspace.context.activeProjectId = "project"
+        workspace.catalog.resources = [try XCTUnwrap(memoryItem(id: "memory", path: "deleted.md").resource)]
+        workspace.edits.drafts = [draft(targetId: "memory", isDeletion: true, scope: .org)]
+        let item = try XCTUnwrap(workspace.navigation.memoryItems.first)
+        workspace.navigation.open(item, mode: .source)
+        let host = NSHostingView(rootView: MemoryMainPane()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .workspaceEnvironment(workspace))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        func tabStrip(in view: NSView) -> DocumentTabStripView? {
+            if let strip = view as? DocumentTabStripView { return strip }
+            return view.subviews.lazy.compactMap { tabStrip(in: $0) }.first
+        }
+        for height in [CGFloat(500), 820] {
+            window.setContentSize(NSSize(width: 900, height: height))
+            for _ in 0..<3 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            let strip = try XCTUnwrap(tabStrip(in: host))
+            let frame = strip.convert(strip.bounds, to: host)
+            let topInset = host.isFlipped ? frame.minY : host.bounds.maxY - frame.maxY
+            XCTAssertEqual(topInset, 0, accuracy: 1, "The deletion placeholder must not center the entire document pane.")
+            XCTAssertEqual(frame.height, DocumentTabMetrics.height, accuracy: 1)
+        }
+    }
+
+    @MainActor
     func testLongUnifiedDiffLineCreatesHorizontalScrollRangeAfterHunkHeader() throws {
         let presentation = UnifiedDiffPresentation(lines: [
             .init(
@@ -433,94 +470,6 @@ final class FileTreeSelectionTests: XCTestCase {
         XCTAssertEqual(selected.map(\.id), ["b"])
     }
 
-    func testCurrentDraftDoesNotShowSharedUpdateAccessory() {
-        XCTAssertNil(
-            SharedUpdateStatusPresentation.resolve(
-                freshness: .current,
-                hasUpstreamResourceChanges: false,
-                reconciliation: .unknown
-            )
-        )
-    }
-
-    func testBehindDraftShowsSharedUpdateAccessory() throws {
-        let presentation = try XCTUnwrap(
-            SharedUpdateStatusPresentation.resolve(
-                freshness: .behind,
-                hasUpstreamResourceChanges: true,
-                reconciliation: .clean
-            )
-        )
-
-        XCTAssertEqual(
-            presentation.symbolName,
-            "arrow.trianglehead.2.clockwise.rotate.90"
-        )
-        XCTAssertEqual(presentation.help, "The remote version of this file has changed")
-    }
-
-    func testBehindDraftWithoutResourceChangesShowsNoSharedUpdateAccessory() {
-        XCTAssertNil(
-            SharedUpdateStatusPresentation.resolve(
-                freshness: .behind,
-                hasUpstreamResourceChanges: false,
-                reconciliation: .clean
-            )
-        )
-    }
-
-    func testConflictedBehindDraftShowsConflictAccessory() throws {
-        let presentation = try XCTUnwrap(
-            SharedUpdateStatusPresentation.resolve(
-                freshness: .behind,
-                hasUpstreamResourceChanges: true,
-                reconciliation: .conflicts
-            )
-        )
-
-        XCTAssertEqual(presentation.symbolName, "exclamationmark.triangle")
-        XCTAssertEqual(presentation.help, "Shared update has conflicts")
-    }
-
-    func testStaleResourceWithoutDraftShowsSyncAccessory() throws {
-        let presentation = try XCTUnwrap(
-            SharedUpdateStatusPresentation.resolve(
-                freshness: nil,
-                hasUpstreamResourceChanges: false,
-                reconciliation: .unknown,
-                isStale: true
-            )
-        )
-
-        XCTAssertEqual(
-            presentation.symbolName,
-            "arrow.trianglehead.2.clockwise.rotate.90"
-        )
-        XCTAssertEqual(presentation.help, "A newer remote version is available")
-    }
-
-    func testSyncedResourceWithoutDraftShowsNoAccessory() {
-        XCTAssertNil(
-            SharedUpdateStatusPresentation.resolve(
-                freshness: nil,
-                hasUpstreamResourceChanges: false,
-                reconciliation: .unknown,
-                isStale: false
-            )
-        )
-    }
-
-    func testBehindDraftWithoutResourceChangesDoesNotInheritStaleAccessory() {
-        XCTAssertNil(
-            SharedUpdateStatusPresentation.resolve(
-                freshness: .behind,
-                hasUpstreamResourceChanges: false,
-                reconciliation: .clean,
-                isStale: true
-            )
-        )
-    }
-
     func testNilItemUsesPrimaryTone() {
         XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: nil), .primary)
     }
@@ -571,40 +520,18 @@ final class FileTreeSelectionTests: XCTestCase {
         }
     }
 
-    func testLegacyProjectMemoryUsesReadOnlyLockWithoutChangingTitleTone() {
-        let item = memoryItem(
-            id: "legacy-project-memory",
-            path: "legacy.md",
-            scope: .project,
-            projectId: "project"
-        )
-
-        let accessory = MemoryFileTreeRowAccessory.resolve(item: item)
-        XCTAssertEqual(accessory, .legacyProjectReadOnly)
-        XCTAssertEqual(accessory.help, "Legacy Project memory — read-only")
-        XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: item), .primary)
-    }
-
-    func testOrgMemoryDoesNotUseLegacyReadOnlyLock() {
-        let item = memoryItem(id: "org-memory", path: "org.md")
-
-        XCTAssertEqual(MemoryFileTreeRowAccessory.resolve(item: item), .none)
-    }
-
-    func testDraftLifecycleSeparatesReviewStateFromUnpublishedChanges() {
-        let cases: [(DaemonLocalDraftStatus, MemoryFileTreeRowAccessory, MemoryFileTreeTitleTone)] = [
-            (.open, .draft, .modifiedDraft),
-            (.submitted, .inReview, .modifiedDraft),
-            (.merged, .none, .primary),
-            (.discarded, .none, .primary),
-        ]
-        for (status, accessory, tone) in cases {
-            let draft = draft(targetId: "memory", status: status)
-            let item = MemoryListItem(id: "memory", resource: nil, draft: draft, inherited: true)
-            XCTAssertEqual(MemoryFileTreeRowAccessory.resolve(item: item), accessory)
-            XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: item), tone)
-            let visible = MemoryTreeProjection.memoryTreeDrafts([draft], activeProjectId: "project")
-            XCTAssertEqual(visible.isEmpty, status == .merged || status == .discarded)
+    func testSubmittedChangesKeepTheirColorsUntilMergedOrDiscarded() {
+        for status in [DaemonLocalDraftStatus.open, .submitted, .merged, .discarded] {
+            for (targetId, isDeletion, tone) in [
+                (String?.none, false, MemoryFileTreeTitleTone.newDraft),
+                (Optional("memory"), false, .modifiedDraft),
+                (Optional("memory"), true, .deletedDraft),
+            ] {
+                let item = MemoryListItem(id: "memory", resource: nil,
+                    draft: draft(targetId: targetId, isDeletion: isDeletion, status: status), inherited: true)
+                XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: item),
+                    status == .open || status == .submitted ? tone : .primary)
+            }
         }
     }
 
@@ -827,7 +754,8 @@ final class FileTreeSelectionTests: XCTestCase {
     private func draft(
         targetId: String?,
         isDeletion: Bool = false,
-        status: DaemonLocalDraftStatus = .open
+        status: DaemonLocalDraftStatus = .open,
+        scope: MemoryScope = .project
     ) -> LocalDraft {
         LocalDraft(
             id: "draft-\(targetId ?? "new")",
@@ -840,7 +768,7 @@ final class FileTreeSelectionTests: XCTestCase {
             hasUpstreamResourceChanges: false,
             reconciliation: .unknown,
             reconciliationCandidateId: nil,
-            scope: .project,
+            scope: scope,
             kind: .context,
             targetId: targetId,
             status: status,
