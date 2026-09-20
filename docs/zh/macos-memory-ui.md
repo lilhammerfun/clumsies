@@ -144,9 +144,11 @@ tab 的 Project 身份为空。因此打开相同 resource ID 的 Org 视图与 
 该 Project 没有仍存活的 Draft，才清理对应 tab。
 
 编辑保存进入本机 Draft/outbox，再由 daemon 与 Server 同步。资源 stale 或 Draft behind
-时，菜单提供 Update from Shared Version 或 Review Shared Changes；冲突需要用户查看并
-应用 reconciliation，界面不会静默覆盖本地提议。正在同步的文档会锁住会改变路径、
-选择关系或 Draft 的操作。
+时，工具栏提供同步或冲突处理入口。Memory 的冲突处理使用独立 sheet，原文档保持打开。
+Remote 与 Draft 的冲突片段并排显示，逐处选择后可编辑下方合并结果；路径和删除冲突也需
+明确选择。Save to Draft 只保存草稿，不批准或发布。尚有未处理冲突时禁用保存，整份覆盖
+位于次要菜单并需要确认。取消有编辑的结果时确认丢弃；保存期间禁用取消。
+正在同步的文档会锁住会改变路径、选择关系或 Draft 的操作。
 
 ## 7. Review 集成
 

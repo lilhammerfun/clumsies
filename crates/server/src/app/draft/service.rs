@@ -1353,6 +1353,13 @@ pub(crate) async fn load_reconciliation_candidate(
         draft_state: row.draft_state.clone().0,
         proposed_state: row.proposed_state.clone().map(|state| state.0),
         conflicts: row.conflicts.clone().0,
+        merge_preview: (row.status == "conflicts").then(|| {
+            super::model::reconciliation_merge_preview(
+                &row.base_state.0,
+                &row.current_state.0,
+                &row.draft_state.0,
+            )
+        }),
         result_hash: row.result_hash.clone(),
         valid,
         created_at: row.created_at,

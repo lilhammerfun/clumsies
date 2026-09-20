@@ -13,8 +13,7 @@ final class ReviewUpdateModel: ObservableObject {
     @Published private(set) var isApplying = false
     @Published private(set) var errorMessage: String?
     @Published var selectedCandidateId: String?
-    @Published private(set) var resolutions: [String: ReconciliationResourceState] = [:]
-    @Published private(set) var confirmed: Set<String> = []
+    @Published private(set) var resolutions: [String: DraftResolution] = [:]
     @Published private(set) var hasEdits = false
 
     init(review: ReviewRecord,
@@ -30,7 +29,7 @@ final class ReviewUpdateModel: ObservableObject {
         candidates.first { $0.candidateId == selectedCandidateId }
     }
     var unresolvedCount: Int {
-        candidates.filter { $0.status == .conflicts && !confirmed.contains($0.candidateId) }.count
+        candidates.filter { $0.status == .conflicts && resolutions[$0.candidateId]?.canSave != true }.count
     }
     var canApply: Bool {
         plan != nil && !candidates.isEmpty && !isLoading && !isApplying
@@ -48,16 +47,9 @@ final class ReviewUpdateModel: ObservableObject {
             guard generation == request, !Task.isCancelled else { return }
             plan = result
             resolutions = [:]
-            confirmed = []
             hasEdits = false
-            for candidate in result.candidates where candidate.status == .conflicts {
-                if let merge = result.contentMerges[candidate.candidateId] {
-                    let state = candidate.draftState
-                    resolutions[candidate.candidateId] = .init(
-                        exists: state.exists, resource: state.resource,
-                        content: state.content?.replacingPrimaryText(with: merge.text)
-                    )
-                }
+            for candidate in result.candidates {
+                resolutions[candidate.candidateId] = DraftResolution(candidate: candidate)
             }
             selectedCandidateId = result.candidates.first(where: { $0.status == .conflicts })?.candidateId
                 ?? result.candidates.first?.candidateId
@@ -67,31 +59,9 @@ final class ReviewUpdateModel: ObservableObject {
         }
     }
 
-    func setResolution(_ state: ReconciliationResourceState, for candidateId: String) {
+    func setResolution(_ state: DraftResolution, for candidateId: String) {
         guard !isApplying else { return }
         resolutions[candidateId] = state
-        confirmed.remove(candidateId)
-        hasEdits = true
-    }
-
-    func canConfirm(_ candidate: DraftReconciliationCandidate) -> Bool {
-        guard !isApplying, !isLoading else { return false }
-        let state = resolutions[candidate.candidateId] ?? candidate.proposedState ?? candidate.draftState
-        guard !state.exists || !(state.resource.path ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
-        }
-        if state.exists, let merge = plan?.contentMerges[candidate.candidateId],
-           ContentConflictSection.hasMarkers(in: state.content?.primaryText ?? "", length: merge.markerLength) {
-            return false
-        }
-        return true
-    }
-
-    func confirm(_ candidate: DraftReconciliationCandidate) {
-        guard canConfirm(candidate) else { return }
-        let state = resolutions[candidate.candidateId] ?? candidate.proposedState ?? candidate.draftState
-        resolutions[candidate.candidateId] = state
-        confirmed.insert(candidate.candidateId)
         hasEdits = true
     }
 
@@ -109,7 +79,7 @@ final class ReviewUpdateModel: ObservableObject {
                 return ReviewDraftRequest(
                     draftId: item.draft.draftId, expectedDraftVersion: item.draft.version,
                     candidateId: candidate?.candidateId,
-                    resolvedState: candidate.flatMap { $0.status == .conflicts ? resolutions[$0.candidateId] : nil }
+                    resolvedState: candidate.flatMap { $0.status == .conflicts ? resolutions[$0.candidateId]?.state : nil }
                 )
             }
         )
@@ -128,7 +98,6 @@ final class ReviewUpdateModel: ObservableObject {
         generation = UUID()
         plan = nil
         resolutions = [:]
-        confirmed = []
         hasEdits = false
         isLoading = false
         isApplying = false

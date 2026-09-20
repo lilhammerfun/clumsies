@@ -20,26 +20,26 @@ final class ReviewUpdateTests: XCTestCase {
         XCTAssertEqual(model.selectedCandidateId, "conflict")
         XCTAssertFalse(model.canApply)
         let candidate = plan.candidates[1]
-        model.confirm(candidate)
         XCTAssertFalse(model.canApply, "unresolved marker sections cannot be confirmed")
         let resolution = ReconciliationResourceState(exists: true,
             resource: candidate.draftState.resource, content: .init(description: nil, content: "Combined"))
-        model.setResolution(resolution, for: candidate.candidateId)
-        model.confirm(candidate)
+        model.setResolution(resolved(candidate, choosing: resolution), for: candidate.candidateId)
         model.selectedCandidateId = "clean"
         XCTAssertTrue(model.canApply)
         let result = await model.submit()
         XCTAssertNil(result)
         XCTAssertNotNil(model.errorMessage)
-        XCTAssertEqual(model.resolutions[candidate.candidateId], resolution)
-        XCTAssertTrue(model.confirmed.contains(candidate.candidateId))
+        XCTAssertEqual(model.resolutions[candidate.candidateId]?.state, resolution)
+        XCTAssertTrue(model.resolutions[candidate.candidateId]?.canSave == true)
         XCTAssertTrue(model.canApply, "a failed write keeps the complete retryable form")
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests[0].drafts.map(\.draftId), ["draft-clean", "draft-conflict", "draft-current"])
         XCTAssertEqual(requests[0].drafts[1].resolvedState, resolution)
         XCTAssertNil(requests[0].drafts[2].candidateId)
-        model.setResolution(candidate.draftState, for: candidate.candidateId)
-        XCTAssertFalse(model.canApply, "editing an accepted result requires confirmation again")
+        var edited = resolved(candidate, choosing: candidate.draftState)
+        edited.editContent(candidate.mergePreview!.state.content!.primaryText)
+        model.setResolution(edited, for: candidate.candidateId)
+        XCTAssertFalse(model.canApply, "unresolved markers cannot be saved after manual editing")
     }
 
     func testLatePlanDoesNotRestorePrivateStateAfterInvalidation() async {
@@ -83,12 +83,12 @@ final class ReviewUpdateTests: XCTestCase {
         workspace.reviews.beginUpdate(review)
         let update = try XCTUnwrap(workspace.reviews.update)
         let candidate = plan.candidates[1]
-        update.setResolution(candidate.draftState, for: candidate.candidateId)
+        update.setResolution(resolved(candidate, choosing: candidate.draftState), for: candidate.candidateId)
         let detail = ReviewDetailModel(reviewId: review.id, context: workspace.context,
             feedback: workspace.feedback, reviews: workspace.reviews, fetchDetail: { _ in plan.detail })
         await detail.refreshDetail()
         XCTAssertTrue(workspace.reviews.update === update)
-        XCTAssertEqual(update.resolutions[candidate.candidateId], candidate.draftState)
+        XCTAssertEqual(update.resolutions[candidate.candidateId]?.state, candidate.draftState)
         workspace.clearAuthorityScopedWorkspace()
         XCTAssertNil(workspace.reviews.update)
         XCTAssertTrue(update.resolutions.isEmpty)
@@ -101,11 +101,11 @@ final class ReviewUpdateTests: XCTestCase {
             prepare: { if offline { throw Failure.offline }; return plan },
             apply: { _, _ in plan.detail })
         await model.load()
-        model.setResolution(plan.candidates[1].draftState, for: "conflict")
+        model.setResolution(resolved(plan.candidates[1], choosing: plan.candidates[1].draftState), for: "conflict")
         offline = true
         await model.load(restart: true)
         XCTAssertTrue(model.hasEdits)
-        XCTAssertEqual(model.resolutions["conflict"], plan.candidates[1].draftState)
+        XCTAssertEqual(model.resolutions["conflict"]?.state, plan.candidates[1].draftState)
         offline = false
         await model.load(restart: true)
         XCTAssertFalse(model.hasEdits)
@@ -131,7 +131,7 @@ final class ReviewUpdateTests: XCTestCase {
         func textViews(_ view: NSView) -> [NSTextView] {
             (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
         }
-        let editor = try XCTUnwrap(textViews(host).first { $0.isEditable })
+        let editor = try XCTUnwrap(textViews(host).first)
         XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).bounds.height, 80)
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
@@ -176,7 +176,7 @@ final class ReviewUpdateTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         func editors(_ view: NSView) -> [NSTextView] {
-            (view as? NSTextView).map { $0.isEditable ? [$0] : [] } ?? view.subviews.flatMap(editors)
+            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors)
         }
         XCTAssertEqual(window.frame.size, originalFrame.size)
         XCTAssertTrue(window.contentView === host)
@@ -208,7 +208,11 @@ final class ReviewUpdateTests: XCTestCase {
                 proposedState: status == .clean ? state : nil,
                 conflicts: status == .clean ? [] : [.init(kind: "content", field: "content",
                     base: "Original", current: "Shared", draft: "Proposed")],
-                resultHash: nil, valid: true, createdAt: stamp, invalidatedAt: nil)
+                resultHash: nil, valid: true, createdAt: stamp, invalidatedAt: nil,
+                mergePreview: status == .conflicts ? .init(state: .init(exists: true, resource: state.resource,
+                    content: .init(description: nil, content:
+                        "<<<<<<< ours\nShared\n||||||| original\nOriginal\n=======\nProposed\n>>>>>>> theirs\n")),
+                    markerLength: 7) : nil)
         }
         let metadata = ReviewMetadata(reviewId: "review", projectId: "project", draftId: "draft-clean",
             author: user, title: "Update memory", description: "", status: "open", version: 3,
@@ -217,9 +221,13 @@ final class ReviewUpdateTests: XCTestCase {
         let detail = ReviewDetail(review: metadata, draft: draft("clean"), operations: [],
             drafts: ["clean", "conflict", "current"].map { .init(draft: draft($0), operations: []) }, comments: [])
         return ReviewUpdatePlan(detail: detail,
-            candidates: [candidate("clean", status: .clean), candidate("conflict", status: .conflicts)],
-            contentMerges: ["conflict": .init(text:
-                "<<<<<<< ours\nShared\n||||||| original\nOriginal\n=======\nProposed\n>>>>>>> theirs\n",
-                markerLength: 7)])
+            candidates: [candidate("clean", status: .clean), candidate("conflict", status: .conflicts)])
+    }
+
+    private func resolved(_ candidate: DraftReconciliationCandidate,
+                          choosing state: ReconciliationResourceState) -> DraftResolution {
+        var resolution = DraftResolution(candidate: candidate)
+        resolution.chooseFile(state)
+        return resolution
     }
 }

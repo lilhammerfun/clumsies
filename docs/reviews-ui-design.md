@@ -148,18 +148,15 @@ detail. File selection stays inside this single Review-wide sheet.
 
 - Prepare all behind files against one shared reference. Show “Merges
   automatically”, “Needs resolution”, or “Resolved” for each file.
-- Label the comparisons **Remote changes**, **Draft changes**, and **Merge
-  preview**. Remote changes compares the draft's starting version with the
-  currently published version; Draft changes compares that same starting version
-  with the draft. Merge preview compares the published version with the resolved
-  result. Use Remote Version / Use Draft Version replaces the whole file;
-  Use Remote Change / Use Draft Change selects only one conflict section.
-- Keep nonconflicting merged sections. For each content conflict, offer the
-  shared and proposed changes; also allow full final-text editing and explicit
-  whole-version choices. Path and deletion conflicts retain path and Keep File controls.
-- Mark a conflicting file resolved only after its path is valid and generated
-  conflict markers are gone. Switching files preserves edits.
-- **Apply All Updates** sends the complete ordered Review draft set. The Server
+- Show Remote and Draft conflict sections side by side. Selecting either change
+  updates the merged result below while preserving automatic changes elsewhere.
+  Once content conflicts are chosen, the result can be edited before saving.
+- Show path and deletion choices explicitly. Whole-file replacement is a secondary
+  menu action that confirms replacement of the entire result.
+- A file becomes ready when its choices are complete, its path is valid, and no
+  generated conflict markers remain. There is no separate Mark Resolved step.
+  Switching files preserves choices and edits.
+- **Save All Drafts** sends the complete ordered Review draft set. The Server
   checks membership, versions, candidates, and the shared reference in one
   transaction. A failure on any file rolls back all updates.
 - Applying updates does not publish. Reload the Review, remove the update tool

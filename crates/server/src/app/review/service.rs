@@ -129,18 +129,7 @@ pub async fn create_review_update_plan(
     }
     let detail = load_review_detail(&mut tx, review_id).await?;
     tx.commit().await?;
-    let content_merges = candidates
-        .iter()
-        .filter_map(|candidate| {
-            super::model::conflict_content(candidate)
-                .map(|content| (candidate.candidate_id.clone(), content))
-        })
-        .collect();
-    Ok(super::dto::ReviewUpdatePlan {
-        detail,
-        candidates,
-        content_merges,
-    })
+    Ok(super::dto::ReviewUpdatePlan { detail, candidates })
 }
 
 /// Apply the author's complete inspected proposal set in one transaction without publication.
