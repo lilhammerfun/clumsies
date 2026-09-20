@@ -57,7 +57,7 @@ struct ReviewDetailPage: View {
         .onDisappear {
             self.model.invalidateDetailRequests()
         }
-        .navigationTitle(model.review?.title ?? "Review")
+        .navigationTitle(model.review?.title ?? String(localized: "Review"))
         .onChange(of: reviewModel.pendingReviewReconciliationId) { _, reviewId in
             self.model.handlePendingReconciliation(reviewId)
         }
@@ -198,7 +198,7 @@ struct ReviewDetailPage: View {
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
         let updated = TimestampFormatting.absoluteText(review.updatedAt)
-            .map { " · Updated \($0)" } ?? ""
+            .map { String(localized: " · Updated \($0)") } ?? ""
         return Text("\(context)\(updated)")
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -354,10 +354,10 @@ struct ReviewDetailPage: View {
 
     private func decisionTitle(_ status: String) -> String {
         switch status {
-        case "approved": "Approved"
-        case "rejected": "Changes requested"
-        case "merged": "Merged"
-        default: status.capitalized
+        case "approved": String(localized: "Approved")
+        case "rejected": String(localized: "Changes requested")
+        case "merged": String(localized: "Merged")
+        default: ReviewStatusIndicator.title(for: status)
         }
     }
 
@@ -388,7 +388,7 @@ private struct ReviewFileNavigator: View {
         PathTreeView(
             items: files.map { file in
                 PathTreeItem(id: file.id, path: file.path,
-                             badge: file.reconciliationState?.rawValue,
+                             badge: file.reconciliationState?.title,
                              badgeColor: file.reconciliationState?.badgeColor)
             },
             selection: $selection

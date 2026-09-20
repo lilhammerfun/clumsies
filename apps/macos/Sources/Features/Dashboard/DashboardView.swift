@@ -23,7 +23,7 @@ struct DashboardPage: View {
     }
 
     private func load(_ input: Input) async {
-        let name = context.activeProject?.name ?? context.organization?.name ?? "Organization"
+        let name = context.activeProject?.name ?? context.organization?.name ?? String(localized: "Organization")
         await model.load(key: "\(input.authority):\(input.projectID ?? "organization"):\(input.period)") {
             if let demo = try await DashboardModel.demoSnapshot(projectID: input.projectID, period: input.period) { return (demo, true) }
             return (try await DashboardModel.liveSnapshot(
@@ -136,15 +136,15 @@ struct DashboardView: View {
 
     private func metrics(_ summary: DashboardSummary, width: CGFloat) -> some View {
         let snapshot = summary.snapshot
-        let coverage = summary.resources.isEmpty ? "No memory yet" : "\(Int((summary.coverage * 100).rounded()))% of current memory"
+        let coverage = summary.resources.isEmpty ? String(localized: "No memory yet") : String(localized: "\(Int((summary.coverage * 100).rounded()))% of current memory")
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: width >= 1100 ? 6 : 3), spacing: 12) {
-            metric("Published memory", value: summary.memoryCount, detail: "Current total", symbol: "brain")
-            metric("New memories", value: summary.changedCount(.added), detail: "Last \(model.period) days", symbol: "doc.badge.plus")
-            metric("Updated memories", value: summary.changedCount(.updated), detail: "Last \(model.period) days", symbol: "square.and.pencil")
-            metric("Retrievals", value: summary.retrievals, detail: "On this Mac", symbol: "magnifyingglass")
-            metric("Memories retrieved", value: summary.recalledCount, detail: coverage, symbol: "text.magnifyingglass")
-            metric("Synced drafts", value: snapshot.openDrafts + snapshot.submittedDrafts,
-                   detail: "\(snapshot.openDrafts) open · \(snapshot.submittedDrafts) in review", symbol: "doc.text")
+            metric(String(localized: "Published memory"), value: summary.memoryCount, detail: String(localized: "Current total"), symbol: "brain")
+            metric(String(localized: "New memories"), value: summary.changedCount(.added), detail: String(localized: "Last \(model.period) days"), symbol: "doc.badge.plus")
+            metric(String(localized: "Updated memories"), value: summary.changedCount(.updated), detail: String(localized: "Last \(model.period) days"), symbol: "square.and.pencil")
+            metric(String(localized: "Retrievals"), value: summary.retrievals, detail: String(localized: "On this Mac"), symbol: "magnifyingglass")
+            metric(String(localized: "Memories retrieved"), value: summary.recalledCount, detail: coverage, symbol: "text.magnifyingglass")
+            metric(String(localized: "Synced drafts"), value: snapshot.openDrafts + snapshot.submittedDrafts,
+                   detail: String(localized: "\(snapshot.openDrafts) open · \(snapshot.submittedDrafts) in review"), symbol: "doc.text")
         }
     }
 
@@ -157,7 +157,7 @@ struct DashboardView: View {
             }.foregroundStyle(.secondary)
             Text(value.map { $0.formatted() } ?? "—")
                 .font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit()
-            Text(value == nil ? "History not recorded" : detail)
+            Text(value == nil ? String(localized: "History not recorded") : detail)
                 .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(17)
             .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
@@ -199,7 +199,7 @@ struct DashboardView: View {
         let points = summary.days.filter { $0.memoryCount != nil }
         return panel(.growth) {
             if points.isEmpty {
-                empty("No inventory history yet", detail: "Historical counts require recorded snapshots.")
+                empty(String(localized: "No inventory history yet"), detail: String(localized: "Historical counts require recorded snapshots."))
             } else {
                 Chart {
                     ForEach(points) { day in
@@ -215,7 +215,7 @@ struct DashboardView: View {
                     if let hoveredGrowth, let day = closest(hoveredGrowth, in: points) {
                         RuleMark(x: .value("Date", day.date)).foregroundStyle(.secondary.opacity(0.25))
                             .annotation(position: .top, alignment: .leading, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
-                                chartTip(day.date, text: "\(day.memoryCount ?? 0) memories")
+                                chartTip(day.date, text: String(localized: "\(day.memoryCount ?? 0) memories"))
                             }
                     }
                 }.chartYScale(domain: 0...(max(points.compactMap(\.memoryCount).max() ?? 1, 1) * 12 / 10 + 1))
@@ -230,25 +230,25 @@ struct DashboardView: View {
     private func retrieval(_ summary: DashboardSummary) -> some View {
         let days = summary.days.filter { $0.retrievalObserved != false }
         return panel(.retrieval) {
-            if days.isEmpty { empty("No retrieval records", detail: "Retrieval activity will appear here.") }
+            if days.isEmpty { empty(String(localized: "No retrieval records"), detail: String(localized: "Retrieval activity will appear here.")) }
             else {
                 Chart {
                     ForEach(days) { day in
                         BarMark(x: .value("Date", day.date, unit: .day), y: .value("Requests", day.returned))
-                            .foregroundStyle(by: .value("Result", "With content"))
+                            .foregroundStyle(by: .value("Result", String(localized: "With content")))
                         BarMark(x: .value("Date", day.date, unit: .day), y: .value("Requests", day.empty))
-                            .foregroundStyle(by: .value("Result", "Empty"))
+                            .foregroundStyle(by: .value("Result", String(localized: "Empty")))
                         BarMark(x: .value("Date", day.date, unit: .day), y: .value("Requests", day.failed))
-                            .foregroundStyle(by: .value("Result", "Failed"))
+                            .foregroundStyle(by: .value("Result", String(localized: "Failed")))
                     }
                     if let hoveredRetrieval,
                        let day = days.first(where: { Calendar.current.isDate($0.date, inSameDayAs: hoveredRetrieval) }) {
                         RuleMark(x: .value("Date", day.date, unit: .day)).foregroundStyle(.secondary.opacity(0.25))
                             .annotation(position: .top, alignment: .leading, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
-                                chartTip(day.date, text: "\(day.returned) returned · \(day.empty) empty · \(day.failed) failed")
+                                chartTip(day.date, text: String(localized: "\(day.returned) returned · \(day.empty) empty · \(day.failed) failed"))
                             }
                     }
-                }.chartForegroundStyleScale(["With content": blue, "Empty": amber, "Failed": red])
+                }.chartForegroundStyleScale([String(localized: "With content"): blue, String(localized: "Empty"): amber, String(localized: "Failed"): red])
                     .chartLegend(position: .bottom, alignment: .leading, spacing: 10)
                     .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
                     .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
@@ -261,12 +261,12 @@ struct DashboardView: View {
     private func directories(_ summary: DashboardSummary) -> some View {
         let all = summary.directories
         let rows = all.count <= 6 ? all : Array(all.prefix(5)) + [DashboardBar(
-            id: "other-directories", label: "Other directories",
+            id: "other-directories", label: String(localized: "Other directories"),
             value: all.dropFirst(5).reduce(0) { $0 + $1.value },
             total: all.dropFirst(5).reduce(0) { $0 + ($1.total ?? 0) }
         )]
         return panel(.directories) {
-            if rows.isEmpty { empty("No memory yet", detail: "Select memory for this project to see its distribution.") }
+            if rows.isEmpty { empty(String(localized: "No memory yet"), detail: String(localized: "Select memory for this project to see its distribution.")) }
             else {
                 VStack(alignment: .leading, spacing: 10) {
                     horizontalBars(rows, coverage: true)
@@ -285,7 +285,7 @@ struct DashboardView: View {
 
     private func topMemories(_ summary: DashboardSummary) -> some View {
         panel(.top) {
-            if summary.topResources.isEmpty { empty("No retrieved memories", detail: "Documents returned by retrieval will appear here.") }
+            if summary.topResources.isEmpty { empty(String(localized: "No retrieved memories"), detail: String(localized: "Documents returned by retrieval will appear here.")) }
             else { horizontalBars(summary.topResources, coverage: false) }
         }
     }
@@ -294,13 +294,14 @@ struct DashboardView: View {
         let maxValue = Double(max(rows.map { $0.total ?? $0.value }.max() ?? 1, 1))
         return VStack(spacing: 12) {
             ForEach(rows) { row in
+                let label = coverage && row.id == "Root" ? String(localized: "Root") : row.label
                 HStack(spacing: 12) {
                     if coverage {
-                        Text(row.label).font(.system(size: 11)).frame(width: 150, alignment: .leading).lineLimit(1)
+                        Text(label).font(.system(size: 11)).frame(width: 150, alignment: .leading).lineLimit(1)
                     } else {
                         Button { onOpenMemory(row.id) } label: {
-                            Text(row.label).font(.system(size: 11)).frame(width: 150, alignment: .leading).lineLimit(1)
-                        }.buttonStyle(.plain).help(row.label)
+                            Text(label).font(.system(size: 11)).frame(width: 150, alignment: .leading).lineLimit(1)
+                        }.buttonStyle(.plain).help(label)
                     }
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
@@ -314,7 +315,7 @@ struct DashboardView: View {
                     }.frame(height: 17)
                     Text(coverage ? "\(row.value) / \(row.total ?? 0)" : row.value.formatted())
                         .font(.system(size: 11)).monospacedDigit().frame(width: coverage ? 65 : 43, alignment: .trailing)
-                }.help(coverage ? "\(row.label): \(row.value) retrieved of \(row.total ?? 0) current memories" : "\(row.label): \(row.value) retrievals")
+                }.help(coverage ? "\(label): \(row.value) retrieved of \(row.total ?? 0) current memories" : "\(label): \(row.value) retrievals")
                     .accessibilityElement(children: .combine)
             }
             Spacer(minLength: 0)
@@ -322,8 +323,8 @@ struct DashboardView: View {
     }
 
     private func maintenance(_ summary: DashboardSummary) -> some View {
-        panel(.maintenance, context: model.period == 7 ? "Daily" : "7-day buckets") {
-            if summary.changeBuckets.allSatisfy({ $0.count == 0 }) { empty("No changes in this period", detail: "Published memory changes will appear here.") }
+        panel(.maintenance, context: model.period == 7 ? String(localized: "Daily") : String(localized: "7-day buckets")) {
+            if summary.changeBuckets.allSatisfy({ $0.count == 0 }) { empty(String(localized: "No changes in this period"), detail: String(localized: "Published memory changes will appear here.")) }
             else {
                 Chart(summary.changeBuckets) { bucket in
                     BarMark(x: .value("Starting", bucket.date.formatted(.dateTime.month(.abbreviated).day())),
@@ -333,7 +334,7 @@ struct DashboardView: View {
                         .cornerRadius(2)
                         .accessibilityLabel("\(bucket.kind.title), \(bucket.date.formatted(date: .abbreviated, time: .omitted))")
                         .accessibilityValue("\(bucket.count) documents")
-                }.chartForegroundStyleScale(["Added": green, "Updated": blue, "Deleted": amber])
+                }.chartForegroundStyleScale([String(localized: "Added"): green, String(localized: "Updated"): blue, String(localized: "Deleted"): amber])
                     .chartLegend(position: .bottom, alignment: .leading, spacing: 10)
                     .chartXAxis { AxisMarks { _ in AxisValueLabel().font(.system(size: 9)) } }
                     .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
@@ -342,11 +343,11 @@ struct DashboardView: View {
     }
 
     private func recency(_ summary: DashboardSummary) -> some View {
-        panel(.recency, context: "90 days") {
-            if summary.resources.isEmpty { empty("No memory yet", detail: "The distribution will appear after adding memory.") }
+        panel(.recency, context: String(localized: "90 days")) {
+            if summary.resources.isEmpty { empty(String(localized: "No memory yet"), detail: String(localized: "The distribution will appear after adding memory.")) }
             else {
                 Chart(summary.recency) { row in
-                    BarMark(x: .value("Last retrieval", row.label), y: .value("Memories", row.value))
+                    BarMark(x: .value("Last retrieval", recencyTitle(row)), y: .value("Memories", row.value))
                         .foregroundStyle(blue.opacity([1.0, 0.65, 0.42, 0.23][Int(row.id) ?? 0]))
                         .cornerRadius(4)
                         .annotation(position: .top) { Text(row.value.formatted()).font(.system(size: 10)).monospacedDigit() }
@@ -354,6 +355,16 @@ struct DashboardView: View {
                     .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
                     .chartXAxis { AxisMarks { _ in AxisValueLabel().font(.system(size: 9)) } }
             }
+        }
+    }
+
+    private func recencyTitle(_ row: DashboardBar) -> String {
+        switch row.id {
+        case "0": String(localized: "Last 7 days")
+        case "1": String(localized: "8–30 days")
+        case "2": String(localized: "31–90 days")
+        case "3": String(localized: "Not observed")
+        default: row.label
         }
     }
 
@@ -381,42 +392,42 @@ private enum DashboardMetric: String, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .growth: "Memory growth"
-        case .retrieval: "Retrieval activity"
-        case .directories: "Directory distribution & coverage"
-        case .top: "Frequently retrieved memories"
-        case .maintenance: "Memory maintenance"
-        case .recency: "Last retrieval distribution"
+        case .growth: String(localized: "Memory growth")
+        case .retrieval: String(localized: "Retrieval activity")
+        case .directories: String(localized: "Directory distribution & coverage")
+        case .top: String(localized: "Frequently retrieved memories")
+        case .maintenance: String(localized: "Memory maintenance")
+        case .recency: String(localized: "Last retrieval distribution")
         }
     }
     var subtitle: String {
         switch self {
-        case .growth: "Published memory at the end of each day"
-        case .retrieval: "Completed retrieval requests on this Mac"
-        case .directories: "Published document count and retrieval coverage"
-        case .top: "One count per document per retrieval"
-        case .maintenance: "Distinct documents added, updated or deleted"
-        case .recency: "Current documents by their most recent retrieval"
+        case .growth: String(localized: "Published memory at the end of each day")
+        case .retrieval: String(localized: "Completed retrieval requests on this Mac")
+        case .directories: String(localized: "Published document count and retrieval coverage")
+        case .top: String(localized: "One count per document per retrieval")
+        case .maintenance: String(localized: "Distinct documents added, updated or deleted")
+        case .recency: String(localized: "Current documents by their most recent retrieval")
         }
     }
     var footnote: String {
         switch self {
-        case .growth: "Document updates do not increase inventory"
-        case .retrieval: "With content includes reused fragments"
-        case .directories: "Coverage counts each document once within the selected period"
-        case .top: "Click a document to open Memory"
-        case .maintenance: "Draft edits are excluded"
-        case .recency: "Not observed does not mean never retrieved"
+        case .growth: String(localized: "Document updates do not increase inventory")
+        case .retrieval: String(localized: "With content includes reused fragments")
+        case .directories: String(localized: "Coverage counts each document once within the selected period")
+        case .top: String(localized: "Click a document to open Memory")
+        case .maintenance: String(localized: "Draft edits are excluded")
+        case .recency: String(localized: "Not observed does not mean never retrieved")
         }
     }
     var explanation: String {
         switch self {
-        case .growth: "The server calculates daily closing inventory from published commits. Project scope includes selected organization memories; selection changes affect its count. Draft overlays are excluded. Days before the first retained commit remain unknown."
-        case .retrieval: "Completed memory.activate requests, separated into returned content, successful empty results, and failures. Reused fragments count as content. Requests still running are excluded. Retained local traces may not cover the entire period; these counts do not measure agent adoption or accuracy."
-        case .directories: "Published documents are grouped by directory. When all documents share a parent directory, its subdirectories are shown. The light bar shows current inventory; the blue portion shows distinct current documents retrieved within the selected period. Unpublished drafts are excluded."
-        case .top: "Current documents ranked by successful retrievals in the selected period. Multiple fragments from one document count once per request, including reused fragments. The six most frequently retrieved documents are shown."
-        case .maintenance: "The server compares consecutive published snapshots, including project selection changes. Distinct document IDs added, updated or deleted are grouped by day or consecutive seven-day buckets. A document can appear in several buckets, so bucket totals may exceed the period's distinct count. Draft autosaves are excluded."
-        case .recency: "Each current document appears once, according to its most recent observed retrieval within 90 days. Without complete history, a missing record is labelled Not observed. Low frequency alone is not evidence that a memory should be deleted."
+        case .growth: String(localized: "The server calculates daily closing inventory from published commits. Project scope includes selected organization memories; selection changes affect its count. Draft overlays are excluded. Days before the first retained commit remain unknown.")
+        case .retrieval: String(localized: "Completed memory.activate requests, separated into returned content, successful empty results, and failures. Reused fragments count as content. Requests still running are excluded. Retained local traces may not cover the entire period; these counts do not measure agent adoption or accuracy.")
+        case .directories: String(localized: "Published documents are grouped by directory. When all documents share a parent directory, its subdirectories are shown. The light bar shows current inventory; the blue portion shows distinct current documents retrieved within the selected period. Unpublished drafts are excluded.")
+        case .top: String(localized: "Current documents ranked by successful retrievals in the selected period. Multiple fragments from one document count once per request, including reused fragments. The six most frequently retrieved documents are shown.")
+        case .maintenance: String(localized: "The server compares consecutive published snapshots, including project selection changes. Distinct document IDs added, updated or deleted are grouped by day or consecutive seven-day buckets. A document can appear in several buckets, so bucket totals may exceed the period's distinct count. Draft autosaves are excluded.")
+        case .recency: String(localized: "Each current document appears once, according to its most recent observed retrieval within 90 days. Without complete history, a missing record is labelled Not observed. Low frequency alone is not evidence that a memory should be deleted.")
         }
     }
 }

@@ -9,13 +9,13 @@ enum ServerClientError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .invalidPath:
-            return "The Server request path is invalid."
+            return String(localized: "The Server request path is invalid.")
         case .forbidden(let message):
             return message
         case .response(let status, let message):
-            return "Server request failed (\(status)): \(message)"
+            return String(localized: "Server request failed (\(status)): \(message)")
         case .invalidResponse(let message):
-            return "The Server returned invalid data: \(message)"
+            return String(localized: "The Server returned invalid data: \(message)")
         }
     }
 }
@@ -66,7 +66,7 @@ struct ServerClient: Sendable {
             throw error
         }
         guard let bodyString = String(data: data, encoding: .utf8) else {
-            throw ServerClientError.invalidResponse("Could not encode the request body.")
+            throw ServerClientError.invalidResponse(String(localized: "Could not encode the request body."))
         }
         return try await request(
             method: method,
@@ -133,11 +133,11 @@ struct ServerClient: Sendable {
     ) throws -> Response {
         guard (200..<300).contains(response.status) else {
             let message = Self.errorMessage(from: response.body)
-            let requestID = response.headers["x-request-id"].map { " (request \(ClientDiagnostics.identifier($0)))" } ?? ""
+            let requestID = response.headers["x-request-id"].map { String(localized: " (request \(ClientDiagnostics.identifier($0)))") } ?? ""
             throw ServerClientError.response(status: response.status, message: message + requestID)
         }
         guard let data = response.body.data(using: .utf8) else {
-            throw ServerClientError.invalidResponse("Response body is not UTF-8.")
+            throw ServerClientError.invalidResponse(String(localized: "Response body is not UTF-8."))
         }
         do {
             return try JSONCoding.decoder().decode(Response.self, from: data)
@@ -206,7 +206,7 @@ struct ServerClient: Sendable {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let error = object["error"] as? [String: Any],
               let message = error["message"] as? String else {
-            return body.isEmpty ? "No error details were returned." : body
+            return body.isEmpty ? String(localized: "No error details were returned.") : body
         }
         return message
     }

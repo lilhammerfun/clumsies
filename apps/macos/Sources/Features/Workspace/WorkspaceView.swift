@@ -197,7 +197,7 @@ struct WorkspaceView: View {
                                 Image(systemName: "chevron.left")
                             }
                             .disabled(!workspaceNavigation.canGoBack)
-                            .toolbarHelp("Go Back")
+                            .toolbarHelp(String(localized: "Go Back"))
                             .accessibilityLabel("Go Back")
 
                             Button {
@@ -206,7 +206,7 @@ struct WorkspaceView: View {
                                 Image(systemName: "chevron.right")
                             }
                             .disabled(!workspaceNavigation.canGoForward)
-                            .toolbarHelp("Go Forward")
+                            .toolbarHelp(String(localized: "Go Forward"))
                             .accessibilityLabel("Go Forward")
                         }
                     }
@@ -222,7 +222,7 @@ struct WorkspaceView: View {
                             } label: {
                                 Image(systemName: "plus")
                             }
-                            .toolbarHelp("Add Memory")
+                            .toolbarHelp(String(localized: "Add Memory"))
                             .accessibilityLabel("Add Memory")
                         }
 
@@ -237,7 +237,7 @@ struct WorkspaceView: View {
                                 availableDocumentModes.count < 2
                                     || documentSessions.isSynchronizingDocument(item.id)
                             )
-                            .toolbarHelp("Document View")
+                            .toolbarHelp(String(localized: "Document View"))
                             .accessibilityLabel("Document View")
 
                         }
@@ -251,7 +251,7 @@ struct WorkspaceView: View {
                                 Image(systemName: "ellipsis")
                             }
                             .menuIndicator(.hidden)
-                            .toolbarHelp("Bundle Actions")
+                            .toolbarHelp(String(localized: "Bundle Actions"))
                             .accessibilityLabel("Bundle Actions")
                         }
 
@@ -324,7 +324,7 @@ struct WorkspaceView: View {
                                 Image(systemName: "ellipsis")
                             }
                             .menuIndicator(.hidden)
-                            .toolbarHelp("Memory Actions")
+                            .toolbarHelp(String(localized: "Memory Actions"))
                             .accessibilityLabel("Memory Actions")
                         }
                     }
@@ -338,7 +338,7 @@ struct WorkspaceView: View {
                             text: $workspaceNavigation.searchQuery,
                             prompt: workspaceSearchPrompt,
                             accessibilityIdentifier: "workspace-toolbar-search",
-                            accessibilityHelp: "Search across the current workspace",
+                            accessibilityHelp: String(localized: "Search across the current workspace"),
                             focusToken: workspaceSearchFocusRequest
                         )
                     }
@@ -373,7 +373,7 @@ struct WorkspaceView: View {
         }
         .sheet(isPresented: $showsProjectReviewRequest) {
             ReviewRequestSheet(
-                initialTitle: "Update \(workspaceContext.activeProject?.name ?? "project") memory",
+                initialTitle: String(localized: "Update \(workspaceContext.activeProject?.name ?? "project") memory"),
                 loadCandidates: {
                     try await reconciler.reconciliationCandidates(for: pendingProjectReviewDrafts)
                 }
@@ -492,12 +492,12 @@ struct WorkspaceView: View {
 
     private var workspaceSearchPrompt: String {
         switch workspaceNavigation.selectedSection {
-        case .dashboard: "Search Dashboard"
-        case .memory: "Search Memory"
-        case .bundles: "Search Bundles"
-        case .reviews: "Search Reviews"
-        case .sessions: "Search Activity"
-        case .inbox: "Search Inbox"
+        case .dashboard: String(localized: "Search Dashboard")
+        case .memory: String(localized: "Search Memory")
+        case .bundles: String(localized: "Search Bundles")
+        case .reviews: String(localized: "Search Reviews")
+        case .sessions: String(localized: "Search Activity")
+        case .inbox: String(localized: "Search Inbox")
         }
     }
 
@@ -549,8 +549,8 @@ struct WorkspaceView: View {
                             || !reviewModel.canPerformReviewMenuAction(.reject)
                     )
                     .toolbarHelp(review.freshness == .behind
-                        ? "Reject Review — update to the latest remote version before deciding"
-                        : "Reject Review")
+                        ? String(localized: "Reject Review — update to the latest remote version before deciding")
+                        : String(localized: "Reject Review"))
                     .accessibilityLabel("Reject Review")
                     .accessibilityIdentifier("review-toolbar-reject")
                 }
@@ -571,8 +571,8 @@ struct WorkspaceView: View {
                             || !reviewModel.canPerformReviewMenuAction(.approve)
                     )
                     .toolbarHelp(review.freshness == .behind
-                        ? "Approve and Merge Review — available after conflicts are resolved and remote changes are saved"
-                        : "Approve and Merge Review")
+                        ? String(localized: "Approve and Merge Review — available after conflicts are resolved and remote changes are saved")
+                        : String(localized: "Approve and Merge Review"))
                     .accessibilityLabel("Approve and Merge Review")
                     .accessibilityIdentifier("review-toolbar-approve")
                 }
@@ -601,7 +601,7 @@ struct WorkspaceView: View {
                     }
                     .menuIndicator(.hidden)
                     .disabled(pendingReviewToolbarAction != nil)
-                    .toolbarHelp("Review Actions")
+                    .toolbarHelp(String(localized: "Review Actions"))
                     .accessibilityLabel("Review Actions")
                     .accessibilityIdentifier("review-toolbar-actions")
                 }
@@ -622,9 +622,9 @@ struct WorkspaceView: View {
             ToolbarItem(id: "review.search", placement: .trailingPinned) {
                 ClassicSearchField(
                     text: $reviewSearchQuery,
-                    prompt: "Search Reviews",
+                    prompt: String(localized: "Search Reviews"),
                     accessibilityIdentifier: "review-toolbar-search",
-                    accessibilityHelp: "Search Reviews by title, description or author",
+                    accessibilityHelp: String(localized: "Search Reviews by title, description or author"),
                     focusToken: reviewSearchFocusRequest
                 )
             }
@@ -744,7 +744,7 @@ struct WorkspaceView: View {
                 }
             }
             .disabled(activityModel.isLoading)
-            .toolbarHelp("Refresh Activity")
+            .toolbarHelp(String(localized: "Refresh Activity"))
             .accessibilityLabel("Refresh Activity")
         }
     }
@@ -766,7 +766,7 @@ struct WorkspaceView: View {
                     Image(systemName: "gearshape")
                 }
                 .disabled(workspaceContext.activeProjectId == nil)
-                .toolbarHelp("Project Settings")
+                .toolbarHelp(String(localized: "Project Settings"))
                 .accessibilityLabel("Project Settings")
             }
         case .bundles:
@@ -776,7 +776,7 @@ struct WorkspaceView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .toolbarHelp("New Bundle")
+                .toolbarHelp(String(localized: "New Bundle"))
                 .accessibilityLabel("New Bundle")
             }
         case .reviews:
@@ -896,10 +896,10 @@ private struct MemoryProjectFilter: View {
         ProjectFilterMenu(
             projects: workspaceContext.projects,
             selectedProjectId: workspaceContext.activeProjectId,
-            unscopedTitle: "Org",
+            unscopedTitle: String(localized: "Org"),
             unscopedSystemImage: "building.2",
             isLoading: workspaceContext.isSwitchingMemoryContext,
-            help: "Filter Memory by Project",
+            help: String(localized: "Filter Memory by Project"),
             onCreate: workspaceContext.canCreateProject ? { workspaceNavigation.presentProjectCreation() } : nil
         ) { projectId in
             if let projectId {
@@ -921,10 +921,10 @@ private struct ActivityProjectFilter: View {
         ProjectFilterMenu(
             projects: workspaceContext.projects,
             selectedProjectId: model.selectedProjectId,
-            unscopedTitle: "All Projects",
+            unscopedTitle: String(localized: "All Projects"),
             unscopedSystemImage: nil,
             isLoading: false,
-            help: "Filter Activity by Project",
+            help: String(localized: "Filter Activity by Project"),
             onCreate: workspaceContext.canCreateProject ? { workspaceNavigation.presentProjectCreation() } : nil
         ) { projectId in
             Task { await model.selectProject(projectId) }
@@ -963,7 +963,7 @@ private struct WorkspaceOperationErrorBanner: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
-            .toolbarHelp("Dismiss")
+            .toolbarHelp(String(localized: "Dismiss"))
             .accessibilityLabel("Dismiss operation failure")
         }
         .padding(10)
@@ -1039,7 +1039,7 @@ private struct GlobalSidebar: View {
            !displayName.isEmpty {
             return displayName
         }
-        return workspaceContext.account?.email ?? "Account"
+        return workspaceContext.account?.email ?? String(localized: "Account")
     }
 
     private var selection: Binding<GlobalSidebarDestination?> {

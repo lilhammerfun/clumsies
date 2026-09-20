@@ -95,11 +95,11 @@ actor ReviewFileLoader {
         }
         let operationLabels: [String]
         if terminalOperation?.action == "delete" {
-            operationLabels = ["Delete \(finalPath ?? "the selected memory")"]
+            operationLabels = [String(localized: "Delete \(finalPath ?? String(localized: "the selected memory"))")]
         } else if operations.first?.action == "create" {
-            operationLabels = ["Create \(finalPath ?? "memory")"]
+            operationLabels = [String(localized: "Create \(finalPath ?? "memory")")]
         } else if finalPath != initialPath, let finalPath {
-            operationLabels = ["Rename to \(finalPath)"]
+            operationLabels = [String(localized: "Rename to \(finalPath)")]
         } else {
             operationLabels = []
         }

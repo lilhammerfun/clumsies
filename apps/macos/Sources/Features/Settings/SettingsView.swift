@@ -5,7 +5,7 @@ struct GeneralSettingsView: View {
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
 
     private var version: String {
-        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? String(localized: "Unknown")
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         return build.isEmpty ? short : "\(short) (\(build))"
     }
@@ -24,6 +24,17 @@ struct GeneralSettingsView: View {
                 .padding(.vertical, 14)
                 LabeledContent("Version", value: self.version)
                     .textSelection(.enabled)
+            }
+            Section {
+                LabeledContent("Available languages") {
+                    Text("English / 简体中文")
+                }
+                Link("Open Language & Region Settings…",
+                     destination: URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension")!)
+            } header: {
+                Text("Language")
+            } footer: {
+                Text("Clumsies follows your Mac's app language. In System Settings → General → Language & Region → Applications, add Clumsies and choose English or Simplified Chinese. Reopen Clumsies to apply the change.")
             }
             Section("Updates") {
                 Toggle(

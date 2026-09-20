@@ -20,7 +20,7 @@ enum DocumentTabMetrics {
 
 enum DocumentTabPresentation {
     static func title(for tab: WorkbenchTab) -> String {
-        tab.mode == .preview ? "\(tab.title) Preview" : tab.title
+        tab.mode == .preview ? String(localized: "\(tab.title) Preview") : tab.title
     }
 
     static func itemWidth(
@@ -482,8 +482,8 @@ final class DocumentTabItemView: NSView {
         titleLabel.stringValue = title
         titleLabel.needsLayout = true
         titleLabel.toolTip = title
-        closeButton.toolTip = "Close \(title)"
-        closeButton.setAccessibilityLabel("Close \(title)")
+        closeButton.toolTip = String(localized: "Close \(title)")
+        closeButton.setAccessibilityLabel(String(localized: "Close \(title)"))
         setAccessibilityLabel(title)
         self.onClose = onClose
         needsLayout = true
@@ -504,7 +504,7 @@ final class DocumentTabItemView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
 
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")?
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: String(localized: "Close"))?
             .withSymbolConfiguration(.init(pointSize: 8, weight: .medium))
         closeButton.imageScaling = .scaleProportionallyDown
         closeButton.isBordered = false

@@ -171,17 +171,17 @@ struct DocumentSessionView: View {
     /// additions, removals, and renames so the pane never looks empty.
     private func pathChangeSummary(_ change: DocumentPathChange) -> String {
         let owner = switch change.source {
-        case .draft: "Draft"
-        case .shared: "Remote"
-        case .draftAndShared: "Draft + Remote"
+        case .draft: String(localized: "Draft")
+        case .shared: String(localized: "Remote")
+        case .draftAndShared: String(localized: "Draft + Remote")
         }
         switch (change.from, change.to) {
         case let (from?, to?):
-            return "\(owner) path: \(from) → \(to)"
+            return String(localized: "\(owner) path: \(from) → \(to)")
         case let (nil, to?):
-            return "\(owner) added: \(to)"
+            return String(localized: "\(owner) added: \(to)")
         case let (from?, nil):
-            return "\(owner) deleted: \(from)"
+            return String(localized: "\(owner) deleted: \(from)")
         case (nil, nil):
             return owner
         }

@@ -12,12 +12,12 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .dashboard: "Dashboard"
-        case .inbox: "Inbox"
-        case .memory: "Memory"
-        case .bundles: "Bundles"
-        case .reviews: "Reviews"
-        case .sessions: "Activity"
+        case .dashboard: String(localized: "Dashboard")
+        case .inbox: String(localized: "Inbox")
+        case .memory: String(localized: "Memory")
+        case .bundles: String(localized: "Bundles")
+        case .reviews: String(localized: "Reviews")
+        case .sessions: String(localized: "Activity")
         }
     }
 
@@ -42,17 +42,17 @@ enum MemoryKind: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .context: "Context"
-        case .rules: "Rules"
-        case .workflows: "Workflow"
+        case .context: String(localized: "Context")
+        case .rules: String(localized: "Rules")
+        case .workflows: String(localized: "Workflow")
         }
     }
 
     var singularTitle: String {
         switch self {
-        case .context: "Context"
-        case .rules: "Rule"
-        case .workflows: "Workflow"
+        case .context: String(localized: "Context")
+        case .rules: String(localized: "Rule")
+        case .workflows: String(localized: "Workflow")
         }
     }
 
@@ -145,7 +145,7 @@ struct MemoryListItem: Identifiable, Hashable, Sendable {
 
     var document: EditableMemoryDocument {
         draft?.document ?? resource?.document ?? .init(
-            title: "Untitled",
+            title: String(localized: "Untitled"),
             path: "",
             body: ""
         )
@@ -234,9 +234,9 @@ enum WorkbenchTabMode: String, CaseIterable, Hashable, Sendable {
 
     var title: String {
         switch self {
-        case .preview: "Preview"
-        case .source: "Source"
-        case .diff: "Diff"
+        case .preview: String(localized: "Preview")
+        case .source: String(localized: "Source")
+        case .diff: String(localized: "Diff")
         }
     }
 
@@ -280,15 +280,15 @@ enum ReviewRequestError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .draftNotSynchronized:
-            "Wait for this draft to finish syncing before requesting a review."
+            String(localized: "Wait for this draft to finish syncing before requesting a review.")
         case .legacyProjectDraftCannotBePublished:
-            "Legacy Project-scoped drafts are read-only and cannot be published."
+            String(localized: "Legacy Project-scoped drafts are read-only and cannot be published.")
         case .reconciliationRequired:
-            "Merge the latest remote version before requesting a review."
+            String(localized: "Merge the latest remote version before requesting a review.")
         case .mixedProjects:
-            "All drafts in a review must belong to the same Project."
+            String(localized: "All drafts in a review must belong to the same Project.")
         case .reviewChanged:
-            "This Review changed on the Server. Review its latest state before deciding."
+            String(localized: "This Review changed on the Server. Review its latest state before deciding.")
         }
     }
 }
@@ -302,13 +302,13 @@ enum DocumentSyncError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .checkoutNoLongerCurrent:
-            "The remote version changed again. Refresh sync status and try again."
+            String(localized: "The remote version changed again. Refresh sync status and try again.")
         case .draftUploadFailed(let message):
-            message ?? "The local draft could not be uploaded. Retry sync before reviewing remote changes."
+            message ?? String(localized: "The local draft could not be uploaded. Retry sync before reviewing remote changes.")
         case .draftUploadTimedOut:
-            "The local draft is still uploading. Wait a moment and try Sync again."
+            String(localized: "The local draft is still uploading. Wait a moment and try Sync again.")
         case .mutationWhileSynchronizing:
-            "Remote changes are being checked for this document. Wait for Sync to finish before editing it."
+            String(localized: "Remote changes are being checked for this document. Wait for Sync to finish before editing it.")
         }
     }
 }
@@ -322,13 +322,13 @@ enum ProjectSetupError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .bundledAgentRuntimeMissing:
-            "The clumsiesd Agent runtime is missing from this app build."
+            String(localized: "The clumsiesd Agent runtime is missing from this app build.")
         case .codexHostMissing:
-            "Install or update the Codex app before repairing its Clumsies Plugin."
+            String(localized: "Install or update the Codex app before repairing its Clumsies Plugin.")
         case .bundleNotFound:
-            "The selected Bundle is no longer available."
+            String(localized: "The selected Bundle is no longer available.")
         case .bundleContainsUnavailableMemory:
-            "The selected Bundle contains memory that is not available in the Organization."
+            String(localized: "The selected Bundle contains memory that is not available in the Organization.")
         }
     }
 }
@@ -341,11 +341,11 @@ enum ProjectMemorySelectionError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .activeDrafts:
-            "Discard or finish this Project's LocalDraft before removing its Organization Memory."
+            String(localized: "Discard or finish this Project's LocalDraft before removing its Organization Memory.")
         case .invalidOrgResources:
-            "Only current Organization memory can be added to or removed from a Project."
+            String(localized: "Only current Organization memory can be added to or removed from a Project.")
         case .projectUnavailable:
-            "The selected Project is no longer available."
+            String(localized: "The selected Project is no longer available.")
         }
     }
 }

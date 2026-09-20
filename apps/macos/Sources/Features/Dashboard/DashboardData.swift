@@ -94,7 +94,7 @@ struct DashboardChangeBucket: Codable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
         case added, updated, deleted
         var title: String {
-            switch self { case .added: "Added"; case .updated: "Updated"; case .deleted: "Deleted" }
+            switch self { case .added: String(localized: "Added"); case .updated: String(localized: "Updated"); case .deleted: String(localized: "Deleted") }
         }
     }
 }

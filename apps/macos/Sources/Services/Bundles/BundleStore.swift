@@ -172,7 +172,7 @@ final class BundleStore: ObservableObject {
                     method: "POST",
                     path: "/api/v1/me/bundles",
                     body: PersonalBundleRequest(
-                        name: "Untitled Bundle",
+                        name: String(localized: "Untitled Bundle"),
                         description: "",
                         resourceIds: []
                     )
@@ -249,7 +249,7 @@ final class BundleStore: ObservableObject {
                     responseWasStale: loaded.hasStaleServerResponse
                 ) else {
                     bundleLoadState = .failed(
-                        "Fresh Bundle data was unavailable. Existing Bundles were kept."
+                        String(localized: "Fresh Bundle data was unavailable. Existing Bundles were kept.")
                     )
                     return
                 }

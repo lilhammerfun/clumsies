@@ -14,7 +14,7 @@ struct MemoryGuidelinesSetupView: View {
     var body: some View {
         Group {
             if self.model.isLoading {
-                ContentLoadingView(title: "Checking Memory Guidelines…")
+                ContentLoadingView(title: String(localized: "Checking Memory Guidelines…"))
             } else if let error = model.error {
                 ContentUnavailableView {
                     Label("Memory Guidelines Unavailable", systemImage: "doc.badge.ellipsis")
@@ -79,28 +79,28 @@ struct MemoryGuidelinesSetupView: View {
 
     private func title(for setup: MemoryGuidelinesSetup) -> String {
         switch setup.action {
-        case .createDefault: "Give your memory a starting point"
-        case .useOrganization: "Use your team's memory guidelines"
-        case .open: "Your memory guidelines are ready"
+        case .createDefault: String(localized: "Give your memory a starting point")
+        case .useOrganization: String(localized: "Use your team's memory guidelines")
+        case .open: String(localized: "Your memory guidelines are ready")
         }
     }
 
     private func description(for setup: MemoryGuidelinesSetup) -> String {
         switch setup.action {
         case .createDefault:
-            "Memory guidelines tell agents what to remember and how to keep it useful. Start with our defaults and make them your own."
+            String(localized: "Memory guidelines tell agents what to remember and how to keep it useful. Start with our defaults and make them your own.")
         case .useOrganization:
-            "Your organization already has memory guidelines at \(setup.path). Use them in this project."
+            String(localized: "Your organization already has memory guidelines at \(setup.path). Use them in this project.")
         case .open:
-            "Your guidelines at \(setup.path) tell agents how to organize, update, and retire knowledge. You can edit them at any time."
+            String(localized: "Your guidelines at \(setup.path) tell agents how to organize, update, and retire knowledge. You can edit them at any time.")
         }
     }
 
     private func actionTitle(for setup: MemoryGuidelinesSetup) -> String {
         switch setup.action {
-        case .createDefault: "Set Up Guidelines"
-        case .useOrganization: "Use Team Guidelines"
-        case .open: "Open Guidelines"
+        case .createDefault: String(localized: "Set Up Guidelines")
+        case .useOrganization: String(localized: "Use Team Guidelines")
+        case .open: String(localized: "Open Guidelines")
         }
     }
 

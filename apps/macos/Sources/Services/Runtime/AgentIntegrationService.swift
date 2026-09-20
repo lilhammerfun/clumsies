@@ -77,11 +77,11 @@ final class AgentIntegrationService: ObservableObject {
         }
         let visible = result.conflicts.prefix(3).map { conflict in
             let adapter = conflict.adapter == .claudeCode ? "Claude Code" : conflict.adapter.rawValue
-            return "\(adapter) \(conflict.scope) integration at \(conflict.targetRoot): \(conflict.message)"
+            return String(localized: "\(adapter) \(conflict.scope) integration at \(conflict.targetRoot): \(conflict.message)")
         }
         messages.append(contentsOf: visible)
         if result.conflicts.count > visible.count {
-            messages.append("\(result.conflicts.count - visible.count) more legacy integrations need review.")
+            messages.append(String(localized: "\(result.conflicts.count - visible.count) more legacy integrations need review."))
         }
         return messages.isEmpty ? nil : messages.joined(separator: "\n")
     }

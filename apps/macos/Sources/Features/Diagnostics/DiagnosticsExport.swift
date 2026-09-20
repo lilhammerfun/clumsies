@@ -6,8 +6,8 @@ enum DiagnosticsExport {
     @MainActor static func present() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "Clumsies-Diagnostics-\(Int(Date().timeIntervalSince1970))"
-        panel.title = "Export Diagnostics"
-        panel.prompt = "Export"
+        panel.title = String(localized: "Export Diagnostics")
+        panel.prompt = String(localized: "Export")
         panel.begin { result in
             guard result == .OK, let destination = panel.url else { return }
             Task { @MainActor in

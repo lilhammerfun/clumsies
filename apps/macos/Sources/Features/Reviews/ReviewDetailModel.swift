@@ -76,7 +76,7 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
             if operation.action == "create", let createdPath = operation.resource.path { return createdPath }
             return path
         }
-        let path = loadedPath ?? proposedPath ?? detail.draft.resource.id ?? "Untitled"
+        let path = loadedPath ?? proposedPath ?? detail.draft.resource.id ?? String(localized: "Untitled")
         let id = detail.draft.resource.id ?? "review-file:\(reviewId):\(detail.draft.draftId)"
         let needsUpdate = ["open", "submitted"].contains(detail.draft.status)
             && detail.draft.coordination.freshness == .behind
@@ -312,7 +312,7 @@ final class ReviewDetailModel: ObservableObject {
         if let baseline = request.baseline,
            loadedReview.version < baseline.reviewVersion {
             loading = false
-            loadError = "The Review changed while its detail was loading. Try again."
+            loadError = String(localized: "The Review changed while its detail was loading. Try again.")
             return
         }
 
@@ -394,7 +394,7 @@ final class ReviewDetailModel: ObservableObject {
         let renderedReview = WorkspaceLoader.mapReview(detail.review)
         let anchorPath = line == nil ? nil : changeSources?.proposedPath
         guard line == nil || anchorPath != nil else {
-            workspaceFeedback.errorMessage = "The proposed file path is unavailable for this line comment."
+            workspaceFeedback.errorMessage = String(localized: "The proposed file path is unavailable for this line comment.")
             return
         }
         let generation = detailRequestGeneration

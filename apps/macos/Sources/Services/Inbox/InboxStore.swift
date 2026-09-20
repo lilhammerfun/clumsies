@@ -130,7 +130,7 @@ final class InboxStore: ObservableObject {
         } catch is CancellationError { return }
         catch {
             guard context.authorityGeneration == authority, generation == requestGeneration else { return }
-            errors.append("Couldn't refresh team notifications. \(error.localizedDescription)")
+            errors.append(String(localized: "Couldn't refresh team notifications. \(error.localizedDescription)"))
         }
         do {
             let snapshot = try await fetchLocal()
@@ -140,10 +140,10 @@ final class InboxStore: ObservableObject {
         } catch is CancellationError { return }
         catch {
             guard context.authorityGeneration == authority, generation == requestGeneration else { return }
-            errors.append("Couldn't check this Mac. \(error.localizedDescription)")
+            errors.append(String(localized: "Couldn't check this Mac. \(error.localizedDescription)"))
             installLocal(localItems.filter { $0.id != "local:unavailable" } + [.init(
-                id: "local:unavailable", type: .syncErrors, projectId: nil, projectName: "This Mac",
-                title: "Sync status couldn't be checked", message: "Reconnect to the local service, then refresh Inbox.",
+                id: "local:unavailable", type: .syncErrors, projectId: nil, projectName: String(localized: "This Mac"),
+                title: String(localized: "Sync status couldn't be checked"), message: String(localized: "Reconnect to the local service, then refresh Inbox."),
                 occurredAt: .distantPast, needsAction: true, revision: "unavailable",
                 isRead: false, isArchived: false, destination: .retrySync
             )])
@@ -194,7 +194,7 @@ final class InboxStore: ObservableObject {
             } catch is CancellationError { return false }
             catch {
                 guard context.authorityGeneration == authority, generation == requestGeneration else { return false }
-                receiptError = "Couldn't update this notification. \(error.localizedDescription)"
+                receiptError = String(localized: "Couldn't update this notification. \(error.localizedDescription)")
                 return false
             }
         } else if var receipt = localReceipts[item.id], receipt.revision == item.revision {
@@ -233,7 +233,7 @@ final class InboxStore: ObservableObject {
                 }
             }
         }
-        undoManager?.setActionName(action == .archive ? "Archive Notifications" : "Move to Inbox")
+        undoManager?.setActionName(action == .archive ? String(localized: "Archive Notifications") : String(localized: "Move to Inbox"))
     }
 
     private static func apply(_ action: InboxReceiptAction, to item: inout InboxItem) {
@@ -267,7 +267,7 @@ final class InboxStore: ObservableObject {
     private func saveReceipts() {
         guard let preferenceKey else { return }
         do { defaults.set(try JSONEncoder().encode(localReceipts), forKey: preferenceKey) }
-        catch { receiptError = "Couldn't save notification preferences. \(error.localizedDescription)" }
+        catch { receiptError = String(localized: "Couldn't save notification preferences. \(error.localizedDescription)") }
     }
 
     private func retainProjects(_ accessible: Set<String>) {
@@ -292,7 +292,7 @@ final class InboxStore: ObservableObject {
             guard let name = projects[projectId], !remoteItems.contains(where: { $0.id == "shared:\(projectId)" }) else { return nil }
             let revision = snapshots.map { "\($0.key):\($0.value.authoritativeCommitId)" }.sorted().joined(separator: "|")
             return .init(id: "local:shared:\(projectId)", type: .sharedUpdates, projectId: projectId, projectName: name,
-                title: "Remote Memory updated", message: "Compare the remote version with the files on this Mac.",
+                title: String(localized: "Remote Memory updated"), message: String(localized: "Compare the remote version with the files on this Mac."),
                 occurredAt: .distantPast, needsAction: false, revision: revision, isRead: false, isArchived: false,
                 destination: .sharedChanges(projectId: projectId))
         }
@@ -301,10 +301,10 @@ final class InboxStore: ObservableObject {
     static func localNotifications(_ sync: DaemonSyncStatus) -> [InboxItem] {
         var notices: [InboxItem] = []
         if sync.failedOperationCount > 0 || [sync.draftSync.state, sync.commitSync.state].contains(where: { ["failed", "degraded"].contains($0) }) {
-            notices.append(.init(id: "local:sync", type: .syncErrors, projectId: nil, projectName: "This Mac",
-                title: "Changes couldn't sync",
+            notices.append(.init(id: "local:sync", type: .syncErrors, projectId: nil, projectName: String(localized: "This Mac"),
+                title: String(localized: "Changes couldn't sync"),
                 message: sync.draftSync.lastError?.message ?? sync.commitSync.lastError?.message
-                    ?? "Some changes haven't reached the server. Retry when connected.",
+                    ?? String(localized: "Some changes haven't reached the server. Retry when connected."),
                 occurredAt: .distantPast, needsAction: true, revision: "sync-failed", isRead: false, isArchived: false,
                 destination: .retrySync))
         }

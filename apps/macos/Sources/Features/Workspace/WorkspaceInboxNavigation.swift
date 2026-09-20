@@ -9,7 +9,7 @@ extension WorkspaceCoordinator {
         try context.ensureAuthority(authority)
         let status = try await context.daemon.syncStatus(projectId: projectId)
         if ["failed", "degraded"].contains(status.commitSync.state) {
-            throw ServerClientError.invalidResponse(status.commitSync.lastError?.message ?? "Couldn't download the remote changes. Try again when connected.")
+            throw ServerClientError.invalidResponse(status.commitSync.lastError?.message ?? String(localized: "Couldn't download the remote changes. Try again when connected."))
         }
         try context.ensureAuthority(authority)
         guard context.activeProjectId == projectId else { throw CancellationError() }
@@ -37,7 +37,7 @@ extension WorkspaceCoordinator {
     func openInboxDestination(_ destination: InboxDestination) async throws {
         let authority = context.authorityGeneration
         guard await flushPendingChanges() else {
-            throw ServerClientError.invalidResponse("Save the current edits before opening this notification.")
+            throw ServerClientError.invalidResponse(String(localized: "Save the current edits before opening this notification."))
         }
         try context.ensureAuthority(authority)
         guard navigation.selectedSection == .inbox else { throw CancellationError() }
@@ -61,11 +61,11 @@ extension WorkspaceCoordinator {
 
     private func selectInboxProject(_ projectId: String) async throws {
         guard context.projects.contains(where: { $0.id == projectId }) else {
-            throw ServerClientError.forbidden("This project is no longer accessible.")
+            throw ServerClientError.forbidden(String(localized: "This project is no longer accessible."))
         }
         let authority = context.authorityGeneration
         guard await flushPendingChanges() else {
-            throw ServerClientError.invalidResponse("Save the current edits before switching projects.")
+            throw ServerClientError.invalidResponse(String(localized: "Save the current edits before switching projects."))
         }
         try context.ensureAuthority(authority)
         guard navigation.selectedSection == .inbox else { throw CancellationError() }
@@ -73,7 +73,7 @@ extension WorkspaceCoordinator {
         try context.ensureAuthority(authority)
         guard context.phase == .ready, context.activeProjectId == projectId,
               context.activeProject?.isLoaded == true, !context.isSwitchingMemoryContext else {
-            throw ServerClientError.invalidResponse("Finish the current Memory operation before opening this project.")
+            throw ServerClientError.invalidResponse(String(localized: "Finish the current Memory operation before opening this project."))
         }
     }
 }

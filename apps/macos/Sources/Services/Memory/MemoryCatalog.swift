@@ -425,7 +425,7 @@ enum DocumentDiffError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .baselineUnavailable:
-            "The previous remote content is unavailable, so an accurate Diff cannot be shown."
+            String(localized: "The previous remote content is unavailable, so an accurate Diff cannot be shown.")
         }
     }
 }

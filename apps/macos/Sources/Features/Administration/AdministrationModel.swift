@@ -218,7 +218,7 @@ final class AdministrationModel: ObservableObject {
             let next = page.pageInfo.hasMore ? page.pageInfo.nextCursor : nil
             if page.pageInfo.hasMore {
                 guard let next, !next.isEmpty, next != cursor, !seenCursors.contains(next) else {
-                    throw ServerClientError.invalidResponse("Organization pagination returned an invalid next cursor.")
+                    throw ServerClientError.invalidResponse(String(localized: "Organization pagination returned an invalid next cursor."))
                 }
             }
             return (page.items, stale, next)
@@ -268,7 +268,7 @@ final class AdministrationModel: ObservableObject {
         guard !result.response.isStaleCache else { throw AdministrationError.stale }
         if result.value.pageInfo.hasMore {
             guard let next = result.value.pageInfo.nextCursor, !next.isEmpty, next != cursor else {
-                throw ServerClientError.invalidResponse("Member pagination returned an invalid next cursor.")
+                throw ServerClientError.invalidResponse(String(localized: "Member pagination returned an invalid next cursor."))
             }
         }
         return result.value
@@ -325,11 +325,11 @@ final class AdministrationModel: ObservableObject {
         try Task.checkCancellation()
         guard (200..<300).contains(response.status) else {
             throw ServerClientError.response(status: response.status, message: response.status == 404
-                ? "This project no longer exists or is no longer accessible." : response.body)
+                ? String(localized: "This project no longer exists or is no longer accessible.") : response.body)
         }
         let project = try JSONCoding.decoder().decode(AdminProjectRecord.self, from: Data(response.body.utf8))
         guard project.id == id else {
-            throw ServerClientError.invalidResponse("The project response did not match the requested project.")
+            throw ServerClientError.invalidResponse(String(localized: "The project response did not match the requested project."))
         }
         return (project, response.isStaleCache)
     }
@@ -657,7 +657,7 @@ final class AdministrationModel: ObservableObject {
                       nextCursor != cursor,
                       seenCursors.insert(nextCursor).inserted else {
                     throw ServerClientError.invalidResponse(
-                        "Administration pagination returned an invalid next cursor."
+                        String(localized: "Administration pagination returned an invalid next cursor.")
                     )
                 }
                 cursor = nextCursor

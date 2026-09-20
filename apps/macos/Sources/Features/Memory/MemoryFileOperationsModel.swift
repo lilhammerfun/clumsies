@@ -23,12 +23,12 @@ final class MemoryFileOperationsModel: ObservableObject {
         guard directoryOperationProgress == nil else { return }
         let authority = workspaceContext.authorityGeneration
         let project = workspaceContext.activeProjectId
-        directoryOperationProgress = "Proposing \(items.count) deletions…"
+        directoryOperationProgress = String(localized: "Proposing \(items.count) deletions…")
         defer { directoryOperationProgress = nil }
         for (index, item) in items.enumerated() {
             guard isCurrent(authority: authority, project: project) else { return }
             directoryOperationProgress =
-                "Proposing deletion \(index + 1) of \(items.count)…"
+                String(localized: "Proposing deletion \(index + 1) of \(items.count)…")
             guard await draftStore.delete(item) else { return }
         }
     }
@@ -37,16 +37,16 @@ final class MemoryFileOperationsModel: ObservableObject {
         guard directoryOperationProgress == nil else { return }
         let authority = workspaceContext.authorityGeneration
         let project = workspaceContext.activeProjectId
-        directoryOperationProgress = "Discarding \(drafts.count) Drafts…"
+        directoryOperationProgress = String(localized: "Discarding \(drafts.count) Drafts…")
         defer { directoryOperationProgress = nil }
         for (index, draft) in drafts.enumerated() {
             guard isCurrent(authority: authority, project: project) else { return }
             directoryOperationProgress =
-                "Discarding Draft \(index + 1) of \(drafts.count)…"
+                String(localized: "Discarding Draft \(index + 1) of \(drafts.count)…")
             guard await draftStore.discard(draft) else {
                 guard isCurrent(authority: authority, project: project) else { return }
-                let detail = workspaceFeedback.errorMessage ?? "The remaining Drafts were not changed."
-                workspaceFeedback.errorMessage = "Discarded \(index) of \(drafts.count) Drafts. " + detail
+                let detail = workspaceFeedback.errorMessage ?? String(localized: "The remaining Drafts were not changed.")
+                workspaceFeedback.errorMessage = String(localized: "Discarded \(index) of \(drafts.count) Drafts. ") + detail
                 return
             }
         }
@@ -58,17 +58,17 @@ final class MemoryFileOperationsModel: ObservableObject {
         let project = workspaceContext.activeProjectId
         let total = plan.itemsToDelete.count + plan.draftsToDiscard.count
         var completed = 0
-        directoryOperationProgress = "Applying \(total) folder changes…"
+        directoryOperationProgress = String(localized: "Applying \(total) folder changes…")
         defer { directoryOperationProgress = nil }
         for item in plan.itemsToDelete {
             guard isCurrent(authority: authority, project: project) else { return }
             directoryOperationProgress =
-                "Applying folder change \(completed + 1) of \(total)…"
+                String(localized: "Applying folder change \(completed + 1) of \(total)…")
             guard await draftStore.delete(item) else {
                 guard isCurrent(authority: authority, project: project) else { return }
-                let detail = workspaceFeedback.errorMessage ?? "The remaining files were not changed."
+                let detail = workspaceFeedback.errorMessage ?? String(localized: "The remaining files were not changed.")
                 workspaceFeedback.errorMessage =
-                    "Completed \(completed) of \(total) folder changes. " + detail
+                    String(localized: "Completed \(completed) of \(total) folder changes. ") + detail
                 return
             }
             completed += 1
@@ -76,12 +76,12 @@ final class MemoryFileOperationsModel: ObservableObject {
         for draft in plan.draftsToDiscard {
             guard isCurrent(authority: authority, project: project) else { return }
             directoryOperationProgress =
-                "Applying folder change \(completed + 1) of \(total)…"
+                String(localized: "Applying folder change \(completed + 1) of \(total)…")
             guard await draftStore.discard(draft) else {
                 guard isCurrent(authority: authority, project: project) else { return }
-                let detail = workspaceFeedback.errorMessage ?? "The remaining files were not changed."
+                let detail = workspaceFeedback.errorMessage ?? String(localized: "The remaining files were not changed.")
                 workspaceFeedback.errorMessage =
-                    "Completed \(completed) of \(total) folder changes. " + detail
+                    String(localized: "Completed \(completed) of \(total) folder changes. ") + detail
                 return
             }
             completed += 1
@@ -92,7 +92,7 @@ final class MemoryFileOperationsModel: ObservableObject {
         guard directoryOperationProgress == nil else { return }
         let authority = workspaceContext.authorityGeneration
         let project = workspaceContext.activeProjectId
-        directoryOperationProgress = "Updating project memory…"
+        directoryOperationProgress = String(localized: "Updating project memory…")
         defer { directoryOperationProgress = nil }
         do {
             try await projectService.addOrgMemories(
@@ -110,7 +110,7 @@ final class MemoryFileOperationsModel: ObservableObject {
         let authority = workspaceContext.authorityGeneration
         let project = workspaceContext.activeProjectId
         guard let projectId = workspaceContext.activeProjectId else { return }
-        directoryOperationProgress = "Updating project memory…"
+        directoryOperationProgress = String(localized: "Updating project memory…")
         defer { directoryOperationProgress = nil }
         do {
             try await projectService.removeOrgMemories(
@@ -128,13 +128,13 @@ final class MemoryFileOperationsModel: ObservableObject {
         let authority = workspaceContext.authorityGeneration
         let project = workspaceContext.activeProjectId
         var completed = 0
-        directoryOperationProgress = "Renaming \(plan.changes.count) memories…"
+        directoryOperationProgress = String(localized: "Renaming \(plan.changes.count) memories…")
         defer { directoryOperationProgress = nil }
         do {
             for (index, change) in plan.changes.enumerated() {
                 guard isCurrent(authority: authority, project: project) else { return }
                 directoryOperationProgress =
-                    "Renaming \(index + 1) of \(plan.changes.count) memories…"
+                    String(localized: "Renaming \(index + 1) of \(plan.changes.count) memories…")
                 try await rename(change.item, change.newPath)
                 completed += 1
             }
@@ -142,7 +142,7 @@ final class MemoryFileOperationsModel: ObservableObject {
             guard isCurrent(authority: authority, project: project) else { return }
             let prefix = completed == 0
                 ? ""
-                : "Renamed \(completed) of \(plan.changes.count) memories. "
+                : String(localized: "Renamed \(completed) of \(plan.changes.count) memories. ")
             workspaceFeedback.errorMessage = prefix + error.localizedDescription
         }
     }

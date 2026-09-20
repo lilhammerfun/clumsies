@@ -10,13 +10,13 @@ private enum NativeServerAccessError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingOrganization:
-            "Enter an organization name."
+            String(localized: "Enter an organization name.")
         case .missingProject:
-            "Enter a default project name."
+            String(localized: "Enter a default project name.")
         case .missingSetupCode:
-            "Enter the setup code from the Server deployment."
+            String(localized: "Enter the setup code from the Server deployment.")
         case .daemonDidNotStart(let detail):
-            detail ?? "The local daemon did not start."
+            detail ?? String(localized: "The local daemon did not start.")
         }
     }
 }
@@ -36,7 +36,7 @@ final class NativeServerAccessModel: ObservableObject {
     @Published var serverOrigin: String
     @Published var setupCode = ""
     @Published var organizationName = ""
-    @Published var defaultProjectName = "Default"
+    @Published var defaultProjectName = String(localized: "Default")
     @Published var allowedEmailDomains = ""
     @Published private(set) var showsSetup = false
     @Published private(set) var setupCodeConfigured = true
@@ -70,26 +70,26 @@ final class NativeServerAccessModel: ObservableObject {
     }
 
     var title: String {
-        if recoveryReady { return "Recovery session ready" }
-        if showsSetup { return "Set up Clumsies Server" }
+        if recoveryReady { return String(localized: "Recovery session ready") }
+        if showsSetup { return String(localized: "Set up Clumsies Server") }
         return switch purpose {
-        case .appSignIn: "Sign in to Clumsies"
-        case .administratorRecovery: "Administrator recovery"
+        case .appSignIn: String(localized: "Sign in to Clumsies")
+        case .administratorRecovery: String(localized: "Administrator recovery")
         }
     }
 
     var subtitle: String {
         if recoveryReady {
-            return "The administrator session is available in this App only and was not saved to disk."
+            return String(localized: "The administrator session is available in this App only and was not saved to disk.")
         }
         if showsSetup {
-            return "Create the first organization and owner without a Web console."
+            return String(localized: "Create the first organization and owner without a Web console.")
         }
         return switch purpose {
         case .appSignIn:
-            "Connect to your Server, then continue in the system browser."
+            String(localized: "Connect to your Server, then continue in the system browser.")
         case .administratorRecovery:
-            "Sign in directly to the Server while the local daemon is unavailable."
+            String(localized: "Sign in directly to the Server while the local daemon is unavailable.")
         }
     }
 

@@ -18,7 +18,7 @@ struct DraftReconciliationView: View {
 
     init(candidate: DraftReconciliationCandidate,
          usesContextualUpdateAction: Bool = false,
-         updateButtonTitle: String = "Save to Draft",
+         updateButtonTitle: String = String(localized: "Save to Draft"),
          initialResolution: DraftResolution? = nil,
          onResolutionChange: ((DraftResolution) -> Void)? = nil,
          onCancel: @escaping () -> Void,
@@ -153,7 +153,7 @@ struct DraftReconciliationView: View {
     private var cleanDiff: some View {
         let states = candidate.postSyncDiffStates
         if states.base != states.draft {
-            reconciliationDiff(from: states.base, to: states.draft, title: "Remote Version → Updated Draft")
+            reconciliationDiff(from: states.base, to: states.draft, title: String(localized: "Remote Version → Updated Draft"))
         } else {
             ContentUnavailableView("No Draft Changes", systemImage: "doc.text",
                 description: Text("Saving brings this draft up to date without leaving changes to publish."))

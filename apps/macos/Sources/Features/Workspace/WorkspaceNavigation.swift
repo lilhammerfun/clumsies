@@ -400,7 +400,7 @@ final class WorkspaceNavigation: ObservableObject {
     func closeTab(_ tab: WorkbenchTab) {
         if let key = sessions.documentSessionKey(for: tab),
            sessions.applyingDocumentReconciliationSessions.contains(key) {
-            feedback.errorMessage = "Wait for the remote update to finish before closing this tab."
+            feedback.errorMessage = String(localized: "Wait for the remote update to finish before closing this tab.")
             return
         }
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }

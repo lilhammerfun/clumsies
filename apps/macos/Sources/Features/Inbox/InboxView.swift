@@ -3,6 +3,14 @@ import SwiftUI
 private enum InboxFilter: String, CaseIterable, Identifiable {
     case inbox = "Inbox", unread = "Unread", archived = "Archived"
     var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .inbox: String(localized: "Inbox")
+        case .unread: String(localized: "Unread")
+        case .archived: String(localized: "Archived")
+        }
+    }
 }
 
 struct InboxView: View {
@@ -129,36 +137,36 @@ struct InboxView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(id: "inbox.filter", placement: .navigation) {
-            ToolbarFilterMenu(selectionTitle: filter.rawValue) {
+            ToolbarFilterMenu(selectionTitle: filter.title) {
                 ForEach(InboxFilter.allCases) { option in
-                    Toggle(option.rawValue, isOn: Binding(
+                    Toggle(option.title, isOn: Binding(
                         get: { filter == option },
                         set: { if $0 { filter = option } }
                     ))
                 }
             }
-            .toolbarHelp("Filter Inbox")
+            .toolbarHelp(String(localized: "Filter Inbox"))
             .accessibilityLabel("Filter Inbox")
-            .accessibilityValue(filter.rawValue)
+            .accessibilityValue(filter.title)
             .accessibilityIdentifier("inbox-toolbar-filter")
         }
         ToolbarItem(id: "inbox.type", placement: .navigation) {
-            ToolbarFilterMenu(selectionTitle: messageType?.rawValue ?? "All Types") {
+            ToolbarFilterMenu(selectionTitle: messageType?.title ?? String(localized: "All Types")) {
                 Toggle("All Types", isOn: Binding(
                     get: { messageType == nil },
                     set: { if $0 { messageType = nil } }
                 ))
                 Divider()
                 ForEach(InboxMessageType.allCases) { type in
-                    Toggle(type.rawValue, isOn: Binding(
+                    Toggle(type.title, isOn: Binding(
                         get: { messageType == type },
                         set: { if $0 { messageType = type } }
                     ))
                 }
             }
-            .toolbarHelp("Filter Inbox by Message Type")
+            .toolbarHelp(String(localized: "Filter Inbox by Message Type"))
             .accessibilityLabel("Message Type Filter")
-            .accessibilityValue(messageType?.rawValue ?? "All Types")
+            .accessibilityValue(messageType?.title ?? String(localized: "All Types"))
             .accessibilityIdentifier("inbox-toolbar-type")
         }
         if #available(macOS 26.0, *) {
@@ -169,7 +177,7 @@ struct InboxView: View {
                    systemImage: readAction == .read ? "envelope.open" : "envelope.badge") {
                 update(selectedItems, action: readAction)
             }
-            .toolbarHelp(readAction == .read ? "Mark as Read (⇧⌘U)" : "Mark as Unread (⇧⌘U)")
+            .toolbarHelp(readAction == .read ? String(localized: "Mark as Read (⇧⌘U)") : String(localized: "Mark as Unread (⇧⌘U)"))
             .keyboardShortcut("u", modifiers: [.command, .shift])
             .accessibilityIdentifier("inbox-toolbar-read")
             .disabled(selectedItems.isEmpty || isBusy)
@@ -179,7 +187,7 @@ struct InboxView: View {
                    systemImage: filter == .archived ? "tray.and.arrow.up" : "archivebox") {
                 update(selectedItems, action: filter == .archived ? .restore : .archive)
             }
-            .toolbarHelp(filter == .archived ? "Move to Inbox" : "Archive (⌃⌘A)")
+            .toolbarHelp(filter == .archived ? String(localized: "Move to Inbox") : String(localized: "Archive (⌃⌘A)"))
             .keyboardShortcut("a", modifiers: [.control, .command])
             .accessibilityIdentifier("inbox-toolbar-archive")
             .disabled(selectedItems.isEmpty || isBusy)
@@ -189,7 +197,7 @@ struct InboxView: View {
         }
         ToolbarItem(id: "inbox.refresh", placement: .trailingPinned) {
             Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
-                .toolbarHelp("Refresh Inbox")
+                .toolbarHelp(String(localized: "Refresh Inbox"))
                 .accessibilityLabel("Refresh Inbox")
                 .accessibilityIdentifier("inbox-toolbar-refresh")
                 .disabled(store.isLoading || isBusy)
@@ -200,9 +208,9 @@ struct InboxView: View {
         ToolbarItem(id: "inbox.search", placement: .trailingPinned) {
             ClassicSearchField(
                 text: $query,
-                prompt: "Search Inbox",
+                prompt: String(localized: "Search Inbox"),
                 accessibilityIdentifier: "inbox-toolbar-search",
-                accessibilityHelp: "Search notifications by title, message or project",
+                accessibilityHelp: String(localized: "Search notifications by title, message or project"),
                 focusToken: searchFocusRequest
             )
         }

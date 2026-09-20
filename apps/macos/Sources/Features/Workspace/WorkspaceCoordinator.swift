@@ -139,8 +139,7 @@ final class WorkspaceCoordinator {
             ) {
                 clearAuthorityScopedWorkspace()
                 context.phase = .failed(
-                    "Fresh account data is required before switching workspaces. "
-                        + "The previous account workspace was cleared."
+                    String(localized: "Fresh account data is required before switching workspaces. The previous account workspace was cleared.")
                 )
                 return
             }
@@ -181,7 +180,7 @@ final class WorkspaceCoordinator {
         guard context.phase == .ready else { return }
         guard context.activeProjectId != nil || context.loadingProjectId != nil else { return }
         guard sessions.canCommitMemoryContextSwitch else {
-            feedback.errorMessage = "Finish or cancel the active document Sync before switching Memory context."
+            feedback.errorMessage = String(localized: "Finish or cancel the active document Sync before switching Memory context.")
             return
         }
         // Showing Org supersedes every in-flight Project selection. A stale
@@ -199,7 +198,7 @@ final class WorkspaceCoordinator {
         guard await edits.flushPendingDocumentChanges(),
               context.projectSelectionGeneration == generation else { return }
         guard sessions.canCommitMemoryContextSwitch else {
-            feedback.errorMessage = "Finish or cancel the active document Sync before switching Memory context."
+            feedback.errorMessage = String(localized: "Finish or cancel the active document Sync before switching Memory context.")
             return
         }
         navigation.clearPendingDocumentSessionPresentation()
@@ -221,7 +220,7 @@ final class WorkspaceCoordinator {
             return
         }
         guard sessions.canCommitMemoryContextSwitch else {
-            feedback.errorMessage = "Finish or cancel the active document Sync before switching Memory context."
+            feedback.errorMessage = String(localized: "Finish or cancel the active document Sync before switching Memory context.")
             return
         }
         let generation = UUID()
@@ -242,7 +241,7 @@ final class WorkspaceCoordinator {
         guard await edits.flushPendingDocumentChanges(),
               context.projectSelectionGeneration == generation else { return }
         guard sessions.canCommitMemoryContextSwitch else {
-            feedback.errorMessage = "Finish or cancel the active document Sync before switching Memory context."
+            feedback.errorMessage = String(localized: "Finish or cancel the active document Sync before switching Memory context.")
             return
         }
         do {
@@ -254,7 +253,7 @@ final class WorkspaceCoordinator {
             guard selectedLatestIntent,
                   context.projectSelectionGeneration == generation else { return }
             guard sessions.canCommitMemoryContextSwitch else {
-                feedback.errorMessage = "Finish or cancel the active document Sync before switching Memory context."
+                feedback.errorMessage = String(localized: "Finish or cancel the active document Sync before switching Memory context.")
                 return
             }
             navigation.clearPendingDocumentSessionPresentation()
@@ -583,7 +582,7 @@ final class WorkspaceCoordinator {
                 return
             }
             feedback.presentBackgroundError(
-                "Couldn’t refresh \(projectName). Existing content is still available. "
+                String(localized: "Couldn’t refresh \(projectName). Existing content is still available. ")
                     + error.localizedDescription,
                 source: .projectRefresh(projectId: projectId)
             )

@@ -10,15 +10,15 @@ enum MemoryExportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .empty:
-            "There are no memory files to export."
+            String(localized: "There are no memory files to export.")
         case .invalidPath(let path):
-            "The memory path cannot be exported safely: \(path)"
+            String(localized: "The memory path cannot be exported safely: \(path)")
         case .conflictingPath(let path):
-            "Multiple memories use conflicting file paths: \(path)"
+            String(localized: "Multiple memories use conflicting file paths: \(path)")
         case .contentUnavailable(let path):
-            "The full content of \(path) is unavailable. Refresh or reconcile it before exporting."
+            String(localized: "The full content of \(path) is unavailable. Refresh or reconcile it before exporting.")
         case .compressionFailed(let status):
-            "Could not create the memory ZIP archive (exit status \(status))."
+            String(localized: "Could not create the memory ZIP archive (exit status \(status)).")
         }
     }
 }

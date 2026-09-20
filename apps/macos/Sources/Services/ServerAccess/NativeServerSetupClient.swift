@@ -60,15 +60,15 @@ enum NativeServerSetupError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .noSetupCode:
-            "This Server requires setup, but its deployment has no CLUMSIES_SETUP_CODE configured."
+            String(localized: "This Server requires setup, but its deployment has no CLUMSIES_SETUP_CODE configured.")
         case .oidcNotConfigured:
-            "Configure the Server's OIDC deployment settings before completing setup."
+            String(localized: "Configure the Server's OIDC deployment settings before completing setup.")
         case .alreadyInitialized:
-            "This Server has already been set up. Sign in instead."
+            String(localized: "This Server has already been set up. Sign in instead.")
         case .invalidAuthorizationURL:
-            "The Server returned an invalid identity-provider URL."
+            String(localized: "The Server returned an invalid identity-provider URL.")
         case .server(let status, let message):
-            "Server setup failed (\(status)): \(message)"
+            String(localized: "Server setup failed (\(status)): \(message)")
         }
     }
 }
@@ -197,7 +197,7 @@ struct NativeServerSetupClient: @unchecked Sendable {
             guard let http = response as? HTTPURLResponse else {
                 throw NativeServerSetupError.server(
                     status: 0,
-                    message: "No HTTP response was returned."
+                    message: String(localized: "No HTTP response was returned.")
                 )
             }
             if let url = request.url {

@@ -650,6 +650,14 @@ enum RetrievalRunStatus: String, Codable, Hashable, Sendable {
     case running
     case succeeded
     case failed
+
+    var title: String {
+        switch self {
+        case .running: String(localized: "Running")
+        case .succeeded: String(localized: "Succeeded")
+        case .failed: String(localized: "Failed")
+        }
+    }
 }
 
 enum RetrievalExclusionReason: String, Codable, Hashable, Sendable {
@@ -666,6 +674,14 @@ enum RetrievalDeltaAction: String, Codable, Hashable, Sendable {
     case add
     case replace
     case reuse
+
+    var title: String {
+        switch self {
+        case .add: String(localized: "Add")
+        case .replace: String(localized: "Replace")
+        case .reuse: String(localized: "Reuse")
+        }
+    }
 }
 
 struct RetrievalRunListRequest: Codable, Sendable {
@@ -908,7 +924,7 @@ struct RecallSessionSummary: Codable, Identifiable, Sendable {
 
     var activityDisplayTitle: String {
         title.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-            ?? "Agent activity"
+            ?? String(localized: "Agent activity")
     }
 }
 
@@ -991,24 +1007,24 @@ enum DaemonXPCError: LocalizedError, Sendable {
     case daemon(APIErrorPayload)
 
     var errorDescription: String? {
-        let logHint = "Review logs in \(ClumsiesIdentifiers.daemonLogDirectoryURL.path)."
+        let logHint = String(localized: "Review logs in \(ClumsiesIdentifiers.daemonLogDirectoryURL.path).")
         switch self {
         case .invalidRequest:
-            return "Could not encode the daemon request."
+            return String(localized: "Could not encode the daemon request.")
         case .connectionFailed(let detail):
             if let detail, !detail.isEmpty {
-                return "The local Clumsies daemon is unavailable (\(detail)). \(logHint)"
+                return String(localized: "The local Clumsies daemon is unavailable (\(detail)). \(logHint)")
             }
-            return "The local Clumsies daemon is unavailable. \(logHint)"
+            return String(localized: "The local Clumsies daemon is unavailable. \(logHint)")
         case .requestTimedOut(let timeout):
             if let timeout {
-                return "The local Clumsies daemon did not respond within \(String(format: "%.1f", timeout))s. \(logHint)"
+                return String(localized: "The local Clumsies daemon did not respond within \(String(format: "%.1f", timeout))s. \(logHint)")
             }
-            return "The local Clumsies daemon did not respond in time. \(logHint)"
+            return String(localized: "The local Clumsies daemon did not respond in time. \(logHint)")
         case .invalidReply:
-            return "The local Clumsies daemon returned an invalid response."
+            return String(localized: "The local Clumsies daemon returned an invalid response.")
         case .daemon(let error):
-            let request = error.requestId.map { " (request \($0))" } ?? ""
+            let request = error.requestId.map { String(localized: " (request \($0))") } ?? ""
             return "\(error.code): \(error.message)\(request)"
         }
     }

@@ -26,10 +26,10 @@ final class ReconciliationWindows {
         }
         if pendingReviews.contains(where: \.hasEdits) {
             let alert = NSAlert()
-            alert.messageText = "Discard unsaved Review choices?"
-            alert.informativeText = "Choose Review Actions (…) > Save Conflict Resolutions to keep your choices."
-            alert.addButton(withTitle: "Keep Editing")
-            alert.addButton(withTitle: "Discard Edits")
+            alert.messageText = String(localized: "Discard unsaved Review choices?")
+            alert.informativeText = String(localized: "Choose Review Actions (…) > Save Conflict Resolutions to keep your choices.")
+            alert.addButton(withTitle: String(localized: "Keep Editing"))
+            alert.addButton(withTitle: String(localized: "Discard Edits"))
             guard alert.runModal() == .alertSecondButtonReturn else { return false }
         }
         let windows = Array(documentWindows.values)
@@ -46,10 +46,10 @@ final class ReconciliationWindows {
         }
         for (key, candidate) in candidates where documentWindows[key] == nil {
             let sessions = store.sessions
-            let path = candidate.draftState.resource.path ?? candidate.currentState.resource.path ?? "Untitled"
+            let path = candidate.draftState.resource.path ?? candidate.currentState.resource.path ?? String(localized: "Untitled")
             let controller = ReconciliationWindowController(
                 identity: candidate.candidateId,
-                title: "\((path as NSString).lastPathComponent) — \(candidate.status == .conflicts ? "Resolve Conflicts" : "Update Draft")",
+                title: "\((path as NSString).lastPathComponent) — \(candidate.status == .conflicts ? String(localized: "Resolve Conflicts") : String(localized: "Update Draft"))",
                 subtitle: path,
                 autosaveName: "ClumsiesDraftReconciliationWindow",
                 hasEdits: { sessions.documentReconciliationResolutions[key]?.hasEdits == true },
@@ -84,10 +84,10 @@ final class ReconciliationWindowController: NSWindowController, NSWindowDelegate
     private var onClose: (() -> Void)?
     var confirmDiscard: () -> Bool = {
         let alert = NSAlert()
-        alert.messageText = "Discard unsaved resolution edits?"
-        alert.informativeText = "Your draft has not been changed. Keep editing to save this result, or discard these edits."
-        alert.addButton(withTitle: "Keep Editing")
-        alert.addButton(withTitle: "Discard Edits")
+        alert.messageText = String(localized: "Discard unsaved resolution edits?")
+        alert.informativeText = String(localized: "Your draft has not been changed. Keep editing to save this result, or discard these edits.")
+        alert.addButton(withTitle: String(localized: "Keep Editing"))
+        alert.addButton(withTitle: String(localized: "Discard Edits"))
         return alert.runModal() == .alertSecondButtonReturn
     }
 

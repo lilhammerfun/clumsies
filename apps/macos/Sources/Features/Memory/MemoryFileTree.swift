@@ -236,13 +236,13 @@ enum MemoryDirectoryMutationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidDirectory:
-            "This folder no longer contains any memory."
+            String(localized: "This folder no longer contains any memory.")
         case .invalidName:
-            "Choose a different folder name without a slash."
+            String(localized: "Choose a different folder name without a slash.")
         case .readOnly:
-            "Every memory in the folder must be editable before the folder can be changed."
+            String(localized: "Every memory in the folder must be editable before the folder can be changed.")
         case .pathCollision(let path):
-            "The folder cannot be renamed because \(path) already exists."
+            String(localized: "The folder cannot be renamed because \(path) already exists.")
         }
     }
 }

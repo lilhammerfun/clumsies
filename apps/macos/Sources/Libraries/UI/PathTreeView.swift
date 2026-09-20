@@ -39,7 +39,7 @@ struct PathTreeNode: Identifiable, Sendable {
         let entries = items.map { item in
             let pathComponents = item.path.split(separator: "/").map(String.init)
             let components = pathComponents.isEmpty
-                ? [item.fallbackName ?? "Untitled"]
+                ? [item.fallbackName ?? String(localized: "Untitled")]
                 : pathComponents
             return Entry(item: item, components: components[...])
         }
@@ -47,7 +47,7 @@ struct PathTreeNode: Identifiable, Sendable {
     }
 
     private static func build(_ entries: [Entry], prefix: String) -> [PathTreeNode] {
-        let groups = Dictionary(grouping: entries) { $0.components.first ?? "Untitled" }
+        let groups = Dictionary(grouping: entries) { $0.components.first ?? String(localized: "Untitled") }
         return groups.keys.sorted {
             $0.localizedStandardCompare($1) == .orderedAscending
         }.map { name in

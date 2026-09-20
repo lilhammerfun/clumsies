@@ -19,11 +19,11 @@ final class AgentsSettingsModel: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     var codexDescription: String {
-        if !selected.contains(.codex) { return "Disabled" }
-        guard let codexStatus else { return "Selected by default" }
-        if !codexStatus.hostInstalled { return "Will install when Codex is available" }
-        if codexStatus.ready { return "Plugin installed and enabled" }
-        return codexStatus.pluginInstalled ? "Plugin needs repair" : "Plugin not installed"
+        if !selected.contains(.codex) { return String(localized: "Disabled") }
+        guard let codexStatus else { return String(localized: "Selected by default") }
+        if !codexStatus.hostInstalled { return String(localized: "Will install when Codex is available") }
+        if codexStatus.ready { return String(localized: "Plugin installed and enabled") }
+        return codexStatus.pluginInstalled ? String(localized: "Plugin needs repair") : String(localized: "Plugin not installed")
     }
 
     func load() async {

@@ -96,7 +96,7 @@ final class ProjectStorageModel: ObservableObject {
             try check(request)
             move = current
             if current.state.isTerminal {
-                errorMessage = current.errorMessage ?? (current.state == .failed ? "The storage move failed." : nil)
+                errorMessage = current.errorMessage ?? (current.state == .failed ? String(localized: "The storage move failed.") : nil)
                 let loaded = try await fetchStorage(request.projectId)
                 try check(request)
                 storage = loaded

@@ -19,7 +19,7 @@ struct ReviewStatusFilterControl: View {
                 )
             }
         }
-        .toolbarHelp("Filter Reviews: \(label(for: selection))")
+        .toolbarHelp(String(localized: "Filter Reviews: \(label(for: selection))"))
         .accessibilityLabel("Filter Reviews")
         .accessibilityValue(label(for: selection))
         .accessibilityIdentifier("review-toolbar-filter")
@@ -49,12 +49,12 @@ struct ReviewListPage: View {
                     visibleCount: reviews.count
                 ) {
                 case .loading:
-                    ContentLoadingView(title: "Loading Reviews…")
+                    ContentLoadingView(title: String(localized: "Loading Reviews…"))
                 case .failed:
                     ContentUnavailableView {
                         Label("Reviews Unavailable", systemImage: "exclamationmark.triangle")
                     } description: {
-                        Text(reviewModel.reviewLoadState.failureMessage ?? "Reviews could not be loaded.")
+                        Text(reviewModel.reviewLoadState.failureMessage ?? String(localized: "Reviews could not be loaded."))
                     } actions: {
                         Button("Try Again") { Task { await workspaceActions.reload() } }
                     }
@@ -113,10 +113,10 @@ struct ReviewListPage: View {
                     ProjectFilterMenu(
                         projects: projects,
                         selectedProjectId: filters.projectId,
-                        unscopedTitle: "All Projects",
+                        unscopedTitle: String(localized: "All Projects"),
                         unscopedSystemImage: nil,
                         isLoading: false,
-                        help: "Filter Reviews by Project",
+                        help: String(localized: "Filter Reviews by Project"),
                         onCreate: nil,
                         onSelect: { filters.projectId = $0 }
                     )
@@ -137,7 +137,7 @@ struct ReviewListPage: View {
                         }
                         .pickerStyle(.inline)
                     }
-                    .toolbarHelp("Filter Reviews by Author")
+                    .toolbarHelp(String(localized: "Filter Reviews by Author"))
                     .accessibilityLabel("Author Filter")
                     .accessibilityValue(authorFilterTitle)
                 }
@@ -163,7 +163,7 @@ struct ReviewListPage: View {
 
     private var authorFilterTitle: String {
         guard let author = authors.first(where: { $0.userId == filters.authorId }) else {
-            return "All Authors"
+            return String(localized: "All Authors")
         }
         return authorName(author)
     }
@@ -266,7 +266,7 @@ struct ReviewQueueStatePresentation: Equatable {
     ) -> ReviewQueueStatePresentation {
         if review.status == "merged" {
             return .init(
-                title: "Merged",
+                title: String(localized: "Merged"),
                 symbolName: "arrow.triangle.merge",
                 tone: .done,
                 isQueueSignal: false
@@ -275,7 +275,7 @@ struct ReviewQueueStatePresentation: Equatable {
         if let reconciliation = ReviewReconciliationState.resolve(
             freshness: review.freshness, reconciliation: review.reconciliation, autoRebased: review.autoRebased
         ) {
-            return .init(title: reconciliation.rawValue,
+            return .init(title: reconciliation.title,
                          symbolName: reconciliation == .conflict ? "exclamationmark.triangle" : "checkmark.circle",
                          tone: reconciliation == .conflict ? .negative : .neutral,
                          isQueueSignal: true)
@@ -284,7 +284,7 @@ struct ReviewQueueStatePresentation: Equatable {
         switch review.status {
         case "open":
             return .init(
-                title: "Needs Review",
+                title: String(localized: "Needs Review"),
                 symbolName: "clock",
                 tone: .neutral,
                 isQueueSignal: false
@@ -292,28 +292,28 @@ struct ReviewQueueStatePresentation: Equatable {
         case "approved"
             where canMerge && review.approvedResultHash?.isEmpty == false:
             return .init(
-                title: "Ready to Merge",
+                title: String(localized: "Ready to Merge"),
                 symbolName: "arrow.triangle.merge",
                 tone: .positive,
                 isQueueSignal: true
             )
         case "approved":
             return .init(
-                title: "Approved",
+                title: String(localized: "Approved"),
                 symbolName: "checkmark.circle",
                 tone: .positive,
                 isQueueSignal: false
             )
         case "rejected" where isAuthor:
             return .init(
-                title: "Resubmit",
+                title: String(localized: "Resubmit"),
                 symbolName: "arrow.clockwise.circle",
                 tone: .negative,
                 isQueueSignal: true
             )
         case "rejected":
             return .init(
-                title: "Awaiting Author",
+                title: String(localized: "Awaiting Author"),
                 symbolName: "clock",
                 tone: .neutral,
                 isQueueSignal: true
@@ -351,10 +351,12 @@ struct ReviewRow: View {
                             .help(review.title)
 
                         if errorMessage != nil {
-                            InlineStatusBadge(text: "Retry Needed", color: Color(nsColor: .systemRed))
+                            InlineStatusBadge(text: String(localized: "Retry Needed"), color: Color(nsColor: .systemRed))
                         } else if state.isQueueSignal {
                             InlineStatusBadge(text: state.title,
-                                              color: ReviewReconciliationState(rawValue: state.title)?.badgeColor)
+                                              color: ReviewReconciliationState.resolve(
+                                                  freshness: review.freshness, reconciliation: review.reconciliation,
+                                                  autoRebased: review.autoRebased)?.badgeColor)
                         }
                     }
                     .layoutPriority(1)
@@ -414,24 +416,35 @@ struct ReviewRow: View {
 
     private var lifecycleTitle: String {
         switch review.status {
-        case "merged": "Merged Review"
-        case "approved": "Approved Review"
-        case "rejected": "Rejected Review"
-        default: "Open Review"
+        case "merged": String(localized: "Merged Review")
+        case "approved": String(localized: "Approved Review")
+        case "rejected": String(localized: "Rejected Review")
+        default: String(localized: "Open Review")
         }
     }
 
     private var accessibilityText: String {
         let project = projectName.map { ", \($0)" } ?? ""
-        let queueState = errorMessage != nil ? ", Retry Needed"
+        let queueState = errorMessage != nil ? String(localized: ", Retry Needed")
             : (state.isQueueSignal ? ", \(state.title)" : "")
-        let time = TimestampFormatting.absoluteText(review.updatedAt).map { ", updated \($0)" } ?? ""
-        return "\(review.title), \(lifecycleTitle)\(queueState)\(project), Submitted by \(author)\(time)"
+        let time = TimestampFormatting.absoluteText(review.updatedAt).map { String(localized: ", updated \($0)") } ?? ""
+        return String(localized: "\(review.title), \(lifecycleTitle)\(queueState)\(project), Submitted by \(author)\(time)")
     }
 }
 
 struct ReviewStatusIndicator: View {
     let status: String
+
+    static func title(for status: String) -> String {
+        switch status {
+        case "open": String(localized: "Open")
+        case "approved": String(localized: "Approved")
+        case "rejected": String(localized: "Rejected")
+        case "merged": String(localized: "Merged")
+        default: status.capitalized
+        }
+    }
+
     var iconOnly = false
 
     @ViewBuilder
@@ -446,15 +459,15 @@ struct ReviewStatusIndicator: View {
 
     private var label: some View {
         Label {
-            Text(status.capitalized)
+            Text(Self.title(for: status))
                 .foregroundStyle(.secondary)
         } icon: {
             ReviewSymbolImage(systemName: symbol)
                 .foregroundStyle(color)
         }
         .font(.caption)
-        .help("Status: \(status.capitalized)")
-        .accessibilityLabel("Status: \(status.capitalized)")
+        .help("Status: \(Self.title(for: status))")
+        .accessibilityLabel("Status: \(Self.title(for: status))")
     }
 
     private var symbol: String {

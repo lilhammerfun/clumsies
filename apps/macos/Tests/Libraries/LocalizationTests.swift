@@ -1,0 +1,66 @@
+import Foundation
+import XCTest
+@testable import Clumsies
+
+final class LocalizationTests: XCTestCase {
+    private func languageBundle(_ language: String) throws -> Bundle {
+        let path = try XCTUnwrap(Bundle.main.path(forResource: language, ofType: "lproj"))
+        return try XCTUnwrap(Bundle(path: path))
+    }
+
+    func testPackagedLanguagesAndEnglishFallback() throws {
+        XCTAssertEqual(Bundle.main.developmentLocalization, "en")
+        XCTAssertTrue(Bundle.main.localizations.contains("en"))
+        XCTAssertTrue(Bundle.main.localizations.contains("zh-Hans"))
+        XCTAssertEqual(Bundle.preferredLocalizations(from: ["en", "zh-Hans"], forPreferences: ["fr"]), ["en"])
+        let english = try languageBundle("en")
+        let chinese = try languageBundle("zh-Hans")
+        XCTAssertEqual(String(localized: "Inbox", bundle: english), "Inbox")
+        XCTAssertEqual(String(localized: "Inbox", bundle: chinese), "收件箱")
+        XCTAssertEqual(String(localized: "Settings…", bundle: chinese), "设置…")
+        XCTAssertEqual(String(localized: "Language", bundle: chinese), "语言")
+        for count in [0, 1, 2, 25] {
+            XCTAssertEqual(String(localized: "\(count) requests", bundle: english, locale: Locale(identifier: "en")), "\(count) \(count == 1 ? "request" : "requests")")
+            XCTAssertEqual(String(localized: "\(count) requests", bundle: chinese, locale: Locale(identifier: "zh-Hans")), "\(count) 次请求")
+        }
+        XCTAssertEqual(String(localized: "Delete \("notes")?", bundle: chinese), "删除 notes？")
+    }
+
+    func testDisplayLabelsFollowLanguageWithoutChangingIdentifiers() {
+        let isChinese = Bundle.main.preferredLocalizations.first == "zh-Hans"
+        XCTAssertEqual(WorkspaceSection.inbox.title, isChinese ? "收件箱" : "Inbox")
+        XCTAssertEqual(InboxMessageType.reviewRequests.title, isChinese ? "评审请求" : "Review Requests")
+        XCTAssertEqual(InboxMessageType.reviewRequests.rawValue, "Review Requests")
+        XCTAssertEqual(ReviewReconciliationState.conflict.title, isChinese ? "冲突" : "Conflict")
+        XCTAssertEqual(ReviewReconciliationState.conflict.rawValue, "Conflict")
+        XCTAssertEqual(AdminHealthStatus.down.title, isChinese ? "不可用" : "Down")
+        XCTAssertEqual(AdminHealthStatus.down.rawValue, "down")
+        XCTAssertEqual(SettingsDestination.search(isChinese ? "语言" : "language", canAdminister: false), [.pane(.general)])
+        XCTAssertEqual(SettingsDestination.search("language", canAdminister: false), [.pane(.general)])
+    }
+
+    func testCatalogHasReviewedTranslationsForEveryLocalizableKey() throws {
+        let appRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: appRoot.appending(path: "Resources/Localizable.xcstrings"))
+        let catalog = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let strings = try XCTUnwrap(catalog["strings"] as? [String: [String: Any]])
+        XCTAssertFalse(strings.isEmpty)
+        for (key, entry) in strings where entry["shouldTranslate"] as? Bool != false {
+            let languages = try XCTUnwrap(entry["localizations"] as? [String: Any], key)
+            for language in ["en", "zh-Hans"] {
+                let localization = try XCTUnwrap(languages[language], "\(key): \(language)")
+                verifyUnits(localization, key: key, language: language)
+            }
+        }
+    }
+
+    private func verifyUnits(_ value: Any, key: String, language: String) {
+        guard let object = value as? [String: Any] else { return }
+        if let unit = object["stringUnit"] as? [String: String] {
+            XCTAssertEqual(unit["state"], "translated", "\(key): \(language)")
+            XCTAssertFalse(unit["value"]?.isEmpty ?? true, "\(key): \(language)")
+        }
+        for child in object.values { verifyUnits(child, key: key, language: language) }
+    }
+}
