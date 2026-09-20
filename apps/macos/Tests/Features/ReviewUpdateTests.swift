@@ -208,7 +208,71 @@ final class ReviewUpdateTests: XCTestCase {
         XCTAssertTrue(closed)
     }
 
-    private func fixture() -> ReviewUpdatePlan {
+    func testReviewDetailStaysInsideTheWindowAfterReloadAndResize() async throws {
+        let plan = fixture(description: String(repeating: "较长的 Review 说明，正文仍应在窗口内显示。", count: 10))
+        let workspace = WorkspaceCoordinator()
+        workspace.context.account = plan.detail.review.author
+        let model = ReviewDetailModel(reviewId: plan.detail.review.reviewId,
+            context: workspace.context, feedback: workspace.feedback, reviews: workspace.reviews,
+            fetchDetail: { _ in plan.detail })
+        model.detail = plan.detail
+        model.loading = false
+        model.selectedFileId = model.fileDescriptors.first?.id
+        let host = NSHostingView(rootView: NavigationSplitView {
+            List(["Memory", "Bundles", "Reviews", "Activity"], id: \.self) { Text($0) }
+                .listStyle(.sidebar)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
+                .safeAreaInset(edge: .bottom) { Text("Account").frame(height: 40) }
+        } detail: {
+            NavigationStack(path: .constant([model.reviewId])) {
+                Text("Reviews")
+                    .navigationDestination(for: String.self) { reviewId in
+                        ReviewDetailPage(reviewId: reviewId, loadsRemoteContent: false, model: model)
+                    }
+            }
+            .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+        }.workspaceEnvironment(workspace))
+        host.sizingOptions = []
+        if #available(macOS 26.0, *) { host.sceneBridgingOptions = .all }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
+            styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        func splitViews(_ view: NSView) -> [NSSplitView] {
+            (view as? NSSplitView).map { [$0] } ?? view.subviews.flatMap(splitViews)
+        }
+        for size in [NSSize(width: 1280, height: 820), NSSize(width: 920, height: 600),
+                     NSSize(width: 1280, height: 820)] {
+            window.setContentSize(size)
+            for _ in 0..<3 {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            model.loading = true
+            try await Task.sleep(for: .milliseconds(50))
+            model.detail = plan.detail
+            model.loading = false
+            model.diffModel = .make(original: "Original", modified: String(repeating: "Draft\n", count: 100))
+            for _ in 0..<3 {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let splits = splitViews(host)
+            XCTAssertFalse(splits.isEmpty)
+            for split in splits {
+                let frame = split.convert(split.bounds, to: host)
+                XCTAssertGreaterThanOrEqual(frame.minY, -1, "Review content moved above the window")
+                XCTAssertLessThanOrEqual(frame.maxY, host.bounds.height + 1, "Review content exceeded the window")
+            }
+        }
+    }
+
+    private func fixture(description: String = "") -> ReviewUpdatePlan {
         let user = UserReference(userId: "author", email: "author@example.test", displayName: "Author",
             avatarUrl: nil, role: "admin")
         let coordination = DraftCoordination(freshness: .behind, currentCommitId: "shared",
@@ -238,7 +302,7 @@ final class ReviewUpdateTests: XCTestCase {
                     markerLength: 7) : nil)
         }
         let metadata = ReviewMetadata(reviewId: "review", projectId: "project", draftId: "draft-clean",
-            author: user, title: "Update memory", description: "", status: "open", version: 3,
+            author: user, title: "Update memory", description: description, status: "open", version: 3,
             decisionBody: nil, approvedResultHash: nil, decidedBy: nil, decidedAt: nil,
             coordination: coordination, createdAt: stamp, updatedAt: stamp)
         let detail = ReviewDetail(review: metadata, draft: draft("clean"), operations: [],

@@ -120,7 +120,6 @@ struct ReviewDetailPage: View {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(review.title)
                     .font(.title2.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
 
                 Spacer(minLength: 16)
@@ -165,7 +164,6 @@ struct ReviewDetailPage: View {
             if !description.isEmpty {
                 Text(description)
                     .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
 
@@ -174,6 +172,7 @@ struct ReviewDetailPage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
     }
 
     private func metadata(_ review: ReviewRecord) -> some View {
