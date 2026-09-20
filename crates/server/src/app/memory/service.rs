@@ -446,6 +446,8 @@ pub(crate) async fn refresh_projects_for_org_resource_changes(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
     impact: &OrgResourceImpact,
+    actor_user_id: &str,
+    source_commit_id: &str,
 ) -> Result<(), ServerError> {
     if impact.resource_ids.is_empty() {
         return Ok(());
@@ -473,6 +475,8 @@ pub(crate) async fn refresh_projects_for_org_resource_changes(
         }
         let commit_id = create_project_commit(tx, &project_id, parent_commit_id.as_deref()).await?;
         advance_project_ref(tx, &project_id, &commit_id).await?;
+        crate::app::inbox::notify_shared_update(tx, &project_id, source_commit_id, actor_user_id)
+            .await?;
     }
     Ok(())
 }

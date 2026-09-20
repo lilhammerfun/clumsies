@@ -6,6 +6,7 @@ pub mod bundle;
 pub mod commit;
 pub mod draft;
 pub mod health;
+pub mod inbox;
 pub mod installation;
 pub mod memory;
 pub mod organization;
