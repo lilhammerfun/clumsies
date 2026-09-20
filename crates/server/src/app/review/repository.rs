@@ -11,6 +11,79 @@ use crate::pagination::page_info;
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
 use std::collections::BTreeMap;
 
+/// Lock the mutable review containing a proposal, including non-primary members.
+///
+/// # Errors
+/// Propagates database failures; the enclosing proposal mutation owns the transaction.
+pub(super) async fn lock_review_for_draft(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<String>, ServerError> {
+    Ok(sqlx::query_scalar(
+        "SELECT r.review_id FROM reviews r JOIN review_drafts rd USING (review_id)
+         WHERE rd.draft_id = $1 AND r.status != 'merged' FOR UPDATE OF r",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Find the surviving members in their original review order.
+///
+/// # Errors
+/// Propagates database failures.
+pub(super) async fn remaining_review_drafts(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+    discarded_id: &str,
+) -> Result<Vec<String>, ServerError> {
+    Ok(sqlx::query_scalar(
+        "SELECT rd.draft_id FROM review_drafts rd JOIN drafts d USING (draft_id)
+         WHERE rd.review_id = $1 AND rd.draft_id != $2 AND d.status != 'discarded'
+         ORDER BY rd.ordinal",
+    )
+    .bind(review_id)
+    .bind(discarded_id)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// Persist a smaller proposal set, or retain the final discarded member as rejected history.
+///
+/// # Errors
+/// Propagates database failures without committing the caller's discard transaction.
+pub(super) async fn remove_review_member(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+    draft_id: &str,
+    next_primary: Option<&str>,
+    actor_user_id: &str,
+) -> Result<(), ServerError> {
+    if next_primary.is_some() {
+        sqlx::query("DELETE FROM review_drafts WHERE review_id = $1 AND draft_id = $2")
+            .bind(review_id)
+            .bind(draft_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::query(
+        "UPDATE reviews SET draft_id = COALESCE($2, draft_id),
+         status = CASE WHEN $2 IS NULL THEN 'rejected'
+                       WHEN status = 'approved' THEN 'open' ELSE status END,
+         version = version + 1, approved_result_hash = NULL,
+         decision_body = CASE WHEN $2 IS NULL THEN 'Draft discarded.' ELSE NULL END,
+         decided_by_user_id = CASE WHEN $2 IS NULL THEN $3 ELSE NULL END,
+         decided_at = CASE WHEN $2 IS NULL THEN now() ELSE NULL END, updated_at = now()
+         WHERE review_id = $1",
+    )
+    .bind(review_id)
+    .bind(next_primary)
+    .bind(actor_user_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Read a review's proposal identities in submission order.
 ///
 /// Uses the caller's transaction without committing it.

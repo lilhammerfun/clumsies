@@ -219,7 +219,7 @@ pub async fn update_draft(
     get_draft(pool, principal, draft_id).await
 }
 
-/// Discard an owned editable proposal, invalidate candidates, and reject its active review.
+/// Discard an owned editable proposal, invalidate candidates, and remove it from its pending review.
 ///
 /// # Errors
 /// Rejects an identity outside the resource authorization boundary, stale revisions or reference
@@ -923,6 +923,10 @@ pub(crate) async fn apply_draft_rebase_in_tx(
     expected_ref: Option<&str>,
     request: CreateDraftRebaseRequest,
 ) -> Result<DraftRebaseResult, ServerError> {
+    let identity = repository::load_identity(tx, draft_id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
+    lock_org_draft_selection_coordination_for_project(tx, &identity.project_id).await?;
     let row = repository::lock_rebase_state(tx, draft_id)
         .await?
         .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
@@ -1211,6 +1215,10 @@ pub(crate) async fn discard_draft_in_tx(
     actor_user_id: &str,
     expected_draft_version: i64,
 ) -> Result<DeleteResult, ServerError> {
+    let identity = repository::load_identity(tx, draft_id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
+    lock_org_draft_selection_coordination_for_project(tx, &identity.project_id).await?;
     let row = repository::lock_discard_state(tx, draft_id)
         .await?
         .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
@@ -1232,7 +1240,7 @@ pub(crate) async fn discard_draft_in_tx(
     }
     let next_version: i64 = repository::mark_discarded(tx, draft_id).await?;
     invalidate_draft_candidates(tx, draft_id).await?;
-    repository::reject_discarded_review(tx, draft_id, actor_user_id).await?;
+    crate::app::review::remove_discarded_draft(tx, draft_id, actor_user_id).await?;
     insert_draft_event(
         tx,
         draft_id,

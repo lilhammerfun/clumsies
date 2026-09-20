@@ -3,7 +3,6 @@ import SwiftUI
 struct ReviewDetailPage: View {
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
-    @EnvironmentObject private var reconciler: DraftReconciliationService
     @EnvironmentObject private var reviewModel: ReviewsModel
     let reviewId: String
     let loadsRemoteContent: Bool
@@ -18,7 +17,15 @@ struct ReviewDetailPage: View {
 
     var body: some View {
         Group {
-            if self.model.loading {
+            if let update = reviewModel.update, update.review.id == reviewId {
+                ReviewUpdateView(model: update, onCancel: {
+                    reviewModel.endUpdate()
+                    Task { await model.refreshDetail() }
+                }, onApplied: { result in
+                    reviewModel.endUpdate(result: result)
+                    Task { await model.refreshDetail() }
+                })
+            } else if self.model.loading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let loadError = model.loadError {
@@ -51,12 +58,6 @@ struct ReviewDetailPage: View {
         .onDisappear {
             self.model.invalidateDetailRequests()
         }
-        .sheet(item: $model.reconciliationCandidate, onDismiss: {
-            guard model.detail != nil, reviewModel.selectedReviewId == reviewId else { return }
-            Task { await model.refreshDetail() }
-        }) { candidate in
-            reconciliationPanel(candidate)
-        }
         .navigationTitle(model.review?.title ?? "Review")
         .onChange(of: reviewModel.pendingReviewReconciliationId) { _, reviewId in
             self.model.handlePendingReconciliation(reviewId)
@@ -72,58 +73,22 @@ struct ReviewDetailPage: View {
         }
     }
 
-    private func reconciliationPanel(_ candidate: DraftReconciliationCandidate) -> some View {
-        let path = candidate.proposedState?.resource.path
-            ?? candidate.draftState.resource.path
-            ?? candidate.currentState.resource.path
-            ?? "Untitled"
-        let projectId = model.draftDetails.first { $0.draft.draftId == candidate.draftId }?.draft.projectId
-        return VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(model.review?.title ?? "Review").font(.headline)
-                Text(path).font(.callout.monospaced()).textSelection(.enabled)
-                Text("Saving updates this file in the Review. It still needs approval before publication.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(16)
-            Divider()
-            DraftReconciliationView(
-                candidate: candidate,
-                updateButtonTitle: "Save to Review",
-                onCancel: { model.reconciliationCandidate = nil }
-            ) { resolvedState in
-                try await reconciler.applyReconciliation(
-                    draftId: candidate.draftId,
-                    candidate: candidate,
-                    resolvedState: resolvedState,
-                    projectId: projectId
-                )
-            }
-            .id(candidate.candidateId)
-        }
-        .frame(minWidth: 780, idealWidth: 980, minHeight: 600, idealHeight: 740)
-        .interactiveDismissDisabled()
-    }
-
     private func content(_ review: ReviewRecord) -> some View {
-        return HSplitView {
+        return VStack(spacing: 0) {
+            reviewHeader(review).padding(20)
+            if review.freshness == .behind { readinessChip(review).padding(.horizontal, 20).padding(.bottom, 12) }
+            Divider()
+            HSplitView {
             ReviewFileNavigator(
                 files: self.model.fileDescriptors,
                 selection: self.$model.selectedFileId
             )
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
-            .disabled(model.loadsReconciliation)
 
             Group {
                 if let selectedDraftDetail = model.selectedDraftDetail {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
-                            self.reviewHeader(review)
-
-                            if review.freshness == .behind {
-                                self.readinessChip(review)
-                            }
-
                             if self.model.showsGeneralComments {
                                 self.generalCommentsPanel
                             }
@@ -146,6 +111,7 @@ struct ReviewDetailPage: View {
             }
             .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
+            }
         }
         .onAppear {
             if self.model.selectedFileId == nil {
@@ -222,7 +188,7 @@ struct ReviewDetailPage: View {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
-        let updated = TimestampFormatting.relativeText(review.updatedAt, relativeTo: .now)
+        let updated = TimestampFormatting.absoluteText(review.updatedAt)
             .map { " · Updated \($0)" } ?? ""
         return Text("\(context)\(updated)")
         .font(.caption)
@@ -233,53 +199,21 @@ struct ReviewDetailPage: View {
     }
 
     private func readinessChip(_ review: ReviewRecord) -> some View {
-        let target = model.reconciliationTarget
-        let pendingCount = model.fileDescriptors.filter(\.needsUpdate).count
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Label(
-                pendingCount > 0
-                    ? "\(pendingCount) \(pendingCount == 1 ? "file needs" : "files need") updating before approval"
-                    : "The shared version changed",
-                systemImage: review.reconciliation == .conflicts
-                    ? "exclamationmark.triangle"
-                    : "arrow.trianglehead.2.clockwise.rotate.90"
-            )
-            .foregroundStyle(review.reconciliation == .conflicts ? Color.orange : Color.secondary)
-
-            Spacer(minLength: 8)
-
-            if workspaceContext.isReviewAuthor(review), ["open", "approved", "rejected"].contains(review.status) {
-                if let target {
-                    Button(target.draft.coordination.reconciliation == .conflicts
-                           ? "Resolve Conflicts…" : "Review Shared Changes…") {
-                        model.loadReconciliation(detail: target)
-                    }
-                    .controlSize(.small)
-                    .disabled(model.loadsReconciliation)
-                    if model.loadsReconciliation { ProgressView().controlSize(.small) }
-                } else {
-                    Text("No active files can be updated. Reload the Review.")
-                        .foregroundStyle(.secondary)
-                    Button("Reload") { Task { await model.refreshDetail() } }
-                        .controlSize(.small)
-                }
-            } else {
-                Text("Waiting for the author to update the files.")
-                    .foregroundStyle(.secondary)
-            }
+        let count = model.fileDescriptors.filter(\.needsUpdate).count
+        return Label {
+            Text(workspaceContext.isReviewAuthor(review)
+                ? "Remote content has changed. Update this Review from the toolbar before approval (\(count) files)."
+                : "Remote content has changed. Waiting for the author to update this Review.")
+        } icon: {
+            Image(systemName: review.reconciliation == .conflicts ? "exclamationmark.triangle" : "arrow.trianglehead.2.clockwise.rotate.90")
         }
-        .font(.caption)
-        .fixedSize(horizontal: false, vertical: true)
-        .help(
-            review.reconciliation == .conflicts
-                ? "Draft conflicts with the shared version; resolve before deciding"
-                : "Review base is behind the shared version; review changes before deciding"
-        )
+        .font(.callout).foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func decisionSummary(_ review: ReviewRecord) -> some View {
-        let relativeDecisionTime = review.decidedAt.flatMap {
-            TimestampFormatting.relativeText($0, relativeTo: .now)
+        let decisionTime = review.decidedAt.flatMap {
+            TimestampFormatting.absoluteText($0)
         }
         return VStack(alignment: .leading, spacing: 7) {
             if review.status != "merged" {
@@ -295,8 +229,8 @@ struct ReviewDetailPage: View {
                             .foregroundStyle(.secondary)
                     }
                     if let decidedAt = review.decidedAt,
-                       let relativeDecisionTime {
-                        Text("· \(relativeDecisionTime)")
+                       let decisionTime {
+                        Text("· \(decisionTime)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .help(TimestampFormatting.absoluteText(decidedAt).map {
@@ -461,7 +395,7 @@ private struct ReviewFileNavigator: View {
                 Image(systemName: file.hasConflicts
                       ? "exclamationmark.triangle.fill" : "arrow.trianglehead.2.clockwise.rotate.90")
                     .foregroundStyle(file.hasConflicts ? Color.orange : Color.secondary)
-                    .help(file.hasConflicts ? "Conflicts with the shared version" : "Shared version changed")
+                    .help(file.hasConflicts ? "Conflicts with the remote version" : "Published version changed")
                     .accessibilityLabel(file.hasConflicts ? "Conflicts" : "Needs update")
             }
         }

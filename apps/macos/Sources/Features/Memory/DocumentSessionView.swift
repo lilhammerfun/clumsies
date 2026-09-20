@@ -204,8 +204,8 @@ struct DocumentSessionView: View {
     private func pathChangeSummary(_ change: DocumentPathChange) -> String {
         let owner = switch change.source {
         case .draft: "Draft"
-        case .shared: "Shared"
-        case .draftAndShared: "Draft + Shared"
+        case .shared: "Remote"
+        case .draftAndShared: "Draft + Remote"
         }
         switch (change.from, change.to) {
         case let (from?, to?):

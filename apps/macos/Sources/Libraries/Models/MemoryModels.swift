@@ -277,7 +277,7 @@ enum ReviewRequestError: LocalizedError, Sendable {
         case .legacyProjectDraftCannotBePublished:
             "Legacy Project-scoped drafts are read-only and cannot be published."
         case .reconciliationRequired:
-            "Merge the latest shared version before requesting a review."
+            "Merge the latest remote version before requesting a review."
         case .mixedProjects:
             "All drafts in a review must belong to the same Project."
         case .reviewChanged:
@@ -295,13 +295,13 @@ enum DocumentSyncError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .checkoutNoLongerCurrent:
-            "The shared version changed again. Refresh sync status and try again."
+            "The remote version changed again. Refresh sync status and try again."
         case .draftUploadFailed(let message):
-            message ?? "The local draft could not be uploaded. Retry sync before reviewing shared changes."
+            message ?? "The local draft could not be uploaded. Retry sync before reviewing remote changes."
         case .draftUploadTimedOut:
             "The local draft is still uploading. Wait a moment and try Sync again."
         case .mutationWhileSynchronizing:
-            "Shared changes are being prepared for this document. Wait for Sync to finish before editing it."
+            "Remote changes are being checked for this document. Wait for Sync to finish before editing it."
         }
     }
 }

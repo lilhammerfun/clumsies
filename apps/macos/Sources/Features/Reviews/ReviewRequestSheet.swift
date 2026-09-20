@@ -103,7 +103,7 @@ struct ReviewRequestSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Update Drafts and Request Review")
                     .font(.title2.weight(.semibold))
-                Text("The latest shared changes will be applied to these drafts in one transaction.")
+                Text("All drafts will be updated to the latest remote version and submitted for review together. Nothing is published yet.")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

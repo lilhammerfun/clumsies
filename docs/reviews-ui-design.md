@@ -33,7 +33,7 @@ separators, focus, selection, hover, and inactive-window behavior. Do not enable
 alternating row backgrounds: AppKit continues their stripes through empty table
 space, making nonexistent Reviews look like blank rows. Pin the separator's
 leading alignment to the row rather than allowing trailing metadata such as the
-relative update time to shorten it.
+fixed update time to shorten it.
 
 The list is a review queue. Each row answers four scan questions: what changed,
 where it belongs, who submitted it, and what needs attention next. Keep the row
@@ -41,11 +41,13 @@ to two lines:
 
 ```
 [lifecycle icon] review title                   optional queue signal
-Submitted by author for project                 updated relative time
+Submitted by author for project                 Updated <local date and time>
 ```
 
+- Format updatedAt as a fixed local date and time, explicitly labeled Updated. It is the
+  last Review record update, not creation time or a live elapsed-time counter.
 - Keep the complete description in the detail page; do not add a list excerpt.
-- Express Project and author as muted metadata on the left and the relative
+- Express Project and author as muted metadata on the left and the fixed
   Review record update time independently on the right. The author is the
   submitter, not necessarily the person who last updated the record, so never
   label the update as theirs. If a Project name or timestamp cannot be
@@ -101,7 +103,8 @@ true last-activity timestamp, and the macOS client must not invent them from
 The pushed detail contains an independent split:
 
 ```
-changed-file navigator | review metadata + unified diff
+Review metadata + overall update status
+changed-file navigator | selected file unified diff
 ```
 
 The file navigator reuses the path hierarchy, folder expansion, file symbols,
@@ -134,23 +137,38 @@ lines`. The file navigator already communicates the path and the diff directly
 communicates insertions/removals. Delete-only and metadata-only Reviews retain a
 short explicit empty state because the diff cannot communicate those outcomes.
 
-The file tree marks behind files and detected conflicts. Reconciliation targets
-an active behind file: prefer the selection, then another conflicted file,
-then another behind file. Discarded and merged drafts are not editable targets.
-After saving, reload the Review to update the diff and remaining file markers.
+The file tree marks behind files and detected conflicts. These markers only describe
+individual files; selecting a current file never redirects an update action to
+another file. The overall Review header and stale explanation sit above the split.
 
-Authors resolve conflicts in a native sheet attached to the Review detail,
-with the Review title and file path visible. The `Shared changes`, `Your
-changes`, and `Result preview` comparisons show original-to-shared,
-original-to-proposed, and shared-to-final differences. The editor below owns
-the final text; path conflicts expose a path field and deletion conflicts
-expose `Keep File`. `Save to Review` uses the existing rebase endpoint and
-still requires approval before publication. Non-authors see a waiting state.
+The author opens **Update Review** from the symbol toolbar. This replaces the
+detail body with one update workspace for every behind file, preserving the
+Review title and file paths. It does not open a separate sheet for each file.
 
-The sheet blocks navigation during editing. Cancel asks before discarding
-edits, saving disables cancellation, and failed saves keep the input. A
-background Review refresh preserves the editor; authority reset clears it.
-The server rejects an outdated candidate if the shared version changes again.
+- Prepare all behind files against one shared reference. Show “Merges
+  automatically”, “Needs resolution”, or “Resolved” for each file.
+- Label the comparisons **Remote changes**, **Draft changes**, and **Merge
+  preview**. Remote changes compares the draft's starting version with the
+  currently published version; Draft changes compares that same starting version
+  with the draft. Merge preview compares the published version with the resolved
+  result. Use Remote Version / Use Draft Version replaces the whole file;
+  Use Remote Change / Use Draft Change selects only one conflict section.
+- Keep nonconflicting merged sections. For each content conflict, offer the
+  shared and proposed changes; also allow full final-text editing and explicit
+  whole-version choices. Path and deletion conflicts retain path and Keep File controls.
+- Mark a conflicting file resolved only after its path is valid and generated
+  conflict markers are gone. Switching files preserves edits.
+- **Apply All Updates** sends the complete ordered Review draft set. The Server
+  checks membership, versions, candidates, and the shared reference in one
+  transaction. A failure on any file rolls back all updates.
+- Applying updates does not publish. Reload the Review, remove the update tool
+  when current, then enable the separate approval/publication action when the
+  loaded detail is current and readable.
+- Failed requests retain input. Check Latest Again explicitly warns before
+  replacing edited resolutions. Cancel also confirms edited input; applying
+  disables cancellation. Background detail refresh preserves the update model;
+  an account/authority reset clears it and ignores late responses.
+- Non-authors see that the author must update the Review.
 
 ## 4. Diff and comments
 
@@ -176,7 +194,13 @@ the UI labels these honestly rather than pretending they are inline comments.
 
 ## 5. Toolbar decisions
 
-Decision actions remain native symbol toolbar items with menu-command parity:
+The toolbar owns the whole-Review update action and decisions. All use icons
+with tooltips and accessibility labels. Update Review uses
+arrow.trianglehead.2.clockwise.rotate.90 and appears only for the author of a
+behind, editable Review. It is disabled while updating. There is no update
+button inside an individual file detail.
+
+Decision actions retain menu-command parity:
 
 - Open: Org owners/admins with `review:decide` and `review:merge` see Reject
   (`xmark`) and Approve (`checkmark`) in the standard toolbar style. Approve records the
@@ -218,7 +242,12 @@ progress, failures, and stale status.
 ## 7. Data boundary
 
 A Review can contain multiple drafts from the server-provided `drafts[]`
-metadata. Coordination is aggregated across them, while reconciliation is
-performed per file. The client reloads the Review after each save and does
-not infer a multi-file commit history from draft operations. Legacy singular
+metadata. Coordination is aggregated across its pending members. Update planning covers
+every behind member; applying the complete ordered set is atomic. A discarded
+member is detached and approval of the old set is invalidated. If the primary
+member was discarded, the next surviving member becomes primary. When none
+remain, the Review is rejected with its last member retained for history.
+A database migration repairs previously stranded discarded memberships; the
+client must not silently restore discarded content. The client does not infer
+a multi-file commit history from draft operations. Legacy singular
 detail fields remain supported by the current client contract.

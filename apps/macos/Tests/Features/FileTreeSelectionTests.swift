@@ -294,6 +294,16 @@ final class FileTreeSelectionTests: XCTestCase {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             }
 
+            if candidate.status == .conflicts {
+                func picker(in view: NSView) -> NSSegmentedControl? {
+                    (view as? NSSegmentedControl) ?? view.subviews.lazy.compactMap { picker(in: $0) }.first
+                }
+                let control = try XCTUnwrap(picker(in: host))
+                control.selectedSegment = 1
+                control.sendAction(control.action, to: control.target)
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
             XCTAssertNotNil(
                 descendantScrollViews(in: host).first {
                     $0.hasHorizontalScroller && !$0.hasVerticalScroller
@@ -425,7 +435,7 @@ final class FileTreeSelectionTests: XCTestCase {
             presentation.symbolName,
             "arrow.trianglehead.2.clockwise.rotate.90"
         )
-        XCTAssertEqual(presentation.help, "The shared version of this file has changed")
+        XCTAssertEqual(presentation.help, "The remote version of this file has changed")
     }
 
     func testBehindDraftWithoutResourceChangesShowsNoSharedUpdateAccessory() {
@@ -465,7 +475,7 @@ final class FileTreeSelectionTests: XCTestCase {
             presentation.symbolName,
             "arrow.trianglehead.2.clockwise.rotate.90"
         )
-        XCTAssertEqual(presentation.help, "A newer shared version is available")
+        XCTAssertEqual(presentation.help, "A newer remote version is available")
     }
 
     func testSyncedResourceWithoutDraftShowsNoAccessory() {

@@ -452,8 +452,8 @@ struct ReviewRow: View {
 
                 Spacer(minLength: 8)
 
-                if let updatedAt = TimestampFormatting.date(from: review.updatedAt) {
-                    Text(updatedAt, style: .relative)
+                if let updatedAt = TimestampFormatting.absoluteText(review.updatedAt) {
+                    Text("Updated \(updatedAt)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -519,8 +519,8 @@ struct ReviewRow: View {
     }
 
     private var accessibilityText: String {
-        let relative = TimestampFormatting.relativeText(review.updatedAt, relativeTo: .now)
-        let time = relative.map { ", updated \($0)" } ?? ""
+        let updated = TimestampFormatting.absoluteText(review.updatedAt)
+        let time = updated.map { ", updated \($0)" } ?? ""
         let queueState = state.isQueueSignal ? ", \(state.title)" : ""
         return "\(review.title), \(lifecycleTitle)\(queueState), \(context)\(time)"
     }

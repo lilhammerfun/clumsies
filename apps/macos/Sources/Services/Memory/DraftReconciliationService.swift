@@ -242,6 +242,28 @@ final class DraftReconciliationService: ObservableObject {
     static func refETag(_ commitId: String?) -> String {
         "\"\(commitId ?? "ref-none")\""
     }
+
+    func applyReviewUpdate(
+        reviewId: String, plan: ReviewUpdatePlan, request: CreateReviewUpdateRequest
+    ) async throws -> ReviewDetail {
+        guard !context.isSwitchingMemoryContext else {
+            throw DocumentSyncError.mutationWhileSynchronizing
+        }
+        let authority = context.authorityGeneration
+        let activityId = UUID()
+        sessions.standaloneReconciliationActivityIds.insert(activityId)
+        defer { sessions.standaloneReconciliationActivityIds.remove(activityId) }
+        let result: ReviewDetail = try await context.server.send(
+            method: "POST", path: "/api/v1/reviews/\(reviewId)/updates",
+            headers: ["If-Match": Self.refETag(plan.detail.review.coordination.currentCommitId)],
+            body: request
+        )
+        try context.ensureAuthority(authority)
+        _ = await refresh.retrySync(channel: "drafts", projectId: plan.detail.review.projectId)
+        await onReconciled?()
+        try context.ensureAuthority(authority)
+        return result
+    }
 }
 
 enum DraftUploadBarrierDecision: Equatable, Sendable {

@@ -542,6 +542,26 @@ struct ReviewDraftRequest: Codable, Sendable {
     let resolvedState: ReconciliationResourceState?
 }
 
+struct CreateReviewUpdatePlanRequest: Codable, Sendable {
+    let expectedReviewVersion: Int
+}
+
+struct ReviewUpdatePlan: Codable, Sendable {
+    let detail: ReviewDetail
+    let candidates: [DraftReconciliationCandidate]
+    var contentMerges: [String: ReviewConflictContent] = [:]
+}
+
+struct ReviewConflictContent: Codable, Sendable {
+    let text: String
+    let markerLength: Int
+}
+
+struct CreateReviewUpdateRequest: Codable, Sendable {
+    let expectedReviewVersion: Int
+    let drafts: [ReviewDraftRequest]
+}
+
 struct ReviewDraftReconciliation: Sendable {
     let candidate: DraftReconciliationCandidate
     let resolvedState: ReconciliationResourceState?
