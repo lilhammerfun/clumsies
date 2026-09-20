@@ -8,6 +8,14 @@ struct ReviewUpdateView: View {
     @State private var confirmsRestart = false
 
     var body: some View {
+        if #available(macOS 15.0, *) {
+            content.presentationSizing(.fitted)
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Update Review").font(.title2.weight(.semibold))
@@ -117,6 +125,9 @@ struct ReviewUpdateView: View {
                 .disabled(!model.canApply)
             }.padding(12)
         }
+        .frame(minWidth: 1000, idealWidth: 1100, maxWidth: .infinity,
+               minHeight: 720, idealHeight: 760, maxHeight: .infinity)
+        .interactiveDismissDisabled(model.hasEdits || model.isApplying)
         .task { await model.load() }
         .confirmationDialog("Discard these resolution edits?", isPresented: $confirmsDiscard) {
             Button("Discard Edits", role: .destructive, action: onCancel)

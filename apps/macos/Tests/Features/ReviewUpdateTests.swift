@@ -151,7 +151,6 @@ final class ReviewUpdateTests: XCTestCase {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .sheet(isPresented: .constant(true)) {
                 ReviewUpdateView(model: model, onCancel: {}, onApplied: { _ in })
-                    .frame(minWidth: 900, idealWidth: 1100, minHeight: 600, idealHeight: 700)
             })
         host.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
@@ -170,6 +169,7 @@ final class ReviewUpdateTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         let sheet = try XCTUnwrap(window.attachedSheet)
+        XCTAssertTrue(sheet.styleMask.contains(.resizable))
         let content = try XCTUnwrap(sheet.contentView)
         for _ in 0..<3 {
             content.layoutSubtreeIfNeeded()
