@@ -79,18 +79,21 @@ cherry-pick 相应提交。
 端口动态分配且只绑定 loopback。
 
 交付 Review 界面供人检查时，运行 `just dev-macos-reviews`。命令自动完成本地 Server
-初始化、fake OIDC 登录和 daemon 凭据安装，跳过 Agent 选择，并准备 12 个编号 Review。
+初始化、fake OIDC 登录和 daemon 凭据安装，跳过 Agent 选择，并在「青禾酒店」项目准备 12 个业务 Review。
 检查者不需要填写 setup code、登录信息或执行终端命令。重复运行会重新登录并保留已有测试数据。
 
-在 Dev App 打开 **Reviews**，每个 Review 的说明写有检查要点，覆盖：混合文件状态、自动合并、
+在 Dev App 打开 **Reviews**，将项目筛选设为「青禾酒店」。标题、描述及文件正文只写酒店业务内容。
+例如「两家门店早餐延长至十点」提议将早餐结束时间从九点改成十点，已发布的入住指南则把停车费
+从每天三十元改成五十元；自动结果应保留两项修改。案例编号和验收步骤仅保存在应用外的清单中，
+不得填入 Review description。案例覆盖：混合文件状态、自动合并、
 多段正文冲突、重命名冲突、双方分别删除、丢弃成员后审批、无需更新、已完成更新、拒绝后重新提交，
-以及同路径各自新增。第 11 项在 **Rejected** 或 **All** 中查看。建议先浏览再批准发布；发布会推进
+以及同路径各自新增。「周末早餐延长至十点半」在 **Rejected** 或 **All** 中查看。建议先浏览再批准发布；发布会推进
 这个测试组织的 Remote 版本，因此其他 Review 可能再次需要更新。
 
 检查“编辑期间 Remote 又更新”时，先打开更新编辑器，再由开发者执行
 `python3 dev/seed-review-playground.py --advance-remote`。提交旧结果应被拒绝，保留编辑内容，
-并提供检查最新版本的入口。实例目录下的 `review-playground.json` 记录 Review ID 和预期结果，
-不保存凭据。构造脚本只接受当前 worktree 的 loopback Local 实例，不能操作 Preview 或生产 Server。
+并提供检查最新版本的入口。实例目录下的 `hotel-review-playground.json` 记录案例编号、Review ID 和预期结果，
+不保存凭据。旧通用案例及其清单原样保留。构造脚本只接受当前 worktree 的 loopback Local 实例，不能操作 Preview 或生产 Server。
 
 ### 4.2 Preview
 

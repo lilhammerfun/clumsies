@@ -45,7 +45,7 @@ class Playground:
             urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         self.token = None
         self.head = None
-        self.manifest_path = self.root / "review-playground.json"
+        self.manifest_path = self.root / "hotel-review-playground.json"
         self.manifest = {"server_url": self.origin, "scenarios": []}
         self.resources = {}
 
@@ -182,10 +182,10 @@ class Playground:
             {"expected_review_version": detail["review"]["version"]}, self.etag())
         self.head = result["commit_id"]
 
-    def scenario(self, title, description, drafts):
+    def scenario(self, case, title, description, drafts, check):
         detail = self.review(title, description, drafts)
         self.manifest["scenarios"].append({
-            "review_id": detail["review"]["review_id"], "title": title, "check": description})
+            "case": case, "review_id": detail["review"]["review_id"], "title": title, "check": check})
         self.save()
         return detail
 
@@ -216,117 +216,131 @@ class Playground:
             self.etag())
 
     def seed(self):
-        run = secrets.token_hex(3)
-        prefix = f"review-playground/{run}"
+        project = self.call("POST", "/api/v1/projects", {
+            "name": "青禾酒店", "description": "住客服务指南与门店运营手册。"})
+        self.project = project["project_id"]
+        prefix = "青禾酒店"
         path = lambda name: f"{prefix}/{name}.md"
-        log = "# 日志策略\n\n日志保留 7 天。\n\n归档后压缩。\n"
-        automatic = "# 交付检查\n\n版本：1\n\n说明段落一。\n说明段落二。\n说明段落三。\n\n状态：待检查\n"
-        multiple = "# 中文与多段冲突\n\n日志保留 7 天。\n\n中间说明一。\n中间说明二。\n中间说明三。\n\n重试次数：3\n\n尾部说明一。\n尾部说明二。\n尾部说明三。\n\n=======\n这行是原文中的分隔符，应原样保留。\n"
+        guide = (
+            "# 入住指南\n\n"
+            "## 办理入住\n\n入住时间为下午 15:00，请携带有效身份证件。\n\n"
+            "## 早餐\n\n早餐供应时间为 07:00—09:00，餐厅位于一楼。\n\n"
+            "## 客房服务\n\n每天 10:00—16:00 提供客房清洁。\n需要额外毛巾可拨打前台分机 800。\n\n"
+            "## 停车\n\n住店客人停车收费为每天 30 元。\n离店前请到前台登记车牌。\n")
+        checkout = "# 退房须知\n\n退房时间为中午 12:00。\n\n行李可在前台免费寄存至当天 20:00。\n"
+        booking = "# 预订与退房\n\n退房时间为中午 12:00。\n\n预订时请填写入住人姓名。\n到店办理入住时需出示身份证。\n前台全天提供行李寄存。\n\n免费取消截止时间为入住前一天 18:00。\n"
+        transport = "# 到店交通\n\n酒店位于青禾路 18 号，从地铁青禾站 A 口步行约 8 分钟。\n"
+        pool = "# 泳池服务\n\n泳池每天开放至 20:00，住店客人凭房卡免费使用。\n"
+        shuttle = "# 机场班车\n\n酒店每天 09:00 提供一班机场接送，请提前一天向前台预约。\n"
         baseline = {
-            "01-mixed/log-policy": log, "01-mixed/auto-merge": automatic,
-            "01-mixed/already-current": "# 当前文件\n\n草稿内容。\n",
-            "02-auto/guide-a": automatic, "02-auto/guide-b": automatic,
-            "03-sections/中文规则": multiple,
-            "04-rename/original": "# 重命名冲突\n\n正文保持不变。\n",
-            "05-remote-delete/note": "# Remote 删除\n\n原始内容。\n",
-            "06-draft-delete/note": "# Draft 删除\n\n原始内容。\n",
-            "07-discard-secondary/keep-a": log, "07-discard-secondary/discard": log,
-            "07-discard-secondary/keep-b": log,
-            "08-discard-primary/discard": log, "08-discard-primary/keep": log,
-            "09-ready/edit": log, "09-ready/rename": log, "09-ready/delete": log,
-            "10-updated/note": automatic, "11-rejected/note": automatic,
-            "_remote-tick": "# Remote revision\n\nInitial version.\n",
+            "住客服务/入住指南": guide, "住客服务/退房须知": checkout,
+            "住客服务/行李寄存": "# 行李寄存\n\n寄存行李请在前台领取号码牌。\n",
+            "河畔店/入住指南": guide, "西湖店/入住指南": guide,
+            "预订/预订与退房": booking, "交通/交通指引": transport,
+            "康体/泳池服务": pool, "交通/机场班车": shuttle,
+            "暑期服务/早餐": guide, "暑期服务/泳池": pool, "暑期服务/退房": checkout,
+            "团队接待/泳池": pool, "团队接待/入住指南": guide,
+            "前台/发票办理": "# 发票办理\n\n电子发票在离店后 3 个工作日内发送到预留邮箱。\n",
+            "前台/联系前台": "# 联系前台\n\n客房电话拨打 800 可联系前台，全天提供服务。\n",
+            "前台/旧无线网络说明": "# 客房无线网络\n\n请连接 QINGHE-OLD，密码为房卡背面标注的八位数字。\n",
+            "花园店/入住指南": guide, "周末服务/入住指南": guide,
+            "前台/夜间服务": "# 夜间服务\n\n夜间有紧急事项请拨打前台分机 800。\n",
         }
         self.head = self.current_head()
+        self.manifest.update(project_id=self.project, prefix=prefix)
+        self.save()
         base_drafts = [self.draft(path(name), text, "create") for name, text in baseline.items()]
-        self.publish(self.review("Fixture setup · 原始版本", "测试数据基线。", base_drafts))
+        self.publish(self.review("发布住客服务手册", "汇总入住、餐饮、交通及前台服务信息，方便各门店统一答复客人。", base_drafts))
         memories = self.call("GET", "/api/v1/org/memories")["items"]
         self.resources = {m["path"]: m["memory_id"] for m in memories}
-        self.manifest.update(project_id=self.project, prefix=prefix)
         def edit(name, text):
             return self.draft(path(name), text)
         pending = []
-        mixed = self.scenario("01 · 混合文件：冲突 / 自动合并 / 已是最新",
-            "log-policy：Remote 为 14 天，Draft 为 30 天，在详情直接选择。"
-            "auto-merge 显示普通 Diff 和 Auto-rebased 标签。already-current 显示普通 Diff。", [
-                edit("01-mixed/log-policy", log.replace("7 天", "30 天")),
-                edit("01-mixed/auto-merge", automatic.replace("待检查", "草稿已检查")),
-                edit("01-mixed/already-current", "# 当前文件\n\n本次草稿已更新到最新 Remote。\n")])
+        mixed = self.scenario("01", "延长早餐及退房服务",
+            "不少家庭客人希望早晨安排更从容，建议早餐延长至十点、退房延长至下午两点，并补充行李寄存提醒。", [
+                edit("住客服务/退房须知", checkout.replace("中午 12:00", "下午 14:00")),
+                edit("住客服务/入住指南", guide.replace("07:00—09:00", "07:00—10:00")),
+                edit("住客服务/行李寄存", "# 行李寄存\n\n寄存行李请在前台领取号码牌，贵重物品请随身携带。\n")],
+            "同组包含退房时间冲突、早餐与停车的独立修改、已更新的寄存文件。")
         pending.append(mixed)
-        pending.append(self.scenario("02 · 全部自动合并（两个文件）",
-            "两个文件都是独立行修改，详情显示普通 Diff 和 Auto-rebased 标签。通过工具栏保存整组更新后可批准。",
-            [edit("02-auto/" + name, automatic.replace("待检查", "草稿已检查")) for name in ("guide-a", "guide-b")]))
-        pending.append(self.scenario("03 · 多段正文冲突与中文",
-            "分别处理两个冲突：日志保留天数、重试次数。可混合选择 Remote / Draft，切换文件或页签应保留输入。"
-            "正文原有的 ======= 分隔符不能被误判为冲突。",
-            [edit("03-sections/中文规则", multiple.replace("7 天", "30 天").replace("次数：3", "次数：5"))]))
-        pending.append(self.scenario("04 · 同一个文件被重命名到不同路径",
-            "Remote 改名为 remote-name.md，Draft 改名为 draft-name.md。确认最终路径，正文不应丢失。",
-            [self.draft(path("04-rename/original"), action="rename", destination=path("04-rename/draft-name"))]))
-        pending.append(self.scenario("05 · Remote 删除，Draft 修改",
-            "Remote 已删除文件，草稿仍修改正文。在详情选择保留 Draft 文件或采用 Remote 删除。",
-            [edit("05-remote-delete/note", "# Remote 删除\n\n草稿希望保留的新增说明。\n")]))
-        pending.append(self.scenario("06 · Draft 删除，Remote 修改",
-            "草稿要删除文件，但 Remote 增加了内容。在详情选择保留 Remote 或确认删除，随后显示对应 Diff。",
-            [self.draft(path("06-draft-delete/note"), action="delete")]))
-        for number, folder, names, discarded_index in [
-            ("07", "discard-secondary", ["keep-a", "discard", "keep-b"], 1),
-            ("08", "discard-primary", ["discard", "keep"], 0),
-        ]:
-            detail = self.scenario(f"{number} · 丢弃{'中间' if number == '07' else '首个'}文件后继续审批",
-                "已通过实际 API 丢弃一个成员。文件树只应显示剩余文件；更新后能正常批准，不会被已丢弃内容卡住。",
-                [edit(f"{number}-{folder}/{name}", log.replace("7 天", "30 天")) for name in names])
-            removed = detail["drafts"][discarded_index]["draft"]
-            self.call("DELETE", f'/api/v1/drafts/{removed["draft_id"]}',
-                headers={"If-Match": f'"{removed["version"]}"'})
+        pending.append(self.scenario("02", "两家门店早餐延长至十点",
+            "河畔店和西湖店近期家庭客人增多，建议将早餐结束时间从九点延长至十点。",
+            [edit(name + "/入住指南", guide.replace("07:00—09:00", "07:00—10:00")) for name in ("河畔店", "西湖店")],
+            "Remote 将停车费从 30 元调整为 50 元，草稿仅改早餐。自动结果应同时保留两项。"))
+        pending.append(self.scenario("03", "放宽退房和免费取消时间",
+            "为方便晚到和返程较晚的客人，建议退房延长至下午两点，免费取消延长至入住前一天晚八点。",
+            [edit("预订/预订与退房", booking.replace("中午 12:00", "下午 14:00").replace("前一天 18:00", "前一天 20:00"))],
+            "两个独立冲突块，分别选择后均应保留；普通段落不应改变。"))
+        pending.append(self.scenario("04", "将交通指引更名为到店交通",
+            "客人更常询问如何到店，建议使用更直接的文件名称。",
+            [self.draft(path("交通/交通指引"), action="rename", destination=path("交通/到店交通"))],
+            "远端已改名为交通与停车；应明确选择路径，正文保留。"))
+        pending.append(self.scenario("05", "延长泳池开放至晚九点",
+            "夏季晚餐后使用泳池的客人增多，建议延长一小时开放时间。",
+            [edit("康体/泳池服务", pool.replace("20:00", "21:00"))],
+            "远端因泳池检修已删除服务说明，草稿仍有修改。"))
+        pending.append(self.scenario("06", "停止机场班车服务",
+            "班车乘坐人数持续下降，建议停止运营，由前台协助客人预约出租车。",
+            [self.draft(path("交通/机场班车"), action="delete")],
+            "草稿删除文件，远端增加晚间班次；检查删除与保留的选择。"))
+        summer = self.scenario("07", "调整暑期早餐和退房安排",
+            "暑期家庭客人集中，建议延长早餐和退房时间。泳池安排尚待人员排班确认，另行讨论。", [
+                edit("暑期服务/早餐", guide.replace("07:00—09:00", "07:00—10:00")),
+                edit("暑期服务/泳池", pool.replace("20:00", "21:00")),
+                edit("暑期服务/退房", checkout.replace("中午 12:00", "下午 14:00"))],
+            "移除中间的泳池成员后，早餐和退房仍可继续审批。")
+        team = self.scenario("08", "延长团队客人早餐时间",
+            "团队返程集合较晚，建议延长早餐时间。泳池活动安排暂缓。", [
+                edit("团队接待/泳池", pool.replace("20:00", "21:00")),
+                edit("团队接待/入住指南", guide.replace("07:00—09:00", "07:00—10:00"))],
+            "移除首个泳池成员后，剩余入住指南仍可审批。")
+        for detail, index in [(summer, 1), (team, 0)]:
+            removed = detail["drafts"][index]["draft"]
+            self.call("DELETE", f'/api/v1/drafts/{removed["draft_id"]}', headers={"If-Match": f'"{removed["version"]}"'})
             pending.append(detail)
-        updated = self.scenario("10 · 已完成整组更新，等待批准",
-            "已完成整组更新。此 Review 不应再显示保存更新按钮，可以直接批准。",
-            [edit("10-updated/note", automatic.replace("待检查", "草稿已检查"))])
-        rejected = self.scenario("11 · 已拒绝，更新后重新提交",
-            "切换列表筛选到 Rejected 或 All。作者应能更新 Remote，然后 Resubmit，再完成审批。",
-            [edit("11-rejected/note", automatic.replace("待检查", "草稿已检查"))])
+        updated = self.scenario("10", "花园店早餐延长至十点",
+            "花园店周边展会期间晚起客人较多，建议早餐延长一小时。",
+            [edit("花园店/入住指南", guide.replace("07:00—09:00", "07:00—10:00"))],
+            "已保存整组更新，直接查看最新差异并审批。")
+        rejected = self.scenario("11", "周末早餐延长至十点半",
+            "周末以休闲住客为主，建议延长早餐供应时间，减少客人错过早餐的情况。",
+            [edit("周末服务/入住指南", guide.replace("07:00—09:00", "07:00—10:30"))],
+            "已拒绝的 Review 更新后应能重新提交。")
         self.call("POST", f'/api/v1/reviews/{rejected["review"]["review_id"]}/decisions', {
             "expected_review_version": rejected["review"]["version"], "decision": "rejected",
-            "body": "请更新到最新 Remote 后重新提交。"})
+            "body": "请先与餐厅确认周末排班及增加的食材成本，再提交此安排。"})
         pending.append(rejected)
-        pending.append(self.scenario("12 · 同一路径各自新增文件",
-            "Remote 和 Draft 都创建了 new-guide.md，内容不同。选择最终版本，不应误建第二份同名文件。",
-            [self.draft(path("12-add-add/new-guide"), "# 草稿新增\n\n采用 30 天方案。\n", "create")]))
+        pending.append(self.scenario("12", "增加宠物入住说明",
+            "近期携带宠物的咨询增多，建议允许二十公斤以内的宠物入住，并收取一百元清洁押金。",
+            [self.draft(path("住客服务/宠物入住"), "# 宠物入住\n\n允许体重不超过 20 公斤的宠物入住。\n清洁押金为 100 元，离店检查后退还。\n", "create")],
+            "双方在同一路径各自新增了不同的宠物政策。"))
         remote = [
-            edit("01-mixed/log-policy", log.replace("7 天", "14 天")),
-            edit("01-mixed/auto-merge", automatic.replace("版本：1", "版本：2")),
-            *[edit("02-auto/" + name, automatic.replace("版本：1", "版本：2")) for name in ("guide-a", "guide-b")],
-            edit("03-sections/中文规则", multiple.replace("7 天", "14 天").replace("次数：3", "次数：8")),
-            self.draft(path("04-rename/original"), action="rename", destination=path("04-rename/remote-name")),
-            self.draft(path("05-remote-delete/note"), action="delete"),
-            edit("06-draft-delete/note", "# Draft 删除\n\nRemote 新增的重要说明。\n"),
-            edit("10-updated/note", automatic.replace("版本：1", "版本：2")),
-            edit("11-rejected/note", automatic.replace("版本：1", "版本：2")),
-            self.draft(path("12-add-add/new-guide"), "# Remote 新增\n\n采用 14 天方案。\n", "create"),
+            edit("住客服务/退房须知", checkout.replace("中午 12:00", "下午 13:00")),
+            *[edit(name + "/入住指南", guide.replace("每天 30 元", "每天 50 元"))
+              for name in ("住客服务", "河畔店", "西湖店", "花园店", "周末服务")],
+            edit("预订/预订与退房", booking.replace("中午 12:00", "下午 13:00").replace("前一天 18:00", "前一天 16:00")),
+            self.draft(path("交通/交通指引"), action="rename", destination=path("交通/交通与停车")),
+            self.draft(path("康体/泳池服务"), action="delete"),
+            edit("交通/机场班车", shuttle.replace("一班机场接送", "及 18:00 两班机场接送")),
+            self.draft(path("住客服务/宠物入住"), "# 宠物入住\n\n允许体重不超过 10 公斤的宠物入住。\n清洁押金为 200 元，离店检查后退还。\n", "create"),
         ]
-        self.publish(self.review("Fixture setup · Remote 已生效的修改", "用于制造真实冲突。", remote))
+        self.publish(self.review("更新停车收费及住客服务政策",
+            "停车场调整住店收费至每日五十元；退房延长一小时。同步更新交通、宠物政策，并撤下检修期间的泳池说明。", remote))
         plan = self.plan(mixed)
         current_id = mixed["drafts"][2]["draft"]["draft_id"]
         candidate = next(c for c in plan["candidates"] if c["draft_id"] == current_id)
         self.call("POST", f"/api/v1/drafts/{current_id}/rebases", {
-            "candidate_id": candidate["candidate_id"], "expected_draft_version": candidate["draft_version"]},
-            self.etag())
+            "candidate_id": candidate["candidate_id"], "expected_draft_version": candidate["draft_version"]}, self.etag())
         self.update(updated)
-        self.scenario("09 · 无需更新：正文 / 仅重命名 / 仅删除",
-            "当前版本的 Review，不应出现更新入口。逐项检查正文 diff、仅重命名、仅删除空状态，批准可直接生效。", [
-                edit("09-ready/edit", log.replace("7 天", "30 天")),
-                self.draft(path("09-ready/rename"), action="rename", destination=path("09-ready/renamed")),
-                self.draft(path("09-ready/delete"), action="delete")])
+        self.scenario("09", "更新发票办理及前台联系方式",
+            "财务已将电子发票处理时间缩短至一个工作日，同时整理前台联系入口并移除停用的无线网络说明。", [
+                edit("前台/发票办理", baseline["前台/发票办理"].replace("3 个工作日", "1 个工作日")),
+                self.draft(path("前台/联系前台"), action="rename", destination=path("前台/前台联系方式")),
+                self.draft(path("前台/旧无线网络说明"), action="delete")],
+            "基于最新 Remote，无需更新；覆盖正文、重命名及删除。")
         for item in pending:
             self.plan(item)
-        for item in self.manifest["scenarios"]:
-            detail = self.call("GET", f'/api/v1/reviews/{item["review_id"]}')
-            item.update(status=detail["review"]["status"],
-                        freshness=detail["review"]["coordination"]["freshness"],
-                        reconciliation=detail["review"]["coordination"]["reconciliation"],
-                        file_count=len(detail["drafts"]))
-        self.manifest["scenarios"].sort(key=lambda s: s["title"])
+        self.manifest["scenarios"].sort(key=lambda s: s["case"])
         self.manifest["head"] = self.head
         self.save()
         self.verify()
@@ -349,25 +363,43 @@ class Playground:
             "12": ("open", "behind", "conflicts", 1),
         }
         scenarios = self.manifest["scenarios"]
-        if len(scenarios) != 12 or {s["title"][:2] for s in scenarios} != set(expected):
+        if len(scenarios) != 12 or {s["case"] for s in scenarios} != set(expected):
             raise RuntimeError("The Review playground is incomplete.")
         for item in scenarios:
             detail = self.call("GET", f'/api/v1/reviews/{item["review_id"]}')
             review = detail["review"]
             actual = (review["status"], review["coordination"]["freshness"],
                       review["coordination"]["reconciliation"], len(detail["drafts"]))
-            if actual != expected[item["title"][:2]]:
+            if actual != expected[item["case"]]:
                 raise RuntimeError(f'Fixture state changed: {item["title"]}: {actual}')
+            if review["description"] == item["check"]:
+                raise RuntimeError("QA instructions must not be stored as the Review description.")
+            if item["case"] == "02":
+                plan = self.plan(detail)
+                if len(plan["candidates"]) != 2:
+                    raise RuntimeError("Both hotel guides must have an automatic update candidate.")
+                for candidate in plan["candidates"]:
+                    original = candidate["base_state"]["content"]["content"]
+                    draft = candidate["draft_state"]["content"]["content"]
+                    remote = candidate["current_state"]["content"]["content"]
+                    merged = candidate["proposed_state"]["content"]["content"]
+                    if (draft != original.replace("07:00—09:00", "07:00—10:00")
+                            or remote != original.replace("每天 30 元", "每天 50 元")
+                            or merged != draft.replace("每天 30 元", "每天 50 元")):
+                        raise RuntimeError("Breakfast and parking changes were not both preserved.")
         print("All 12 initial Review states verified through the Server API.")
 
     def advance_remote(self):
         self.manifest = json.loads(self.manifest_path.read_text())
         self.project = self.manifest["project_id"]
         self.head = self.current_head()
-        item = self.draft(self.manifest["prefix"] + "/_remote-tick.md",
-                          "# Remote revision\n\n" + secrets.token_hex(8) + "\n")
-        self.publish(self.review("Fixture · Remote 再次更新",
-            "先打开冲突编辑，再执行此命令，检查旧结果提交被拒绝且输入保留。", [item]))
+        extension = 801 + self.manifest.get("night_desk_updates", 0)
+        item = self.draft(self.manifest["prefix"] + "/前台/夜间服务.md",
+                          f"# 夜间服务\n\n夜间有紧急事项请拨打前台分机 {extension}。\n")
+        self.publish(self.review("调整夜间前台联系电话",
+            "夜间值班人员调整至独立服务台，请住客使用夜班专用分机。", [item]))
+        self.manifest["night_desk_updates"] = extension - 800
+        self.save()
 
 
 def main():
