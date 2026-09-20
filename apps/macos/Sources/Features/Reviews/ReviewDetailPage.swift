@@ -52,8 +52,6 @@ struct ReviewDetailPage: View {
                 }, onApplied: { result in
                     reviewModel.endUpdate(result: result)
                 })
-                .frame(minWidth: 900, idealWidth: 1100, minHeight: 600, idealHeight: 700)
-                .interactiveDismissDisabled(update.hasEdits || update.isApplying)
             }
         }
         .task(id: reviewId) {
