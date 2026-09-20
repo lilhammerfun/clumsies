@@ -1,3 +1,5 @@
+//! Migration removing retired browser-admin state while preserving active identities.
+
 mod common;
 
 #[tokio::test]

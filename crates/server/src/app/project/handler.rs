@@ -8,7 +8,7 @@ use crate::app::project::dto::{
     UpdateProjectRequest,
 };
 use crate::error::ServerError;
-use crate::http::{HttpError, parse_idempotency_key, parse_if_match, require_org_admin};
+use crate::http::{HttpError, parse_idempotency_key, parse_if_match};
 use crate::pagination::{AdminPageQuery, AdminSearchQuery, parse_admin_page};
 use crate::state::AppState;
 use axum::Json;
@@ -16,42 +16,60 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::header::LOCATION;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 
+/// Return organization-wide project administration data only to an organization administrator.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_admin_projects(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Query(query): Query<AdminPageQuery>,
 ) -> Result<Json<dto::AdminProjectListResponse>, HttpError> {
-    require_org_admin(&principal)?;
     let page = parse_admin_page(query)?;
     Ok(Json(
-        service::list_admin_projects(&state.pool, &principal.org_id, page.offset, page.limit)
-            .await?,
+        service::list_admin_projects(&state.pool, &principal, page.offset, page.limit).await?,
     ))
 }
 
+/// Create project metadata, its initial reference and selection, creator membership, and audit
+/// record atomically.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_admin_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Json(request): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<dto::AdminProject>), HttpError> {
-    require_org_admin(&principal)?;
     Ok((
         StatusCode::CREATED,
         Json(service::create_admin_project(&state.pool, &principal, request).await?),
     ))
 }
 
+/// Return administrative project metadata to an authorized organization administrator or project
+/// member.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn get_admin_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
 ) -> Result<Json<dto::AdminProject>, HttpError> {
-    service::ensure_project_member_or_org_admin(&state.pool, &principal, &project_id).await?;
     Ok(Json(
-        service::get_admin_project(&state.pool, &principal.org_id, &project_id).await?,
+        service::get_admin_project(&state.pool, &principal, &project_id).await?,
     ))
 }
 
+/// Require project administration before applying a revision-checked update and audit record.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn update_admin_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -59,7 +77,6 @@ pub(super) async fn update_admin_project(
     headers: HeaderMap,
     Json(request): Json<UpdateProjectRequest>,
 ) -> Result<Json<dto::AdminProject>, HttpError> {
-    service::ensure_project_admin(&state.pool, &principal, &project_id).await?;
     let expected_revision = parse_if_match(&headers)?;
     Ok(Json(
         service::update_admin_project(
@@ -73,13 +90,17 @@ pub(super) async fn update_admin_project(
     ))
 }
 
+/// Require project administration before deleting the expected revision and recording the actor.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn delete_admin_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<crate::dto::DeleteResult>, HttpError> {
-    service::ensure_project_admin(&state.pool, &principal, &project_id).await?;
     let expected_revision = parse_if_match(&headers)?;
     Ok(Json(
         service::delete_admin_project(&state.pool, &principal, &project_id, expected_revision)
@@ -87,6 +108,11 @@ pub(super) async fn delete_admin_project(
     ))
 }
 
+/// Return membership details only to an authorized project member or organization administrator.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_admin_project_members(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -98,11 +124,10 @@ pub(super) async fn list_admin_project_members(
         limit: query.limit,
         cursor: query.cursor,
     })?;
-    service::ensure_project_member_or_org_admin(&state.pool, &principal, &project_id).await?;
     Ok(Json(
         service::list_admin_project_members(
             &state.pool,
-            &principal.org_id,
+            &principal,
             &project_id,
             role,
             page.offset,
@@ -112,6 +137,11 @@ pub(super) async fn list_admin_project_members(
     ))
 }
 
+/// Return enabled organization members not yet assigned to a project the caller administers.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_project_member_candidates(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -132,13 +162,18 @@ pub(super) async fn list_project_member_candidates(
     ))
 }
 
+/// Require project administration before adding an enabled organization member and recording the
+/// audit event.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_admin_project_member(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
     Json(request): Json<CreateProjectMemberRequest>,
 ) -> Result<(StatusCode, Json<dto::ProjectMember>), HttpError> {
-    service::ensure_project_admin(&state.pool, &principal, &project_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(
@@ -148,13 +183,18 @@ pub(super) async fn create_admin_project_member(
     ))
 }
 
+/// Require project administration before changing an existing member's role and recording the
+/// actor.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn update_admin_project_member(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path((project_id, user_id)): Path<(String, String)>,
     Json(request): Json<UpdateProjectMemberRequest>,
 ) -> Result<Json<dto::ProjectMember>, HttpError> {
-    service::ensure_project_admin(&state.pool, &principal, &project_id).await?;
     Ok(Json(
         service::update_admin_project_member(
             &state.pool,
@@ -167,18 +207,26 @@ pub(super) async fn update_admin_project_member(
     ))
 }
 
+/// Require project administration before removing a membership and persisting its audit event.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn delete_admin_project_member(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path((project_id, user_id)): Path<(String, String)>,
 ) -> Result<Json<crate::dto::DeleteResult>, HttpError> {
-    service::ensure_project_admin(&state.pool, &principal, &project_id).await?;
     Ok(Json(
         service::delete_admin_project_member(&state.pool, &principal, &project_id, &user_id)
             .await?,
     ))
 }
 
+/// Decode the optional project-role query filter and reject unsupported values.
+///
+/// # Errors
+/// Rejects a nonempty role filter that is not a supported project role.
 fn parse_admin_project_role(role: Option<&str>) -> Result<Option<ProjectRole>, HttpError> {
     match role {
         Some("member") => Ok(Some(ProjectRole::Member)),
@@ -190,6 +238,12 @@ fn parse_admin_project_role(role: Option<&str>) -> Result<Option<ProjectRole>, H
     }
 }
 
+/// Create an administrator-owned project with its initial reference, selection state, and creator
+/// membership.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -212,6 +266,11 @@ pub(super) async fn create_project(
     Ok((StatusCode::CREATED, [(LOCATION, location)], Json(project)))
 }
 
+/// Return only projects assigned to the principal within its organization.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_projects(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -219,15 +278,26 @@ pub(super) async fn list_projects(
     Ok(Json(service::list_projects(&state.pool, &principal).await?))
 }
 
+/// Return public project metadata after enforcing explicit membership.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn get_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
 ) -> Result<Json<dto::Project>, HttpError> {
-    service::ensure_project_member(&state.pool, &principal, &project_id).await?;
-    Ok(Json(service::get_project(&state.pool, &project_id).await?))
+    Ok(Json(
+        service::get_project(&state.pool, &principal, &project_id).await?,
+    ))
 }
 
+/// Require project administration and membership before changing the expected project version.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn update_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -235,43 +305,47 @@ pub(super) async fn update_project(
     headers: HeaderMap,
     Json(request): Json<UpdateProjectRequest>,
 ) -> Result<Json<dto::Project>, HttpError> {
-    service::ensure_project_admin(&state.pool, &principal, &project_id).await?;
-    service::ensure_project_member(&state.pool, &principal, &project_id).await?;
     let expected_version = parse_if_match(&headers)?;
     Ok(Json(
-        service::update_project(&state.pool, &project_id, expected_version, request).await?,
+        service::update_project(
+            &state.pool,
+            &principal,
+            &project_id,
+            expected_version,
+            request,
+        )
+        .await?,
     ))
 }
 
+/// Require project administration and membership before deleting the expected project version.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn delete_project(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<crate::dto::DeleteResult>, HttpError> {
-    service::ensure_project_admin(&state.pool, &principal, &project_id).await?;
-    service::ensure_project_member(&state.pool, &principal, &project_id).await?;
     let expected_version = parse_if_match(&headers)?;
     Ok(Json(
-        service::delete_project(&state.pool, &project_id, expected_version).await?,
+        service::delete_project(&state.pool, &principal, &project_id, expected_version).await?,
     ))
 }
 
+/// Return project members only after enforcing the caller's explicit project membership.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_project_members(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(project_id): Path<String>,
 ) -> Result<Json<dto::ProjectMemberListResponse>, HttpError> {
-    service::ensure_project_member(&state.pool, &principal, &project_id).await?;
     Ok(Json(
-        service::list_admin_project_members(
-            &state.pool,
-            &principal.org_id,
-            &project_id,
-            None,
-            0,
-            200,
-        )
-        .await?,
+        service::list_project_members(&state.pool, &principal, &project_id, None, 0, 200).await?,
     ))
 }

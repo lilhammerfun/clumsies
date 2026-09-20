@@ -9,8 +9,13 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
+/// Singleton key ensuring only one organization installation exists in this database.
 const INSTALLATION_ID: &str = "default";
 
+/// Read installation completion state through the supplied database executor.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn installation_state_for(
     pool: &PgPool,
 ) -> Result<InstallationState, InstallationError> {
@@ -23,6 +28,10 @@ pub(super) async fn installation_state_for(
     installation_state(&state)
 }
 
+/// Decode the expiry and staged settings of a live first-run setup session.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn active_session_status(
     pool: &PgPool,
     token: &str,
@@ -57,6 +66,12 @@ pub(super) async fn active_session_status(
     .transpose()
 }
 
+/// Persist hashed setup-session credentials and their bounded expiry.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn create_session(
     tx: &mut Transaction<'_, Postgres>,
     session_id: &str,
@@ -79,6 +94,12 @@ pub(super) async fn create_session(
     Ok(())
 }
 
+/// Lock the active setup session and replace its staged organization settings.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn replace_configuration(
     tx: &mut Transaction<'_, Postgres>,
     session_token: &str,
@@ -105,6 +126,12 @@ pub(super) async fn replace_configuration(
     Ok(())
 }
 
+/// Read authorized setup-session state for first-owner provider login.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn authorize_oidc(
     tx: &mut Transaction<'_, Postgres>,
     session_token: &str,
@@ -115,6 +142,15 @@ pub(super) async fn authorize_oidc(
     Ok(session_id)
 }
 
+/// Lock a setup session and load the configuration used to initialize its owner.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid or completed setup
+/// state.
 pub(super) async fn setup_configuration_for_update(
     tx: &mut Transaction<'_, Postgres>,
     session_id: &str,
@@ -140,6 +176,13 @@ pub(super) async fn setup_configuration_for_update(
     })
 }
 
+/// Lock singleton installation state and persist initial organization, owner, and project
+/// records.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn initialize_with_oidc(
     tx: &mut Transaction<'_, Postgres>,
     identity: &OidcIdentity,
@@ -237,6 +280,15 @@ pub(super) async fn initialize_with_oidc(
     })
 }
 
+/// Reject setup writes once the singleton installation has completed.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid or completed setup
+/// state.
 async fn require_setup_required(
     tx: &mut Transaction<'_, Postgres>,
     exclusive: bool,
@@ -267,6 +319,15 @@ async fn require_setup_required(
     }
 }
 
+/// Require an unexpired setup session whose CSRF proof matches.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid or completed setup
+/// state.
 async fn require_active_session(
     tx: &mut Transaction<'_, Postgres>,
     session_token: &str,
@@ -301,6 +362,12 @@ async fn require_active_session(
     Ok(row.try_get("session_id")?)
 }
 
+/// Create the initial empty snapshot reference during installation initialization.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 async fn insert_ref(
     tx: &mut Transaction<'_, Postgres>,
     scope: &str,

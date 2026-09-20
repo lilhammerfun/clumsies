@@ -75,6 +75,7 @@ pub fn setup_router(pool: PgPool, owner_email: &str, owner_subject: &str) -> Rou
             display_name: "Owner".to_owned(),
         }),
         vec![Url::parse("http://127.0.0.1/callback").unwrap()],
+        None,
     );
     let installation =
         InstallationService::new(pool.clone(), Some(TEST_SETUP_CODE), false).unwrap();
@@ -142,6 +143,7 @@ pub async fn authenticated_router_as(
             display_name: display_name.to_owned(),
         }),
         vec![Url::parse("http://127.0.0.1/callback").unwrap()],
+        None,
     );
     let installation = InstallationService::new(pool.clone(), None, true).unwrap();
     let app = build_app(pool, auth, installation);
@@ -329,4 +331,28 @@ impl TestPostgres {
             .await
             .expect("remove PostgreSQL test container");
     }
+}
+
+// Component fixtures use the persisted actor role rather than inventing an admin.
+pub async fn principal(pool: &sqlx::PgPool, user_id: &str) -> server::app::auth::AuthPrincipal {
+    let (org_id, role): (String, String) = sqlx::query_as(
+        "SELECT i.org_id, u.role FROM users u CROSS JOIN server_installations i WHERE u.user_id = $1",
+    ).bind(user_id).fetch_one(pool).await.unwrap();
+    server::app::auth::AuthPrincipal {
+        user_id: user_id.to_owned(),
+        org_id,
+        role,
+        session_id: "component-session".to_owned(),
+        token_id: "component-token".to_owned(),
+    }
+}
+
+pub async fn owner_principal(pool: &sqlx::PgPool) -> server::app::auth::AuthPrincipal {
+    let user_id: String = sqlx::query_scalar(
+        "SELECT user_id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    principal(pool, &user_id).await
 }

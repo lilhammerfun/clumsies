@@ -1,6 +1,6 @@
 //! HTTP preconditions and error responses.
 
-use crate::app::auth::{AuthError, AuthPrincipal};
+use crate::app::auth::AuthError;
 use crate::app::installation::InstallationError;
 use crate::error::ServerError;
 use axum::Json;
@@ -10,14 +10,10 @@ use serde_json::json;
 
 pub(crate) use crate::middleware::cookie_value;
 
-pub(crate) fn require_org_admin(principal: &AuthPrincipal) -> Result<(), HttpError> {
-    if principal.role == "owner" || principal.role == "admin" {
-        Ok(())
-    } else {
-        Err(ServerError::Forbidden("organization administrator role required".to_owned()).into())
-    }
-}
-
+/// Require a well-formed numeric revision precondition from HTTP headers.
+///
+/// # Errors
+/// Rejects a missing, malformed, or nonnumeric resource revision precondition.
 pub(crate) fn parse_if_match(headers: &HeaderMap) -> Result<i64, HttpError> {
     let value = headers
         .get("if-match")
@@ -30,6 +26,10 @@ pub(crate) fn parse_if_match(headers: &HeaderMap) -> Result<i64, HttpError> {
         .map_err(|_| HttpError::bad_request("If-Match must be an integer version"))
 }
 
+/// Require a usable client key for deduplicating project creation.
+///
+/// # Errors
+/// Rejects a missing, invalid, or blank idempotency header.
 pub(crate) fn parse_idempotency_key(headers: &HeaderMap) -> Result<&str, HttpError> {
     let value = headers
         .get("idempotency-key")
@@ -45,6 +45,10 @@ pub(crate) fn parse_idempotency_key(headers: &HeaderMap) -> Result<&str, HttpErr
     Ok(value)
 }
 
+/// Decode a reference precondition, including the sentinel for an empty reference.
+///
+/// # Errors
+/// Rejects a missing or malformed reference validator.
 pub(crate) fn parse_ref_if_match(headers: &HeaderMap) -> Result<Option<String>, HttpError> {
     let value = headers
         .get("if-match")
@@ -70,18 +74,25 @@ pub(crate) fn parse_ref_if_match(headers: &HeaderMap) -> Result<Option<String>, 
     }
 }
 
+/// Boundary error mapped to the common HTTP status and response envelope.
 pub(crate) enum HttpError {
+    /// Resource-operation failure mapped to the shared public error envelope.
     Server(ServerError),
+    /// Authentication failure mapped to a stable public response.
     Auth(AuthError),
+    /// First-run setup failure mapped to its public status and code.
     Installation(InstallationError),
+    /// Technical failure whose details are retained only for internal diagnostics.
     Internal(String),
 }
 
 impl HttpError {
+    /// Construct a safe public error for malformed HTTP input.
     pub(crate) fn bad_request(message: &str) -> Self {
         Self::Server(ServerError::InvalidRequest(message.to_owned()))
     }
 
+    /// Construct an internal failure without exposing technical diagnostics to the caller.
     pub(crate) fn internal(message: &str) -> Self {
         Self::Internal(message.to_owned())
     }
@@ -222,6 +233,7 @@ impl IntoResponse for HttpError {
     }
 }
 
+/// Map setup failures to the HTTP status defined by the installation contract.
 fn installation_error_status(error: &InstallationError) -> StatusCode {
     match error {
         InstallationError::SetupRequired | InstallationError::Locked => StatusCode::CONFLICT,

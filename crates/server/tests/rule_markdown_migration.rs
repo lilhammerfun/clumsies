@@ -1,3 +1,5 @@
+//! Migration preserving rule semantics in canonical Markdown content.
+
 mod common;
 
 use sqlx::Executor;

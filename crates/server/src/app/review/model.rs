@@ -3,6 +3,7 @@
 use crate::app::review::dto::ReviewStatus;
 use crate::error::ServerError;
 
+/// Count final-content lines using the same trailing-newline convention as client anchors.
 pub(crate) fn review_comment_line_count(content: &str) -> i64 {
     if content.is_empty() {
         0
@@ -11,6 +12,10 @@ pub(crate) fn review_comment_line_count(content: &str) -> i64 {
     }
 }
 
+/// Decode the persisted review lifecycle before applying publication rules.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn review_status(value: &str) -> Result<ReviewStatus, ServerError> {
     match value {
         "open" => Ok(ReviewStatus::Open),
@@ -23,8 +28,11 @@ pub(crate) fn review_status(value: &str) -> Result<ReviewStatus, ServerError> {
     }
 }
 
+/// Committed snapshot identity and operation count returned by transactional publication.
 pub(crate) struct ReviewMergeData {
+    /// Stable identifier of the immutable committed snapshot.
     pub(crate) commit_id: String,
+    /// Number of resource operations materialized by this publication.
     pub(crate) applied_operation_count: i64,
 }
 

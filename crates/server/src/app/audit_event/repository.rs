@@ -5,6 +5,10 @@ use crate::error::ServerError;
 use crate::identity::prefixed_id;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
+/// Read organization audit history with filtering applied before the page limit.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_audit_events(
     pool: &PgPool,
     org_id: &str,
@@ -67,6 +71,12 @@ pub(crate) async fn list_audit_events(
         .collect()
 }
 
+/// Persist the actor and operation in the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_audit_event(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,

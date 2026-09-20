@@ -1,3 +1,5 @@
+//! Bounded database query work for proposal and review read operations.
+
 use server::app::draft::dto::{
     CreateDraftRequest, DraftOperationAction, DraftOperationInput, DraftResourceContent,
     DraftResourceRef,
@@ -22,41 +24,53 @@ async fn metadata_and_draft_reads_skip_payloads_and_ref_locks() {
     )
     .await;
 
-    let org_memory = server::app::memory::service::create_org_context(
+    let org_memory = server::app::memory::create_org_context(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "context/selected.md",
         "# Selected",
     )
     .await
     .unwrap();
-    server::app::memory::service::select_org_resource_for_project(
+    server::app::memory::select_org_resource_for_project(
         &pool,
+        &common::owner_principal(&pool).await,
         &bootstrap.project_id,
         &org_memory,
     )
     .await
     .unwrap();
-    let project_head =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .expect("project selection should create a project commit");
-    server::app::commit::service::get_commit_payload(&pool, &project_head)
-        .await
-        .unwrap();
-    let org_head =
-        server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id;
-
-    let draft = server::app::draft::service::create_draft(
+    let project_head = server::app::commit::get_project_commit_state(
         &pool,
-        &bootstrap.user_id,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .expect("project selection should create a project commit");
+    server::app::commit::get_commit_payload(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &project_head,
+    )
+    .await
+    .unwrap();
+    let org_head = server::app::commit::get_org_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id;
+
+    let draft = server::app::draft::create_draft(
+        &pool,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateDraftRequest {
             daemon_installation_id: "daemon_read_paths".to_owned(),
             project_id: bootstrap.project_id.clone(),
@@ -100,7 +114,11 @@ async fn metadata_and_draft_reads_skip_payloads_and_ref_locks() {
 
     let read = tokio::time::timeout(
         Duration::from_secs(3),
-        server::app::draft::service::get_draft(&pool, &draft.draft.draft_id),
+        server::app::draft::get_draft(
+            &pool,
+            &common::owner_principal(&pool).await,
+            &draft.draft.draft_id,
+        ),
     )
     .await;
     ref_lock.rollback().await.unwrap();
@@ -119,15 +137,23 @@ async fn metadata_and_draft_reads_skip_payloads_and_ref_locks() {
     .await
     .unwrap();
 
-    let state =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap();
+    let state = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(state.latest.unwrap().commit_id, project_head);
 
-    let commits = server::app::commit::service::list_project_commits(&pool, &bootstrap.project_id)
-        .await
-        .unwrap();
+    let commits = server::app::commit::list_project_commits(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+    )
+    .await
+    .unwrap();
     assert!(
         commits
             .items
@@ -135,7 +161,12 @@ async fn metadata_and_draft_reads_skip_payloads_and_ref_locks() {
             .any(|commit| commit.commit_id == project_head)
     );
     assert!(matches!(
-        server::app::commit::service::get_commit_payload(&pool, &project_head).await,
+        server::app::commit::get_commit_payload(
+            &pool,
+            &common::owner_principal(&pool).await,
+            &project_head
+        )
+        .await,
         Err(ServerError::InvalidRequest(_))
     ));
     postgres.shutdown().await;

@@ -6,7 +6,7 @@ mod handler;
 pub(crate) mod model;
 mod repository;
 pub(crate) mod routes;
-pub mod service;
+mod service;
 pub use error::InstallationError;
 pub use model::{InitializedInstallation, SetupSessionCredentials};
 pub use service::InstallationService;

@@ -1,3 +1,5 @@
+//! Migration unifying legacy resource categories under Memory.
+
 mod common;
 
 use sqlx::Executor;

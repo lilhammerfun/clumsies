@@ -1,3 +1,5 @@
+//! Idempotent project creation and replay through the production HTTP contract.
+
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::LOCATION;
@@ -119,7 +121,7 @@ async fn failed_creator_membership_rolls_back_the_entire_project() {
         .await
         .unwrap();
 
-    let result = server::app::project::service::create_project_from_request(
+    let result = server::app::project::create_project_from_request(
         &pool,
         &AuthPrincipal {
             user_id: "missing-user".to_owned(),

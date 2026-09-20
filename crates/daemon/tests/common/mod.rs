@@ -1,3 +1,5 @@
+//! Isolated database, credential, and HTTP server fixtures for daemon integration scenarios.
+
 use daemon::{
     CredentialStore, CredentialStoreError, DaemonConfig, DaemonIpcService, DaemonState,
     ServerCredentials,
@@ -239,4 +241,30 @@ impl Drop for TestServer {
         // Panic-path fallback; successful scenarios await shutdown explicitly.
         self.task.abort();
     }
+}
+
+// Component fixtures use the persisted actor role rather than inventing an admin.
+#[allow(dead_code)]
+pub async fn principal(pool: &sqlx::PgPool, user_id: &str) -> server::app::auth::AuthPrincipal {
+    let (org_id, role): (String, String) = sqlx::query_as(
+        "SELECT i.org_id, u.role FROM users u CROSS JOIN server_installations i WHERE u.user_id = $1",
+    ).bind(user_id).fetch_one(pool).await.unwrap();
+    server::app::auth::AuthPrincipal {
+        user_id: user_id.to_owned(),
+        org_id,
+        role,
+        session_id: "component-session".to_owned(),
+        token_id: "component-token".to_owned(),
+    }
+}
+
+#[allow(dead_code)]
+pub async fn owner_principal(pool: &sqlx::PgPool) -> server::app::auth::AuthPrincipal {
+    let user_id: String = sqlx::query_scalar(
+        "SELECT user_id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    principal(pool, &user_id).await
 }

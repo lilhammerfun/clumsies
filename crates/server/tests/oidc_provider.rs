@@ -1,3 +1,5 @@
+//! OIDC HTTP discovery, cryptographic verification, key refresh, and invalid-provider behavior.
+
 use chrono::{Duration, Utc};
 use openidconnect::core::{
     CoreIdToken, CoreIdTokenClaims, CoreJsonWebKeySet, CoreJwsSigningAlgorithm,
@@ -279,6 +281,10 @@ async fn unknown_signing_key_refreshes_jwks_without_redeeming_the_code_twice() {
     assert_eq!(identity.subject, "oidc-subject");
 }
 
+/// Discover the test provider through its real HTTP protocol endpoints.
+///
+/// # Errors
+/// Propagates invalid discovery metadata or protocol transport failures from the adapter.
 async fn discover(server: &MockServer) -> Result<DiscoveredOidcProvider, AuthError> {
     DiscoveredOidcProvider::discover(
         &server.uri(),

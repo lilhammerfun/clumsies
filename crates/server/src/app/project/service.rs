@@ -13,7 +13,12 @@ use crate::error::ServerError;
 use crate::identity::prefixed_id;
 use crate::pagination::{admin_page, page_info};
 
-pub async fn ensure_project_member(
+/// Hide projects outside the principal's organization or explicit project membership.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
+pub(crate) async fn ensure_project_member(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: &str,
@@ -27,7 +32,13 @@ pub async fn ensure_project_member(
     }
 }
 
-pub async fn ensure_project_admin(
+/// Require organization administration or project-local administration within the principal's
+/// organization.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
+pub(crate) async fn ensure_project_admin(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: &str,
@@ -48,7 +59,13 @@ pub async fn ensure_project_admin(
     }
 }
 
-pub async fn ensure_project_member_or_org_admin(
+/// Allow organization administrators or explicit project members to read administrative project
+/// details.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
+async fn ensure_project_member_or_org_admin(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: &str,
@@ -60,6 +77,11 @@ pub async fn ensure_project_member_or_org_admin(
     }
 }
 
+/// Return enabled organization members not yet assigned to a project the caller administers.
+///
+/// # Errors
+/// Propagates missing required state, invalid stored values, and persistence failures from the
+/// participating resource operations.
 pub async fn list_project_member_candidates(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
@@ -76,30 +98,55 @@ pub async fn list_project_member_candidates(
     Ok(ProjectMemberCandidateListResponse { items, page_info })
 }
 
+/// Return organization-wide project administration data only to an organization administrator.
+///
+/// # Errors
+/// Propagates missing required state, invalid stored values, and persistence failures from the
+/// participating resource operations.
 pub async fn list_admin_projects(
     pool: &sqlx::PgPool,
-    org_id: &str,
+    principal: &AuthPrincipal,
     offset: i64,
     limit: i64,
 ) -> Result<AdminProjectListResponse, ServerError> {
+    let org_id = &principal.org_id;
+    principal.require_org_admin()?;
+
     let items = repository::list_admin_projects(pool, org_id, offset, limit + 1).await?;
     let (items, page_info) = admin_page(items, offset, limit);
     Ok(AdminProjectListResponse { items, page_info })
 }
 
+/// Return administrative project metadata to an authorized organization administrator or project
+/// member.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
 pub async fn get_admin_project(
     pool: &sqlx::PgPool,
-    org_id: &str,
+    principal: &AuthPrincipal,
     project_id: &str,
 ) -> Result<AdminProject, ServerError> {
+    let org_id = &principal.org_id;
+    ensure_project_member_or_org_admin(pool, principal, project_id).await?;
+
     repository::load_admin_project(pool, org_id, project_id).await
 }
 
+/// Create project metadata, its initial reference and selection, creator membership, and audit
+/// record atomically.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, invalid input or lifecycle
+/// state, and propagates persistence failures.
 pub async fn create_admin_project(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     request: CreateProjectRequest,
 ) -> Result<AdminProject, ServerError> {
+    principal.require_org_admin()?;
+
     let name = normalize_project_name(&request.name)?;
     let description = normalize_project_description(request.description.as_deref())?;
     let project_id = prefixed_id("prj");
@@ -110,7 +157,7 @@ pub async fn create_admin_project(
     repository::insert_main_ref(&mut tx, &principal.org_id, &project_id).await?;
     repository::insert_selection_state(&mut tx, &project_id).await?;
     repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "admin").await?;
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -120,9 +167,14 @@ pub async fn create_admin_project(
     )
     .await?;
     tx.commit().await?;
-    get_admin_project(pool, &principal.org_id, &project_id).await
+    get_admin_project(pool, principal, &project_id).await
 }
 
+/// Require project administration before applying a revision-checked update and audit record.
+///
+/// # Errors
+/// Rejects unauthorized actors, missing projects, stale revisions, duplicate or invalid metadata,
+/// and persistence failures. The metadata change and audit record share one transaction.
 pub async fn update_admin_project(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
@@ -130,6 +182,8 @@ pub async fn update_admin_project(
     expected_revision: i64,
     request: UpdateProjectRequest,
 ) -> Result<AdminProject, ServerError> {
+    ensure_project_admin(pool, principal, project_id).await?;
+
     let mut tx = pool.begin().await?;
     let current = repository::lock_admin_project(&mut tx, &principal.org_id, project_id).await?;
     if current.revision != expected_revision {
@@ -150,7 +204,7 @@ pub async fn update_admin_project(
         None => current.description,
     };
     repository::update_project(&mut tx, project_id, &name, &description).await?;
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -160,15 +214,22 @@ pub async fn update_admin_project(
     )
     .await?;
     tx.commit().await?;
-    get_admin_project(pool, &principal.org_id, project_id).await
+    get_admin_project(pool, principal, project_id).await
 }
 
+/// Require project administration before deleting the expected revision and recording the actor.
+///
+/// # Errors
+/// Rejects unauthorized actors, missing projects, stale revisions, and persistence failures.
+/// Deletion and its audit record commit together.
 pub async fn delete_admin_project(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: &str,
     expected_revision: i64,
 ) -> Result<DeleteResult, ServerError> {
+    ensure_project_admin(pool, principal, project_id).await?;
+
     let mut tx = pool.begin().await?;
     let revision =
         repository::lock_admin_project_revision(&mut tx, &principal.org_id, project_id).await?;
@@ -179,7 +240,7 @@ pub async fn delete_admin_project(
             revision,
         ));
     }
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -196,14 +257,21 @@ pub async fn delete_admin_project(
     })
 }
 
+/// Return membership details only to an authorized project member or organization administrator.
+///
+/// # Errors
+/// Hides inaccessible projects and propagates invalid stored roles or database failures.
 pub async fn list_admin_project_members(
     pool: &sqlx::PgPool,
-    org_id: &str,
+    principal: &AuthPrincipal,
     project_id: &str,
     role: Option<ProjectRole>,
     offset: i64,
     limit: i64,
 ) -> Result<ProjectMemberListResponse, ServerError> {
+    let org_id = &principal.org_id;
+    ensure_project_member_or_org_admin(pool, principal, project_id).await?;
+
     ensure_project_in_org(pool, org_id, project_id).await?;
     let items = repository::list_project_members(
         pool,
@@ -218,15 +286,23 @@ pub async fn list_admin_project_members(
     Ok(ProjectMemberListResponse { items, page_info })
 }
 
+/// Require project administration before adding an enabled organization member and recording the
+/// audit event.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, invalid input or lifecycle
+/// state, and propagates persistence failures.
 pub async fn create_admin_project_member(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: &str,
     request: CreateProjectMemberRequest,
 ) -> Result<ProjectMember, ServerError> {
+    ensure_project_admin(pool, principal, project_id).await?;
+
     let mut tx = pool.begin().await?;
     ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
-    let status = organization::service::load_user_status(&mut tx, &request.user_id).await?;
+    let status = organization::load_user_status(&mut tx, &request.user_id).await?;
     if status == "disabled" {
         return Err(ServerError::InvalidRequest(
             "a disabled organization member cannot be added to a project".to_owned(),
@@ -246,7 +322,7 @@ pub async fn create_admin_project_member(
         ));
     }
     let target_id = format!("{project_id}:{}", request.user_id);
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -259,6 +335,12 @@ pub async fn create_admin_project_member(
     repository::load_project_member(pool, &principal.org_id, project_id, &request.user_id).await
 }
 
+/// Require project administration before changing an existing member's role and recording the
+/// actor.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
 pub async fn update_admin_project_member(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
@@ -266,6 +348,8 @@ pub async fn update_admin_project_member(
     user_id: &str,
     request: UpdateProjectMemberRequest,
 ) -> Result<ProjectMember, ServerError> {
+    ensure_project_admin(pool, principal, project_id).await?;
+
     let mut tx = pool.begin().await?;
     ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
     if !repository::update_project_member(&mut tx, project_id, user_id, request.role.as_str())
@@ -277,7 +361,7 @@ pub async fn update_admin_project_member(
         ));
     }
     let target_id = format!("{project_id}:{user_id}");
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -290,12 +374,19 @@ pub async fn update_admin_project_member(
     repository::load_project_member(pool, &principal.org_id, project_id, user_id).await
 }
 
+/// Require project administration before removing a membership and persisting its audit event.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
 pub async fn delete_admin_project_member(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: &str,
     user_id: &str,
 ) -> Result<DeleteResult, ServerError> {
+    ensure_project_admin(pool, principal, project_id).await?;
+
     let mut tx = pool.begin().await?;
     ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
     if !repository::delete_project_member(&mut tx, project_id, user_id).await? {
@@ -305,7 +396,7 @@ pub async fn delete_admin_project_member(
         ));
     }
     let target_id = format!("{project_id}:{user_id}");
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -321,12 +412,21 @@ pub async fn delete_admin_project_member(
     })
 }
 
+/// Create an administrator-owned project with its initial reference, selection state, and creator
+/// membership.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, invalid input or lifecycle
+/// state, and propagates persistence failures.
 pub async fn create_project(
     pool: &sqlx::PgPool,
-    org_id: &str,
+    principal: &AuthPrincipal,
     name: &str,
     description: &str,
 ) -> Result<String, ServerError> {
+    let org_id = &principal.org_id;
+    principal.require_org_admin()?;
+
     let name = normalize_project_name(name)?;
     let description = normalize_project_description(Some(description))?;
     let project_id = prefixed_id("prj");
@@ -335,10 +435,17 @@ pub async fn create_project(
     repository::insert_project(&mut tx, &project_id, org_id, &name, &description).await?;
     repository::insert_main_ref(&mut tx, org_id, &project_id).await?;
     repository::insert_selection_state(&mut tx, &project_id).await?;
+    repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "admin").await?;
     tx.commit().await?;
     Ok(project_id)
 }
 
+/// Create a project exactly once per actor and idempotency key, rejecting reuse with different
+/// metadata.
+///
+/// # Errors
+/// Rejects invalid metadata or idempotency keys, duplicate project names, and reuse of a key with
+/// different metadata; propagates persistence failures.
 pub async fn create_project_from_request(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
@@ -375,7 +482,7 @@ pub async fn create_project_from_request(
             ));
         }
         tx.commit().await?;
-        return get_project(pool, &existing.project_id).await;
+        return get_project(pool, principal, &existing.project_id).await;
     }
     repository::ensure_project_name_available(&mut tx, &principal.org_id, &name, None).await?;
     repository::insert_project(&mut tx, &project_id, &principal.org_id, &name, &description)
@@ -383,7 +490,7 @@ pub async fn create_project_from_request(
     repository::insert_main_ref(&mut tx, &principal.org_id, &project_id).await?;
     repository::insert_selection_state(&mut tx, &project_id).await?;
     repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "admin").await?;
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -393,9 +500,14 @@ pub async fn create_project_from_request(
     )
     .await?;
     tx.commit().await?;
-    get_project(pool, &project_id).await
+    get_project(pool, principal, &project_id).await
 }
 
+/// Return only projects assigned to the principal within its organization.
+///
+/// # Errors
+/// Propagates missing required state, invalid stored values, and persistence failures from the
+/// participating resource operations.
 pub async fn list_projects(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
@@ -406,16 +518,36 @@ pub async fn list_projects(
     })
 }
 
-pub async fn get_project(pool: &sqlx::PgPool, project_id: &str) -> Result<Project, ServerError> {
+/// Return public project metadata after enforcing explicit membership.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
+pub async fn get_project(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+    project_id: &str,
+) -> Result<Project, ServerError> {
+    ensure_project_member(pool, principal, project_id).await?;
+
     repository::load_project(pool, project_id).await
 }
 
+/// Require project administration and membership before changing the expected project version.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, stale revisions or reference
+/// preconditions, invalid input or lifecycle state, and propagates persistence failures.
 pub async fn update_project(
     pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
     project_id: &str,
     expected_version: i64,
     request: UpdateProjectRequest,
 ) -> Result<Project, ServerError> {
+    ensure_project_admin(pool, principal, project_id).await?;
+    ensure_project_member(pool, principal, project_id).await?;
+
     let mut tx = pool.begin().await?;
     let current = repository::lock_project_revision(&mut tx, project_id).await?;
     if current != expected_version {
@@ -438,14 +570,23 @@ pub async fn update_project(
     };
     repository::update_project(&mut tx, project_id, &name, &description).await?;
     tx.commit().await?;
-    get_project(pool, project_id).await
+    get_project(pool, principal, project_id).await
 }
 
+/// Require project administration and membership before deleting the expected project version.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, stale revisions or reference
+/// preconditions, and propagates persistence failures.
 pub async fn delete_project(
     pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
     project_id: &str,
     expected_version: i64,
 ) -> Result<DeleteResult, ServerError> {
+    ensure_project_admin(pool, principal, project_id).await?;
+    ensure_project_member(pool, principal, project_id).await?;
+
     let mut tx = pool.begin().await?;
     let current = repository::lock_project_revision(&mut tx, project_id).await?;
     if current != expected_version {
@@ -463,6 +604,11 @@ pub async fn delete_project(
     })
 }
 
+/// Hide projects outside the specified organization before evaluating project-local privileges.
+///
+/// # Errors
+/// Propagates missing required state, invalid stored values, and persistence failures from the
+/// participating resource operations.
 async fn ensure_project_in_org(
     pool: &sqlx::PgPool,
     org_id: &str,
@@ -475,6 +621,13 @@ async fn ensure_project_in_org(
     }
 }
 
+/// Check project ownership using the caller's transaction before modifying memberships.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates missing required state, invalid stored values, and persistence failures from the
+/// participating resource operations.
 async fn ensure_project_in_org_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org_id: &str,
@@ -487,6 +640,10 @@ async fn ensure_project_in_org_tx(
     }
 }
 
+/// Trim a project name and enforce its nonempty, bounded public contract.
+///
+/// # Errors
+/// Rejects blank project names or names exceeding the supported length.
 fn normalize_project_name(name: &str) -> Result<String, ServerError> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 120 {
@@ -497,6 +654,10 @@ fn normalize_project_name(name: &str) -> Result<String, ServerError> {
     Ok(name.to_owned())
 }
 
+/// Normalize optional project description text and enforce the public size limit.
+///
+/// # Errors
+/// Rejects descriptions exceeding the supported length.
 fn normalize_project_description(description: Option<&str>) -> Result<String, ServerError> {
     let description = description.unwrap_or_default().trim();
     if description.chars().count() > 4_000 {
@@ -507,6 +668,10 @@ fn normalize_project_description(description: Option<&str>) -> Result<String, Se
     Ok(description.to_owned())
 }
 
+/// Require a bounded nonblank key before recording a project-creation claim.
+///
+/// # Errors
+/// Rejects blank keys and keys exceeding the supported length.
 fn normalize_idempotency_key(value: &str) -> Result<String, ServerError> {
     let value = value.trim();
     if value.is_empty() || value.len() > 200 {
@@ -518,4 +683,20 @@ fn normalize_idempotency_key(value: &str) -> Result<String, ServerError> {
 }
 
 // Transaction participants share the caller-owned transaction; only the outer service commits.
-pub(crate) use super::repository::list_project_refs;
+
+/// Return project members only after enforcing the caller's explicit project membership.
+///
+/// # Errors
+/// Propagates missing required state, invalid stored values, and persistence failures from the
+/// participating resource operations.
+pub async fn list_project_members(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+    project_id: &str,
+    role: Option<ProjectRole>,
+    offset: i64,
+    limit: i64,
+) -> Result<ProjectMemberListResponse, ServerError> {
+    ensure_project_member(pool, principal, project_id).await?;
+    list_admin_project_members(pool, principal, project_id, role, offset, limit).await
+}

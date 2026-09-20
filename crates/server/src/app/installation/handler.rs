@@ -14,6 +14,11 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use cookie::{Cookie, SameSite};
 
+/// Return the current installation phase and setup capabilities.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn get_setup(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -27,6 +32,11 @@ pub(super) async fn get_setup(
     ))
 }
 
+/// Validate the bootstrap secret and issue a short-lived setup cookie.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_setup_session(
     State(state): State<AppState>,
     Json(request): Json<CreateSetupSessionRequest>,
@@ -54,6 +64,11 @@ pub(super) async fn create_setup_session(
     Ok(response)
 }
 
+/// Replace staged setup settings after validating the session and CSRF proof.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn replace_setup_configuration(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -68,6 +83,11 @@ pub(super) async fn replace_setup_configuration(
     ))
 }
 
+/// Authorize first-owner browser login using the active setup session.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_setup_oidc_authorization(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -94,6 +114,11 @@ pub(super) async fn create_setup_oidc_authorization(
     ))
 }
 
+/// Extract the setup cookie and CSRF proof required by state-changing setup endpoints.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 fn setup_credentials(
     installation: &InstallationService,
     headers: &HeaderMap,
@@ -109,6 +134,7 @@ fn setup_credentials(
     Ok((session_token, csrf_token))
 }
 
+/// Read the setup credential from the deployment-appropriate cookie name.
 fn setup_session_token(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     cookie_value(headers, cookie_name)
 }

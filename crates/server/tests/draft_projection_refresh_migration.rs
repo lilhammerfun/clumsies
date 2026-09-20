@@ -1,3 +1,5 @@
+//! Migration refreshing proposal projections after authoritative content changes.
+
 mod common;
 
 use sqlx::Executor;

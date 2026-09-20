@@ -9,6 +9,11 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::HeaderMap;
 
+/// Create an owned Memory collection and its validated resource selection atomically.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_personal_bundle(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -25,6 +30,11 @@ pub(super) async fn create_personal_bundle(
     ))
 }
 
+/// Return collections belonging to the authenticated owner.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_personal_bundles(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -34,6 +44,11 @@ pub(super) async fn list_personal_bundles(
     ))
 }
 
+/// Require collection ownership before assembling its active selected memories.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn get_personal_bundle(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -44,6 +59,11 @@ pub(super) async fn get_personal_bundle(
     ))
 }
 
+/// Apply owner-authorized metadata and selection changes at the expected revision.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn update_personal_bundle(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -65,6 +85,11 @@ pub(super) async fn update_personal_bundle(
     ))
 }
 
+/// Delete an owned collection only when its revision matches the caller's precondition.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn delete_personal_bundle(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,

@@ -1,3 +1,5 @@
+//! Migration preserving stable resource identity in reconciliation candidates.
+
 mod common;
 
 use sqlx::Executor;

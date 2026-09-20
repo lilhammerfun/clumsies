@@ -13,28 +13,35 @@ use crate::app::installation::dto::{
 };
 use crate::identity::{prefixed_id, random_token, secret_hash};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::env;
 use subtle::ConstantTimeEq;
 use time::{Duration, OffsetDateTime};
 
+/// Maximum lifetime of a first-run setup session and its CSRF authorization.
 const SETUP_SESSION_TTL: Duration = Duration::minutes(15);
+/// Minimum bootstrap-secret length accepted before enabling first-owner setup.
 const MINIMUM_SETUP_CODE_LENGTH: usize = 32;
+/// Cookie name used only for permitted loopback HTTP setup.
 const LOCAL_SETUP_COOKIE_NAME: &str = "clumsies_setup_session";
+/// Host-prefixed cookie name enforcing HTTPS setup-session isolation.
 const SECURE_SETUP_COOKIE_NAME: &str = "__Host-clumsies_setup_session";
 
+/// Bootstrap-secret validation and transactional first-run installation operations.
 #[derive(Clone)]
 pub struct InstallationService {
+    /// Shared PostgreSQL connection pool; callers retain responsibility for shutdown.
     pool: PgPool,
+    /// Digest of the bootstrap secret used for constant-time comparison.
     setup_code_hash: Option<[u8; 32]>,
+    /// Whether setup credentials require HTTPS-only cookie attributes.
     secure_cookie: bool,
 }
 
 impl InstallationService {
-    pub fn from_env(pool: PgPool, secure_cookie: bool) -> Result<Self, InstallationError> {
-        let setup_code = optional_env("CLUMSIES_SETUP_CODE");
-        Self::new(pool, setup_code.as_deref(), secure_cookie)
-    }
-
+    /// Hash an explicit bootstrap secret and retain dependencies without reading deployment
+    /// state.
+    ///
+    /// # Errors
+    /// Rejects a configured bootstrap secret shorter than the required minimum.
     pub fn new(
         pool: PgPool,
         setup_code: Option<&str>,
@@ -59,10 +66,12 @@ impl InstallationService {
         })
     }
 
+    /// Report whether a bootstrap secret is configured without exposing its value.
     pub fn setup_code_configured(&self) -> bool {
         self.setup_code_hash.is_some()
     }
 
+    /// Select the host-prefixed cookie name when HTTPS security is required.
     pub fn cookie_name(&self) -> &'static str {
         if self.secure_cookie {
             SECURE_SETUP_COOKIE_NAME
@@ -71,10 +80,16 @@ impl InstallationService {
         }
     }
 
+    /// Report whether setup cookies must be restricted to HTTPS transport.
     pub fn cookie_secure(&self) -> bool {
         self.secure_cookie
     }
 
+    /// Reject normal application access until first-owner setup completes.
+    ///
+    /// # Errors
+    /// Rejects invalid setup credentials, completed installation state, or invalid configuration
+    /// and propagates persistence failures.
     pub async fn require_initialized(&self) -> Result<(), InstallationError> {
         if repository::installation_state_for(&self.pool).await? == InstallationState::Initialized {
             Ok(())
@@ -83,6 +98,11 @@ impl InstallationService {
         }
     }
 
+    /// Describe installation readiness and setup options without exposing bootstrap credentials.
+    ///
+    /// # Errors
+    /// Rejects invalid setup credentials, completed installation state, or invalid configuration
+    /// and propagates persistence failures.
     pub async fn status(
         &self,
         session_token: Option<&str>,
@@ -105,6 +125,11 @@ impl InstallationService {
         })
     }
 
+    /// Validate the bootstrap secret in constant time and issue bounded setup credentials.
+    ///
+    /// # Errors
+    /// Rejects invalid setup credentials, completed installation state, or invalid configuration
+    /// and propagates persistence failures.
     pub async fn create_session(
         &self,
         setup_code: &str,
@@ -134,6 +159,11 @@ impl InstallationService {
         })
     }
 
+    /// Validate setup credentials and atomically persist normalized organization settings.
+    ///
+    /// # Errors
+    /// Rejects invalid setup credentials, completed installation state, or invalid configuration
+    /// and propagates persistence failures.
     pub async fn replace_configuration(
         &self,
         session_token: &str,
@@ -148,6 +178,11 @@ impl InstallationService {
         Ok(configuration)
     }
 
+    /// Authorize a live setup session to continue first-owner identity verification.
+    ///
+    /// # Errors
+    /// Rejects invalid setup credentials, completed installation state, or invalid configuration
+    /// and propagates persistence failures.
     pub async fn authorize_oidc(
         &self,
         session_token: &str,
@@ -159,6 +194,14 @@ impl InstallationService {
         Ok(session_id)
     }
 
+    /// Validate the first owner's identity and create the organization, owner, and initial
+    /// project atomically.
+    ///
+    /// Uses the caller's transaction without committing it.
+    ///
+    /// # Errors
+    /// Rejects invalid setup credentials, completed installation state, or invalid configuration
+    /// and propagates persistence failures.
     pub async fn initialize_with_oidc(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -182,13 +225,6 @@ impl InstallationService {
         )
         .await
     }
-}
-
-fn optional_env(name: &str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

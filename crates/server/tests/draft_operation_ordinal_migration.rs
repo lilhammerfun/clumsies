@@ -1,3 +1,5 @@
+//! Migration of legacy proposal mutations to a dense semantic operation order.
+
 mod common;
 
 use sqlx::Executor;

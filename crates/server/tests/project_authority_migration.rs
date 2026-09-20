@@ -1,3 +1,5 @@
+//! Guarded legacy authority conversion and preservation of effective project content.
+
 mod common;
 
 use server::maintenance::project_authority::{MigrationMode, migrate_project_authority};
@@ -17,16 +19,17 @@ async fn migration_flattens_effective_project_memory_into_org_drafts() {
         "Legacy Project",
     )
     .await;
-    let selected_org_id = server::app::memory::service::create_org_context(
+    let selected_org_id = server::app::memory::create_org_context(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "shared/selected.md",
         "# Selected Organization Memory",
     )
     .await
     .unwrap();
-    server::app::memory::service::select_org_resource_for_project(
+    server::app::memory::select_org_resource_for_project(
         &pool,
+        &common::owner_principal(&pool).await,
         &bootstrap.project_id,
         &selected_org_id,
     )

@@ -57,10 +57,18 @@ Services take concrete dependencies such as `&PgPool`; the stateful authenticati
 and installation services retain their provider/configuration state. Database
 access does not need a repository trait for its single implementation.
 
+Resource operations enforce their authorization policy before changing state.
+Handlers do not perform a separate permission check that another caller could
+omit. A direct service regression test verifies both rejected writes and the
+absence of audit side effects, then verifies project-local administrator access.
+`service` and `repository` modules are private; `mod.rs` exposes the operations
+needed by callers, with transaction participants restricted to the crate.
+
 Cross-resource publication and reconciliation must use the caller's transaction.
-The owning service explicitly exposes the required transaction participants;
-simple query operations can be re-exported without a forwarding function.
-Repositories remain private. Only the outer operation begins and commits the
+The resource interface explicitly exposes the required transaction participants;
+simple typed persistence operations can be re-exported without a forwarding
+function. SQL row types and row-decoding helpers stay in repositories. Only the
+outer operation begins and commits the
 transaction. In particular, `CommitOutcome` preserves the existing behavior that
 persists a reconciliation candidate before reporting a conflict to the client.
 
@@ -70,6 +78,9 @@ the `/admin` prefix alone does not imply an organization-administrator gate.
 
 The OIDC HTTP client belongs to `auth/oidc.rs` because authentication is its only
 consumer. PostgreSQL connection and migration code lives in `infra/database.rs`.
+`config.rs` parses deployment credentials and redirect settings; `bootstrap.rs`
+performs provider discovery and supplies the configured dependencies. Service
+constructors receive explicit values and do not read environment variables.
 The legacy authority migration remains an explicit, plan-hash-guarded CLI command;
 it does not run during normal startup or an HTTP request. There are no background
 business workers to configure in the current server.
@@ -91,6 +102,8 @@ narrow identity-provider substitute. Test response bodies have a finite limit.
 
 ```sh
 cargo fmt --all --check
+cargo clippy -p server --all-targets -- -D warnings
+RUSTDOCFLAGS='-D warnings' cargo doc -p server --no-deps --document-private-items
 cargo test -p server
 cargo test -p daemon --test server_integration
 cargo test --workspace
@@ -100,3 +113,11 @@ Docker is required for database scenarios. A missing Docker service is a test
 failure, not a skipped successful run. Route registration still supplies the
 operation metadata used to compare all registered paths/methods against the
 public and administrator OpenAPI contracts.
+
+The selection/review concurrency scenario waits until PostgreSQL reports the
+operation blocked on the held advisory lock, then releases the transaction. It
+uses a bounded deadline rather than treating a fixed sleep as proof of contention.
+
+The server denies missing public/private documentation and missing `# Errors`
+sections, including private functions. CI runs all-target Clippy, strict private
+API documentation, and the workspace tests, which include server doctests.

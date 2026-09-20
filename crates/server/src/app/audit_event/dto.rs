@@ -4,23 +4,36 @@ use crate::pagination::PageInfo;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+/// Actor, action, and target recorded for a security-relevant operation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuditEvent {
+    /// Stable opaque event identity; ordering uses the separate synchronization cursor.
     pub event_id: String,
+    /// Identity responsible for the operation or audit event.
     pub actor_user_id: Option<String>,
+    /// Display name of the user responsible for the event, when available.
     pub actor_display_name: Option<String>,
+    /// Email of the user responsible for the event, when available.
     pub actor_email: Option<String>,
+    /// Mutation to apply to the referenced resource.
     pub action: String,
+    /// Resource category affected by the audit event.
     pub target_type: String,
+    /// Stable identity of the resource affected by the operation.
     pub target_id: Option<String>,
+    /// Current human-readable label of the audited resource, when resolvable.
     pub target_display_name: Option<String>,
+    /// UTC timestamp at which the record was created.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
+/// Administrative audit history page with continuation metadata.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuditEventListResponse {
+    /// Ordered results included in the current response page.
     pub items: Vec<AuditEvent>,
+    /// Continuation metadata for the returned result page.
     pub page_info: PageInfo,
 }
 

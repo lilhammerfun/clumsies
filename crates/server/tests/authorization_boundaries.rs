@@ -1,3 +1,5 @@
+//! Organization and project isolation across production HTTP resource operations.
+
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use server::app::draft::dto::{
@@ -40,28 +42,33 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
     .execute(&postgres.pool)
     .await
     .unwrap();
-    let private_project_id =
-        server::app::project::service::create_project(&pool, &bootstrap.org_id, "Owner Only", "")
-            .await
-            .unwrap();
-    let selected_org_memory_id = server::app::memory::service::create_org_context(
+    let private_project_id = server::app::project::create_project(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
+        "Owner Only",
+        "",
+    )
+    .await
+    .unwrap();
+    let selected_org_memory_id = server::app::memory::create_org_context(
+        &pool,
+        &common::owner_principal(&pool).await,
         "context/selected.md",
         "# Selected",
     )
     .await
     .unwrap();
-    let unselected_org_memory_id = server::app::memory::service::create_org_context(
+    let unselected_org_memory_id = server::app::memory::create_org_context(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "context/unselected.md",
         "# Unselected",
     )
     .await
     .unwrap();
-    server::app::memory::service::select_org_resource_for_project(
+    server::app::memory::select_org_resource_for_project(
         &pool,
+        &common::owner_principal(&pool).await,
         &bootstrap.project_id,
         &selected_org_memory_id,
     )
@@ -410,9 +417,9 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let memory_id = server::app::memory::service::create_org_context(
+    let memory_id = server::app::memory::create_org_context(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "context/member-project.md",
         "# Initial memory",
     )

@@ -7,19 +7,32 @@ use crate::app::memory::model::{
 use crate::error::ServerError;
 use std::collections::BTreeMap;
 
+/// Validated resource or configuration entry before tree content addressing.
 #[derive(serde::Serialize)]
 pub(crate) struct PendingTreeEntry {
+    /// Stable identity of the resource or configuration item in a tree.
     pub(crate) item_id: String,
+    /// Stored content category used to validate and materialize the payload.
     pub(crate) resource_kind: String,
+    /// Ownership boundary determining which reference and resource set apply.
     pub(crate) scope: String,
+    /// Project boundary containing the resource or proposal.
     pub(crate) project_id: Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
     pub(crate) path: Option<String>,
+    /// Content-addressed identifier of the stored payload.
     pub(crate) blob_id: String,
+    /// Origin of the snapshot entry or migration overlay.
     pub(crate) source: String,
+    /// Human-readable explanation associated with the resource.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) description: String,
 }
 
+/// Reject ambiguous output paths before storing a snapshot tree.
+///
+/// # Errors
+/// Rejects unsupported, unsafe, or duplicate output destinations in the tree.
 pub(crate) fn validate_tree_materialization_paths(
     entries: &[PendingTreeEntry],
 ) -> Result<(), ServerError> {
@@ -41,6 +54,10 @@ pub(crate) fn validate_tree_materialization_paths(
     Ok(())
 }
 
+/// Decode a persisted snapshot ownership scope, rejecting unknown values.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn commit_scope(value: &str) -> Result<CommitScope, ServerError> {
     match value {
         "org" => Ok(CommitScope::Org),
@@ -51,6 +68,10 @@ pub(crate) fn commit_scope(value: &str) -> Result<CommitScope, ServerError> {
     }
 }
 
+/// Decode a persisted snapshot entry category, rejecting unknown values.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn tree_entry_kind(value: &str) -> Result<TreeEntryKind, ServerError> {
     match value {
         // Legacy kinds from archived pre-unification Commits stay decodable
@@ -64,6 +85,10 @@ pub(crate) fn tree_entry_kind(value: &str) -> Result<TreeEntryKind, ServerError>
     }
 }
 
+/// Decode a persisted entry's ownership or configuration scope.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn tree_entry_scope(value: &str) -> Result<TreeEntryScope, ServerError> {
     match value {
         "org" => Ok(TreeEntryScope::Org),
@@ -75,6 +100,10 @@ pub(crate) fn tree_entry_scope(value: &str) -> Result<TreeEntryScope, ServerErro
     }
 }
 
+/// Decode how a stored entry entered the effective snapshot.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn tree_entry_source(value: &str) -> Result<TreeEntrySource, ServerError> {
     match value {
         "org" => Ok(TreeEntrySource::Org),

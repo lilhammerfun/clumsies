@@ -2,14 +2,18 @@
 
 use super::model::PersonalBundleSnapshot;
 use crate::app::bundle::dto::{
-    PersonalBundleDetail, PersonalBundleListResponse, PersonalBundleMeta, PersonalBundleRequest,
+    PersonalBundleListResponse, PersonalBundleMeta, PersonalBundleRequest,
 };
-use crate::app::memory::model::etag;
-use crate::app::memory::service::memory_meta_from_row;
 use crate::error::ServerError;
 use crate::pagination::page_info;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
+/// Persist a bundle's deduplicated active resource selection after checking ownership scope.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn insert_bundle_items(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -49,6 +53,12 @@ pub(crate) async fn insert_bundle_items(
     Ok(())
 }
 
+/// Replace selected resources when supplied, preserving the current set when omitted.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn replace_bundle_items_if_present(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -65,10 +75,16 @@ pub(crate) async fn replace_bundle_items_if_present(
     Ok(())
 }
 
-pub(crate) async fn load_personal_bundle_detail(
+/// Read owner-visible bundle metadata and its active selected-resource count.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
+pub(crate) async fn load_personal_bundle_meta(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
-) -> Result<PersonalBundleDetail, ServerError> {
+) -> Result<PersonalBundleMeta, ServerError> {
     let bundle_row = sqlx::query(
         "SELECT
             b.bundle_id, b.owner_user_id, b.name, b.description, b.revision,
@@ -84,32 +100,13 @@ pub(crate) async fn load_personal_bundle_detail(
     .await?
     .ok_or_else(|| ServerError::not_found("bundle", bundle_id))?;
 
-    let rows = sqlx::query(
-        "SELECT
-            r.resource_id, r.scope, r.project_id, r.path, r.name, r.description,
-            r.status, r.content_hash, r.updated_at
-         FROM personal_bundle_items i
-         JOIN resources r ON r.resource_id = i.resource_id
-         WHERE i.bundle_id = $1 AND r.status = 'active'
-         ORDER BY i.position, r.path",
-    )
-    .bind(bundle_id)
-    .fetch_all(&mut **tx)
-    .await?;
-
-    let memories = rows
-        .iter()
-        .map(memory_meta_from_row)
-        .collect::<Result<_, _>>()?;
-
-    let bundle = personal_bundle_meta_from_row(&bundle_row)?;
-    Ok(PersonalBundleDetail {
-        etag: etag(bundle.revision),
-        bundle,
-        memories,
-    })
+    personal_bundle_meta_from_row(&bundle_row)
 }
 
+/// Decode bundle metadata and its owner identity from one joined row.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) fn personal_bundle_meta_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<PersonalBundleMeta, ServerError> {
@@ -125,6 +122,12 @@ pub(crate) fn personal_bundle_meta_from_row(
     })
 }
 
+/// Hide bundles outside the requesting owner's organization and user identity.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn ensure_bundle_owner(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -147,6 +150,12 @@ pub(crate) async fn ensure_bundle_owner(
     }
 }
 
+/// Insert initial owned bundle metadata and its first concurrency revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_personal_bundle(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -168,6 +177,14 @@ pub(crate) async fn insert_personal_bundle(
     Ok(())
 }
 
+/// Lock an owned bundle and load metadata needed for an update.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_personal_bundle(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -191,6 +208,12 @@ pub(crate) async fn lock_personal_bundle(
     })
 }
 
+/// Persist replacement bundle metadata and advance its concurrency revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn update_personal_bundle_metadata(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -210,6 +233,14 @@ pub(crate) async fn update_personal_bundle_metadata(
     Ok(())
 }
 
+/// Lock an owned bundle and read its revision before deletion.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_personal_bundle_revision(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -228,6 +259,12 @@ pub(crate) async fn lock_personal_bundle_revision(
     .ok_or_else(|| ServerError::not_found("bundle", bundle_id))
 }
 
+/// Delete an owned collection after the service has checked its revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn delete_personal_bundle(
     tx: &mut Transaction<'_, Postgres>,
     bundle_id: &str,
@@ -239,6 +276,10 @@ pub(crate) async fn delete_personal_bundle(
     Ok(())
 }
 
+/// Read the owner's collections and their active selected-resource counts.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_personal_bundles(
     pool: &PgPool,
     owner_user_id: &str,

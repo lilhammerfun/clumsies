@@ -1,7 +1,7 @@
 //! Authentication and security middleware.
 
 use crate::app::auth::AuthError;
-use crate::http::{HttpError, require_org_admin};
+use crate::http::HttpError;
 use crate::state::AppState;
 use axum::extract::{Request, State};
 use axum::http::header::{AUTHORIZATION, COOKIE};
@@ -10,6 +10,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use cookie::Cookie;
 
+/// Apply the shared browser-security response headers after executing the request.
 pub(crate) async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     for (name, value) in [
@@ -33,6 +34,11 @@ pub(crate) async fn security_headers(request: Request, next: Next) -> Response {
     response
 }
 
+/// Resolve a bearer credential and attach its trusted principal to the request.
+///
+/// # Errors
+/// Rejects missing or invalid bearer credentials, incomplete installation, and authentication
+/// persistence failures.
 pub(crate) async fn require_auth(
     State(state): State<AppState>,
     mut request: Request,
@@ -44,6 +50,10 @@ pub(crate) async fn require_auth(
     Ok(next.run(request).await)
 }
 
+/// Authenticate the request and reject identities without organization administration privileges.
+///
+/// # Errors
+/// Rejects invalid authentication and principals without organization-administration privileges.
 pub(crate) async fn require_admin_auth(
     State(state): State<AppState>,
     mut request: Request,
@@ -51,11 +61,12 @@ pub(crate) async fn require_admin_auth(
 ) -> Result<Response, HttpError> {
     let bearer_token = bearer_token(request.headers()).ok_or(AuthError::Unauthorized)?;
     let principal = state.auth.authenticate(bearer_token).await?;
-    require_org_admin(&principal)?;
+    principal.require_org_admin()?;
     request.extensions_mut().insert(principal);
     Ok(next.run(request).await)
 }
 
+/// Extract a well-formed bearer credential from the Authorization header.
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(AUTHORIZATION)
@@ -64,6 +75,7 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+/// Find one named cookie without interpreting unrelated cookie values.
 pub(crate) fn cookie_value(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     headers
         .get_all(COOKIE)

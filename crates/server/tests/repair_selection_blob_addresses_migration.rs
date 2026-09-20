@@ -1,3 +1,5 @@
+//! Repair migration restoring content-addressed organization-selection blobs.
+
 mod common;
 
 use sqlx::Executor;

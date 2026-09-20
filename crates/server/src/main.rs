@@ -1,5 +1,9 @@
 //! Server and maintenance command entry points.
 
+/// Dispatch normal server startup or the explicit, fingerprint-guarded maintenance command.
+///
+/// # Errors
+/// Propagates invalid maintenance arguments, startup failures, or guarded migration failures.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();

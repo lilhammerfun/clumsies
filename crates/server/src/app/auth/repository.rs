@@ -13,28 +13,52 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
+/// Client redirect and PKCE data persisted for ordinary product login.
 pub(super) struct ProductLoginTransaction<'a> {
+    /// Unpredictable correlation value used to find the login transaction.
     pub(super) provider_state: &'a str,
+    /// Unpredictable value binding the provider's ID token to this login attempt.
     pub(super) nonce: &'a str,
+    /// Secret proof used only when exchanging the provider authorization code.
     pub(super) provider_pkce_verifier: &'a str,
+    /// Native client category that initiated authentication.
     pub(super) client_kind: &'a str,
+    /// Validated destination for returning the one-time client authorization code.
     pub(super) client_redirect_uri: &'a str,
+    /// Opaque client value echoed to correlate the authorization response.
     pub(super) client_state: Option<&'a str>,
+    /// PKCE challenge binding the authorization code to the requesting client.
     pub(super) client_code_challenge: &'a str,
+    /// UTC deadline after which this credential or session is invalid.
     pub(super) expires_at: OffsetDateTime,
 }
 
+/// Setup session authorized to continue owner initialization through OIDC.
 pub(super) struct SetupLoginTransaction<'a> {
+    /// Unpredictable correlation value used to find the login transaction.
     pub(super) provider_state: &'a str,
+    /// Unpredictable value binding the provider's ID token to this login attempt.
     pub(super) nonce: &'a str,
+    /// Secret proof used only when exchanging the provider authorization code.
     pub(super) provider_pkce_verifier: &'a str,
+    /// Validated destination for returning the one-time client authorization code.
     pub(super) client_redirect_uri: &'a str,
+    /// Opaque client value echoed to correlate the authorization response.
     pub(super) client_state: &'a str,
+    /// PKCE challenge binding the authorization code to the requesting client.
     pub(super) client_code_challenge: &'a str,
+    /// UTC deadline after which this credential or session is invalid.
     pub(super) expires_at: OffsetDateTime,
+    /// Setup session authorized to continue first-run OIDC initialization.
     pub(super) setup_session_id: &'a str,
 }
 
+/// Persist the native callback, correlation secrets, and expiry for one login attempt.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn insert_product_login_transaction(
     pool: &PgPool,
     transaction: ProductLoginTransaction<'_>,
@@ -60,6 +84,12 @@ pub(super) async fn insert_product_login_transaction(
     Ok(())
 }
 
+/// Persist provider correlation bound to the authorized first-run setup session.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn insert_setup_login_transaction(
     pool: &PgPool,
     transaction: SetupLoginTransaction<'_>,
@@ -88,6 +118,11 @@ pub(super) async fn insert_setup_login_transaction(
     Ok(())
 }
 
+/// Load a live unconsumed provider login transaction by its hashed state.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid, consumed, or
+/// inadmissible authentication state.
 pub(super) async fn login_transaction(
     pool: &PgPool,
     provider_state: &str,
@@ -114,6 +149,11 @@ pub(super) async fn login_transaction(
     })
 }
 
+/// Atomically consume provider correlation so a callback cannot be replayed.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid, consumed, or
+/// inadmissible authentication state.
 pub(super) async fn consume_login_transaction(
     pool: &PgPool,
     transaction_id: &str,
@@ -132,6 +172,12 @@ pub(super) async fn consume_login_transaction(
     }
 }
 
+/// Consume provider correlation inside the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn consume_login_transaction_in(
     tx: &mut Transaction<'_, Postgres>,
     transaction_id: &str,
@@ -147,6 +193,13 @@ pub(super) async fn consume_login_transaction_in(
     Ok(result.rows_affected() == 1)
 }
 
+/// Load the installed organization's identity and configured email admission policy.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid, consumed, or
+/// inadmissible authentication state.
 pub(super) async fn organization_admission(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<OrganizationAdmission, AuthError> {
@@ -161,6 +214,12 @@ pub(super) async fn organization_admission(
     })
 }
 
+/// Persist a short-lived, single-use client code without storing its plaintext secret.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn insert_authorization_code(
     tx: &mut Transaction<'_, Postgres>,
     authorization_code: &str,
@@ -187,6 +246,11 @@ pub(super) async fn insert_authorization_code(
     Ok(())
 }
 
+/// Resolve an unexpired credential to an active user and installed organization.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid, consumed, or
+/// inadmissible authentication state.
 pub(super) async fn authenticate_bearer(
     pool: &PgPool,
     bearer_token: &str,
@@ -216,6 +280,12 @@ pub(super) async fn authenticate_bearer(
     })
 }
 
+/// Invalidate the session and its issued credentials in the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn revoke_session(
     tx: &mut Transaction<'_, Postgres>,
     principal: &AuthPrincipal,
@@ -248,6 +318,15 @@ pub(super) async fn revoke_session(
     })
 }
 
+/// Lock and consume a valid one-time client grant before issuing session credentials.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid, consumed, or
+/// inadmissible authentication state.
 pub(super) async fn exchange_authorization_code(
     tx: &mut Transaction<'_, Postgres>,
     code: &str,
@@ -303,6 +382,15 @@ pub(super) async fn exchange_authorization_code(
     Ok(response)
 }
 
+/// Lock and consume a refresh grant before issuing its replacement credentials.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid, consumed, or
+/// inadmissible authentication state.
 pub(super) async fn rotate_refresh_token(
     tx: &mut Transaction<'_, Postgres>,
     refresh_token: &str,
@@ -332,6 +420,12 @@ pub(super) async fn rotate_refresh_token(
     issue_token_pair(tx, &session_id, &user_id, &org_id).await
 }
 
+/// Create a session's access and refresh credentials while persisting only their hashes.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 async fn issue_token_pair(
     tx: &mut Transaction<'_, Postgres>,
     session_id: &str,
@@ -391,6 +485,15 @@ async fn issue_token_pair(
     })
 }
 
+/// Bind a verified external subject to an admitted member without rebinding an existing identity.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects invalid, consumed, or
+/// inadmissible authentication state.
 pub(super) async fn resolve_external_identity(
     tx: &mut Transaction<'_, Postgres>,
     identity: &OidcIdentity,
@@ -472,6 +575,12 @@ pub(super) async fn resolve_external_identity(
     Ok(user_id)
 }
 
+/// Activate an invited member and update public identity attributes from the verified provider.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 async fn activate_member(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
@@ -499,6 +608,12 @@ async fn activate_member(
     Ok(())
 }
 
+/// Persist the actor and operation in the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(super) async fn insert_audit_event(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,

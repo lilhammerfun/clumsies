@@ -1,3 +1,5 @@
+//! Migration of structured legacy workflow content into canonical Markdown.
+
 mod common;
 
 use sqlx::Row;
