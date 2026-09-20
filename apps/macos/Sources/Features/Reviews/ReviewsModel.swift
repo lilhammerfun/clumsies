@@ -30,28 +30,48 @@ final class ReviewsModel: ObservableObject {
     @discardableResult
     func beginUpdate(_ review: ReviewRecord) -> ReviewUpdateModel? {
         if let existing = updates[review.id] { return existing }
-        guard context.isReviewAuthor(review), review.freshness == .behind,
+        guard context.isReviewAuthor(review) || context.canMergeReviews, review.freshness == .behind,
               ["open", "approved", "rejected"].contains(review.status) else { return nil }
-        reviewDecisionReadiness = nil
-        let update = ReviewUpdateModel(review: review, prepare: { [weak self] in
+        if reviewDecisionReadiness?.reviewId == review.id { reviewDecisionReadiness = nil }
+        let update = ReviewUpdateModel(review: review, canResolveConflicts: context.isReviewAuthor(review), prepare: { [weak self] in
             guard let self else { throw CancellationError() }
             let authority = self.context.authorityGeneration
             let latest: ReviewDetail = try await self.context.server.get("/api/v1/reviews/\(review.id)")
             guard self.context.authorityGeneration == authority, !Task.isCancelled else {
                 throw CancellationError()
             }
-            return try await self.context.server.send(
-                method: "POST", path: "/api/v1/reviews/\(review.id)/update-plans",
-                body: CreateReviewUpdatePlanRequest(expectedReviewVersion: latest.review.version)
-            )
+            guard latest.review.coordination.freshness == .behind else {
+                return ReviewUpdatePlan(detail: latest, candidates: [])
+            }
+            return try await self.reconciliation.autoRebaseReview(latest)
         }, apply: { [weak self] plan, request in
             guard let self else { throw CancellationError() }
             return try await self.reconciliation.applyReviewUpdate(
                 reviewId: review.id, plan: plan, request: request
             )
         })
+        update.didLoad = { [weak self, weak update] in
+            guard let self, let update, self.updates[review.id] === update else { return }
+            if let plan = update.plan, update.errorMessage == nil {
+                self.replaceReview(with: WorkspaceLoader.mapReview(plan.detail.review))
+                if plan.candidates.isEmpty { self.endUpdate(review.id, result: plan.detail) }
+            } else {
+                self.objectWillChange.send()
+            }
+        }
         updates[review.id] = update
         return update
+    }
+
+    /// Shares preparation between queue rows and detail; only server-saved results become completed badges.
+    func prepareUpdate(_ review: ReviewRecord) async {
+        guard let update = beginUpdate(review) else { return }
+        await update.load()
+    }
+
+    func canSaveConflictResolutions(_ review: ReviewRecord) -> Bool {
+        guard context.isReviewAuthor(review), let update = updates[review.id] else { return false }
+        return update.candidates.contains { $0.status == .conflicts }
     }
 
     func endUpdate(_ reviewId: String, result: ReviewDetail? = nil) {

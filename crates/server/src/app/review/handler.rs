@@ -28,6 +28,21 @@ pub(super) async fn create_review_update_plan(
     ))
 }
 
+/// Save conflict-free updates automatically while leaving conflicting proposals for their author.
+///
+/// # Errors
+/// Rejects inaccessible reviews, unauthorized actors, stale revisions, and invalid proposals.
+pub(super) async fn create_review_auto_rebase(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Path(review_id): Path<String>,
+    Json(request): Json<dto::CreateReviewUpdatePlanRequest>,
+) -> Result<Json<dto::ReviewUpdatePlan>, HttpError> {
+    Ok(Json(
+        service::create_review_auto_rebase(&state.pool, &principal, &review_id, request).await?,
+    ))
+}
+
 /// Apply the complete inspected review update atomically without publishing it.
 ///
 /// # Errors

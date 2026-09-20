@@ -4,6 +4,8 @@ import Foundation
 @MainActor
 final class ReviewUpdateModel: ObservableObject {
     let review: ReviewRecord
+    let canResolveConflicts: Bool
+    var didLoad: (() -> Void)?
     private let prepare: () async throws -> ReviewUpdatePlan
     private let apply: (ReviewUpdatePlan, CreateReviewUpdateRequest) async throws -> ReviewDetail
     private var generation = UUID()
@@ -15,10 +17,11 @@ final class ReviewUpdateModel: ObservableObject {
     @Published private(set) var resolutions: [String: DraftResolution] = [:]
     @Published private(set) var hasEdits = false
 
-    init(review: ReviewRecord,
+    init(review: ReviewRecord, canResolveConflicts: Bool = true,
          prepare: @escaping () async throws -> ReviewUpdatePlan,
          apply: @escaping (ReviewUpdatePlan, CreateReviewUpdateRequest) async throws -> ReviewDetail) {
         self.review = review
+        self.canResolveConflicts = canResolveConflicts
         self.prepare = prepare
         self.apply = apply
     }
@@ -28,7 +31,8 @@ final class ReviewUpdateModel: ObservableObject {
         candidates.filter { $0.status == .conflicts && resolutions[$0.candidateId]?.canSave != true }.count
     }
     var canApply: Bool {
-        plan != nil && !candidates.isEmpty && !isLoading && !isApplying
+        canResolveConflicts && plan != nil && candidates.contains { $0.status == .conflicts }
+            && !isLoading && !isApplying
             && candidates.allSatisfy(\.valid) && unresolvedCount == 0
     }
 
@@ -37,7 +41,12 @@ final class ReviewUpdateModel: ObservableObject {
         let request = generation
         isLoading = true
         errorMessage = nil
-        defer { if generation == request { isLoading = false } }
+        defer {
+            if generation == request {
+                isLoading = false
+                if !Task.isCancelled { didLoad?() }
+            }
+        }
         do {
             let result = try await prepare()
             guard generation == request, !Task.isCancelled else { return }
@@ -54,13 +63,13 @@ final class ReviewUpdateModel: ObservableObject {
     }
 
     func setResolution(_ state: DraftResolution, for candidateId: String) {
-        guard !isApplying else { return }
+        guard canResolveConflicts, !isApplying else { return }
         resolutions[candidateId] = state
         hasEdits = true
     }
 
     func resetResolution(for candidate: DraftReconciliationCandidate) {
-        guard !isApplying else { return }
+        guard canResolveConflicts, !isApplying else { return }
         resolutions[candidate.candidateId] = DraftResolution(candidate: candidate)
         hasEdits = resolutions.values.contains(where: \.hasEdits)
     }

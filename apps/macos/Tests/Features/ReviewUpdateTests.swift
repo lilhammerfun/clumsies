@@ -234,6 +234,64 @@ final class ReviewUpdateTests: XCTestCase {
         }
     }
 
+    func testBadgesDistinguishSavedRebaseFromCleanPreviewAndNewRemoteChanges() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let saved = try decoder.decode(DraftCoordination.self, from: Data("""
+        {"freshness":"current","current_commit_id":"remote","has_upstream_resource_changes":false,
+         "reconciliation":"unknown","candidate_id":null,"auto_rebased":true}
+        """.utf8))
+        XCTAssertEqual(ReviewReconciliationState.resolve(freshness: saved.freshness,
+            reconciliation: saved.reconciliation, autoRebased: saved.autoRebased == true), .autoRebased)
+        XCTAssertEqual(ReviewReconciliationState.resolve(freshness: .behind,
+            reconciliation: .clean, autoRebased: false), .checking,
+            "a computed clean candidate is not a saved rebase")
+        XCTAssertEqual(ReviewReconciliationState.resolve(freshness: .behind,
+            reconciliation: .conflicts, autoRebased: true), .conflict,
+            "a newer conflict takes precedence over past automatic updates")
+        XCTAssertNil(ReviewReconciliationState.resolve(freshness: .current,
+            reconciliation: .unknown, autoRebased: false))
+    }
+
+    func testPreparationPublishesSavedResultOnRetryWithoutOfferingAnotherSave() async {
+        let plan = fixture()
+        let completed = ReviewUpdatePlan(detail: plan.detail, candidates: [])
+        var offline = true
+        var loadResults: [Bool] = []
+        var manualSaves = 0
+        let model = ReviewUpdateModel(review: WorkspaceLoader.mapReview(plan.detail.review),
+            prepare: { if offline { throw Failure.offline }; return completed },
+            apply: { _, _ in manualSaves += 1; return completed.detail })
+        model.didLoad = { loadResults.append(model.plan != nil && model.errorMessage == nil) }
+        await model.load()
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertNil(model.plan)
+        offline = false
+        await model.load(restart: true)
+        XCTAssertEqual(loadResults, [false, true])
+        XCTAssertTrue(model.candidates.isEmpty)
+        XCTAssertFalse(model.canApply)
+        let result = await model.submit()
+        XCTAssertNil(result)
+        XCTAssertEqual(manualSaves, 0)
+    }
+
+    func testReviewerCanInspectConflictsButCannotSubmitAuthorChoices() async {
+        let plan = fixture()
+        var saves = 0
+        let model = ReviewUpdateModel(review: WorkspaceLoader.mapReview(plan.detail.review),
+            canResolveConflicts: false, prepare: { plan },
+            apply: { _, _ in saves += 1; return plan.detail })
+        await model.load()
+        let candidate = plan.candidates[1]
+        model.setResolution(resolved(candidate, choosing: candidate.draftState), for: candidate.candidateId)
+        XCTAssertFalse(model.hasEdits)
+        XCTAssertFalse(model.canApply)
+        let result = await model.submit()
+        XCTAssertNil(result)
+        XCTAssertEqual(saves, 0)
+    }
+
     private func fixture(description: String = "") -> ReviewUpdatePlan {
         let user = UserReference(userId: "author", email: "author@example.test", displayName: "Author",
             avatarUrl: nil, role: "admin")

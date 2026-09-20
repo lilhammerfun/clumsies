@@ -58,6 +58,12 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     let path: String
     let needsUpdate: Bool
     let hasConflicts: Bool
+    var autoRebased = false
+
+    var reconciliationState: ReviewReconciliationState? {
+        .resolve(freshness: needsUpdate ? .behind : .current,
+                 reconciliation: hasConflicts ? .conflicts : .unknown, autoRebased: autoRebased)
+    }
 
     static func resolve(
         reviewId: String,
@@ -79,7 +85,8 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
             draftId: detail.draft.draftId,
             path: path,
             needsUpdate: needsUpdate,
-            hasConflicts: needsUpdate && detail.draft.coordination.reconciliation == .conflicts
+            hasConflicts: needsUpdate && detail.draft.coordination.reconciliation == .conflicts,
+            autoRebased: ["open", "submitted"].contains(detail.draft.status) && detail.draft.coordination.autoRebased == true
         )
     }
 }

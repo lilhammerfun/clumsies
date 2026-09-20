@@ -57,18 +57,15 @@ Submitted by author for project                 Updated <local date and time>
   Merged uses the merge icon, and Rejected uses a red pull-request icon. The
   icon has an accessibility status name and semantic color, so color is never
   the only signal. Do not repeat Open or Merged as row text.
-- Resolve an optional queue signal separately. Precedence is `Conflicts`,
-  `Update Required`/`Out of Date`, then legacy `Ready to Merge`, or
-  `Resubmit`/`Awaiting Author`. Stable lifecycle labels such as `Needs Review`,
-  `Approved`, and `Merged` are not repeated on the right.
-  A merged Review never displays stale merely because the merge advanced the
-  current Project ref. `Ready to Merge` applies only to historical two-step
-  approvals and also requires a nonempty approved result hash; capability alone
-  does not make a legacy approval mergeable.
-- A queue signal is a plain system label with semantic foreground color. It is
-  neither a button nor a capsule. At narrow widths, the label may reduce to its
-  symbol so the primary Review title retains priority. Lifecycle and queue
-  signals remain separate accessibility elements with explicit names.
+- Use the same native SwiftUI text badges in the list and file navigator. `Conflict`
+  uses `.badgeProminence(.increased)`; `Auto-rebased` uses `.decreased`. System
+  styling owns colors, text metrics, and selection contrast. Do not draw custom
+  capsules, borders, or shadows. A conflict takes precedence over completed automatic
+  updates elsewhere in the Review. `Checking…` is transient and failures show `Retry Needed`.
+- `Auto-rebased` means the server saved a clean result, not merely calculated a preview.
+  Never ask the user to save an automatic rebase. Merged Reviews show their lifecycle
+  rather than reconciliation badges. Legacy `Ready to Merge` and author resubmission
+  actions remain available according to permissions.
 - Let macOS draw separators, focus, hover/press feedback, and inactive-window
   state. Do not draw an outer list border, per-row cards, or empty-space zebra
   stripes. `NavigationLink` and the stack path are the only navigation state;
@@ -79,9 +76,8 @@ Submitted by author for project                 Updated <local date and time>
   the menu, help, and accessibility value. It defaults to Open and contains
   Open, Rejected, Merged, and All with counts. Historical Approved records
   remain available through All; they do not retain a dedicated filter.
-- The fixed list header provides native Author and Project menus. These filters
-  combine with status and search. Do not add a Label filter until Labels exist
-  in the Review domain model.
+- Reuse the native toolbar filter menus in Project, status, Author order. These
+  filters combine with search; no additional filter row is needed.
 - Search is an independent window-level action and remains the trailing-most
   Review tool. Sync and decision actions are not grouped with Filter.
 - Loading without cached Reviews uses a labeled `ProgressView`. Existing cached
@@ -145,30 +141,30 @@ The author reviews remote changes directly in the existing file detail. There is
 no separate Review update window and no merged-result editor or placeholder text.
 The same file navigator includes current files, automatic rebases, and conflicts.
 
-- Prepare all behind files against one remote reference when the detail loads.
+- As queue rows or a detail load, authors and organization administrators automatically
+  prepare and save clean rebases through `POST /reviews/{id}/auto-rebases`.
+  The response contains saved detail and only the conflicts still requiring choices.
 - Conflicting files show Remote and Draft side by side as unified diffs against
   their common original, with choice buttons alongside the headings. Choosing a
   hunk preserves all automatic changes outside that hunk. Path and deletion
   conflicts have explicit choices; a custom path is available for path collisions.
 - Once choices are complete, show the ordinary diff from the latest remote state
   to the updated draft. **File Actions (…) → Reset File Choices** restores its choices.
-- Automatically merged files use the same ordinary diff. A brand-pink **Auto-rebased** tag
-  beside the file name in the navigator replaces the sync icon; it appears only
-  for a valid, clean prepared candidate. Its tooltip explains that the toolbar
-  save applies it. Conflicts use a warm vermilion **Conflict** tag; current files have no marker.
-  Tags use saturated solid fills, white text, full capsule ends, and a subtle edge and shadow.
-  No status row above the diff, file counts, or extra result panel are shown.
-- **Review Actions (…) → Save Review Updates** sends the complete ordered draft set.
-  It is disabled until every conflict is resolved. Server membership, version,
-  candidate, and remote-reference checks apply in one transaction; any failure
-  rolls back the whole update. This save does not approve or publish the Review.
+- Automatically rebased files use the ordinary diff and the native `Auto-rebased`
+  badge beside their filename. Status is derived from persisted rebase history for
+  the current Draft revision, so reloading or reopening the App retains it. Files
+  never rebased have no badge. No status row, file counts, or result panel is added.
+- **Review Actions (…) → Save Conflict Resolutions** appears only for author-editable
+  conflicts. It sends the complete ordered proposal set with choices only for
+  conflicting files, and remains disabled until every conflict is resolved. Version,
+  membership, and remote-reference validation remain atomic. This does not publish.
 - After saving, refresh the detail and file markers, remove the save action when
   current, and enable approval only once the current detail is readable.
 - Switching files or Reviews retains unsaved choices. Failed requests retain
   input; **Check Latest Again** confirms before replacing edited resolutions.
   Signing out or quitting warns about unsaved choices and blocks during a save.
   Account/authority reset clears choices and ignores late responses.
-- Non-authors see that the author must update the Review. Existing line comments
+- Non-authors with remaining conflicts see that the author must resolve them. Existing line comments
   remain on the saved revision; pending reconciliation diffs do not accept new
   line anchors until saved.
 
@@ -198,8 +194,8 @@ the UI labels these honestly rather than pretending they are inline comments.
 
 The toolbar keeps Reject and Approve as direct actions. Updates, Merge, and
 Resubmit use explicit text entries in **Review Actions (…)**, with the same
-permissions and readiness checks. **Save Review Updates** appears for a prepared,
-editable Review owned by the author. It is disabled while loading, saving, or
+permissions and readiness checks. **Save Conflict Resolutions** appears only for
+prepared conflicts in a Review owned by the author. The ellipsis stays last in its group. It is disabled while loading, saving, or
 awaiting conflict choices. The menu remains openable when that entry is disabled.
 There is no separate update-window button inside an individual file detail.
 

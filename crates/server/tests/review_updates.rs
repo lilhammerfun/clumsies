@@ -428,3 +428,248 @@ async fn conflict_plan_preserves_automatic_sections_and_rejects_foreign_authors_
     let merged = publish(&app, &updated, head).await;
     assert_eq!(merged.review.status, ReviewStatus::Merged);
 }
+
+#[tokio::test]
+async fn automatic_rebase_saves_clean_files_leaves_conflicts_and_survives_reload() {
+    use server::app::draft::dto::DraftFreshness;
+    let (pg, app, project) = fixture().await;
+    let base = "Hotel A\n\nReception\nLuggage\nParking\nPets\nInvoices\n\nBreakfast until 9\n";
+    let remote = base.replace("Hotel A", "Hotel B");
+    let proposed = base.replace("until 9", "until 10");
+    let seed_clean = draft_content(&app, &project, "breakfast.md", None, base).await;
+    let seed_conflict =
+        draft_content(&app, &project, "checkout.md", None, "Checkout at 12\n").await;
+    let seed = review(&app, &[seed_clean, seed_conflict]).await;
+    let published = publish(&app, &seed, None).await;
+    let base_head = published.commit_id.as_deref();
+    let clean = draft_content(&app, &project, "breakfast.md", base_head, &proposed).await;
+    let conflict =
+        draft_content(&app, &project, "checkout.md", base_head, "Checkout at 14\n").await;
+    let pending = review(&app, &[clean, conflict]).await;
+    let clean_remote = draft_content(&app, &project, "breakfast.md", base_head, &remote).await;
+    let conflicting_remote =
+        draft_content(&app, &project, "checkout.md", base_head, "Checkout at 13\n").await;
+    let upstream = review(&app, &[clean_remote, conflicting_remote]).await;
+    let published = publish(&app, &upstream, base_head).await;
+    let head = published.commit_id.as_deref();
+    let path = format!("/api/v1/reviews/{}/auto-rebases", pending.review.review_id);
+    let (status, _) = request(
+        &app,
+        "POST",
+        &path,
+        CreateReviewUpdatePlanRequest {
+            expected_review_version: pending.review.version + 1,
+        },
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let unchanged = get_review(&app, &pending.review.review_id).await;
+    assert_eq!(unchanged.review.version, pending.review.version);
+    for (before, after) in pending.drafts.iter().zip(&unchanged.drafts) {
+        assert_eq!(before.draft.version, after.draft.version);
+        assert_eq!(before.operations, after.operations);
+    }
+    let plan: ReviewUpdatePlan = post(
+        &app,
+        &path,
+        CreateReviewUpdatePlanRequest {
+            expected_review_version: pending.review.version,
+        },
+        None,
+    )
+    .await;
+    assert_eq!(plan.candidates.len(), 1);
+    assert_eq!(
+        plan.candidates[0].draft_id,
+        pending.drafts[1].draft.draft_id
+    );
+    let clean = &plan.detail.drafts[0];
+    assert_eq!(clean.draft.coordination.freshness, DraftFreshness::Current);
+    assert!(clean.draft.coordination.auto_rebased);
+    assert_eq!(
+        clean.operations[0].input.content.as_ref().unwrap().content,
+        remote.replace("until 9", "until 10")
+    );
+    assert_eq!(
+        plan.detail.drafts[1].draft.version,
+        pending.drafts[1].draft.version
+    );
+    assert_eq!(
+        plan.detail.drafts[1].operations,
+        pending.drafts[1].operations
+    );
+    assert!(!plan.detail.drafts[1].draft.coordination.auto_rebased);
+    assert_eq!(plan.detail.review.status, ReviewStatus::Open);
+    assert_eq!(
+        get_review(&app, &pending.review.review_id).await,
+        plan.detail
+    );
+    let (status, bytes) = request(&app, "GET", "/api/v1/reviews", (), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let list: ReviewListResponse = serde_json::from_slice(&bytes).unwrap();
+    let listed = list
+        .items
+        .iter()
+        .find(|item| item.review_id == pending.review.review_id)
+        .unwrap();
+    assert_eq!(listed.coordination, plan.detail.review.coordination);
+    let again: ReviewUpdatePlan = post(
+        &app,
+        &path,
+        CreateReviewUpdatePlanRequest {
+            expected_review_version: plan.detail.review.version,
+        },
+        None,
+    )
+    .await;
+    assert_eq!(
+        again, plan,
+        "a repeat request must not reapply a completed rebase"
+    );
+    let rebases: i64 = sqlx::query_scalar("SELECT count(*) FROM draft_rebases")
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+    assert_eq!(rebases, 1);
+    let updates = CreateReviewUpdateRequest {
+        expected_review_version: plan.detail.review.version,
+        drafts: plan
+            .detail
+            .drafts
+            .iter()
+            .map(|item| {
+                let candidate = plan
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.draft_id == item.draft.draft_id);
+                ReviewDraftRequest {
+                    draft_id: item.draft.draft_id.clone(),
+                    expected_draft_version: item.draft.version,
+                    candidate_id: candidate.map(|candidate| candidate.candidate_id.clone()),
+                    resolved_state: candidate.map(|candidate| candidate.draft_state.clone()),
+                }
+            })
+            .collect(),
+    };
+    let resolved: ReviewDetail = post(
+        &app,
+        &format!("/api/v1/reviews/{}/updates", pending.review.review_id),
+        updates,
+        head,
+    )
+    .await;
+    assert_eq!(
+        resolved.review.coordination.freshness,
+        DraftFreshness::Current
+    );
+    assert_eq!(resolved.review.status, ReviewStatus::Open);
+    let merged = publish(&app, &resolved, head).await;
+    assert_eq!(merged.review.status, ReviewStatus::Merged);
+    assert_eq!(merged.applied_operation_count, 2);
+}
+
+#[tokio::test]
+async fn automatic_rebase_needs_no_save_and_allows_only_author_or_administrator() {
+    let (pg, app, project) = fixture().await;
+    let proposal = draft(&app, &project, "breakfast.md").await;
+    let pending = review(&app, &[proposal]).await;
+    let upstream = draft(&app, &project, "checkout.md").await;
+    let upstream = review(&app, &[upstream]).await;
+    let published = publish(&app, &upstream, None).await;
+    for (id, role) in [("member", "member"), ("reviewer", "admin")] {
+        sqlx::query(
+            "INSERT INTO users (user_id, email, role, status) VALUES ($1, $2, $3, 'active')",
+        )
+        .bind(id)
+        .bind(format!("{id}@example.com"))
+        .bind(role)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(&project)
+        .bind(id)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    }
+    let (member, _) =
+        common::authenticated_router_as(pg.pool.clone(), "member@example.com", "member", "Member")
+            .await;
+    let path = format!("/api/v1/reviews/{}/auto-rebases", pending.review.review_id);
+    let body = CreateReviewUpdatePlanRequest {
+        expected_review_version: pending.review.version,
+    };
+    let (status, _) = request(&member, "POST", &path, &body, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        get_review(&app, &pending.review.review_id)
+            .await
+            .review
+            .version,
+        pending.review.version
+    );
+    let (reviewer, _) = common::authenticated_router_as(
+        pg.pool.clone(),
+        "reviewer@example.com",
+        "reviewer",
+        "Reviewer",
+    )
+    .await;
+    let plan: ReviewUpdatePlan = post(&reviewer, &path, body, None).await;
+    assert!(
+        plan.candidates.is_empty(),
+        "there is nothing for the user to save"
+    );
+    assert!(plan.detail.review.coordination.auto_rebased);
+    assert_eq!(
+        plan.detail.review.status,
+        ReviewStatus::Open,
+        "automatic rebase must not approve or publish"
+    );
+    let actor: String =
+        sqlx::query_scalar("SELECT applied_by_user_id FROM draft_rebases WHERE draft_id = $1")
+            .bind(&pending.draft.draft_id)
+            .fetch_one(&pg.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        actor, "reviewer",
+        "audit must identify the actual actor, not impersonate the author"
+    );
+    let merged = publish(&reviewer, &plan.detail, published.commit_id.as_deref()).await;
+    assert_eq!(merged.review.status, ReviewStatus::Merged);
+}
+
+#[tokio::test]
+async fn already_published_changes_auto_rebase_to_no_operations_and_can_be_approved() {
+    let (_pg, app, project) = fixture().await;
+    let seed = draft_content(&app, &project, "breakfast.md", None, "Breakfast until 9\n").await;
+    let seed = review(&app, &[seed]).await;
+    let published = publish(&app, &seed, None).await;
+    let base = published.commit_id.as_deref();
+    let proposal =
+        draft_content(&app, &project, "breakfast.md", base, "Breakfast until 10\n").await;
+    let pending = review(&app, &[proposal]).await;
+    let remote = draft_content(&app, &project, "breakfast.md", base, "Breakfast until 10\n").await;
+    let remote = review(&app, &[remote]).await;
+    let published = publish(&app, &remote, base).await;
+    let plan: ReviewUpdatePlan = post(
+        &app,
+        &format!("/api/v1/reviews/{}/auto-rebases", pending.review.review_id),
+        CreateReviewUpdatePlanRequest {
+            expected_review_version: pending.review.version,
+        },
+        None,
+    )
+    .await;
+    assert!(plan.candidates.is_empty());
+    assert!(plan.detail.operations.is_empty());
+    assert!(plan.detail.review.coordination.auto_rebased);
+    let merged = publish(&app, &plan.detail, published.commit_id.as_deref()).await;
+    assert_eq!(merged.review.status, ReviewStatus::Merged);
+    assert_eq!(merged.applied_operation_count, 0);
+}

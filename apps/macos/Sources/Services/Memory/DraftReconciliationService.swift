@@ -243,6 +243,26 @@ final class DraftReconciliationService: ObservableObject {
         "\"\(commitId ?? "ref-none")\""
     }
 
+    func autoRebaseReview(_ detail: ReviewDetail) async throws -> ReviewUpdatePlan {
+        guard !context.isSwitchingMemoryContext else {
+            throw DocumentSyncError.mutationWhileSynchronizing
+        }
+        let authority = context.authorityGeneration
+        let activityId = UUID()
+        sessions.standaloneReconciliationActivityIds.insert(activityId)
+        defer { sessions.standaloneReconciliationActivityIds.remove(activityId) }
+        let result: ReviewUpdatePlan = try await context.server.send(
+            method: "POST", path: "/api/v1/reviews/\(detail.review.reviewId)/auto-rebases",
+            body: CreateReviewUpdatePlanRequest(expectedReviewVersion: detail.review.version)
+        )
+        try context.ensureAuthority(authority)
+        if result.detail.review.version != detail.review.version {
+            _ = await refresh.retrySync(channel: "drafts", projectId: detail.review.projectId)
+        }
+        try context.ensureAuthority(authority)
+        return result
+    }
+
     func applyReviewUpdate(
         reviewId: String, plan: ReviewUpdatePlan, request: CreateReviewUpdateRequest
     ) async throws -> ReviewDetail {

@@ -744,7 +744,10 @@ pub(crate) async fn load_draft_coordination(
         }
         None => (DraftReconciliationStatus::Unknown, None),
     };
+    let auto_rebased = freshness == DraftFreshness::Current
+        && repository::was_auto_rebased(tx, draft_id, draft_version).await?;
     Ok(DraftCoordination {
+        auto_rebased,
         freshness,
         current_commit_id,
         has_upstream_resource_changes,
@@ -923,6 +926,66 @@ pub(crate) async fn apply_draft_rebase_in_tx(
     expected_ref: Option<&str>,
     request: CreateDraftRebaseRequest,
 ) -> Result<DraftRebaseResult, ServerError> {
+    apply_rebase_in_tx(
+        tx,
+        draft_id,
+        RebaseAuthority::Author(author_user_id),
+        expected_ref,
+        request,
+    )
+    .await
+}
+
+/// Save only a server-computed clean result for the author or an organization reviewer.
+///
+/// The review use case checks project membership before entering this transaction. No supplied
+/// conflict resolution is accepted, and audit history records the actual triggering actor.
+///
+/// # Errors
+/// Rejects non-author members, conflicting candidates, stale revisions and reference changes.
+pub(crate) async fn auto_rebase_draft_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    principal: &AuthPrincipal,
+    candidate: &DraftReconciliationCandidate,
+) -> Result<DraftRebaseResult, ServerError> {
+    if candidate.status != ReconciliationCandidateStatus::Clean {
+        return Err(ServerError::InvalidRequest(
+            "automatic rebase requires a clean candidate".to_owned(),
+        ));
+    }
+    apply_rebase_in_tx(
+        tx,
+        &candidate.draft_id,
+        RebaseAuthority::Automatic(principal),
+        candidate.current_commit_id.as_deref(),
+        CreateDraftRebaseRequest {
+            expected_draft_version: candidate.draft_version,
+            candidate_id: candidate.candidate_id.clone(),
+            resolved_state: None,
+        },
+    )
+    .await
+}
+
+/// Authorization boundary for author choices versus deterministic automatic reconciliation.
+enum RebaseAuthority<'a> {
+    /// Only this proposal's author may supply a manual resolution.
+    Author(&'a str),
+    /// Authors or organization administrators may apply the server's conflict-free result.
+    Automatic(&'a AuthPrincipal),
+}
+
+/// Persist a validated rebase under the caller's existing transaction and authority.
+///
+/// # Errors
+/// Rejects invalid ownership, stale evidence, reference changes, and invalid resource state.
+async fn apply_rebase_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    authority: RebaseAuthority<'_>,
+    expected_ref: Option<&str>,
+    request: CreateDraftRebaseRequest,
+) -> Result<DraftRebaseResult, ServerError> {
     let identity = repository::load_identity(tx, draft_id)
         .await?
         .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
@@ -930,11 +993,22 @@ pub(crate) async fn apply_draft_rebase_in_tx(
     let row = repository::lock_rebase_state(tx, draft_id)
         .await?
         .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    if row.author_user_id.clone() != author_user_id {
-        return Err(ServerError::Forbidden(
-            "only the draft author can rebase it".to_owned(),
-        ));
-    }
+    let author_user_id = match authority {
+        RebaseAuthority::Author(actor) => {
+            if row.author_user_id != actor {
+                return Err(ServerError::Forbidden(
+                    "only the draft author can rebase it".to_owned(),
+                ));
+            }
+            actor
+        }
+        RebaseAuthority::Automatic(principal) => {
+            if row.author_user_id != principal.user_id {
+                principal.require_org_admin()?;
+            }
+            &principal.user_id
+        }
+    };
     let version: i64 = row.version;
     if version != request.expected_draft_version {
         return Err(ServerError::version_conflict(
