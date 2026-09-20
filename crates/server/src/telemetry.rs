@@ -135,6 +135,28 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn ingress_logs_link_client_and_server_ids_without_query_or_body() {
+        // Tracing caches callsite interest across threads. Run alone so another
+        // router test without a subscriber cannot register these calls as disabled.
+        const CHILD_ENV: &str = "CLUMSIES_TELEMETRY_TEST_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "telemetry::tests::ingress_logs_link_client_and_server_ids_without_query_or_body",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed;"),
+                "isolated telemetry test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
         let path =
             std::env::temp_dir().join(format!("clumsies-telemetry-{}.log", uuid::Uuid::new_v4()));
         let subscriber = tracing_subscriber::fmt()
