@@ -57,23 +57,28 @@ data and test credentials and must run before deleting the worktree. Only
 
 Use `just dev-macos-reviews` when handing a Review UI build to someone for testing.
 It completes local Server setup, signs in the fake-OIDC owner through the daemon,
-skips agent selection, and seeds 12 numbered Reviews. The tester does not need a
+skips agent selection, and seeds 12 business Reviews in the 青禾酒店 project. The tester does not need a
 setup code, credentials, or terminal commands. Repeating the command signs in
 again and preserves the existing playground.
 
-Open **Reviews** in the Dev App. Each Review description explains its expected
-behavior. Scenarios include mixed current/conflicting files, automatic merges,
+Open **Reviews** in the Dev App and filter projects to **青禾酒店**. Titles,
+descriptions, and documents contain hotel business content only. For example,
+**两家门店早餐延长至十点** proposes extending breakfast from 09:00 to 10:00,
+while the published guide independently changes parking from 30 to 50 yuan per
+day. The automatic result retains both changes. Scenario numbers and QA
+instructions live only in the external manifest, never in Review descriptions.
+Scenarios include mixed current/conflicting files, automatic merges,
 multiple text conflicts, rename conflicts, deletion on either side, discarded
 members, ready-to-approve changes, an already-updated Review, a rejected Review,
 and two independent additions at the same path. Show **Rejected** or **All** to
-find scenario 11. Inspect scenarios before publishing: publishing advances Remote
+find **周末早餐延长至十点半**. Inspect scenarios before publishing: publishing advances Remote
 for this shared test organization, so other Reviews may need updating again.
 
 To test an update becoming stale while its editor is open, run
 `python3 dev/seed-review-playground.py --advance-remote`, then apply the old result.
 The editor should preserve your input and offer to check the latest version.
-The instance's `review-playground.json` records Review IDs and expectations;
-it contains no credentials. This fixture command accepts only the current
+The instance's `hotel-review-playground.json` records case IDs, Review IDs, and expectations;
+it contains no credentials. The earlier generic playground and its manifest are left intact. This fixture command accepts only the current
 worktree's loopback Local instance, never a Preview or production Server.
 
 ## Validation
