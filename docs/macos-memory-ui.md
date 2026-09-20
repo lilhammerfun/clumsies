@@ -43,10 +43,15 @@ SwiftUI lives under `apps/macos/`; Draft persistence, synchronization, and autho
 
 ## Resolving remote changes
 
-The Memory conflict action opens a sheet over the existing document. Remote and
+The Memory conflict action opens a separate native window with standard close,
+minimize, and zoom/full-screen controls. The main workspace remains usable; closing
+the source tab does not discard the resolution. The window remembers its frame,
+and a draggable divider separates the independently scrolling comparison and result.
+Remote and
 Draft conflict sections appear side by side; each choice updates the merged result
 without dropping automatically merged changes. After choosing the content changes,
 the result remains editable. Path and deletion conflicts require explicit choices.
 Save to Draft stays disabled until all choices are complete; it does not approve or
 publish. Whole-file replacement is a secondary menu action with confirmation.
-Cancel confirms edited input, and saving disables cancellation.
+Cancel, the close button, and Command-W confirm edited input; saving blocks closing.
+Signing out or quitting also checks these windows before discarding unsaved edits.

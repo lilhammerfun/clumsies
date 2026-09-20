@@ -1608,8 +1608,9 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
     }
 
-    func testDocumentReconciliationPresentsASheetAndKeepsTheEditor() async throws {
+    func testDocumentReconciliationOwnsAWindowAndSurvivesClosingTheSourceTab() async throws {
         let workspace = WorkspaceCoordinator()
+        let windows = ReconciliationWindows(store: workspace)
         workspace.context.activeProjectId = "project"
         let draft = localDraft(id: "draft", targetId: "memory")
         let item = MemoryListItem(id: "memory", resource: nil, draft: draft,
@@ -1636,7 +1637,8 @@ final class WorkspaceNavigationTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         defer {
-            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+            workspace.sessions.finishDocumentReconciliation(for: key)
+            windows.documentWindows[key]?.dismiss()
             window.close()
         }
         func editors(_ view: NSView) -> [NSTextView] {
@@ -1649,12 +1651,18 @@ final class WorkspaceNavigationTests: XCTestCase {
         workspace.sessions.pendingDocumentReconciliationCandidatesBySession[key] = candidate
         for _ in 0..<20 {
             host.layoutSubtreeIfNeeded()
-            if window.attachedSheet != nil { break }
+            if windows.documentWindows[key] != nil { break }
             try await Task.sleep(for: .milliseconds(50))
         }
-        let sheet = try XCTUnwrap(window.attachedSheet, "the warning flow must open a native sheet")
-        XCTAssertTrue(sheet.styleMask.contains(.resizable))
-        let content = try XCTUnwrap(sheet.contentView)
+        let controller = try XCTUnwrap(windows.documentWindows[key])
+        let mergeWindow = try XCTUnwrap(controller.window)
+        XCTAssertNil(window.attachedSheet)
+        XCTAssertNil(mergeWindow.sheetParent)
+        XCTAssertTrue(mergeWindow.styleMask.contains([.titled, .closable, .miniaturizable, .resizable]))
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            XCTAssertFalse(try XCTUnwrap(mergeWindow.standardWindowButton(button)).isHidden)
+        }
+        let content = try XCTUnwrap(mergeWindow.contentView)
         for _ in 0..<3 {
             content.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(50))
@@ -1664,15 +1672,33 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertEqual(window.frame.size, originalFrame.size)
         let resolutionEditor = try XCTUnwrap(editors(content).first)
         XCTAssertGreaterThan(try XCTUnwrap(resolutionEditor.enclosingScrollView).bounds.height, 80)
-        workspace.sessions.finishDocumentReconciliation(for: key)
+        let tab = tab(itemId: item.id, projectId: "project")
+        workspace.navigation.tabs = [tab]
+        workspace.navigation.closeTab(tab)
+        XCTAssertTrue(workspace.navigation.tabs.isEmpty)
+        XCTAssertNotNil(workspace.sessions.pendingDocumentReconciliationCandidatesBySession[key])
+        window.close()
+        XCTAssertTrue(mergeWindow.isVisible, "the merge must outlive its source window")
+
+        var resolution = DraftResolution(candidate: candidate)
+        resolution.chooseFile(candidate.draftState)
+        workspace.sessions.documentReconciliationResolutions[key] = resolution
+        controller.confirmDiscard = { false }
+        mergeWindow.performClose(nil)
+        XCTAssertTrue(mergeWindow.isVisible)
+        XCTAssertEqual(workspace.sessions.documentReconciliationResolutions[key], resolution)
+        controller.confirmDiscard = { true }
+        workspace.sessions.applyingDocumentReconciliationSessions.insert(key)
+        XCTAssertFalse(controller.windowShouldClose(mergeWindow), "saving cannot be interrupted by closing")
+        workspace.sessions.applyingDocumentReconciliationSessions.remove(key)
+        mergeWindow.performClose(nil)
         for _ in 0..<20 {
-            if window.attachedSheet == nil { break }
+            if windows.documentWindows[key] == nil { break }
             try await Task.sleep(for: .milliseconds(50))
         }
-        XCTAssertNil(window.attachedSheet)
+        XCTAssertNil(windows.documentWindows[key])
         XCTAssertFalse(workspace.sessions.isSynchronizingDocument(item.id))
         XCTAssertTrue(workspace.sessions.canCommitMemoryContextSwitch)
-        XCTAssertTrue(editors(host).first === originalEditor)
     }
 
     func testKeepFileAfterDeleteConflictUsesCurrentContentTemplate() {

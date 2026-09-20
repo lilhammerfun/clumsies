@@ -8,7 +8,6 @@ struct DocumentSessionView: View {
     @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
     @EnvironmentObject private var memoryModel: MemoryModel
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
-    @EnvironmentObject private var reconciler: DraftReconciliationService
     @EnvironmentObject private var reviewModel: ReviewsModel
     @EnvironmentObject private var documentSessions: DocumentSessions
     let item: MemoryListItem
@@ -31,12 +30,6 @@ struct DocumentSessionView: View {
 
     var body: some View {
         documentContent
-        .sheet(item: Binding(
-            get: { documentSessions.pendingDocumentReconciliationCandidates[item.id] },
-            set: { if $0 == nil { closeReconciliation() } }
-        )) { candidate in
-            reconciliationSheet(candidate)
-        }
         .onChange(of: item.document) { _, latest in
             self.model.adoptAuthoritativeDocument(latest)
         }
@@ -78,47 +71,6 @@ struct DocumentSessionView: View {
                 "This creates a deletion draft proposal. If reviewed and merged, "
                     + "the organization memory will be removed for every project that includes it."
             )
-        }
-    }
-
-    @ViewBuilder
-    private func reconciliationSheet(_ candidate: DraftReconciliationCandidate) -> some View {
-        let content = VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(candidate.status == .conflicts ? "Resolve Conflicts" : "Update Draft").font(.title2.weight(.semibold))
-                Text(item.document.path).font(.body.monospaced())
-                    .textSelection(.enabled)
-                Text("Choose which changes to keep, then save the merged result to your draft.")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(20)
-            Divider()
-            DraftReconciliationView(
-                candidate: candidate,
-                updateButtonTitle: "Save to Draft",
-                initialResolution: documentSessions.documentReconciliationResolution(for: item.id),
-                onResolutionChange: {
-                    documentSessions.updateDocumentReconciliationResolution($0, for: item.id)
-                },
-                onCancel: closeReconciliation,
-                onApplied: closeReconciliation
-            ) { resolvedState in
-                try await reconciler.applyReconciliation(
-                    draftId: candidate.draftId,
-                    candidate: candidate,
-                    resolvedState: resolvedState,
-                    documentItemId: item.id
-                )
-            }
-            .id(candidate.candidateId)
-        }
-        .frame(minWidth: 900, idealWidth: 1000, maxWidth: .infinity,
-               minHeight: 640, idealHeight: 720, maxHeight: .infinity)
-        if #available(macOS 15.0, *) {
-            content.presentationSizing(.fitted)
-        } else {
-            content
         }
     }
 
@@ -298,8 +250,4 @@ struct DocumentSessionView: View {
         }
     }
 
-    private func closeReconciliation() {
-        guard let sessionKey else { return }
-        documentSessions.finishDocumentReconciliation(for: sessionKey)
-    }
 }
