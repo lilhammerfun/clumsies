@@ -798,6 +798,8 @@ struct UnifiedDiffView: View {
             }
         }
         .onPreferenceChange(UnifiedDiffViewportWidthKey.self) { viewportWidth = $0 }
+        // Keep diff rows and gutters rectangular inside rounded cards or sheets.
+        .containerShape(Rectangle())
     }
 
     private var minimumContentWidth: CGFloat {

@@ -86,6 +86,52 @@ final class FileTreeSelectionTests: XCTestCase {
     }
 
     @MainActor
+    func testUnifiedDiffBackgroundsDoNotInheritRoundedContainerShape() throws {
+        let presentation = UnifiedDiffPresentation(model: .make(
+            original: "Checkout at 12:00.", modified: "Checkout at 13:00."
+        ))
+        func render(cornerRadius: CGFloat) throws -> NSBitmapImageRep {
+            let host = NSHostingView(rootView:
+                UnifiedDiffView(presentation: presentation)
+                    .frame(width: 400, height: 74, alignment: .topLeading)
+                    .background(.white, in: RoundedRectangle(cornerRadius: cornerRadius))
+                    .environment(\.colorScheme, .light)
+            )
+            host.frame = NSRect(x: 0, y: 0, width: 400, height: 74)
+            let window = NSWindow(contentRect: host.frame, styleMask: [], backing: .buffered, defer: false)
+            window.contentView = host
+            for _ in 0..<3 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return bitmap
+        }
+        let plain = try render(cornerRadius: 0)
+        let rounded = try render(cornerRadius: 8)
+        func color(_ bitmap: NSBitmapImageRep, x: Int, y: Int) throws -> NSColor {
+            try XCTUnwrap(bitmap.colorAt(x: x * bitmap.pixelsWide / 400,
+                                        y: y * bitmap.pixelsHigh / 74)?.usingColorSpace(.deviceRGB))
+        }
+        let removal = try color(plain, x: 80, y: 38)
+        let insertion = try color(plain, x: 80, y: 62)
+        XCTAssertGreaterThan(removal.redComponent, removal.greenComponent)
+        XCTAssertGreaterThan(insertion.greenComponent, insertion.redComponent)
+        // Sample the hunk, changed rows, and line-number gutters at their edges.
+        for y in [1, 27, 51] {
+            for x in [1, 29, 31, 59, 398] {
+                let expected = try color(plain, x: x, y: y)
+                let actual = try color(rounded, x: x, y: y)
+                XCTAssertEqual(actual.alphaComponent, 1, accuracy: 0.005)
+                XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.005, "x=\(x), y=\(y)")
+                XCTAssertEqual(actual.greenComponent, expected.greenComponent, accuracy: 0.005, "x=\(x), y=\(y)")
+                XCTAssertEqual(actual.blueComponent, expected.blueComponent, accuracy: 0.005, "x=\(x), y=\(y)")
+            }
+        }
+    }
+
+    @MainActor
     func testLongUnifiedDiffLineCreatesHorizontalScrollRangeAfterHunkHeader() throws {
         let presentation = UnifiedDiffPresentation(lines: [
             .init(
