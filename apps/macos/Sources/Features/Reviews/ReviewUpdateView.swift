@@ -1,105 +1,56 @@
 import SwiftUI
 
-struct ReviewUpdateView: View {
+/// Reconciliation stays in the selected file's detail, using the Review's shared choices.
+struct ReviewUpdateView<Content: View>: View {
     @ObservedObject var model: ReviewUpdateModel
-    let onCancel: () -> Void
-    let onApplied: (ReviewDetail) -> Void
-    @State private var confirmsDiscard = false
+    let draftId: String
+    @ViewBuilder let currentFile: () -> Content
     @State private var confirmsRestart = false
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 16) {
             if model.isLoading {
-                ProgressView("Checking all files against the latest remote version…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.plan == nil {
-                ContentUnavailableView {
-                    Label("Could Not Check Review", systemImage: "exclamationmark.triangle")
-                } actions: {
-                    Button("Try Again") { Task { await model.load() } }
+                ProgressView("Checking the latest remote version…")
+            } else if let candidate = model.candidates.first(where: { $0.draftId == draftId }),
+                      let resolution = model.resolutions[candidate.candidateId] {
+                if candidate.status == .clean {
+                    Text("Auto-rebased")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.quaternary, in: Capsule())
+                        .help("Remote changes are included automatically. Save Review Updates to apply them.")
                 }
-            } else if model.candidates.isEmpty {
-                ContentUnavailableView("Already Up to Date", systemImage: "checkmark.circle",
-                    description: Text("All active files use the latest remote version. Return to the Review to continue."))
-            } else {
-                HSplitView {
-                    List(selection: $model.selectedCandidateId) {
-                        ForEach(model.candidates) { candidate in
-                            HStack {
-                                Image(systemName: candidate.status == .clean
-                                    || model.resolutions[candidate.candidateId]?.canSave == true
-                                    ? "checkmark.circle" : "exclamationmark.triangle")
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(path(candidate)).lineLimit(2)
-                                    Text(candidate.status == .clean ? "Merges automatically"
-                                        : model.resolutions[candidate.candidateId]?.canSave == true ? "Resolved" : "Needs resolution")
-                                        .font(.caption).foregroundStyle(.secondary)
+                if resolution.canSave {
+                    fileDiff(from: candidate.currentState, to: resolution.state)
+                        .overlay(alignment: .topTrailing) {
+                            if resolution.hasEdits {
+                                Button { model.resetResolution(for: candidate) } label: {
+                                    Image(systemName: "arrow.uturn.backward")
                                 }
+                                .buttonStyle(.borderless).padding(6)
+                                .help("Reset choices for this file")
+                                .accessibilityLabel("Reset File Choices")
                             }
-                            .tag(candidate.candidateId)
-                            .help(path(candidate))
                         }
-                    }
-                    .frame(minWidth: 180, idealWidth: 250, maxWidth: 330)
-                    .disabled(model.isApplying)
-
-                    if let candidate = model.selectedCandidate {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(path(candidate))
-                                .font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
-                                .help(path(candidate)).textSelection(.enabled).padding(12)
-                            Divider()
-                            DraftReconciliationView(
-                                candidate: candidate, usesContextualUpdateAction: true,
-                                initialResolution: model.resolutions[candidate.candidateId],
-                                onResolutionChange: { model.setResolution($0, for: candidate.candidateId) },
-                                onCancel: {}
-                            ) { _ in }
-                            .id(candidate.candidateId)
-                            .disabled(model.isApplying)
-
-                        }.frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-                    }
+                } else {
+                    DraftConflictView(candidate: candidate, resolution: Binding(
+                        get: { model.resolutions[candidate.candidateId] ?? resolution },
+                        set: { model.setResolution($0, for: candidate.candidateId) }
+                    ))
                 }
+            } else if model.plan != nil {
+                currentFile()
             }
             if let error = model.errorMessage {
-                HStack {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if model.plan != nil {
-                        Button("Check Latest Again") {
-                            if model.hasEdits { confirmsRestart = true }
-                            else { Task { await model.load(restart: true) } }
-                        }.disabled(model.isApplying || model.isLoading)
-                    }
-                }.padding(12)
+                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                Button("Check Latest Again") {
+                    if model.hasEdits { confirmsRestart = true }
+                    else { Task { await model.load(restart: true) } }
+                }
             }
-            Divider()
-            HStack {
-                Button(model.candidates.isEmpty && model.plan != nil ? "Back to Review" : "Cancel") {
-                    if model.hasEdits { confirmsDiscard = true } else { onCancel() }
-                }
-                .keyboardShortcut(.cancelAction)
-                .disabled(model.isApplying)
-                Spacer()
-                if model.isApplying {
-                    ProgressView().controlSize(.small)
-                    Text("Applying updates and refreshing the Review…").font(.caption)
-                }
-                Button("Save All Drafts") {
-                    Task { if let result = await model.submit() { onApplied(result) } }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.canApply)
-            }.padding(12)
         }
-        .frame(minWidth: 900, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
-        .interactiveDismissDisabled(model.hasEdits || model.isApplying)
-        .task { await model.load() }
-        .confirmationDialog("Discard these resolution edits?", isPresented: $confirmsDiscard) {
-            Button("Discard Edits", role: .destructive, action: onCancel)
-            Button("Keep Editing", role: .cancel) {}
-        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .disabled(model.isApplying)
         .confirmationDialog("Check again and replace these resolution edits?", isPresented: $confirmsRestart) {
             Button("Discard Edits and Check Again", role: .destructive) {
                 Task { await model.load(restart: true) }
@@ -108,8 +59,41 @@ struct ReviewUpdateView: View {
         }
     }
 
-    private func path(_ candidate: DraftReconciliationCandidate) -> String {
-        candidate.proposedState?.resource.path ?? candidate.draftState.resource.path
-            ?? candidate.currentState.resource.path ?? "Untitled"
+    @ViewBuilder
+    private func fileDiff(from remote: ReconciliationResourceState, to draft: ReconciliationResourceState) -> some View {
+        if !draft.exists {
+            Label("This file will be deleted.", systemImage: "trash")
+                .font(.callout).foregroundStyle(.secondary)
+        } else if remote.resource.path != draft.resource.path {
+            Text("\(remote.resource.path ?? "/dev/null") → \(draft.resource.path ?? "/dev/null")")
+                .font(.caption.monospaced()).textSelection(.enabled)
+        }
+        UnifiedDiffView(presentation: UnifiedDiffPresentation(model: .make(
+            original: remote.exists ? remote.content?.primaryText ?? "" : "",
+            modified: draft.exists ? draft.content?.primaryText ?? "" : ""
+        )))
+    }
+}
+
+struct ReviewUpdateToolbarButton: View {
+    @ObservedObject var model: ReviewUpdateModel
+    let onApplied: (ReviewDetail) -> Void
+
+    var body: some View {
+        Button {
+            Task { if let detail = await model.submit() { onApplied(detail) } }
+        } label: {
+            if model.isApplying || model.isLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "square.and.arrow.down")
+            }
+        }
+        .disabled(!model.canApply)
+        .help(model.unresolvedCount > 0
+            ? "Choose Remote or Draft for each conflict before saving"
+            : "Save all Review updates. This does not approve or publish the Review.")
+        .accessibilityLabel("Save Review Updates")
+        .accessibilityIdentifier("review-toolbar-update")
     }
 }

@@ -247,14 +247,14 @@ class Playground:
             return self.draft(path(name), text)
         pending = []
         mixed = self.scenario("01 · 混合文件：冲突 / 自动合并 / 已是最新",
-            "从工具栏打开 Update Review。log-policy：Remote 为 14 天，Draft 为 30 天。"
-            "auto-merge 应自动合并。already-current 不应出现在待更新列表，点击它也不应跳到其他文件。", [
+            "log-policy：Remote 为 14 天，Draft 为 30 天，在详情直接选择。"
+            "auto-merge 显示普通 Diff 和 Auto-rebased 标签。already-current 显示普通 Diff。", [
                 edit("01-mixed/log-policy", log.replace("7 天", "30 天")),
                 edit("01-mixed/auto-merge", automatic.replace("待检查", "草稿已检查")),
                 edit("01-mixed/already-current", "# 当前文件\n\n本次草稿已更新到最新 Remote。\n")])
         pending.append(mixed)
         pending.append(self.scenario("02 · 全部自动合并（两个文件）",
-            "两个文件都是独立行的修改，应一次 Apply All Updates 完成，无需逐个保存。更新后按钮消失，可批准。",
+            "两个文件都是独立行修改，详情显示普通 Diff 和 Auto-rebased 标签。通过工具栏保存整组更新后可批准。",
             [edit("02-auto/" + name, automatic.replace("待检查", "草稿已检查")) for name in ("guide-a", "guide-b")]))
         pending.append(self.scenario("03 · 多段正文冲突与中文",
             "分别处理两个冲突：日志保留天数、重试次数。可混合选择 Remote / Draft，切换文件或页签应保留输入。"
@@ -264,10 +264,10 @@ class Playground:
             "Remote 改名为 remote-name.md，Draft 改名为 draft-name.md。确认最终路径，正文不应丢失。",
             [self.draft(path("04-rename/original"), action="rename", destination=path("04-rename/draft-name"))]))
         pending.append(self.scenario("05 · Remote 删除，Draft 修改",
-            "Remote 已删除文件，草稿仍修改正文。检查 Keep File、恢复文件、采用 Remote 删除三种表达是否清楚。",
+            "Remote 已删除文件，草稿仍修改正文。在详情选择保留 Draft 文件或采用 Remote 删除。",
             [edit("05-remote-delete/note", "# Remote 删除\n\n草稿希望保留的新增说明。\n")]))
         pending.append(self.scenario("06 · Draft 删除，Remote 修改",
-            "草稿要删除文件，但 Remote 增加了内容。选择保留 Remote 或确认删除；结果预览应与选择一致。",
+            "草稿要删除文件，但 Remote 增加了内容。在详情选择保留 Remote 或确认删除，随后显示对应 Diff。",
             [self.draft(path("06-draft-delete/note"), action="delete")]))
         for number, folder, names, discarded_index in [
             ("07", "discard-secondary", ["keep-a", "discard", "keep-b"], 1),
@@ -281,7 +281,7 @@ class Playground:
                 headers={"If-Match": f'"{removed["version"]}"'})
             pending.append(detail)
         updated = self.scenario("10 · 已完成整组更新，等待批准",
-            "已经实际调用 Apply All Updates。此 Review 不应再显示更新按钮，可以直接批准。",
+            "已完成整组更新。此 Review 不应再显示保存更新按钮，可以直接批准。",
             [edit("10-updated/note", automatic.replace("待检查", "草稿已检查"))])
         rejected = self.scenario("11 · 已拒绝，更新后重新提交",
             "切换列表筛选到 Rejected 或 All。作者应能更新 Remote，然后 Resubmit，再完成审批。",

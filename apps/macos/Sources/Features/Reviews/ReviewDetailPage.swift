@@ -40,7 +40,7 @@ struct ReviewDetailPage: View {
                 )
             }
         }
-        .onChange(of: reviewModel.update == nil) { _, finished in
+        .onChange(of: reviewModel.updates[reviewId] == nil) { _, finished in
             if finished, loadsRemoteContent { Task { await model.refreshDetail() } }
         }
         .task(id: reviewId) {
@@ -49,6 +49,13 @@ struct ReviewDetailPage: View {
                 return
             }
             await self.model.load()
+        }
+        .task(id: reviewModel.updates[reviewId].map(ObjectIdentifier.init)) {
+            guard loadsRemoteContent, let update = reviewModel.updates[reviewId] else { return }
+            await update.load()
+            if update.plan?.candidates.isEmpty == true, let detail = update.plan?.detail {
+                reviewModel.endUpdate(reviewId, result: detail)
+            }
         }
         .onDisappear {
             self.model.invalidateDetailRequests()
@@ -71,7 +78,12 @@ struct ReviewDetailPage: View {
     private func content(_ review: ReviewRecord) -> some View {
         return VStack(spacing: 0) {
             reviewHeader(review).padding(20)
-            if review.freshness == .behind { readinessChip(review).padding(.horizontal, 20).padding(.bottom, 12) }
+            if review.freshness == .behind, !workspaceContext.isReviewAuthor(review) {
+                Text("Remote content has changed. Waiting for the author to update this Review.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20).padding(.bottom, 12)
+            }
             Divider()
             HSplitView {
             ReviewFileNavigator(
@@ -88,7 +100,13 @@ struct ReviewDetailPage: View {
                                 self.generalCommentsPanel
                             }
 
-                            self.diffPanel(detail: selectedDraftDetail)
+                            if let update = reviewModel.updates[reviewId] {
+                                ReviewUpdateView(model: update, draftId: selectedDraftDetail.draft.draftId) {
+                                    self.diffPanel(detail: selectedDraftDetail)
+                                }
+                            } else {
+                                self.diffPanel(detail: selectedDraftDetail)
+                            }
                         }
                         .frame(maxWidth: 1180, alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .top)
@@ -189,19 +207,6 @@ struct ReviewDetailPage: View {
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.tail)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func readinessChip(_ review: ReviewRecord) -> some View {
-        let count = model.fileDescriptors.filter(\.needsUpdate).count
-        return Label {
-            Text(workspaceContext.isReviewAuthor(review)
-                ? "Remote content has changed. Update this Review from the toolbar before approval (\(count) files)."
-                : "Remote content has changed. Waiting for the author to update this Review.")
-        } icon: {
-            Image(systemName: review.reconciliation == .conflicts ? "exclamationmark.triangle" : "arrow.trianglehead.2.clockwise.rotate.90")
-        }
-        .font(.callout).foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

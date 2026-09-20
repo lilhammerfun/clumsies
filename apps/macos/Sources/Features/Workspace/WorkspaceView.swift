@@ -700,16 +700,12 @@ struct WorkspaceView: View {
         }
 
         if let review = selectedReviewForToolbar {
-            if review.freshness == .behind, workspaceContext.isReviewAuthor(review),
-               ["open", "approved", "rejected"].contains(review.status) {
+            if let update = reviewModel.updates[review.id] {
                 ToolbarItem(id: "review.update", placement: .automatic) {
-                    Button { reviewModel.beginUpdate(review) } label: {
-                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                    ReviewUpdateToolbarButton(model: update) { detail in
+                        reviewModel.endUpdate(review.id, result: detail)
                     }
-                    .disabled(reviewModel.update != nil || pendingReviewToolbarAction != nil)
-                    .help("Update all files in this Review to the latest remote version…")
-                    .accessibilityLabel("Update Review")
-                    .accessibilityIdentifier("review-toolbar-update")
+                    .disabled(pendingReviewToolbarAction != nil)
                 }
             }
             if reviewToolbarOwnership.contains(.decision(.reject)) {

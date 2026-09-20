@@ -141,36 +141,33 @@ The file tree marks behind files and detected conflicts. These markers only desc
 individual files; selecting a current file never redirects an update action to
 another file. The overall Review header and stale explanation sit above the split.
 
-The author opens **Update Review** from the symbol toolbar. One independent native
-window contains every behind file, with standard close, minimize, and zoom/full-screen
-controls. The detail page remains usable in the main window. File selection stays
-inside the Review update window, and a draggable divider separates comparison from
-result. Closing, signing out, or quitting confirms unsaved resolution edits; saving
-blocks closing. Applying updates refreshes the Review detail.
+The author reviews remote changes directly in the existing file detail. There is
+no separate Review update window and no merged-result editor or placeholder text.
+The same file navigator includes current files, automatic rebases, and conflicts.
 
-- Prepare all behind files against one shared reference. Show “Merges
-  automatically”, “Needs resolution”, or “Resolved” for each file; omit a separate
-  file-count summary strip.
-- Show Remote and Draft conflict sections side by side as unified diffs against
-  their common original, with each choice button beside its heading. Selecting either change
-  updates the merged result below while preserving automatic changes elsewhere.
-  Once content conflicts are chosen, the result can be edited before saving.
-- Show path and deletion choices explicitly. Whole-file replacement is a secondary
-  menu action that confirms replacement of the entire result.
-- A file becomes ready when its choices are complete, its path is valid, and no
-  generated conflict markers remain. There is no separate Mark Resolved step.
-  Switching files preserves choices and edits.
-- **Save All Drafts** sends the complete ordered Review draft set. The Server
-  checks membership, versions, candidates, and the shared reference in one
-  transaction. A failure on any file rolls back all updates.
-- Applying updates does not publish. Reload the Review, remove the update tool
-  when current, then enable the separate approval/publication action when the
-  loaded detail is current and readable.
-- Failed requests retain input. Check Latest Again explicitly warns before
-  replacing edited resolutions. Cancel also confirms edited input; applying
-  disables cancellation. Background detail refresh preserves the update model;
-  an account/authority reset clears it and ignores late responses.
-- Non-authors see that the author must update the Review.
+- Prepare all behind files against one remote reference when the detail loads.
+- Conflicting files show Remote and Draft side by side as unified diffs against
+  their common original, with choice buttons alongside the headings. Choosing a
+  hunk preserves all automatic changes outside that hunk. Path and deletion
+  conflicts have explicit choices; a custom path is available for path collisions.
+- Once choices are complete, show the ordinary diff from the latest remote state
+  to the updated draft. A reset icon returns the file to its original choices.
+- Automatically merged files use the same ordinary diff with an **Auto-rebased**
+  label. The label describes the prepared result; its tooltip explains that the
+  toolbar save applies it. No file counts or extra result panel are shown.
+- **Save Review Updates** in the toolbar sends the complete ordered draft set.
+  It is disabled until every conflict is resolved. Server membership, version,
+  candidate, and remote-reference checks apply in one transaction; any failure
+  rolls back the whole update. This save does not approve or publish the Review.
+- After saving, refresh the detail and file markers, remove the save action when
+  current, and enable approval only once the current detail is readable.
+- Switching files or Reviews retains unsaved choices. Failed requests retain
+  input; **Check Latest Again** confirms before replacing edited resolutions.
+  Signing out or quitting warns about unsaved choices and blocks during a save.
+  Account/authority reset clears choices and ignores late responses.
+- Non-authors see that the author must update the Review. Existing line comments
+  remain on the saved revision; pending reconciliation diffs do not accept new
+  line anchors until saved.
 
 ## 4. Diff and comments
 
@@ -197,10 +194,10 @@ the UI labels these honestly rather than pretending they are inline comments.
 ## 5. Toolbar decisions
 
 The toolbar owns the whole-Review update action and decisions. All use icons
-with tooltips and accessibility labels. Update Review uses
-arrow.trianglehead.2.clockwise.rotate.90 and appears only for the author of a
-behind, editable Review. It is disabled while updating. There is no update
-button inside an individual file detail.
+with tooltips and accessibility labels. Save Review Updates uses
+square.and.arrow.down and appears for a prepared, editable Review owned by the
+author. It is disabled while loading, saving, or awaiting conflict choices.
+There is no separate update-window button inside an individual file detail.
 
 Decision actions retain menu-command parity:
 
