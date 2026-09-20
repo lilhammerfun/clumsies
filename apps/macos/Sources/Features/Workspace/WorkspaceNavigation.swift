@@ -409,7 +409,12 @@ final class WorkspaceNavigation: ObservableObject {
                 pendingDocumentCommand = nil
             }
         }
-        sessions.clearDocumentSynchronizationState(for: tab)
+        // A reconciliation window owns its session after the source tab closes.
+        if sessions.documentSessionKey(for: tab).flatMap({
+            sessions.pendingDocumentReconciliationCandidatesBySession[$0]
+        }) == nil {
+            sessions.clearDocumentSynchronizationState(for: tab)
+        }
         let visibleIndex = visibleTabs.firstIndex(where: { $0.id == tab.id })
         tabs.remove(at: index)
         navigationBackStack.removeAll { $0 == tab.id }

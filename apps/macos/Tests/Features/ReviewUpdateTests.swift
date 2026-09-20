@@ -142,16 +142,13 @@ final class ReviewUpdateTests: XCTestCase {
         add(attachment)
     }
 
-    func testUpdateSheetKeepsTheDetailWindowAndHasUsableEditorSpace() async throws {
+    func testUpdateWindowKeepsTheDetailWindowAndProtectsUnsavedEdits() async throws {
         let plan = fixture()
         let model = ReviewUpdateModel(review: WorkspaceLoader.mapReview(plan.detail.review),
             prepare: { plan }, apply: { _, _ in plan.detail })
         await model.load()
         let host = NSHostingView(rootView: Text("Review details remain here")
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .sheet(isPresented: .constant(true)) {
-                ReviewUpdateView(model: model, onCancel: {}, onApplied: { _ in })
-            })
+            .frame(maxWidth: .infinity, maxHeight: .infinity))
         host.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
             styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -159,18 +156,21 @@ final class ReviewUpdateTests: XCTestCase {
         window.contentView = host
         let originalFrame = window.frame
         window.orderFront(nil)
+        var closed = false
+        let controller = ReconciliationWindowController(identity: "review", title: "Update Review",
+            subtitle: model.review.title, autosaveName: "ReviewWindowTest-\(UUID().uuidString)",
+            hasEdits: { model.hasEdits }, isSaving: { model.isApplying }, onClose: { closed = true })
+        let originalMergeSize = try XCTUnwrap(controller.window).frame.size
+        controller.install(ReviewUpdateView(model: model, onCancel: {}, onApplied: { _ in }))
+        controller.showWindow(nil)
         defer {
-            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+            controller.dismiss()
             window.close()
         }
-        for _ in 0..<20 {
-            host.layoutSubtreeIfNeeded()
-            if window.attachedSheet != nil { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        let sheet = try XCTUnwrap(window.attachedSheet)
-        XCTAssertTrue(sheet.styleMask.contains(.resizable))
-        let content = try XCTUnwrap(sheet.contentView)
+        let mergeWindow = try XCTUnwrap(controller.window)
+        XCTAssertNil(window.attachedSheet)
+        XCTAssertNil(mergeWindow.sheetParent)
+        let content = try XCTUnwrap(mergeWindow.contentView)
         for _ in 0..<3 {
             content.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(50))
@@ -179,10 +179,20 @@ final class ReviewUpdateTests: XCTestCase {
             (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors)
         }
         XCTAssertEqual(window.frame.size, originalFrame.size)
+        XCTAssertEqual(mergeWindow.frame.size, originalMergeSize)
         XCTAssertTrue(window.contentView === host)
         XCTAssertTrue(editors(host).isEmpty, "the editor must not replace the detail page")
         let editor = try XCTUnwrap(editors(content).first)
         XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).bounds.height, 80)
+        let candidate = try XCTUnwrap(model.selectedCandidate)
+        model.setResolution(resolved(candidate, choosing: candidate.draftState), for: candidate.candidateId)
+        controller.confirmDiscard = { false }
+        mergeWindow.performClose(nil)
+        XCTAssertFalse(closed)
+        XCTAssertTrue(mergeWindow.isVisible)
+        controller.confirmDiscard = { true }
+        mergeWindow.performClose(nil)
+        XCTAssertTrue(closed)
     }
 
     private func fixture() -> ReviewUpdatePlan {

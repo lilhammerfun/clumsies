@@ -32,36 +32,9 @@ final class DocumentSessions: ObservableObject {
     /// exclude a daemon Project-context switch while a candidate/rebase is in flight.
     var standaloneReconciliationActivityIds: Set<UUID> = []
 
-    /// UI compatibility view of reconciliation state for the active Project.
-    /// The stored state remains context-scoped so an equal Org resource id in
-    /// another Project can never be rendered or applied here.
-    var pendingDocumentReconciliationCandidates: [String: DraftReconciliationCandidate] {
-        guard let activeProjectId = context.activeProjectId else { return [:] }
-        return Dictionary(
-            uniqueKeysWithValues: pendingDocumentReconciliationCandidatesBySession.compactMap {
-                key, candidate in
-                key.projectId == activeProjectId ? (key.itemId, candidate) : nil
-            }
-        )
-    }
-
     func isSynchronizingDocument(_ itemId: String) -> Bool {
         guard let key = activeDocumentSessionKey(for: itemId) else { return false }
         return synchronizingDocumentSessions.contains(key)
-    }
-
-    func documentReconciliationResolution(for itemId: String) -> DraftResolution? {
-        guard let key = activeDocumentSessionKey(for: itemId) else { return nil }
-        return documentReconciliationResolutions[key]
-    }
-
-    func updateDocumentReconciliationResolution(
-        _ resolution: DraftResolution,
-        for itemId: String
-    ) {
-        guard let key = activeDocumentSessionKey(for: itemId),
-              pendingDocumentReconciliationCandidatesBySession[key] != nil else { return }
-        documentReconciliationResolutions[key] = resolution
     }
 
     func finishDocumentReconciliation(for key: MemoryDocumentSessionKey) {

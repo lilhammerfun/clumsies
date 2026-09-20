@@ -8,28 +8,17 @@ struct ReviewUpdateView: View {
     @State private var confirmsRestart = false
 
     var body: some View {
-        if #available(macOS 15.0, *) {
-            content.presentationSizing(.fitted)
-        } else {
-            content
-        }
-    }
-
-    private var content: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Update Review").font(.title2.weight(.semibold))
-                Text(model.review.title).font(.headline)
-                Text("This Review is based on an older remote version. Merge the remote changes with these drafts before approval.")
-                    .foregroundStyle(.secondary)
-                if model.plan != nil {
-                    Text("\(model.candidates.count) files to update · \(model.unresolvedCount) unresolved")
-                        .font(.callout)
+            if model.plan != nil {
+                HStack {
+                    Text("\(model.candidates.count) files to update")
+                    Spacer()
+                    Text("\(model.unresolvedCount) files need resolution")
+                        .foregroundStyle(.secondary)
                 }
+                .font(.callout).padding(.horizontal, 16).padding(.vertical, 10)
+                Divider()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(20)
-            Divider()
             if model.isLoading {
                 ProgressView("Checking all files against the latest remote version…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -67,7 +56,8 @@ struct ReviewUpdateView: View {
                     if let candidate = model.selectedCandidate {
                         VStack(alignment: .leading, spacing: 0) {
                             Text(path(candidate))
-                                .font(.callout.monospaced()).textSelection(.enabled).padding(12)
+                                .font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                                .help(path(candidate)).textSelection(.enabled).padding(12)
                             Divider()
                             DraftReconciliationView(
                                 candidate: candidate, usesContextualUpdateAction: true,
@@ -113,8 +103,7 @@ struct ReviewUpdateView: View {
                 .disabled(!model.canApply)
             }.padding(12)
         }
-        .frame(minWidth: 1000, idealWidth: 1100, maxWidth: .infinity,
-               minHeight: 720, idealHeight: 760, maxHeight: .infinity)
+        .frame(minWidth: 900, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
         .interactiveDismissDisabled(model.hasEdits || model.isApplying)
         .task { await model.load() }
         .confirmationDialog("Discard these resolution edits?", isPresented: $confirmsDiscard) {

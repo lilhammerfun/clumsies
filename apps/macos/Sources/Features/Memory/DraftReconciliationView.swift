@@ -88,7 +88,7 @@ struct DraftReconciliationView: View {
     }
 
     private var conflictResolution: some View {
-        VStack(spacing: 0) {
+        VSplitView {
             if hasExistenceConflict || hasPathConflict || !resolution.sections.isEmpty
                 || resolution.unresolvedFields.contains("content") {
                 ScrollView {
@@ -131,10 +131,16 @@ struct DraftReconciliationView: View {
                         }
                     }.padding(16)
                 }
-                .frame(maxHeight: 260)
+                .frame(minHeight: 120, idealHeight: 240, maxHeight: .infinity)
                 .disabled(isApplying)
-                Divider()
             }
+            resultEditor
+                .frame(minHeight: 180, maxHeight: .infinity)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var resultEditor: some View {
+        VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Merged Result").font(.headline)
@@ -152,7 +158,7 @@ struct DraftReconciliationView: View {
                 .help("Replace the entire result with one file version")
                 .accessibilityLabel("Whole-file alternatives")
                 .disabled(isApplying)
-            }.padding(16)
+            }.padding(.horizontal, 16).padding(.vertical, 10)
             if hasPathConflict, resolution.state.exists {
                 TextField("Final path", text: Binding(get: { resolution.path }, set: { resolution.choosePath($0) }))
                     .textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)

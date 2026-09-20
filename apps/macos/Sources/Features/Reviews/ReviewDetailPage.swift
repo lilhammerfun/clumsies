@@ -40,19 +40,8 @@ struct ReviewDetailPage: View {
                 )
             }
         }
-        .sheet(isPresented: Binding(
-            get: { reviewModel.update?.review.id == reviewId },
-            set: { if !$0 { reviewModel.endUpdate() } }
-        ), onDismiss: {
-            Task { await model.refreshDetail() }
-        }) {
-            if let update = reviewModel.update, update.review.id == reviewId {
-                ReviewUpdateView(model: update, onCancel: {
-                    reviewModel.endUpdate()
-                }, onApplied: { result in
-                    reviewModel.endUpdate(result: result)
-                })
-            }
+        .onChange(of: reviewModel.update == nil) { _, finished in
+            if finished, loadsRemoteContent { Task { await model.refreshDetail() } }
         }
         .task(id: reviewId) {
             guard self.loadsRemoteContent else {

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var isChoosingAgents = false
     private var mainWindow: NSWindow?
     private let startupWindowController = StartupWindowController()
+    private lazy var reconciliationWindows = ReconciliationWindows(store: store)
     private lazy var settingsWindowController = SettingsWindowController(
         store: store, administration: administration, softwareUpdateController: softwareUpdateController,
         onShowLogs: { [weak self] in self?.showLogsInFinder() }
@@ -32,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.setActivationPolicy(.regular)
         installApplicationMenu()
         installStatusItem()
+        _ = reconciliationWindows
         observePhase()
         NSApp.activate(ignoringOtherApps: true)
         startupTask = Task { [weak self] in
@@ -53,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard settingsWindowController.confirmDiscardIfNeeded() else { return .terminateCancel }
+        guard reconciliationWindows.closeAllIfAllowed() else { return .terminateCancel }
         guard store.hasPendingChanges else { return .terminateNow }
         guard !isFlushingForTermination else { return .terminateLater }
         isFlushingForTermination = true
@@ -545,6 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func signOut() {
         guard settingsWindowController.confirmDiscardIfNeeded() else { return }
+        guard reconciliationWindows.closeAllIfAllowed() else { return }
         Task { await store.signOut() }
     }
 
