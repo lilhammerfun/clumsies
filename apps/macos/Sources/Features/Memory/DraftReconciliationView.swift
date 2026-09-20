@@ -115,10 +115,12 @@ struct DraftReconciliationView: View {
                         }
                         ForEach(resolution.sections) { section in
                             HStack(alignment: .top, spacing: 12) {
-                                choice("Remote", text: section.shared, actionTitle: "Use Remote Change") {
+                                choice("Remote", text: section.shared, original: section.base,
+                                       actionTitle: "Use Remote Change") {
                                     resolution.chooseContent(section.shared, in: section)
                                 }
-                                choice("Draft", text: section.proposed, actionTitle: "Use Draft Change") {
+                                choice("Draft", text: section.proposed, original: section.base,
+                                       actionTitle: "Use Draft Change") {
                                     resolution.chooseContent(section.proposed, in: section)
                                 }
                             }
@@ -183,22 +185,33 @@ struct DraftReconciliationView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func choice(_ title: String, text: String, actionTitle: String,
+    private func choice(_ title: String, text: String, original: String? = nil, actionTitle: String,
                         action: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary)
-            Text(text.isEmpty ? "(Removed)" : text)
-                .font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(actionTitle, action: action).controlSize(.small)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary)
+                    .help(original == nil ? title : "Changes from the common original to \(title)")
+                Spacer()
+                Button(actionTitle, action: action).controlSize(.small)
+            }.padding(12)
+            Divider()
+            if let original, original != text {
+                UnifiedDiffView(presentation: UnifiedDiffPresentation(
+                    model: SplitDiffModel.make(original: original, modified: text)
+                ))
+            } else {
+                Text(text.isEmpty ? "(Removed)" : text)
+                    .font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func fileChoice(_ title: String, state: ReconciliationResourceState) -> some View {
-        choice(title, text: state.exists ? state.content?.primaryText ?? "" : "File deleted",
+        choice(title, text: text(in: state), original: text(in: candidate.baseState),
                actionTitle: state.exists ? "Keep \(title) File" : "Keep File Deleted") {
             resolution.chooseFile(state)
         }

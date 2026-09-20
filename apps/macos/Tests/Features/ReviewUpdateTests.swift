@@ -64,14 +64,27 @@ final class ReviewUpdateTests: XCTestCase {
         let text = "自动合并的前文\n<<<<<<< ours\n共享内容\n||||||| original\n原文\n=======\n提议内容\n>>>>>>> theirs\n自动合并的后文\n"
         let sections = ContentConflictSection.parse(text, markerLength: 7)
         XCTAssertEqual(sections.count, 1)
+        XCTAssertEqual(sections.first?.base, "原文\n")
         XCTAssertEqual(sections.first?.shared, "共享内容\n")
         XCTAssertEqual(sections.first?.proposed, "提议内容\n")
+        for version in [sections[0].shared, sections[0].proposed] {
+            let diff = UnifiedDiffPresentation(model: .make(original: sections[0].base, modified: version))
+            let lines = diff.blocks.flatMap(\.lines)
+            XCTAssertEqual(lines.filter { $0.kind == .removal }.map(\.text), ["原文"])
+            XCTAssertEqual(lines.filter { $0.kind == .insertion }.map(\.text), [String(version.dropLast())])
+        }
         let resolved = (text as NSString).replacingCharacters(in: sections[0].range, with: sections[0].proposed)
         XCTAssertEqual(resolved, "自动合并的前文\n提议内容\n自动合并的后文\n")
         XCTAssertFalse(ContentConflictSection.hasMarkers(in: resolved, length: 7))
         XCTAssertTrue(ContentConflictSection.hasMarkers(in: text, length: 7))
         XCTAssertTrue(ContentConflictSection.parse(text, markerLength: 8).isEmpty,
                       "literal marker-like input is not a generated conflict")
+
+        let deletion = ContentConflictSection.parse(
+            "<<<<<<< ours\n||||||| original\n原文\n=======\n草稿\n>>>>>>> theirs", markerLength: 7)
+        XCTAssertEqual(deletion.first?.base, "原文\n")
+        XCTAssertEqual(deletion.first?.shared, "")
+        XCTAssertEqual(deletion.first?.proposed, "草稿\n")
     }
 
     func testDetailRefreshPreservesWorkflowAndAuthorityResetClearsIt() async throws {
