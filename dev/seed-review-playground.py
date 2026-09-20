@@ -127,6 +127,14 @@ class Playground:
         if any(Path(paths[key]) != value or not value.resolve().is_relative_to(self.root.resolve())
                for key, value in expected.items()):
             raise RuntimeError("Dev paths must belong to this instance.")
+        # A rebuilt ad-hoc binary can prompt for access to the previous item's
+        # ACL. Replace only this disposable fake-OIDC session before bootstrap;
+        # the current daemon then creates and owns its own Keychain item.
+        removed = subprocess.run(["security", "delete-generic-password",
+            "-s", "ai.clumsies.dev." + self.instance, "-a", "server-session"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+        if removed.returncode not in (0, 44):  # 44: errSecItemNotFound
+            raise RuntimeError("Could not renew this local Dev Instance's test credentials.")
         environment = {**os.environ, "CLUMSIES_DEV_INSTANCE_ID": self.instance,
             "CLUMSIES_SERVER_URL": self.origin, "CLUMSIES_DAEMON_ROOT": paths["daemon_root"],
             "CLUMSIES_DAEMON_CACHE_DIR": paths["cache"], "CLUMSIES_DAEMON_LOG_DIR": paths["logs"],
