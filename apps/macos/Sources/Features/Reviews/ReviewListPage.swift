@@ -368,12 +368,21 @@ struct ReviewRow: View {
                         .help("Submitted by \(author)")
                 }
 
-                if let projectName, !projectName.isEmpty {
-                    Text(projectName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                HStack(spacing: 16) {
+                    if let projectName, !projectName.isEmpty {
+                        Text(projectName)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if let updatedAt = TimestampFormatting.date(from: review.updatedAt) {
+                        Text("Updated \(updatedAt, format: .dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())")
+                            .help("Last Review record update")
+                    }
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
         }
         .padding(.vertical, 4)
@@ -416,7 +425,8 @@ struct ReviewRow: View {
         let project = projectName.map { ", \($0)" } ?? ""
         let queueState = errorMessage != nil ? ", Retry Needed"
             : (state.isQueueSignal ? ", \(state.title)" : "")
-        return "\(review.title), \(lifecycleTitle)\(queueState)\(project), Submitted by \(author)"
+        let time = TimestampFormatting.absoluteText(review.updatedAt).map { ", updated \($0)" } ?? ""
+        return "\(review.title), \(lifecycleTitle)\(queueState)\(project), Submitted by \(author)\(time)"
     }
 }
 
