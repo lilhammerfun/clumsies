@@ -255,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         title: String
     ) {
         let contentView = NSHostingView(rootView: content)
+        contentView.sizingOptions = []
         if #available(macOS 26.0, *) {
             contentView.sceneBridgingOptions = .all
         }
