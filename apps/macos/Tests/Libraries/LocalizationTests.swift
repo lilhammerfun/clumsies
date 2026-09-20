@@ -19,6 +19,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(String(localized: "Inbox", bundle: chinese), "收件箱")
         XCTAssertEqual(String(localized: "Settings…", bundle: chinese), "设置…")
         XCTAssertEqual(String(localized: "Language", bundle: chinese), "语言")
+        XCTAssertEqual(String(localized: "Open", bundle: chinese), "打开")
         for count in [0, 1, 2, 25] {
             XCTAssertEqual(String(localized: "\(count) requests", bundle: english, locale: Locale(identifier: "en")), "\(count) \(count == 1 ? "request" : "requests")")
             XCTAssertEqual(String(localized: "\(count) requests", bundle: chinese, locale: Locale(identifier: "zh-Hans")), "\(count) 次请求")
@@ -26,6 +27,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(String(localized: "Delete \("notes")?", bundle: chinese), "删除 notes？")
     }
 
+    @MainActor
     func testDisplayLabelsFollowLanguageWithoutChangingIdentifiers() {
         let isChinese = Bundle.main.preferredLocalizations.first == "zh-Hans"
         XCTAssertEqual(WorkspaceSection.inbox.title, isChinese ? "收件箱" : "Inbox")
@@ -33,6 +35,8 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(InboxMessageType.reviewRequests.rawValue, "Review Requests")
         XCTAssertEqual(ReviewReconciliationState.conflict.title, isChinese ? "冲突" : "Conflict")
         XCTAssertEqual(ReviewReconciliationState.conflict.rawValue, "Conflict")
+        XCTAssertEqual(ReviewStatusFilter.open.title, isChinese ? "待评审" : "Open")
+        XCTAssertEqual(ReviewStatusIndicator.title(for: "open"), isChinese ? "待评审" : "Open")
         XCTAssertEqual(AdminHealthStatus.down.title, isChinese ? "不可用" : "Down")
         XCTAssertEqual(AdminHealthStatus.down.rawValue, "down")
         XCTAssertEqual(SettingsDestination.search(isChinese ? "语言" : "language", canAdminister: false), [.pane(.general)])

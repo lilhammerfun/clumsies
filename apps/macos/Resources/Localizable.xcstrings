@@ -16275,6 +16275,42 @@
         }
       }
     },
+    "review.lifecycle.open": {
+      "comment": "Accessibility description of a review awaiting a decision, not the Open Review button.",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Review"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待评审"
+          }
+        }
+      }
+    },
+    "review.status.open": {
+      "comment": "Review lifecycle status, not the action that opens a file.",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待评审"
+          }
+        }
+      }
+    },
     "team administration name rename": {
       "localizations": {
         "en": {

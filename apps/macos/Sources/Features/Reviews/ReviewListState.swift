@@ -10,7 +10,7 @@ enum ReviewStatusFilter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .open: String(localized: "Open")
+        case .open: String(localized: "review.status.open", defaultValue: "Open", comment: "Review lifecycle status, not the action that opens a file.")
         case .rejected: String(localized: "Rejected")
         case .merged: String(localized: "Merged")
         case .all: String(localized: "All")
