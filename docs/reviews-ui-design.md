@@ -57,8 +57,8 @@ Submitted by author for project                 Updated <local date and time>
   Merged uses the merge icon, and Rejected uses a red pull-request icon. The
   icon has an accessibility status name and semantic color, so color is never
   the only signal. Do not repeat Open or Merged as row text.
-- Use the shared compact `InlineStatusBadge` immediately after the Review title or
-  filename, before flexible space. `Conflict` uses system red; `Auto-rebased` uses
+- Use the shared compact `InlineStatusBadge` immediately after titles in the Review
+  list, and right-aligned in file navigator rows. `Conflict` uses system red; `Auto-rebased` uses
   GitHub's merged purple (`#8250DF`). Both use white 10 pt semibold text and a capsule, without borders
   or shadows. SwiftUI's native List badge occupies the trailing slot and cannot provide
   this inline placement. A conflict takes precedence over completed automatic
@@ -152,7 +152,7 @@ The same file navigator includes current files, automatic rebases, and conflicts
 - Once choices are complete, show the ordinary diff from the latest remote state
   to the updated draft. **File Actions (…) → Reset File Choices** restores its choices.
 - Automatically rebased files use the ordinary diff and the inline `Auto-rebased`
-  badge beside their filename. Status is derived from persisted rebase history for
+  badge at the right edge of their file row. Status is derived from persisted rebase history for
   the current Draft revision, so reloading or reopening the App retains it. Files
   never rebased have no badge. No status row, file counts, or result panel is added.
 - **Review Actions (…) → Save Conflict Resolutions** appears only for author-editable

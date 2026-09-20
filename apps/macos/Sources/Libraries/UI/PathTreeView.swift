@@ -267,11 +267,12 @@ struct PathTreeRowLabel<Accessory: View>: View {
                 .truncationMode(.middle)
                 .foregroundStyle(titleColor)
 
+            Spacer(minLength: 4)
+
             if let badge {
                 InlineStatusBadge(text: badge, color: badgeColor)
             }
 
-            Spacer(minLength: 4)
             accessory
         }
         .padding(.leading, CGFloat(depth) * 13 + 5)
