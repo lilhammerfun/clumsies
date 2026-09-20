@@ -141,9 +141,10 @@ The file tree marks behind files and detected conflicts. These markers only desc
 individual files; selecting a current file never redirects an update action to
 another file. The overall Review header and stale explanation sit above the split.
 
-The author opens **Update Review** from the symbol toolbar. This replaces the
-detail body with one update workspace for every behind file, preserving the
-Review title and file paths. It does not open a separate sheet for each file.
+The author opens **Update Review** from the symbol toolbar. One resizable modal
+sheet contains every behind file. The existing detail page and its selected file
+remain underneath; applying or cancelling closes the sheet and refreshes that
+detail. File selection stays inside this single Review-wide sheet.
 
 - Prepare all behind files against one shared reference. Show “Merges
   automatically”, “Needs resolution”, or “Resolved” for each file.

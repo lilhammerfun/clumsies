@@ -103,6 +103,7 @@ struct ReviewUpdateView: View {
                 Button(model.candidates.isEmpty && model.plan != nil ? "Back to Review" : "Cancel") {
                     if model.hasEdits { confirmsDiscard = true } else { onCancel() }
                 }
+                .keyboardShortcut(.cancelAction)
                 .disabled(model.isApplying)
                 Spacer()
                 if model.isApplying {
