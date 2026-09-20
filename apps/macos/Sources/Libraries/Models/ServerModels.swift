@@ -486,6 +486,7 @@ struct DraftReconciliationCandidate: Codable, Identifiable, Hashable, Sendable {
     let valid: Bool
     let createdAt: String
     let invalidatedAt: String?
+    var mergePreview: ReconciliationMergePreview? = nil
 
     var postSyncDiffStates: (base: ReconciliationResourceState, draft: ReconciliationResourceState) {
         (currentState, proposedState ?? draftState)
@@ -549,11 +550,10 @@ struct CreateReviewUpdatePlanRequest: Codable, Sendable {
 struct ReviewUpdatePlan: Codable, Sendable {
     let detail: ReviewDetail
     let candidates: [DraftReconciliationCandidate]
-    var contentMerges: [String: ReviewConflictContent] = [:]
 }
 
-struct ReviewConflictContent: Codable, Sendable {
-    let text: String
+struct ReconciliationMergePreview: Codable, Hashable, Sendable {
+    let state: ReconciliationResourceState
     let markerLength: Int
 }
 

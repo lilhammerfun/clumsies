@@ -185,7 +185,7 @@ final class FileTreeSelectionTests: XCTestCase {
     }
 
     @MainActor
-    func testReconciliationKeepsUnifiedDiffRenderer() throws {
+    func testCleanReconciliationKeepsUnifiedDiffRenderer() throws {
         let resource = ServerDraftResourceReference(
             scope: "project",
             id: "memory",
@@ -253,22 +253,7 @@ final class FileTreeSelectionTests: XCTestCase {
         XCTAssertEqual(changedLines.map(\.kind), [.removal, .insertion])
         XCTAssertEqual(changedLines.map(\.text), ["local: base", "local: draft"])
 
-        let candidates = [
-            cleanCandidate,
-            candidate(
-                status: .conflicts,
-                proposedState: nil,
-                conflicts: [
-                    .init(
-                        kind: "modify_modify",
-                        field: "content",
-                        base: "base",
-                        current: "shared",
-                        draft: "draft"
-                    )
-                ]
-            ),
-        ]
+        let candidates = [cleanCandidate]
 
         for candidate in candidates {
             let root = DraftReconciliationView(
@@ -294,16 +279,6 @@ final class FileTreeSelectionTests: XCTestCase {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             }
 
-            if candidate.status == .conflicts {
-                func picker(in view: NSView) -> NSSegmentedControl? {
-                    (view as? NSSegmentedControl) ?? view.subviews.lazy.compactMap { picker(in: $0) }.first
-                }
-                let control = try XCTUnwrap(picker(in: host))
-                control.selectedSegment = 1
-                control.sendAction(control.action, to: control.target)
-                host.layoutSubtreeIfNeeded()
-                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            }
             XCTAssertNotNil(
                 descendantScrollViews(in: host).first {
                     $0.hasHorizontalScroller && !$0.hasVerticalScroller

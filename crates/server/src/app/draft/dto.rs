@@ -224,6 +224,15 @@ pub enum ReconciliationCandidateStatus {
     Conflicts,
 }
 
+/// Editable partial merge retaining automatic changes around unresolved sections.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReconciliationMergePreview {
+    /// Suggested result; conflicting fields still require the author's choice.
+    pub state: ReconciliationResourceState,
+    /// Length of generated diff3 markers, chosen not to collide with document text.
+    pub marker_length: usize,
+}
+
 /// Persisted three-way reconciliation tied to exact draft and upstream revisions.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftReconciliationCandidate {
@@ -249,6 +258,8 @@ pub struct DraftReconciliationCandidate {
     pub proposed_state: Option<ReconciliationResourceState>,
     /// Unresolved differences between ancestor, upstream, and proposed content.
     pub conflicts: Vec<ReconciliationConflict>,
+    /// Partial merge for editing conflicts without dropping unrelated changes.
+    pub merge_preview: Option<ReconciliationMergePreview>,
     /// Fingerprint of materialized content used to validate reconciliation or approval.
     pub result_hash: Option<String>,
     /// Whether the candidate still matches the proposal version, base, and current reference.

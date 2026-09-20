@@ -361,14 +361,26 @@ async fn conflict_plan_preserves_automatic_sections_and_rejects_foreign_authors_
     )
     .await;
     let candidate = &plan.candidates[0];
-    let merge = &plan.content_merges[&candidate.candidate_id];
+    let single: server::app::draft::dto::DraftReconciliationCandidate = post(
+        &app,
+        &format!(
+            "/api/v1/drafts/{}/reconciliation-candidates",
+            candidate.draft_id
+        ),
+        serde_json::json!({"expected_draft_version": candidate.draft_version}),
+        head,
+    )
+    .await;
+    assert_eq!(single.merge_preview, candidate.merge_preview);
+    let merge = candidate.merge_preview.as_ref().unwrap();
+    let text = &merge.state.content.as_ref().unwrap().content;
     assert_eq!(
         merge.marker_length, 8,
         "literal markers in content must remain ordinary text"
     );
-    assert!(merge.text.starts_with("=======\nNew title\n"));
-    assert!(merge.text.ends_with("\nNew footer\n"));
-    assert!(merge.text.contains(
+    assert!(text.starts_with("=======\nNew title\n"));
+    assert!(text.ends_with("\nNew footer\n"));
+    assert!(text.contains(
         "<<<<<<<< ours\nshared\n|||||||| original\noriginal\n========\nproposed\n>>>>>>>> theirs\n"
     ));
     let mut resolved = candidate.draft_state.clone();

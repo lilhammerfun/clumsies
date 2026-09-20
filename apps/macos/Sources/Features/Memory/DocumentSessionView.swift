@@ -85,10 +85,10 @@ struct DocumentSessionView: View {
     private func reconciliationSheet(_ candidate: DraftReconciliationCandidate) -> some View {
         let content = VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Update Draft").font(.title2.weight(.semibold))
+                Text(candidate.status == .conflicts ? "Resolve Conflicts" : "Update Draft").font(.title2.weight(.semibold))
                 Text(item.document.path).font(.body.monospaced())
                     .textSelection(.enabled)
-                Text("Review the remote changes and resolve any conflicts before updating this draft.")
+                Text("Choose which changes to keep, then save the merged result to your draft.")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -96,9 +96,9 @@ struct DocumentSessionView: View {
             Divider()
             DraftReconciliationView(
                 candidate: candidate,
-                updateButtonTitle: "Update Draft",
-                initialResolvedState: documentSessions.documentReconciliationResolution(for: item.id),
-                onResolvedStateChange: {
+                updateButtonTitle: "Save to Draft",
+                initialResolution: documentSessions.documentReconciliationResolution(for: item.id),
+                onResolutionChange: {
                     documentSessions.updateDocumentReconciliationResolution($0, for: item.id)
                 },
                 onCancel: closeReconciliation,

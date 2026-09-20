@@ -1525,6 +1525,7 @@ components:
         - draft_state
         - proposed_state
         - conflicts
+        - merge_preview
         - result_hash
         - valid
         - created_at
@@ -1557,6 +1558,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReconciliationConflict"
+        merge_preview:
+          description: Partial merge retaining automatic content and path changes; conflicting fields still require an explicit user choice.
+          oneOf:
+            - $ref: "#/components/schemas/ReconciliationMergePreview"
+            - type: "null"
         result_hash:
           type: [string, "null"]
         valid:
@@ -1567,6 +1573,16 @@ components:
         invalidated_at:
           type: [string, "null"]
           format: date-time
+    ReconciliationMergePreview:
+      type: object
+      required: [state, marker_length]
+      properties:
+        state:
+          $ref: "#/components/schemas/ReconciliationResourceState"
+        marker_length:
+          type: integer
+          minimum: 7
+          description: Collision-free diff3 marker length; ours is Remote, original is base, and theirs is Draft.
     CreateDraftRebaseRequest:
       type: object
       required: [candidate_id, expected_draft_version]
@@ -1713,7 +1729,7 @@ components:
           type: integer
     ReviewUpdatePlan:
       type: object
-      required: [detail, candidates, content_merges]
+      required: [detail, candidates]
       properties:
         detail:
           $ref: "#/components/schemas/ReviewDetail"
@@ -1721,21 +1737,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DraftReconciliationCandidate"
-        content_merges:
-          type: object
-          description: Candidate IDs mapped to partially merged text with collision-free diff3 conflict markers.
-          additionalProperties:
-            $ref: "#/components/schemas/ReviewConflictContent"
-    ReviewConflictContent:
-      type: object
-      required: [text, marker_length]
-      properties:
-        text:
-          type: string
-          description: Automatically merged sections plus diff3 sections labeled ours (shared), original (base), and theirs (proposed).
-        marker_length:
-          type: integer
-          minimum: 7
     CreateReviewUpdateRequest:
       type: object
       required: [expected_review_version, drafts]

@@ -1662,7 +1662,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertTrue(editors(host).first === originalEditor, "the document must stay mounted")
         XCTAssertEqual(originalEditor.string, draft.document.body)
         XCTAssertEqual(window.frame.size, originalFrame.size)
-        let resolutionEditor = try XCTUnwrap(editors(content).first { $0.isEditable })
+        let resolutionEditor = try XCTUnwrap(editors(content).first)
         XCTAssertGreaterThan(try XCTUnwrap(resolutionEditor.enclosingScrollView).bounds.height, 80)
         workspace.sessions.finishDocumentReconciliation(for: key)
         for _ in 0..<20 {
@@ -1714,13 +1714,12 @@ final class WorkspaceNavigationTests: XCTestCase {
             invalidatedAt: nil
         )
 
-        let template = DraftReconciliationView.resolutionContentTemplate(
-            for: candidate,
-            preferredState: deleted
-        )
-
-        XCTAssertEqual(template.primaryText, "Remote body")
-        XCTAssertEqual(template.description, "current description")
+        var resolution = DraftResolution(candidate: candidate)
+        XCTAssertFalse(resolution.canSave)
+        resolution.chooseFile(candidate.currentState)
+        XCTAssertTrue(resolution.canSave)
+        XCTAssertEqual(resolution.state.content?.primaryText, "Remote body")
+        XCTAssertEqual(resolution.state.content?.description, "current description")
     }
 
     func testOrgViewPresentationStripsProjectCarriedDraft() {

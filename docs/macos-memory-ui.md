@@ -40,3 +40,13 @@ This is a file snapshot. The org-admin `/api/v1/admin/memory-export` JSON endpoi
 ## Implementation boundary
 
 SwiftUI lives under `apps/macos/`; Draft persistence, synchronization, and authority checks live in the shared daemon and Server contracts. Planned interactions are tracked as gaps, not documented as shipped behavior.
+
+## Resolving remote changes
+
+The Memory conflict action opens a sheet over the existing document. Remote and
+Draft conflict sections appear side by side; each choice updates the merged result
+without dropping automatically merged changes. After choosing the content changes,
+the result remains editable. Path and deletion conflicts require explicit choices.
+Save to Draft stays disabled until all choices are complete; it does not approve or
+publish. Whole-file replacement is a secondary menu action with confirmation.
+Cancel confirms edited input, and saving disables cancellation.

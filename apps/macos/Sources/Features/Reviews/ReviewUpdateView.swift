@@ -48,12 +48,12 @@ struct ReviewUpdateView: View {
                         ForEach(model.candidates) { candidate in
                             HStack {
                                 Image(systemName: candidate.status == .clean
-                                    || model.confirmed.contains(candidate.candidateId)
+                                    || model.resolutions[candidate.candidateId]?.canSave == true
                                     ? "checkmark.circle" : "exclamationmark.triangle")
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(path(candidate)).lineLimit(2)
                                     Text(candidate.status == .clean ? "Merges automatically"
-                                        : model.confirmed.contains(candidate.candidateId) ? "Resolved" : "Needs resolution")
+                                        : model.resolutions[candidate.candidateId]?.canSave == true ? "Resolved" : "Needs resolution")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -71,25 +71,13 @@ struct ReviewUpdateView: View {
                             Divider()
                             DraftReconciliationView(
                                 candidate: candidate, usesContextualUpdateAction: true,
-                                conflictMarkerLength: model.plan?.contentMerges[candidate.candidateId]?.markerLength,
-                                initialResolvedState: model.resolutions[candidate.candidateId],
-                                onResolvedStateChange: { model.setResolution($0, for: candidate.candidateId) },
+                                initialResolution: model.resolutions[candidate.candidateId],
+                                onResolutionChange: { model.setResolution($0, for: candidate.candidateId) },
                                 onCancel: {}
                             ) { _ in }
                             .id(candidate.candidateId)
                             .disabled(model.isApplying)
-                            if candidate.status == .conflicts {
-                                Divider()
-                                HStack {
-                                    Text(model.confirmed.contains(candidate.candidateId)
-                                        ? "This result is ready to apply with the other files."
-                                        : "Resolve each highlighted section or edit the final result, then mark this file as resolved.")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Button("Mark Resolved") { model.confirm(candidate) }
-                                        .disabled(!model.canConfirm(candidate) || model.confirmed.contains(candidate.candidateId))
-                                }.padding(12)
-                            }
+
                         }.frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
@@ -118,7 +106,7 @@ struct ReviewUpdateView: View {
                     ProgressView().controlSize(.small)
                     Text("Applying updates and refreshing the Review…").font(.caption)
                 }
-                Button("Apply All Updates") {
+                Button("Save All Drafts") {
                     Task { if let result = await model.submit() { onApplied(result) } }
                 }
                 .buttonStyle(.borderedProminent)

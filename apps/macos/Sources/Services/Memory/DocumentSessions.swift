@@ -26,7 +26,7 @@ final class DocumentSessions: ObservableObject {
     var documentSynchronizationTasks: [MemoryDocumentSessionKey: Task<Void, Never>] = [:]
 
     var documentReconciliationResolutions:
-        [MemoryDocumentSessionKey: ReconciliationResourceState] = [:]
+        [MemoryDocumentSessionKey: DraftResolution] = [:]
 
     /// Review reconciliation has no open document session, but it still must
     /// exclude a daemon Project-context switch while a candidate/rebase is in flight.
@@ -50,13 +50,13 @@ final class DocumentSessions: ObservableObject {
         return synchronizingDocumentSessions.contains(key)
     }
 
-    func documentReconciliationResolution(for itemId: String) -> ReconciliationResourceState? {
+    func documentReconciliationResolution(for itemId: String) -> DraftResolution? {
         guard let key = activeDocumentSessionKey(for: itemId) else { return nil }
         return documentReconciliationResolutions[key]
     }
 
     func updateDocumentReconciliationResolution(
-        _ resolution: ReconciliationResourceState,
+        _ resolution: DraftResolution,
         for itemId: String
     ) {
         guard let key = activeDocumentSessionKey(for: itemId),

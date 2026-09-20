@@ -5,216 +5,211 @@ struct DraftReconciliationView: View {
     let candidate: DraftReconciliationCandidate
     let usesContextualUpdateAction: Bool
     let updateButtonTitle: String
-    let conflictMarkerLength: Int?
-    let initialResolution: ReconciliationResourceState
-    let onResolvedStateChange: ((ReconciliationResourceState) -> Void)?
+    let onResolutionChange: ((DraftResolution) -> Void)?
     let onCancel: () -> Void
     let onApplied: () -> Void
     let onApply: (ReconciliationResourceState?) async throws -> Void
 
-    @State private var resolvedExists: Bool
-    @State private var resolvedPath: String
-    @State private var resolvedContent: String
+    @State private var resolution: DraftResolution
     @State private var isApplying = false
     @State private var errorMessage: String?
     @State private var confirmsDiscard = false
-    @State private var comparison = Comparison.resolve
+    @State private var replacement: ReconciliationResourceState?
 
-    private enum Comparison: String, CaseIterable {
-        case resolve = "Resolve"
-        case remoteChanges = "Remote changes"
-        case draftChanges = "Draft changes"
-        case preview = "Merge preview"
-    }
-
-    init(
-        candidate: DraftReconciliationCandidate,
-        usesContextualUpdateAction: Bool = false,
-        updateButtonTitle: String = "Update",
-        conflictMarkerLength: Int? = nil,
-        initialResolvedState: ReconciliationResourceState? = nil,
-        onResolvedStateChange: ((ReconciliationResourceState) -> Void)? = nil,
-        onCancel: @escaping () -> Void,
-        onApplied: (() -> Void)? = nil,
-        onApply: @escaping (ReconciliationResourceState?) async throws -> Void
-    ) {
+    init(candidate: DraftReconciliationCandidate,
+         usesContextualUpdateAction: Bool = false,
+         updateButtonTitle: String = "Save to Draft",
+         initialResolution: DraftResolution? = nil,
+         onResolutionChange: ((DraftResolution) -> Void)? = nil,
+         onCancel: @escaping () -> Void,
+         onApplied: (() -> Void)? = nil,
+         onApply: @escaping (ReconciliationResourceState?) async throws -> Void) {
         self.candidate = candidate
         self.usesContextualUpdateAction = usesContextualUpdateAction
         self.updateButtonTitle = updateButtonTitle
-        self.conflictMarkerLength = conflictMarkerLength
-        self.onResolvedStateChange = onResolvedStateChange
+        self.onResolutionChange = onResolutionChange
         self.onCancel = onCancel
         self.onApplied = onApplied ?? onCancel
         self.onApply = onApply
-        let initial = initialResolvedState ?? candidate.proposedState ?? candidate.draftState
-        self.initialResolution = initial
-        _resolvedExists = State(initialValue: initial.exists)
-        _resolvedPath = State(initialValue: initial.resource.path ?? "")
-        _resolvedContent = State(
-            initialValue: Self.resolutionContentTemplate(
-                for: candidate,
-                preferredState: initial
-            ).primaryText
-        )
+        _resolution = State(initialValue: initialResolution ?? DraftResolution(candidate: candidate))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if !candidate.valid {
-                HStack(spacing: 7) {
-                    Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-                    Text("A newer remote version is available. Check the latest version again.")
-                    Spacer()
-                }
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 10)
-                .frame(height: 34)
-                Divider()
+                Text("The remote version changed. Close this window and check the latest version again.")
+                    .font(.callout).foregroundStyle(.orange).padding(12)
             }
-
             if candidate.status == .conflicts {
                 conflictResolution
             } else {
                 cleanDiff
             }
-
             if !usesContextualUpdateAction {
                 Divider()
                 HStack {
                     Button("Cancel") {
-                        if hasEdits { confirmsDiscard = true } else { onCancel() }
+                        if resolution.hasEdits { confirmsDiscard = true } else { onCancel() }
                     }
-                        .keyboardShortcut(.cancelAction)
-                        .disabled(isApplying)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isApplying)
                     Spacer()
-                    Button {
-                        apply()
-                    } label: {
-                        if isApplying {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text(updateButtonTitle)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canApply)
-                }
-                .padding(12)
+                    if isApplying { ProgressView().controlSize(.small) }
+                    Button(updateButtonTitle, action: apply)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(isApplying || !resolution.canSave)
+                        .accessibilityIdentifier("draft-resolution-save")
+                }.padding(12)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: resolvedExists) { _, _ in publishResolution() }
-        .onChange(of: resolvedPath) { _, _ in publishResolution() }
-        .onChange(of: resolvedContent) { _, _ in publishResolution() }
-        .interactiveDismissDisabled(!usesContextualUpdateAction && (hasEdits || isApplying))
+        .onChange(of: resolution) { _, value in onResolutionChange?(value) }
+        .interactiveDismissDisabled(!usesContextualUpdateAction && (resolution.hasEdits || isApplying))
         .confirmationDialog("Discard your conflict resolution edits?", isPresented: $confirmsDiscard) {
-            Button("Discard Edits", role: .destructive) { onCancel() }
+            Button("Discard Edits", role: .destructive, action: onCancel)
             Button("Keep Editing", role: .cancel) {}
         }
-        .alert(
-            "Could Not Update Draft",
-            isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )
-        ) {
+        .confirmationDialog("Replace the entire result?", isPresented: Binding(
+            get: { replacement != nil }, set: { if !$0 { replacement = nil } }
+        ), presenting: replacement) { version in
+            Button("Replace Entire Result", role: .destructive) { resolution.chooseFile(version) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This replaces all merged changes and edits with the selected file version.")
+        }
+        .alert("Could Not Save Draft", isPresented: Binding(
+            get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+        )) {
             Button("OK") { errorMessage = nil }
         } message: {
-            Text(errorMessage ?? "")
-                .textSelection(.enabled)
-        }
-    }
-
-    private var canApply: Bool {
-        !isApplying
-            && candidate.valid
-            && !(candidate.status == .conflicts && resolvedExists
-                && resolvedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
-    private var hasEdits: Bool {
-        resolvedExists != initialResolution.exists
-            || resolvedPath != (initialResolution.resource.path ?? "")
-            || resolvedContent != Self.resolutionContentTemplate(
-                for: candidate, preferredState: initialResolution
-            ).primaryText
-    }
-
-    private func publishResolution() {
-        onResolvedStateChange?(resolvedState)
-    }
-
-    @ViewBuilder
-    private var cleanDiff: some View {
-        let states = candidate.postSyncDiffStates
-        if states.base != states.draft {
-            reconciliationDiff(
-                from: states.base,
-                to: states.draft,
-                title: "Remote Version → Updated Draft"
-            )
-        } else {
-            ContentUnavailableView(
-                "No Draft Changes",
-                systemImage: "doc.text",
-                description: Text(
-                    "Updating brings this draft up to date without leaving any changes to publish."
-                )
-            )
+            Text(errorMessage ?? "").textSelection(.enabled)
         }
     }
 
     private var conflictResolution: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Label(conflictSummary, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-
-                Spacer(minLength: 12)
-
-                if hasExistenceConflict {
-                    Toggle("Keep File", isOn: $resolvedExists)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
+            if hasExistenceConflict || hasPathConflict || !resolution.sections.isEmpty
+                || resolution.unresolvedFields.contains("content") {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if hasExistenceConflict {
+                            Text("One version deletes this file. Choose whether to keep it.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            HStack(alignment: .top, spacing: 12) {
+                                fileChoice("Remote", state: candidate.currentState)
+                                fileChoice("Draft", state: candidate.draftState)
+                            }
+                        }
+                        if hasPathConflict {
+                            HStack(alignment: .top, spacing: 12) {
+                                choice("Remote", text: candidate.currentState.resource.path ?? "(No path)",
+                                       actionTitle: "Use Remote Path") {
+                                    resolution.choosePath(candidate.currentState.resource.path ?? "")
+                                }
+                                choice("Draft", text: candidate.draftState.resource.path ?? "(No path)",
+                                       actionTitle: "Use Draft Path") {
+                                    resolution.choosePath(candidate.draftState.resource.path ?? "")
+                                }
+                            }
+                        }
+                        ForEach(resolution.sections) { section in
+                            HStack(alignment: .top, spacing: 12) {
+                                choice("Remote", text: section.shared, actionTitle: "Use Remote Change") {
+                                    resolution.chooseContent(section.shared, in: section)
+                                }
+                                choice("Draft", text: section.proposed, actionTitle: "Use Draft Change") {
+                                    resolution.chooseContent(section.proposed, in: section)
+                                }
+                            }
+                        }
+                        if resolution.unresolvedFields.contains("content") {
+                            HStack(alignment: .top, spacing: 12) {
+                                fileChoice("Remote", state: candidate.currentState)
+                                fileChoice("Draft", state: candidate.draftState)
+                            }
+                        }
+                    }.padding(16)
                 }
-
-                if resolvedExists && hasPathConflict {
-                    TextField("Path", text: $resolvedPath)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 280)
-                }
+                .frame(maxHeight: 260)
+                .disabled(isApplying)
+                Divider()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .disabled(isApplying)
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Merged Result").font(.headline)
+                    Text(resolution.canSave
+                         ? "You can edit this result before saving it to the draft."
+                         : "Choose a version for each change above to continue.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Menu {
+                    Button("Replace Entire File with Remote…") { replacement = candidate.currentState }
+                    Button("Replace Entire File with Draft…") { replacement = candidate.draftState }
+                } label: { Image(systemName: "ellipsis") }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Replace the entire result with one file version")
+                .accessibilityLabel("Whole-file alternatives")
+                .disabled(isApplying)
+            }.padding(16)
+            if hasPathConflict, resolution.state.exists {
+                TextField("Final path", text: Binding(get: { resolution.path }, set: { resolution.choosePath($0) }))
+                    .textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
+                    .disabled(isApplying)
+            }
             Divider()
+            if resolution.state.exists {
+                TextEditor(text: Binding(
+                    get: { resolution.canEditContent ? resolution.text : resolution.previewText },
+                    set: { resolution.editContent($0) }
+                ))
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .background(Color(nsColor: .textBackgroundColor))
+                .disabled(isApplying || !resolution.canEditContent)
+                .accessibilityLabel("Merged result")
+                .frame(minHeight: 120)
+            } else {
+                ContentUnavailableView("File Will Be Deleted", systemImage: "trash",
+                    description: Text("Saving this result keeps the file deleted in the draft."))
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-            Picker("Compare versions", selection: $comparison) {
-                ForEach(Comparison.allCases, id: \.self) { comparison in
-                    Text(comparison.rawValue).tag(comparison)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(10)
-            switch comparison {
-            case .resolve:
-                resolvedContentPane
-            case .remoteChanges:
-                reconciliationDiff(from: candidate.baseState, to: candidate.currentState,
-                                   title: "Draft's Starting Version → Remote Version")
-            case .draftChanges:
-                reconciliationDiff(from: candidate.baseState, to: candidate.draftState,
-                                   title: "Draft's Starting Version → Draft Version")
-            case .preview:
-                reconciliationDiff(from: candidate.currentState, to: resolvedState,
-                                   title: "Remote Version → Merged Result")
-            }
+    private func choice(_ title: String, text: String, actionTitle: String,
+                        action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary)
+            Text(text.isEmpty ? "(Removed)" : text)
+                .font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(actionTitle, action: action).controlSize(.small)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func fileChoice(_ title: String, state: ReconciliationResourceState) -> some View {
+        choice(title, text: state.exists ? state.content?.primaryText ?? "" : "File deleted",
+               actionTitle: state.exists ? "Keep \(title) File" : "Keep File Deleted") {
+            resolution.chooseFile(state)
+        }
+    }
+
+    private var hasExistenceConflict: Bool { candidate.conflicts.contains { $0.field == "exists" } }
+    private var hasPathConflict: Bool { candidate.conflicts.contains { $0.field == "path" || $0.field == "path_occupied" } }
+
+    @ViewBuilder
+    private var cleanDiff: some View {
+        let states = candidate.postSyncDiffStates
+        if states.base != states.draft {
+            reconciliationDiff(from: states.base, to: states.draft, title: "Remote Version → Updated Draft")
+        } else {
+            ContentUnavailableView("No Draft Changes", systemImage: "doc.text",
+                description: Text("Saving brings this draft up to date without leaving changes to publish."))
+        }
     }
 
     private func reconciliationDiff(
@@ -263,95 +258,6 @@ struct DraftReconciliationView: View {
         }
     }
 
-    private var resolvedContentPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Final Result").font(.caption.weight(.medium))
-                Text("Choose between the Remote and Draft versions, or edit the merged result below.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Button("Use Remote Version") { use(candidate.currentState) }
-                    Button("Use Draft Version") { use(candidate.draftState) }
-                }
-                .controlSize(.small)
-                .disabled(isApplying)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Divider()
-
-            if let length = conflictMarkerLength {
-                let sections = ContentConflictSection.parse(resolvedContent, markerLength: length)
-                if !sections.isEmpty {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Conflict \(index + 1)").font(.caption.weight(.semibold))
-                                    HStack(alignment: .top, spacing: 16) {
-                                        conflictChoice("Use Remote Change", text: section.shared, section: section)
-                                        conflictChoice("Use Draft Change", text: section.proposed, section: section)
-                                    }
-                                }
-                            }
-                        }.padding(10)
-                    }
-                    .frame(maxHeight: 220)
-                    Divider()
-                }
-            }
-            if resolvedExists {
-                TextEditor(text: $resolvedContent)
-                    .font(.system(.body, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .disabled(isApplying)
-                    .accessibilityLabel("Final resolved content")
-                    .frame(minHeight: 120)
-            } else {
-                ContentUnavailableView(
-                    "File Removed",
-                    systemImage: "trash",
-                    description: Text("The resolved result removes this file.")
-                )
-            }
-        }
-    }
-
-    private var conflictSummary: String {
-        let fields = Array(Set(candidate.conflicts.map(\.field))).sorted()
-        let noun = candidate.conflicts.count == 1 ? "conflict" : "conflicts"
-        guard !fields.isEmpty else { return "\(candidate.conflicts.count) \(noun)" }
-        return "\(candidate.conflicts.count) \(noun): \(fields.joined(separator: ", "))"
-    }
-
-    private func use(_ state: ReconciliationResourceState) {
-        resolvedExists = state.exists
-        resolvedPath = state.resource.path ?? ""
-        resolvedContent = Self.resolutionContentTemplate(for: candidate, preferredState: state).primaryText
-    }
-
-    private func conflictChoice(_ title: String, text: String, section: ContentConflictSection) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(text.isEmpty ? "(Removed)" : text)
-                .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-            Button(title) {
-                let source = resolvedContent as NSString
-                guard NSMaxRange(section.range) <= source.length else { return }
-                resolvedContent = source.replacingCharacters(in: section.range, with: text)
-            }.disabled(isApplying)
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var hasExistenceConflict: Bool {
-        candidate.conflicts.contains { $0.field == "exists" }
-    }
-
-    private var hasPathConflict: Bool {
-        candidate.conflicts.contains { $0.field == "path" || $0.field == "path_occupied" }
-    }
-
     private func text(in state: ReconciliationResourceState) -> String {
         state.exists ? state.content?.primaryText ?? "" : ""
     }
@@ -361,48 +267,14 @@ struct DraftReconciliationView: View {
     }
 
     private func apply() {
-        guard canApply else { return }
+        guard !isApplying, resolution.canSave else { return }
         isApplying = true
         Task {
             defer { isApplying = false }
             do {
-                let resolved = candidate.status == .conflicts ? resolvedState : nil
-                try await onApply(resolved)
+                try await onApply(candidate.status == .conflicts ? resolution.state : nil)
                 onApplied()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+            } catch { errorMessage = error.localizedDescription }
         }
-    }
-
-    private var resolvedState: ReconciliationResourceState {
-        let template = candidate.proposedState ?? candidate.draftState
-        let contentTemplate = Self.resolutionContentTemplate(
-            for: candidate,
-            preferredState: template
-        )
-        let resource = ServerDraftResourceReference(
-            scope: template.resource.scope,
-            id: template.resource.id,
-            path: resolvedExists ? resolvedPath : template.resource.path
-        )
-        return .init(
-            exists: resolvedExists,
-            resource: resource,
-            content: resolvedExists
-                ? contentTemplate.replacingPrimaryText(with: resolvedContent)
-                : nil
-        )
-    }
-
-    static func resolutionContentTemplate(
-        for candidate: DraftReconciliationCandidate,
-        preferredState: ReconciliationResourceState
-    ) -> DaemonDraftContent {
-        preferredState.content
-            ?? candidate.currentState.content
-            ?? candidate.draftState.content
-            ?? candidate.baseState.content
-            ?? .init(description: nil, content: "")
     }
 }

@@ -3,36 +3,6 @@
 use crate::app::review::dto::ReviewStatus;
 use crate::error::ServerError;
 
-/// Retain automatic merges around conflicting sections using collision-free diff3 markers.
-pub(super) fn conflict_content(
-    candidate: &crate::app::draft::dto::DraftReconciliationCandidate,
-) -> Option<super::dto::ReviewConflictContent> {
-    let conflict = candidate.conflicts.iter().find(|c| c.field == "content")?;
-    let base = conflict.base.as_deref().unwrap_or_default();
-    let shared = conflict.current.as_deref().unwrap_or_default();
-    let proposed = conflict.draft.as_deref().unwrap_or_default();
-    let marker_length = [base, shared, proposed]
-        .iter()
-        .flat_map(|text| text.lines())
-        .map(|line| {
-            line.chars()
-                .take_while(|c| ['<', '>', '|', '='].contains(c))
-                .count()
-                + 1
-        })
-        .max()
-        .unwrap_or(7)
-        .max(7);
-    let text = diffy::MergeOptions::new()
-        .set_conflict_marker_length(marker_length)
-        .merge(base, shared, proposed)
-        .err()?;
-    Some(super::dto::ReviewConflictContent {
-        text,
-        marker_length,
-    })
-}
-
 /// Count final-content lines using the same trailing-newline convention as client anchors.
 pub(crate) fn review_comment_line_count(content: &str) -> i64 {
     if content.is_empty() {

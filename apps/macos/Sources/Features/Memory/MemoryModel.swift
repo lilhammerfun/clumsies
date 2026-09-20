@@ -556,8 +556,7 @@ final class MemoryModel: ObservableObject {
                 return
             }
             sessions.pendingDocumentReconciliationCandidatesBySession[key] = candidate
-            sessions.documentReconciliationResolutions[key] = candidate.proposedState
-                ?? candidate.draftState
+            sessions.documentReconciliationResolutions[key] = DraftResolution(candidate: candidate)
         } catch is CancellationError {
             sessions.endDocumentSynchronization(key, generation: generation)
             return

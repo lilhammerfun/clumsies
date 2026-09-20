@@ -357,6 +357,57 @@ pub(crate) fn merge_resource_states(
     )
 }
 
+/// Preserve automatic text and path changes while preparing explicit conflict choices.
+pub(super) fn reconciliation_merge_preview(
+    base: &ReconciliationResourceState,
+    current: &ReconciliationResourceState,
+    draft: &ReconciliationResourceState,
+) -> super::dto::ReconciliationMergePreview {
+    let mut state = draft.clone();
+    let base_text = base.content.as_ref().map(content_text).unwrap_or_default();
+    let current_text = current
+        .content
+        .as_ref()
+        .map(content_text)
+        .unwrap_or_default();
+    let draft_text = draft.content.as_ref().map(content_text).unwrap_or_default();
+    let marker_length = [base_text, current_text, draft_text]
+        .iter()
+        .flat_map(|text| text.lines())
+        .map(|line| {
+            line.chars()
+                .take_while(|c| ['<', '>', '|', '='].contains(c))
+                .count()
+                + 1
+        })
+        .max()
+        .unwrap_or(7)
+        .max(7);
+    if current.exists && draft.exists {
+        state.resource = current.resource.clone();
+        state.resource.path = merge_scalar(
+            &base.resource.path,
+            &current.resource.path,
+            &draft.resource.path,
+        )
+        .unwrap_or_else(|| draft.resource.path.clone());
+        if state.resource.id.is_none() {
+            state.resource.id.clone_from(&draft.resource.id);
+        }
+        let text = match diffy::MergeOptions::new()
+            .set_conflict_marker_length(marker_length)
+            .merge(base_text, current_text, draft_text)
+        {
+            Ok(text) | Err(text) => text,
+        };
+        state.content = Some(content_for_kind("memory", text, None));
+    }
+    super::dto::ReconciliationMergePreview {
+        state,
+        marker_length,
+    }
+}
+
 /// Produce the minimal ordered mutations transforming one resource state into another.
 pub(crate) fn diff_resource_states(
     current: &ReconciliationResourceState,
@@ -616,6 +667,19 @@ mod tests {
         let (result, conflicts) = merge_resource_states(base, current, draft);
         assert!(result.is_none());
         assert!(!conflicts.is_empty());
+    }
+
+    #[test]
+    fn merge_preview_preserves_remote_rename_and_nonconflicting_content() {
+        let base = context_state(true, "old.md", Some("Title\n\nbase\n\nFooter\n"));
+        let current = context_state(true, "renamed.md", Some("New title\n\nremote\n\nFooter\n"));
+        let draft = context_state(true, "old.md", Some("Title\n\ndraft\n\nNew footer\n"));
+        let preview = reconciliation_merge_preview(&base, &current, &draft);
+        assert_eq!(preview.state.resource.path.as_deref(), Some("renamed.md"));
+        let text = preview.state.content.unwrap().content;
+        assert!(text.starts_with("New title\n"));
+        assert!(text.ends_with("New footer\n"));
+        assert!(text.contains("<<<<<<< ours"));
     }
 
     #[test]

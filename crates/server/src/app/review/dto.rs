@@ -60,17 +60,6 @@ pub struct ReviewUpdatePlan {
     pub detail: ReviewDetail,
     /// Reconciliation results for every behind proposal, in review order.
     pub candidates: Vec<DraftReconciliationCandidate>,
-    /// Automatic text merges retaining individually selectable conflict sections.
-    pub content_merges: std::collections::BTreeMap<String, ReviewConflictContent>,
-}
-
-/// Partial merge with conflict markers that cannot collide with the input documents.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReviewConflictContent {
-    /// Text containing the shared, ancestor, and proposed versions of each conflict.
-    pub text: String,
-    /// Number of repeated characters in each generated conflict marker.
-    pub marker_length: usize,
 }
 
 /// Author-confirmed updates to the complete ordered proposal set.
