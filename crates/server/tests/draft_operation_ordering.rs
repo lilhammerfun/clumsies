@@ -1,3 +1,5 @@
+//! Stable proposal operation ordering and atomic multi-proposal publication.
+
 use server::app::auth::AuthPrincipal;
 use server::app::draft::dto::{
     CreateDraftReconciliationCandidateRequest, CreateDraftRequest, DraftOperationAction,
@@ -34,11 +36,15 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
         "Directory Review",
     )
     .await;
-    let head = server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id;
+    let head = server::app::commit::get_org_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id;
 
     let mut drafts = Vec::new();
     for (index, path) in [
@@ -49,9 +55,9 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     .enumerate()
     {
         drafts.push(
-            server::app::draft::service::create_draft(
+            server::app::draft::create_draft(
                 &pool,
-                &bootstrap.user_id,
+                &common::principal(&pool, &bootstrap.user_id).await,
                 CreateDraftRequest {
                     daemon_installation_id: format!("daemon_directory_{index}"),
                     project_id: bootstrap.project_id.clone(),
@@ -80,9 +86,9 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
         );
     }
 
-    let first_submission = server::app::review::service::create_review(
+    let first_submission = server::app::review::create_review(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         head.as_deref(),
         CreateReviewRequest {
             drafts: vec![ReviewDraftRequest {
@@ -97,10 +103,10 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     )
     .await
     .unwrap();
-    let rejected = server::app::review::service::create_review_decision(
+    let rejected = server::app::review::create_review_decision(
         &pool,
         &first_submission.review.review_id,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateReviewDecisionRequest {
             decision: ReviewDecision::Rejected,
             expected_review_version: first_submission.review.version,
@@ -109,9 +115,9 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     )
     .await
     .unwrap();
-    let detail = server::app::review::service::create_review(
+    let detail = server::app::review::create_review(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         head.as_deref(),
         CreateReviewRequest {
             drafts: vec![
@@ -158,16 +164,16 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
         .unwrap();
     let draft_list = tokio::time::timeout(
         Duration::from_secs(3),
-        server::app::draft::service::list_drafts(
+        server::app::draft::list_drafts(
             &pool,
-            &bootstrap.user_id,
+            &common::principal(&pool, &bootstrap.user_id).await,
             Some(&bootstrap.project_id),
         ),
     )
     .await;
     let reviews = tokio::time::timeout(
         Duration::from_secs(3),
-        server::app::review::service::list_reviews(&pool, &principal, Some(&bootstrap.project_id)),
+        server::app::review::list_reviews(&pool, &principal, Some(&bootstrap.project_id)),
     )
     .await;
     blob_lock.rollback().await.unwrap();
@@ -180,10 +186,10 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
         .unwrap();
     assert_eq!(reviews.items, vec![detail.review.clone()]);
 
-    let approved = server::app::review::service::create_review_decision(
+    let approved = server::app::review::create_review_decision(
         &pool,
         &detail.review.review_id,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateReviewDecisionRequest {
             decision: ReviewDecision::Approved,
             expected_review_version: detail.review.version,
@@ -192,10 +198,10 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     )
     .await
     .unwrap();
-    let merged = server::app::review::service::create_review_merge(
+    let merged = server::app::review::create_review_merge(
         &pool,
         &detail.review.review_id,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         head.as_deref(),
         CreateReviewMergeRequest {
             expected_review_version: approved.review.version,
@@ -205,8 +211,9 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     .unwrap();
     assert_eq!(merged.applied_operation_count, 2);
 
-    let commit = server::app::commit::service::get_commit_payload(
+    let commit = server::app::commit::get_commit_payload(
         &pool,
+        &common::owner_principal(&pool).await,
         merged.commit_id.as_deref().unwrap(),
     )
     .await
@@ -235,12 +242,15 @@ async fn multi_draft_review_reconciles_atomically() {
         "Atomic Directory Review",
     )
     .await;
-    let initial_head =
-        server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id;
+    let initial_head = server::app::commit::get_org_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id;
 
     let mut drafts = Vec::new();
     for (index, path) in [
@@ -252,9 +262,9 @@ async fn multi_draft_review_reconciles_atomically() {
     .enumerate()
     {
         drafts.push(
-            server::app::draft::service::create_draft(
+            server::app::draft::create_draft(
                 &pool,
-                &bootstrap.user_id,
+                &common::principal(&pool, &bootstrap.user_id).await,
                 CreateDraftRequest {
                     daemon_installation_id: format!("daemon_atomic_review_{index}"),
                     project_id: bootstrap.project_id.clone(),
@@ -291,14 +301,18 @@ async fn multi_draft_review_reconciles_atomically() {
         drafts[2].draft.version,
     )
     .await;
-    let current_head =
-        server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id;
-    let first_candidate = server::app::draft::service::create_draft_reconciliation_candidate(
+    let current_head = server::app::commit::get_org_commit_state(
         &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id;
+    let first_candidate = server::app::draft::create_draft_reconciliation_candidate(
+        &pool,
+        &common::owner_principal(&pool).await,
         &drafts[0].draft.draft_id,
         CreateDraftReconciliationCandidateRequest {
             expected_draft_version: drafts[0].draft.version,
@@ -306,8 +320,9 @@ async fn multi_draft_review_reconciles_atomically() {
     )
     .await
     .unwrap();
-    let second_candidate = server::app::draft::service::create_draft_reconciliation_candidate(
+    let second_candidate = server::app::draft::create_draft_reconciliation_candidate(
         &pool,
+        &common::owner_principal(&pool).await,
         &drafts[1].draft.draft_id,
         CreateDraftReconciliationCandidateRequest {
             expected_draft_version: drafts[1].draft.version,
@@ -316,12 +331,16 @@ async fn multi_draft_review_reconciles_atomically() {
     .await
     .unwrap();
 
-    let before = server::app::draft::service::get_draft(&pool, &drafts[0].draft.draft_id)
-        .await
-        .unwrap();
-    let error = server::app::review::service::create_review(
+    let before = server::app::draft::get_draft(
         &pool,
-        &bootstrap.user_id,
+        &common::owner_principal(&pool).await,
+        &drafts[0].draft.draft_id,
+    )
+    .await
+    .unwrap();
+    let error = server::app::review::create_review(
+        &pool,
+        &common::principal(&pool, &bootstrap.user_id).await,
         current_head.as_deref(),
         CreateReviewRequest {
             drafts: vec![
@@ -349,18 +368,22 @@ async fn multi_draft_review_reconciles_atomically() {
         ServerError::ReconciliationRequired { draft_id, .. }
             if draft_id == drafts[1].draft.draft_id
     ));
-    let after_failure = server::app::draft::service::get_draft(&pool, &drafts[0].draft.draft_id)
-        .await
-        .unwrap();
+    let after_failure = server::app::draft::get_draft(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &drafts[0].draft.draft_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(after_failure.draft.version, before.draft.version);
     assert_eq!(
         after_failure.draft.base_commit_id,
         before.draft.base_commit_id
     );
 
-    let review = server::app::review::service::create_review(
+    let review = server::app::review::create_review(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         current_head.as_deref(),
         CreateReviewRequest {
             drafts: vec![
@@ -408,9 +431,9 @@ async fn approve_and_merge(
     draft_id: &str,
     expected_draft_version: i64,
 ) {
-    let review = server::app::review::service::create_review(
+    let review = server::app::review::create_review(
         pool,
-        user_id,
+        &common::principal(pool, user_id).await,
         expected_ref,
         CreateReviewRequest {
             drafts: vec![ReviewDraftRequest {
@@ -425,10 +448,10 @@ async fn approve_and_merge(
     )
     .await
     .unwrap();
-    let approved = server::app::review::service::create_review_decision(
+    let approved = server::app::review::create_review_decision(
         pool,
         &review.review.review_id,
-        user_id,
+        &common::principal(pool, user_id).await,
         CreateReviewDecisionRequest {
             decision: ReviewDecision::Approved,
             expected_review_version: review.review.version,
@@ -437,10 +460,10 @@ async fn approve_and_merge(
     )
     .await
     .unwrap();
-    server::app::review::service::create_review_merge(
+    server::app::review::create_review_merge(
         pool,
         &approved.review.review_id,
-        user_id,
+        &common::principal(pool, user_id).await,
         expected_ref,
         CreateReviewMergeRequest {
             expected_review_version: approved.review.version,
@@ -463,17 +486,21 @@ async fn create_request_preserves_create_update_rename_order_through_review_and_
         "Create Request Ordering",
     )
     .await;
-    let head = server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id;
+    let head = server::app::commit::get_org_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id;
     let initial_path = "context/created-in-order.md";
     let final_path = "context/created-in-final-order.md";
 
-    let draft = server::app::draft::service::create_draft(
+    let draft = server::app::draft::create_draft(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateDraftRequest {
             daemon_installation_id: "daemon_create_ordering".to_owned(),
             project_id: bootstrap.project_id.clone(),
@@ -557,9 +584,13 @@ async fn create_request_preserves_create_update_rename_order_through_review_and_
         ]
     );
 
-    let detail = server::app::draft::service::get_draft(&pool, &draft.draft.draft_id)
-        .await
-        .unwrap();
+    let detail = server::app::draft::get_draft(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &draft.draft.draft_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         detail
             .operations
@@ -581,18 +612,23 @@ async fn create_request_preserves_create_update_rename_order_through_review_and_
     )
     .await;
 
-    let created = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .find(|memory| memory.path == final_path)
-        .expect("ordered operations should materialize the final path");
-    assert_eq!(
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &created.memory_id)
+    let created =
+        server::app::memory::list_org_memories(&pool, &common::owner_principal(&pool).await)
             .await
             .unwrap()
-            .content,
+            .items
+            .into_iter()
+            .find(|memory| memory.path == final_path)
+            .expect("ordered operations should materialize the final path");
+    assert_eq!(
+        server::app::memory::get_org_memory(
+            &pool,
+            &common::owner_principal(&pool).await,
+            &created.memory_id
+        )
+        .await
+        .unwrap()
+        .content,
         "# Refined"
     );
     postgres.shutdown().await;
@@ -611,34 +647,39 @@ async fn batch_preserves_multiple_operations_and_their_event_versions() {
         "Batch Ordering",
     )
     .await;
-    let resource_id = server::app::memory::service::create_org_context(
+    let resource_id = server::app::memory::create_org_context(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "context/batch-order.md",
         "# Authority",
     )
     .await
     .unwrap();
-    server::app::memory::service::select_org_resource_for_project(
+    server::app::memory::select_org_resource_for_project(
         &pool,
+        &common::owner_principal(&pool).await,
         &bootstrap.project_id,
         &resource_id,
     )
     .await
     .unwrap();
-    let head = server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id;
+    let head = server::app::commit::get_org_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id;
     let target = DraftResourceRef {
         scope: ResourceScope::Org,
         id: Some(resource_id.clone()),
         path: None,
     };
-    let draft = server::app::draft::service::create_draft(
+    let draft = server::app::draft::create_draft(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateDraftRequest {
             daemon_installation_id: "daemon_batch_ordering".to_owned(),
             project_id: bootstrap.project_id.clone(),
@@ -652,7 +693,7 @@ async fn batch_preserves_multiple_operations_and_their_event_versions() {
     .await
     .unwrap();
 
-    let batch = server::app::draft::service::create_draft_operation_batch(
+    let batch = server::app::draft::create_draft_operation_batch(
         &pool,
         &AuthPrincipal {
             user_id: bootstrap.user_id.clone(),
@@ -723,9 +764,13 @@ async fn batch_preserves_multiple_operations_and_their_event_versions() {
         vec![("# First".to_owned(), 1), ("# Final".to_owned(), 2)]
     );
 
-    let detail = server::app::draft::service::get_draft(&pool, &draft.draft.draft_id)
-        .await
-        .unwrap();
+    let detail = server::app::draft::get_draft(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &draft.draft.draft_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         detail
             .operations
@@ -744,15 +789,19 @@ async fn batch_preserves_multiple_operations_and_their_event_versions() {
     );
     assert_eq!(detail.draft.version, 3);
 
-    let events =
-        server::app::draft::service::list_draft_events(&pool, &bootstrap.user_id, None, None)
-            .await
-            .unwrap()
-            .events
-            .into_iter()
-            .filter(|event| event.draft_id == draft.draft.draft_id)
-            .map(|event| (event.event_type, event.version))
-            .collect::<Vec<_>>();
+    let events = server::app::draft::list_draft_events(
+        &pool,
+        &common::principal(&pool, &bootstrap.user_id).await,
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    .events
+    .into_iter()
+    .filter(|event| event.draft_id == draft.draft.draft_id)
+    .map(|event| (event.event_type, event.version))
+    .collect::<Vec<_>>();
     assert_eq!(
         events,
         vec![
@@ -777,10 +826,14 @@ async fn batch_preserves_multiple_operations_and_their_event_versions() {
     )
     .await;
     assert_eq!(
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &resource_id)
-            .await
-            .unwrap()
-            .content,
+        server::app::memory::get_org_memory(
+            &pool,
+            &common::owner_principal(&pool).await,
+            &resource_id
+        )
+        .await
+        .unwrap()
+        .content,
         "# Final"
     );
     postgres.shutdown().await;

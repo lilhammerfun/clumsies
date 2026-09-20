@@ -1,3 +1,5 @@
+//! Production readiness responses with available and unavailable dependencies.
+
 mod common;
 
 use axum::body::{Body, to_bytes};

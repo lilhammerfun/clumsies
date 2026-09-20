@@ -1,3 +1,5 @@
+//! First-owner setup, CSRF protection, domain admission, and concurrent initialization.
+
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};

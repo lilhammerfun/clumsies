@@ -1,18 +1,16 @@
 //! Explicit, plan-hash-guarded maintenance of legacy project authority data.
 
-use crate::app::commit::service::{
-    advance_project_ref, create_project_commit, current_project_ref,
-};
+use crate::app::commit::{advance_project_ref, create_project_commit, current_project_ref};
 use crate::app::draft::dto::{
     CreateDraftRequest, DraftEventType, DraftOperationAction, DraftOperationInput,
     DraftResourceContent, DraftResourceRef,
 };
-use crate::app::draft::service::{create_draft_in_tx as create_draft, insert_draft_event};
+use crate::app::draft::{create_draft_in_tx as create_draft, insert_draft_event};
 use crate::app::memory::dto::ResourceScope;
+use crate::app::memory::lock_org_draft_selection_coordination;
 use crate::app::memory::model::{
     content_hash, insert_materialization_path, materialization_output_path, validate_resource_path,
 };
-use crate::app::memory::service::lock_org_draft_selection_coordination;
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
 use serde::Serialize;
@@ -21,107 +19,186 @@ use sqlx::types::Json;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Synthetic client identity attached to proposals created by explicit authority maintenance.
 const MIGRATION_DAEMON_ID: &str = "server-project-authority-migration-v1";
 
+/// Whether to inspect a migration plan or apply its verified fingerprint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MigrationMode<'a> {
+    /// Compute preservation evidence and blockers without changing stored data.
     DryRun,
-    Apply { expected_plan_hash: &'a str },
+    /// Apply a freshly verified plan whose fingerprint matches explicit operator input.
+    Apply {
+        /// Fingerprint that must match the dry-run plan before applying it.
+        expected_plan_hash: &'a str,
+    },
 }
 
+/// Dry-run or apply outcome with plan fingerprint and preservation evidence.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ProjectAuthorityMigrationReport {
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
     pub version: u32,
+    /// Fingerprint binding an apply request to the inspected migration plan.
     pub plan_hash: String,
+    /// Whether the component satisfies its readiness contract.
     pub ready: bool,
+    /// Whether the guarded migration plan was executed.
     pub applied: bool,
+    /// Number of legacy authoritative resources in the plan.
     pub legacy_authority_count: usize,
+    /// Number of active legacy proposals requiring migration.
     pub legacy_active_draft_count: usize,
+    /// Number of organization proposals required to preserve legacy state.
     pub replacement_draft_count: usize,
+    /// Projects accessible to the identity or affected by the migration.
     pub projects: Vec<ProjectMigrationReport>,
+    /// Conditions that prevent safe application of the migration plan.
     pub blockers: Vec<String>,
 }
 
+/// Per-project blockers, replacements, and preservation evidence from migration.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ProjectMigrationReport {
+    /// Project boundary containing the resource or proposal.
     pub project_id: String,
+    /// Human-readable project label included in the migration report.
     pub project_name: String,
+    /// Persisted identity of the author whose ownership is checked by the use case.
     pub author_user_id: Option<String>,
+    /// Number of legacy authoritative resources in the plan.
     pub legacy_authority_count: usize,
+    /// Number of active legacy proposals requiring migration.
     pub legacy_active_draft_count: usize,
+    /// Number of organization proposals required to preserve legacy state.
     pub replacement_draft_count: usize,
+    /// Fingerprint of materialized paths and content used to verify preservation.
     pub effective_path_content_hash: Option<String>,
+    /// Non-blocking migration observations requiring operator attention.
     pub warnings: Vec<String>,
 }
 
+/// Materialized path and content state used to verify migration preservation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MemoryState {
+    /// Stable identifier of the resource described by this result.
     id: String,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
     path: String,
+    /// Human-readable explanation associated with the resource.
     description: String,
+    /// Markdown body of this Memory resource.
     content: String,
 }
 
+/// Organization proposal planned to preserve a legacy resource's effective content.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ReplacementDraft {
+    /// Persisted record from which this overlay or migration item originated.
     source_id: String,
+    /// Stable identity of the resource affected by the operation.
     target_id: Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
     path: String,
+    /// Human-readable explanation associated with the resource.
     description: String,
+    /// Markdown body of this Memory resource.
     content: String,
 }
 
+/// Resource identity used when matching legacy and organization authority.
 #[derive(Clone, Debug)]
 struct AuthorityIdentity {
+    /// Stable identity of the persisted resource.
     resource_id: String,
+    /// Monotonic revision used for optimistic concurrency and cache validation.
     revision: i64,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
     path: String,
+    /// Fingerprint used to detect resource content changes.
     content_hash: String,
 }
 
+/// Legacy proposal information layered over an authoritative Memory snapshot.
 #[derive(Clone, Debug)]
 struct DraftOverlay {
+    /// Stable identifier of the editable proposal.
     draft_id: String,
+    /// Persisted identity of the author whose ownership is checked by the use case.
     author_user_id: String,
+    /// Ownership boundary determining which reference and resource set apply.
     scope: String,
+    /// Commit against which the proposal was authored; absent before the first commit.
     base_commit_id: Option<String>,
+    /// Stable identity of the resource affected by the operation.
     target_id: Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
     path: Option<String>,
+    /// Proposal lifecycle controlling editing, review, and publication.
     status: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
     version: i64,
+    /// Ordered mutations applied to the proposal's base state.
     operations: Vec<OverlayOperation>,
 }
 
+/// Legacy mutation replayed when computing the effective migration state.
 #[derive(Clone, Debug)]
 struct OverlayOperation {
+    /// Mutation to apply to the referenced resource.
     action: DraftOperationAction,
+    /// Stable identity of the resource affected by the operation.
     target_id: Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
     path: Option<String>,
+    /// Requested destination for a rename, validated for portability before persistence.
     new_path: Option<String>,
+    /// Optional Memory payload for create or update; rename and delete omit content.
     content: Option<DraftResourceContent>,
 }
 
+/// Replacement proposals and reference preconditions for one legacy project.
 #[derive(Clone, Debug)]
 struct ProjectPlan {
+    /// Human-readable and machine-verifiable migration outcome.
     report: ProjectMigrationReport,
+    /// Organization boundary to which the resource or identity belongs.
     org_id: String,
+    /// Persisted identity of the author whose ownership is checked by the use case.
     author_user_id: Option<String>,
+    /// Organization snapshot head used by this plan.
     current_org_commit_id: Option<String>,
+    /// Project snapshot head used by this plan.
     current_project_commit_id: Option<String>,
+    /// Authoritative Memory representation used to build the migration plan.
     authority: Vec<AuthorityIdentity>,
+    /// Legacy proposals whose effective state must be preserved.
     legacy_drafts: Vec<DraftOverlay>,
+    /// Proposals to create when applying the inspected migration plan.
     replacements: Vec<ReplacementDraft>,
+    /// Fingerprint of effective state before applying the migration plan.
     before_state_hash: Option<String>,
+    /// Conditions that prevent safe application of the migration plan.
     blockers: Vec<String>,
 }
 
+/// Dry-run evidence and guarded replacement operations for legacy project authority.
 #[derive(Clone, Debug)]
 struct MigrationPlan {
+    /// Fingerprint binding an apply request to the inspected migration plan.
     plan_hash: String,
+    /// Projects accessible to the identity or affected by the migration.
     projects: Vec<ProjectPlan>,
+    /// Conditions that prevent safe application of the migration plan.
     blockers: Vec<String>,
 }
 
+/// Build a deterministic maintenance plan and apply it only when its expected fingerprint
+/// matches.
+///
+/// # Errors
+/// Rejects blockers, mismatched plan fingerprints, changed references, and content-preservation
+/// failures. Apply commits only after all projects pass verification.
 pub async fn migrate_project_authority(
     pool: &PgPool,
     mode: MigrationMode<'_>,
@@ -166,6 +243,13 @@ pub async fn migrate_project_authority(
     }
 }
 
+/// Read all legacy project authority and compute guarded preservation plans without writing data.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn build_plan(tx: &mut Transaction<'_, Postgres>) -> Result<MigrationPlan, ServerError> {
     let project_rows = sqlx::query(
         "SELECT p.project_id, p.org_id, p.name
@@ -204,6 +288,14 @@ async fn build_plan(tx: &mut Transaction<'_, Postgres>) -> Result<MigrationPlan,
     })
 }
 
+/// Compute one project's replacement proposals and blockers while preserving its effective
+/// content.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn build_project_plan(
     tx: &mut Transaction<'_, Postgres>,
     project_id: String,
@@ -406,6 +498,13 @@ async fn build_project_plan(
     })
 }
 
+/// Read a required current reference during maintenance planning or application.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn current_ref(
     tx: &mut Transaction<'_, Postgres>,
     scope: &str,
@@ -433,6 +532,13 @@ async fn current_ref(
         .ok_or_else(|| ServerError::not_found("ref", owner_id))
 }
 
+/// Load active legacy project-owned resources for preservation planning.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn load_active_project_authority(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -479,6 +585,13 @@ async fn load_active_project_authority(
     Ok((identity, state))
 }
 
+/// Load selected organization resources forming the target authoritative baseline.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn load_selected_org_authority(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -511,6 +624,13 @@ async fn load_selected_org_authority(
         .collect()
 }
 
+/// Materialize resource paths and content from a stored snapshot for comparison.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn load_commit_state(
     tx: &mut Transaction<'_, Postgres>,
     commit_id: &str,
@@ -552,6 +672,13 @@ async fn load_commit_state(
     Ok(output)
 }
 
+/// Read legacy proposal revisions and ordered mutations that affect effective project content.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn load_overlays(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -627,6 +754,13 @@ async fn load_overlays(
     Ok(overlays)
 }
 
+/// Replay legacy proposals in deterministic order over an authoritative baseline.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn apply_overlays(
     tx: &mut Transaction<'_, Postgres>,
     commit_cache: &mut BTreeMap<(String, String), BTreeMap<String, MemoryState>>,
@@ -650,6 +784,11 @@ async fn apply_overlays(
     Ok(())
 }
 
+/// Replay one legacy proposal while preserving its resource identity across path changes.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 fn apply_overlay(
     resources: &mut BTreeMap<String, MemoryState>,
     overlay: &DraftOverlay,
@@ -771,6 +910,7 @@ fn apply_overlay(
     Ok(())
 }
 
+/// Resolve the effective resource key affected by one legacy mutation.
 fn operation_target_key(
     operation: &OverlayOperation,
     resources: &BTreeMap<String, MemoryState>,
@@ -785,6 +925,7 @@ fn operation_target_key(
     })
 }
 
+/// Derive organization proposals that preserve the legacy project's effective content.
 fn plan_replacements(
     project_id: &str,
     selected_org_authority: &BTreeMap<String, MemoryState>,
@@ -854,6 +995,7 @@ fn plan_replacements(
     replacements
 }
 
+/// Match a legacy proposal to authoritative content by stable identity or ancestor path.
 fn draft_targets_resource(draft: &DraftOverlay, resource: &MemoryState) -> bool {
     if draft.target_id.as_deref() == Some(resource.id.as_str()) {
         return true;
@@ -871,6 +1013,11 @@ fn draft_targets_resource(draft: &DraftOverlay, resource: &MemoryState) -> bool 
     })
 }
 
+/// Reject unsafe or ambiguous paths in the proposed migration result.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 fn validate_materialized_state(
     project_id: &str,
     state: &BTreeMap<String, MemoryState>,
@@ -894,6 +1041,7 @@ fn validate_materialized_state(
     Ok(())
 }
 
+/// Fingerprint normalized output paths and content for preservation verification.
 fn path_content_hash(state: &BTreeMap<String, MemoryState>) -> String {
     let mut resources = state.values().collect::<Vec<_>>();
     resources.sort_by(|left, right| {
@@ -911,6 +1059,7 @@ fn path_content_hash(state: &BTreeMap<String, MemoryState>) -> String {
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
+/// Fingerprint the complete migration plan so apply cannot silently use changed inputs.
 fn plan_hash(projects: &[ProjectPlan]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"project-memory-authority-migration-v1\0");
@@ -947,11 +1096,13 @@ fn plan_hash(projects: &[ProjectPlan]) -> String {
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
+/// Add a length-delimited field to the plan fingerprint without concatenation ambiguity.
 fn hash_field(hasher: &mut Sha256, value: &str) {
     hasher.update(value.len().to_le_bytes());
     hasher.update(value.as_bytes());
 }
 
+/// Distinguish absent fields from present values in the plan fingerprint.
 fn hash_optional(hasher: &mut Sha256, value: Option<&str>) {
     match value {
         Some(value) => {
@@ -962,6 +1113,7 @@ fn hash_optional(hasher: &mut Sha256, value: Option<&str>) {
     }
 }
 
+/// Produce the public dry-run report from a computed maintenance plan.
 fn report_for_plan(plan: &MigrationPlan, applied: bool) -> ProjectAuthorityMigrationReport {
     ProjectAuthorityMigrationReport {
         version: 1,
@@ -992,6 +1144,14 @@ fn report_for_plan(plan: &MigrationPlan, applied: bool) -> ProjectAuthorityMigra
     }
 }
 
+/// Apply all guarded project replacements atomically and verify content preservation before
+/// commit.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Rejects changed plan inputs or a preservation mismatch and propagates database failures. Any
+/// failure prevents the migration transaction from committing.
 async fn apply_plan(
     tx: &mut Transaction<'_, Postgres>,
     plan: &MigrationPlan,
@@ -1017,6 +1177,14 @@ async fn apply_plan(
     Ok(())
 }
 
+/// Replace one project's legacy authority and proposals inside the caller's maintenance
+/// transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn apply_project_plan(
     tx: &mut Transaction<'_, Postgres>,
     project: &ProjectPlan,
@@ -1191,6 +1359,13 @@ async fn apply_project_plan(
     Ok(())
 }
 
+/// Require the post-conversion effective content to match the planned preservation fingerprint.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates invalid legacy state, changed reference preconditions, or persistence failures; the
+/// caller must not commit an incomplete conversion.
 async fn verify_converted_effective_state(
     tx: &mut Transaction<'_, Postgres>,
     project: &ProjectPlan,

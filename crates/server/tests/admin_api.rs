@@ -1,3 +1,5 @@
+//! Administrative HTTP contracts, filtering, membership policy, and audit persistence.
+
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};

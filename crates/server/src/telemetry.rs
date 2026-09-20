@@ -15,9 +15,14 @@ tokio::task_local! {
     static CURRENT_REQUEST_ID: String;
 }
 
+/// Validated correlation identity propagated through request logs and error responses.
 #[derive(Clone)]
 struct RequestId(String);
 
+/// Initialize structured tracing once using the deployment log filter.
+///
+/// # Errors
+/// Propagates failure to install the process-wide tracing subscriber.
 pub(crate) fn init() -> io::Result<()> {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("server=info"));
@@ -31,6 +36,7 @@ pub(crate) fn init() -> io::Result<()> {
         .map_err(|error| io::Error::other(error.to_string()))
 }
 
+/// Attach request correlation and tracing to the constructed application.
 pub(crate) fn instrument(app: Router) -> Router {
     app.layer(
         TraceLayer::new_for_http()
@@ -77,12 +83,14 @@ pub(crate) fn instrument(app: Router) -> Router {
     .layer(middleware::from_fn(request_context))
 }
 
+/// Read the correlation identity of the current request task.
 pub(crate) fn current_request_id() -> String {
     CURRENT_REQUEST_ID
         .try_with(Clone::clone)
         .unwrap_or_else(|_| new_request_id())
 }
 
+/// Bind one request ID to response headers, logs, and the handler's task scope.
 async fn request_context(mut request: Request, next: Next) -> Response<Body> {
     let request_id = request
         .headers()
@@ -106,6 +114,7 @@ async fn request_context(mut request: Request, next: Next) -> Response<Body> {
         .await
 }
 
+/// Accept only bounded, safe characters from an upstream correlation header.
 fn valid_request_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -114,6 +123,7 @@ fn valid_request_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
+/// Generate a fresh correlation identity when no valid upstream value is supplied.
 fn new_request_id() -> String {
     format!("req_{}", uuid::Uuid::new_v4().simple())
 }

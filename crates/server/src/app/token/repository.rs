@@ -6,6 +6,10 @@ use crate::error::ServerError;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 
+/// Read non-secret organization credential metadata with filtering before pagination.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_access_tokens(
     pool: &PgPool,
     org_id: &str,
@@ -28,6 +32,12 @@ pub(crate) async fn list_access_tokens(
     rows.iter().map(access_token_meta_from_row).collect()
 }
 
+/// Check organization ownership of a credential without exposing its secret.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn access_token_exists(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -46,6 +56,12 @@ pub(crate) async fn access_token_exists(
     .await?)
 }
 
+/// Invalidate a credential inside the caller's administrative transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn revoke_access_token(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -63,6 +79,10 @@ pub(crate) async fn revoke_access_token(
     Ok(())
 }
 
+/// Decode safe credential metadata and its public owner identity.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 fn access_token_meta_from_row(row: &sqlx::postgres::PgRow) -> Result<AccessTokenMeta, ServerError> {
     Ok(AccessTokenMeta {
         token_id: row.try_get("token_id")?,

@@ -7,12 +7,18 @@ use crate::app::review::dto::{
     CreateReviewCommentRequest, CreateReviewDecisionRequest, CreateReviewMergeRequest,
     CreateReviewRequest, CreateReviewSubmissionRequest,
 };
-use crate::http::{HttpError, parse_ref_if_match, require_org_admin};
+use crate::http::{HttpError, parse_ref_if_match};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 
+/// Validate an author's proposal set and create or resubmit its review in one transaction.
+///
+/// # Errors
+/// Rejects inaccessible or foreign-authored proposals, invalid proposal sets, stale revisions,
+/// and invalid lifecycle changes. Reconciliation-required failures preserve the generated
+/// candidate before returning; other failures leave the transaction uncommitted.
 pub(super) async fn create_review(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -21,16 +27,15 @@ pub(super) async fn create_review(
 ) -> Result<Json<dto::ReviewDetail>, HttpError> {
     let expected_ref = parse_ref_if_match(&headers)?;
     Ok(Json(
-        service::create_review(
-            &state.pool,
-            &principal.user_id,
-            expected_ref.as_deref(),
-            request,
-        )
-        .await?,
+        service::create_review(&state.pool, &principal, expected_ref.as_deref(), request).await?,
     ))
 }
 
+/// Return reviews visible through the principal's project memberships.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_reviews(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -41,55 +46,74 @@ pub(super) async fn list_reviews(
     ))
 }
 
+/// Return review metadata only after checking the principal's project access.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn get_review(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(review_id): Path<String>,
 ) -> Result<Json<dto::ReviewDetail>, HttpError> {
-    service::ensure_review_member(&state.pool, &principal, &review_id).await?;
     Ok(Json(
-        service::get_review_detail(&state.pool, &review_id).await?,
+        service::get_review_detail(&state.pool, &principal, &review_id).await?,
     ))
 }
 
+/// Return discussion only for a review accessible to the principal.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn list_review_comments(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(review_id): Path<String>,
 ) -> Result<Json<dto::ReviewCommentListResponse>, HttpError> {
-    service::ensure_review_member(&state.pool, &principal, &review_id).await?;
     Ok(Json(
-        service::list_review_comments(&state.pool, &review_id).await?,
+        service::list_review_comments(&state.pool, &principal, &review_id).await?,
     ))
 }
 
+/// Validate access, expected revision, and final-content anchors before persisting discussion.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_review_comment(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(review_id): Path<String>,
     Json(request): Json<CreateReviewCommentRequest>,
 ) -> Result<Json<dto::ReviewComment>, HttpError> {
-    service::ensure_review_member(&state.pool, &principal, &review_id).await?;
     Ok(Json(
-        service::create_review_comment(&state.pool, &review_id, &principal.user_id, request)
-            .await?,
+        service::create_review_comment(&state.pool, &review_id, &principal, request).await?,
     ))
 }
 
+/// Require organization administration and project access before deciding the submitted content.
+///
+/// # Errors
+/// Returns the mapped HTTP failure for invalid preconditions or a rejected resource operation;
+/// internal diagnostics are not exposed in the response.
 pub(super) async fn create_review_decision(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(review_id): Path<String>,
     Json(request): Json<CreateReviewDecisionRequest>,
 ) -> Result<Json<dto::ReviewDetail>, HttpError> {
-    require_org_admin(&principal)?;
-    service::ensure_review_member(&state.pool, &principal, &review_id).await?;
     Ok(Json(
-        service::create_review_decision(&state.pool, &review_id, &principal.user_id, request)
-            .await?,
+        service::create_review_decision(&state.pool, &review_id, &principal, request).await?,
     ))
 }
 
+/// Validate access and proposal ownership before resubmitting a rejected review.
+///
+/// # Errors
+/// Rejects inaccessible or foreign-authored proposals, invalid resubmission state, and stale
+/// revisions. Required reconciliation evidence is committed before its conflict is returned;
+/// other failures do not commit the submission.
 pub(super) async fn create_review_submission(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -97,13 +121,12 @@ pub(super) async fn create_review_submission(
     headers: HeaderMap,
     Json(request): Json<CreateReviewSubmissionRequest>,
 ) -> Result<Json<dto::ReviewDetail>, HttpError> {
-    service::ensure_review_member(&state.pool, &principal, &review_id).await?;
     let expected_ref = parse_ref_if_match(&headers)?;
     Ok(Json(
         service::create_review_submission(
             &state.pool,
             &review_id,
-            &principal.user_id,
+            &principal,
             expected_ref.as_deref(),
             request,
         )
@@ -111,6 +134,13 @@ pub(super) async fn create_review_submission(
     ))
 }
 
+/// Authorize publication and commit resource changes, reference advancement, and synchronization
+/// events atomically.
+///
+/// # Errors
+/// Rejects unauthorized publication, changed review or reference revisions, invalid proposal
+/// state, and persistence failures. A required reconciliation candidate is committed before
+/// reporting its conflict; incomplete publication is not committed.
 pub(super) async fn create_review_merge(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
@@ -118,14 +148,12 @@ pub(super) async fn create_review_merge(
     headers: HeaderMap,
     Json(request): Json<CreateReviewMergeRequest>,
 ) -> Result<Json<dto::ReviewMergeResult>, HttpError> {
-    require_org_admin(&principal)?;
-    service::ensure_review_member(&state.pool, &principal, &review_id).await?;
     let expected_ref = parse_ref_if_match(&headers)?;
     Ok(Json(
         service::create_review_merge(
             &state.pool,
             &review_id,
-            &principal.user_id,
+            &principal,
             expected_ref.as_deref(),
             request,
         )

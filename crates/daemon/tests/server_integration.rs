@@ -1,3 +1,5 @@
+//! Daemon synchronization and publication against the production server over real TCP.
+
 use daemon::{
     DaemonConfig, DaemonContentDraftUpdate, DaemonCreateDraftOperation, DaemonDeleteDraftOperation,
     DaemonDraftContent, DaemonDraftListQuery, DaemonDraftOperation,
@@ -112,12 +114,13 @@ async fn approve_and_merge(
     expected_draft_version: i64,
     expected_ref: Option<&str>,
 ) -> ReviewMergeResult {
-    let detail = server::app::draft::service::get_draft(pool, draft_id)
-        .await
-        .unwrap();
-    let review = server::app::review::service::create_review(
+    let detail =
+        server::app::draft::get_draft(pool, &common::owner_principal(pool).await, draft_id)
+            .await
+            .unwrap();
+    let review = server::app::review::create_review(
         pool,
-        &detail.draft.author.user_id,
+        &common::principal(pool, &detail.draft.author.user_id).await,
         expected_ref,
         CreateReviewRequest {
             drafts: vec![ReviewDraftRequest {
@@ -132,10 +135,10 @@ async fn approve_and_merge(
     )
     .await
     .unwrap();
-    let approved = server::app::review::service::create_review_decision(
+    let approved = server::app::review::create_review_decision(
         pool,
         &review.review.review_id,
-        &review.review.author.user_id,
+        &common::principal(pool, &review.review.author.user_id).await,
         CreateReviewDecisionRequest {
             decision: ReviewDecision::Approved,
             expected_review_version: review.review.version,
@@ -144,10 +147,10 @@ async fn approve_and_merge(
     )
     .await
     .unwrap();
-    server::app::review::service::create_review_merge(
+    server::app::review::create_review_merge(
         pool,
         &approved.review.review_id,
-        &approved.review.author.user_id,
+        &common::principal(pool, &approved.review.author.user_id).await,
         expected_ref,
         CreateReviewMergeRequest {
             expected_review_version: approved.review.version,
@@ -337,12 +340,17 @@ async fn cache_root_for_commit(
 }
 
 async fn current_project_commit_id(pool: &sqlx::PgPool, project_id: &str) -> String {
-    server::app::commit::service::get_project_commit_state(pool, project_id, None)
-        .await
-        .unwrap()
-        .reference
-        .commit_id
-        .unwrap()
+    server::app::commit::get_project_commit_state(
+        pool,
+        &common::owner_principal(pool).await,
+        project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap()
 }
 
 #[tokio::test]
@@ -532,18 +540,22 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     .unwrap();
     assert_eq!(active_token_count, 2);
 
-    let drafts = server::app::draft::service::list_drafts(
+    let drafts = server::app::draft::list_drafts(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         Some(&bootstrap.project_id),
     )
     .await
     .unwrap();
     assert_eq!(drafts.items.len(), 1);
     assert_eq!(drafts.items[0].author.user_id, bootstrap.user_id);
-    let draft = server::app::draft::service::get_draft(&pool, &drafts.items[0].draft_id)
-        .await
-        .unwrap();
+    let draft = server::app::draft::get_draft(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &drafts.items[0].draft_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(draft.operations.len(), 1);
     assert_eq!(
         draft.operations[0].input.content,
@@ -553,9 +565,9 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
         })
     );
 
-    let review = server::app::review::service::create_review(
+    let review = server::app::review::create_review(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         None,
         CreateReviewRequest {
             drafts: vec![ReviewDraftRequest {
@@ -580,10 +592,10 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     assert_eq!(projected.draft.status, DaemonLocalDraftStatus::Submitted);
     assert_eq!(projected.draft.server_version, review.draft.version);
 
-    let rejected = server::app::review::service::create_review_decision(
+    let rejected = server::app::review::create_review_decision(
         &pool,
         &review.review.review_id,
-        &review.review.author.user_id,
+        &common::principal(&pool, &review.review.author.user_id).await,
         CreateReviewDecisionRequest {
             decision: ReviewDecision::Rejected,
             expected_review_version: review.review.version,
@@ -634,10 +646,10 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     assert_eq!(edited.draft.status, DaemonLocalDraftStatus::Open);
     assert_eq!(edited.draft.server_version, rejected.draft.version + 1);
 
-    let resubmitted = server::app::review::service::create_review_submission(
+    let resubmitted = server::app::review::create_review_submission(
         &pool,
         &rejected.review.review_id,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         rejected.draft.coordination.current_commit_id.as_deref(),
         CreateReviewSubmissionRequest {
             expected_review_version: rejected.review.version,
@@ -677,9 +689,9 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
         .unwrap();
     let bootstrap = common::initialize_installation(pool.clone(), "Context Lifecycle").await;
 
-    let seed_draft = server::app::draft::service::create_draft(
+    let seed_draft = server::app::draft::create_draft(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateDraftRequest {
             daemon_installation_id: "daemon_seed_context".to_owned(),
             project_id: bootstrap.project_id.clone(),
@@ -716,14 +728,15 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
     )
     .await;
     let seed_org_commit_id = seed_merge.commit_id.unwrap();
-    let context_id = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .find(|memory| memory.path == "context/original.md")
-        .unwrap()
-        .memory_id;
+    let context_id =
+        server::app::memory::list_org_memories(&pool, &common::owner_principal(&pool).await)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|memory| memory.path == "context/original.md")
+            .unwrap()
+            .memory_id;
 
     let access_token = "daemon-context-lifecycle-access-token";
     let token_hash = hex::encode(Sha256::digest(access_token.as_bytes()));
@@ -862,13 +875,17 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
         .unwrap();
     let merged_update = service.get_draft(&update_draft.draft_id).await.unwrap();
     assert_eq!(merged_update.draft.status, DaemonLocalDraftStatus::Merged);
-    let update_project_commit_id =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let update_project_commit_id = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     assert_ne!(update_project_commit_id, update_org_commit_id);
     let cache = service
         .memory_cache(DaemonMemoryCacheRequest {
@@ -942,13 +959,17 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
         .unwrap();
     let merged_delete = service.get_draft(&delete_draft.draft_id).await.unwrap();
     assert_eq!(merged_delete.draft.status, DaemonLocalDraftStatus::Merged);
-    let delete_project_commit_id =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let delete_project_commit_id = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     assert_ne!(delete_project_commit_id, delete_org_commit_id);
     let deleted_cache = service
         .memory_cache(DaemonMemoryCacheRequest {
@@ -970,7 +991,12 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
             .exists()
     );
     assert!(matches!(
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &context_id).await,
+        server::app::memory::get_org_memory(
+            &pool,
+            &common::owner_principal(&pool).await,
+            &context_id
+        )
+        .await,
         Err(server::error::ServerError::NotFound { .. })
     ));
 
@@ -988,9 +1014,9 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     let verification_pool = pool.clone();
     let bootstrap = common::initialize_installation(pool.clone(), "Offline Conflict").await;
 
-    let base_draft = server::app::draft::service::create_draft(
+    let base_draft = server::app::draft::create_draft(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateDraftRequest {
             daemon_installation_id: "daemon_conflict_seed".to_owned(),
             project_id: bootstrap.project_id.clone(),
@@ -1121,9 +1147,9 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         DraftOperationSyncStatus::Retrying
     );
 
-    let remote_draft = server::app::draft::service::create_draft(
+    let remote_draft = server::app::draft::create_draft(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateDraftRequest {
             daemon_installation_id: "daemon_remote_change".to_owned(),
             project_id: bootstrap.project_id.clone(),
@@ -1351,8 +1377,9 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         SyncState::Idle
     );
 
-    let server_behind = server::app::draft::service::get_draft(
+    let server_behind = server::app::draft::get_draft(
         &pool,
+        &common::owner_principal(&pool).await,
         projected_behind.draft.server_draft_id.as_deref().unwrap(),
     )
     .await
@@ -1363,9 +1390,9 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     );
     assert_eq!(server_behind.operations.len(), 2);
 
-    let reconciliation_error = server::app::review::service::create_review(
+    let reconciliation_error = server::app::review::create_review(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         Some(&current_commit_id),
         CreateReviewRequest {
             drafts: vec![ReviewDraftRequest {
@@ -1384,8 +1411,9 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         server::error::ServerError::ReconciliationRequired { candidate_id, .. } => candidate_id,
         error => panic!("expected reconciliation_required, got {error:?}"),
     };
-    let candidate = server::app::draft::service::get_draft_reconciliation_candidate(
+    let candidate = server::app::draft::get_draft_reconciliation_candidate(
         &pool,
+        &common::owner_principal(&pool).await,
         &server_behind.draft.draft_id,
         &candidate_id,
     )
@@ -1396,17 +1424,21 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     assert_eq!(candidate.base_commit_id, Some(base_commit_id.clone()));
     assert_eq!(candidate.current_commit_id, Some(current_commit_id.clone()));
 
-    let unchanged = server::app::draft::service::get_draft(&pool, &server_behind.draft.draft_id)
-        .await
-        .unwrap();
+    let unchanged = server::app::draft::get_draft(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &server_behind.draft.draft_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(unchanged.draft.base_commit_id, Some(base_commit_id.clone()));
     assert_eq!(unchanged.draft.version, server_behind.draft.version);
     assert_eq!(unchanged.operations, server_behind.operations);
 
-    let rebased = server::app::draft::service::create_draft_rebase(
+    let rebased = server::app::draft::create_draft_rebase(
         &pool,
         &server_behind.draft.draft_id,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         Some(&current_commit_id),
         CreateDraftRebaseRequest {
             candidate_id,
@@ -1471,9 +1503,9 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     assert_eq!(resolved_sync_status.failed_operation_count, 0);
     assert_eq!(resolved_sync_status.draft_sync.state, SyncState::Idle);
 
-    let review = server::app::review::service::create_review(
+    let review = server::app::review::create_review(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         Some(&current_commit_id),
         CreateReviewRequest {
             drafts: vec![ReviewDraftRequest {
@@ -1488,10 +1520,10 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     )
     .await
     .unwrap();
-    let approved = server::app::review::service::create_review_decision(
+    let approved = server::app::review::create_review_decision(
         &pool,
         &review.review.review_id,
-        &review.review.author.user_id,
+        &common::principal(&pool, &review.review.author.user_id).await,
         CreateReviewDecisionRequest {
             decision: ReviewDecision::Approved,
             expected_review_version: review.review.version,
@@ -1500,10 +1532,10 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     )
     .await
     .unwrap();
-    let final_merge = server::app::review::service::create_review_merge(
+    let final_merge = server::app::review::create_review_merge(
         &pool,
         &approved.review.review_id,
-        &approved.review.author.user_id,
+        &common::principal(&pool, &approved.review.author.user_id).await,
         Some(&current_commit_id),
         CreateReviewMergeRequest {
             expected_review_version: approved.review.version,
@@ -1522,13 +1554,17 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         .unwrap();
     let merged = service.get_draft(&local_draft.draft_id).await.unwrap();
     assert_eq!(merged.draft.status, DaemonLocalDraftStatus::Merged);
-    let final_project_commit_id =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let final_project_commit_id = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     assert_ne!(final_project_commit_id, final_commit_id);
     let cache = service
         .memory_cache(DaemonMemoryCacheRequest {
@@ -1614,16 +1650,17 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     .await;
     let rule_create_org_commit =
         sync_local_draft_and_merge(&service, &pool, &create_rule, None).await;
-    let rule_meta = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .find(|memory| memory.path == "rules/memory-review")
-        .unwrap();
+    let rule_meta =
+        server::app::memory::list_org_memories(&pool, &common::owner_principal(&pool).await)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|memory| memory.path == "rules/memory-review")
+            .unwrap();
     let rule_id = rule_meta.memory_id;
     let created_rule =
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id)
+        server::app::memory::get_org_memory(&pool, &common::owner_principal(&pool).await, &rule_id)
             .await
             .unwrap();
     assert_eq!(created_rule.memory.name, "memory-review");
@@ -1659,18 +1696,22 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         Some(&rule_create_org_commit),
     )
     .await;
-    let workflow_meta = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .find(|memory| memory.path == "workflow/memory-publication")
-        .unwrap();
-    let workflow_id = workflow_meta.memory_id;
-    let created_workflow =
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id)
+    let workflow_meta =
+        server::app::memory::list_org_memories(&pool, &common::owner_principal(&pool).await)
             .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|memory| memory.path == "workflow/memory-publication")
             .unwrap();
+    let workflow_id = workflow_meta.memory_id;
+    let created_workflow = server::app::memory::get_org_memory(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &workflow_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         created_workflow.content,
         format!(
@@ -1716,7 +1757,7 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     )
     .await;
     let updated_rule =
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id)
+        server::app::memory::get_org_memory(&pool, &common::owner_principal(&pool).await, &rule_id)
             .await
             .unwrap();
     assert_eq!(updated_rule.memory.path, "rules/memory-review-policy");
@@ -1763,10 +1804,13 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         Some(&rule_update_org_commit),
     )
     .await;
-    let updated_workflow =
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id)
-            .await
-            .unwrap();
+    let updated_workflow = server::app::memory::get_org_memory(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &workflow_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(updated_workflow.memory.path, "workflow/memory-publish");
     assert_eq!(
         updated_workflow.content,
@@ -1817,7 +1861,12 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     )
     .await;
     assert!(matches!(
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id).await,
+        server::app::memory::get_org_memory(
+            &pool,
+            &common::owner_principal(&pool).await,
+            &workflow_id
+        )
+        .await,
         Err(server::error::ServerError::NotFound { .. })
     ));
     let workflow_delete_project_commit =
@@ -1856,7 +1905,8 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
     )
     .await;
     assert!(matches!(
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id).await,
+        server::app::memory::get_org_memory(&pool, &common::owner_principal(&pool).await, &rule_id)
+            .await,
         Err(server::error::ServerError::NotFound { .. })
     ));
     let rule_delete_project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
@@ -1941,7 +1991,7 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     )
     .await;
     let org_rule_commit = sync_local_draft_and_merge(&service, &pool, &create_rule, None).await;
-    let rule = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
+    let rule = server::app::memory::list_org_memories(&pool, &common::owner_principal(&pool).await)
         .await
         .unwrap()
         .items
@@ -1964,19 +2014,23 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     .await;
     let org_workflow_commit =
         sync_local_draft_and_merge(&service, &pool, &create_workflow, Some(&org_rule_commit)).await;
-    let workflow = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .find(|memory| memory.path == "workflow/shared-publication")
-        .unwrap();
+    let workflow =
+        server::app::memory::list_org_memories(&pool, &common::owner_principal(&pool).await)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|memory| memory.path == "workflow/shared-publication")
+            .unwrap();
     let workflow_id = workflow.memory_id;
 
-    let selection =
-        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
-            .await
-            .unwrap();
+    let selection = server::app::memory::get_project_org_selection(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(selection.revision, 2);
     assert_eq!(selection.memories.len(), 2);
     assert!(
@@ -1997,13 +2051,17 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         })
         .await
         .unwrap();
-    let selected_project_commit =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let selected_project_commit = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     let selected_root =
         cache_root_for_commit(&service, &bootstrap.project_id, &selected_project_commit).await;
     assert!(
@@ -2031,13 +2089,17 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
     .await;
     let org_rule_update_commit =
         sync_local_draft_and_merge(&service, &pool, &update_rule, Some(&org_workflow_commit)).await;
-    let rule_update_project_commit =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let rule_update_project_commit = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     assert_ne!(rule_update_project_commit, selected_project_commit);
     assert_ne!(rule_update_project_commit, org_rule_update_commit);
     let rule_update_root =
@@ -2077,13 +2139,17 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         Some(&org_rule_update_commit),
     )
     .await;
-    let workflow_update_project_commit =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let workflow_update_project_commit = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     assert_ne!(workflow_update_project_commit, rule_update_project_commit);
     let workflow_update_root = cache_root_for_commit(
         &service,
@@ -2119,13 +2185,17 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         Some(&org_workflow_update_commit),
     )
     .await;
-    let workflow_delete_project_commit =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let workflow_delete_project_commit = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     let workflow_delete_root = cache_root_for_commit(
         &service,
         &bootstrap.project_id,
@@ -2142,10 +2212,13 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
             .join("cache/memory/rules/shared-review-policy")
             .exists()
     );
-    let selection_after_workflow_delete =
-        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
-            .await
-            .unwrap();
+    let selection_after_workflow_delete = server::app::memory::get_project_org_selection(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         selection_after_workflow_delete.revision,
         selection.revision + 1
@@ -2171,13 +2244,17 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         Some(&org_workflow_delete_commit),
     )
     .await;
-    let rule_delete_project_commit =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let rule_delete_project_commit = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     let rule_delete_root =
         cache_root_for_commit(&service, &bootstrap.project_id, &rule_delete_project_commit).await;
     assert!(
@@ -2185,10 +2262,13 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
             .join("cache/memory/rules/shared-review-policy")
             .exists()
     );
-    let final_selection =
-        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
-            .await
-            .unwrap();
+    let final_selection = server::app::memory::get_project_org_selection(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(final_selection.revision, selection.revision + 2);
     assert!(final_selection.memories.is_empty());
     assert!(
@@ -2197,11 +2277,17 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
             .exists()
     );
     assert!(matches!(
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &rule_id).await,
+        server::app::memory::get_org_memory(&pool, &common::owner_principal(&pool).await, &rule_id)
+            .await,
         Err(server::error::ServerError::NotFound { .. })
     ));
     assert!(matches!(
-        server::app::memory::service::get_org_memory(&pool, &bootstrap.org_id, &workflow_id).await,
+        server::app::memory::get_org_memory(
+            &pool,
+            &common::owner_principal(&pool).await,
+            &workflow_id
+        )
+        .await,
         Err(server::error::ServerError::NotFound { .. })
     ));
 
@@ -2457,33 +2543,25 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     .await
     .unwrap();
 
-    let secondary_project_id = server::app::project::service::create_project(
+    let secondary_project_id = server::app::project::create_project(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "Secondary Memory",
         "",
     )
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO project_members (project_id, user_id, role)
-         VALUES ($1, $2, 'admin')",
-    )
-    .bind(&secondary_project_id)
-    .bind(&bootstrap.user_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    let secondary_memory_id = server::app::memory::service::create_org_context(
+    let secondary_memory_id = server::app::memory::create_org_context(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "context/secondary.md",
         "# Secondary project",
     )
     .await
     .unwrap();
-    server::app::memory::service::replace_project_org_selection(
+    server::app::memory::replace_project_org_selection(
         &pool,
+        &common::owner_principal(&pool).await,
         &secondary_project_id,
         0,
         ReplaceProjectOrgSelectionRequest {
@@ -2492,20 +2570,27 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     )
     .await
     .unwrap();
-    let secondary_commit_id =
-        server::app::commit::service::get_project_commit_state(&pool, &secondary_project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
-    let initial_org_commit_id =
-        server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let secondary_commit_id = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &secondary_project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
+    let initial_org_commit_id = server::app::commit::get_org_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
 
     let server = common::TestServer::start(pool.clone(), postgres).await;
     let server_address = server.address;
@@ -2551,9 +2636,9 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
         assert!(empty_checkout.resources.is_empty());
     }
 
-    let draft = server::app::draft::service::create_draft(
+    let draft = server::app::draft::create_draft(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         CreateDraftRequest {
             daemon_installation_id: "daemon_commit_origin".to_owned(),
             project_id: bootstrap.project_id.clone(),
@@ -2582,9 +2667,9 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     )
     .await
     .unwrap();
-    let review = server::app::review::service::create_review(
+    let review = server::app::review::create_review(
         &pool,
-        &bootstrap.user_id,
+        &common::principal(&pool, &bootstrap.user_id).await,
         Some(&initial_org_commit_id),
         CreateReviewRequest {
             drafts: vec![ReviewDraftRequest {
@@ -2599,10 +2684,10 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     )
     .await
     .unwrap();
-    let approved = server::app::review::service::create_review_decision(
+    let approved = server::app::review::create_review_decision(
         &pool,
         &review.review.review_id,
-        &review.review.author.user_id,
+        &common::principal(&pool, &review.review.author.user_id).await,
         CreateReviewDecisionRequest {
             decision: ReviewDecision::Approved,
             expected_review_version: review.review.version,
@@ -2611,10 +2696,10 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     )
     .await
     .unwrap();
-    let merge = server::app::review::service::create_review_merge(
+    let merge = server::app::review::create_review_merge(
         &pool,
         &approved.review.review_id,
-        &approved.review.author.user_id,
+        &common::principal(&pool, &approved.review.author.user_id).await,
         Some(&initial_org_commit_id),
         CreateReviewMergeRequest {
             expected_review_version: approved.review.version,
@@ -2623,31 +2708,36 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     .await
     .unwrap();
     let org_commit_id = merge.commit_id.unwrap();
-    let commit_sync_id = server::app::memory::service::list_org_memories(&pool, &bootstrap.org_id)
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .find(|memory| memory.path == "context/commit-sync.md")
-        .unwrap()
-        .memory_id;
-    let initial_selection =
-        server::app::memory::service::get_project_org_selection(&pool, &bootstrap.project_id)
+    let commit_sync_id =
+        server::app::memory::list_org_memories(&pool, &common::owner_principal(&pool).await)
             .await
-            .unwrap();
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|memory| memory.path == "context/commit-sync.md")
+            .unwrap()
+            .memory_id;
+    let initial_selection = server::app::memory::get_project_org_selection(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(initial_selection.revision, 1);
     assert_eq!(initial_selection.memories.len(), 1);
     assert_eq!(initial_selection.memories[0].memory_id, commit_sync_id);
-    let org_context_id = server::app::memory::service::create_org_context(
+    let org_context_id = server::app::memory::create_org_context(
         &pool,
-        &bootstrap.org_id,
+        &common::owner_principal(&pool).await,
         "context/shared-from-hub.md",
         "# Shared from Hub\n\nSelected by the project.",
     )
     .await
     .unwrap();
-    let selection = server::app::memory::service::replace_project_org_selection(
+    let selection = server::app::memory::replace_project_org_selection(
         &pool,
+        &common::owner_principal(&pool).await,
         &bootstrap.project_id,
         initial_selection.revision,
         ReplaceProjectOrgSelectionRequest {
@@ -2656,13 +2746,17 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
     )
     .await
     .unwrap();
-    let commit_id =
-        server::app::commit::service::get_project_commit_state(&pool, &bootstrap.project_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let commit_id = server::app::commit::get_project_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     assert_ne!(commit_id, org_commit_id);
 
     let mut roots = Vec::new();
@@ -2753,13 +2847,16 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
         Some(roots[0].to_str().unwrap())
     );
 
-    let current_org_commit_id =
-        server::app::commit::service::get_org_commit_state(&pool, &bootstrap.org_id, None)
-            .await
-            .unwrap()
-            .reference
-            .commit_id
-            .unwrap();
+    let current_org_commit_id = server::app::commit::get_org_commit_state(
+        &pool,
+        &common::owner_principal(&pool).await,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
     let next_draft = restarted_a
         .store_draft_operation(DaemonDraftOperationRequest {
             draft_id: None,

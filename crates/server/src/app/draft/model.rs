@@ -10,6 +10,10 @@ use crate::app::memory::model::validate_resource_path;
 use crate::error::ServerError;
 use sha2::{Digest, Sha256};
 
+/// Require each mutation to target the resource identity and scope of its proposal.
+///
+/// # Errors
+/// Rejects mutations whose resource identity or ownership scope differs from the proposal.
 pub(crate) fn validate_draft_operation_resource(
     draft_resource: &DraftResourceRef,
     operation: &DraftOperationInput,
@@ -60,6 +64,10 @@ pub(crate) fn validate_draft_operation_resource(
     }
 }
 
+/// Reject legacy proposal scopes that may no longer enter the publication workflow.
+///
+/// # Errors
+/// Rejects legacy scopes that cannot enter the active publication workflow.
 pub(crate) fn ensure_publishable_draft_scope(scope: ResourceScope) -> Result<(), ServerError> {
     if scope == ResourceScope::Project {
         return Err(ServerError::InvalidRequest(
@@ -70,6 +78,10 @@ pub(crate) fn ensure_publishable_draft_scope(scope: ResourceScope) -> Result<(),
     Ok(())
 }
 
+/// Reject proposal scopes retired from the active authoring workflow.
+///
+/// # Errors
+/// Rejects scopes retired from the current authoring workflow.
 pub(crate) fn ensure_writable_draft_scope(scope: ResourceScope) -> Result<(), ServerError> {
     if scope == ResourceScope::Project {
         return Err(ServerError::InvalidRequest(
@@ -80,6 +92,10 @@ pub(crate) fn ensure_writable_draft_scope(scope: ResourceScope) -> Result<(), Se
     Ok(())
 }
 
+/// Require new-resource proposals to use a coherent create/edit sequence without deletion.
+///
+/// # Errors
+/// Rejects invalid create/edit ordering and deletion of a resource not yet published.
 pub(crate) fn validate_new_resource_draft_operations(
     operations: &[DraftOperationInput],
 ) -> Result<(), ServerError> {
@@ -97,6 +113,10 @@ pub(crate) fn validate_new_resource_draft_operations(
     Ok(())
 }
 
+/// Require mutation payloads to match the content rules of their action.
+///
+/// # Errors
+/// Rejects missing or unexpected content for the requested mutation action.
 pub(crate) fn validate_draft_content_shape(
     content: &DraftResourceContent,
 ) -> Result<(), ServerError> {
@@ -108,6 +128,10 @@ pub(crate) fn validate_draft_content_shape(
     Ok(())
 }
 
+/// Validate the resource scope and identity or creation path before proposal persistence.
+///
+/// # Errors
+/// Rejects unsupported scopes and missing or unsafe resource identities and paths.
 pub(crate) fn validate_draft_resource(resource: &DraftResourceRef) -> Result<(), ServerError> {
     if let Some(path) = resource.path.as_deref() {
         validate_resource_path(path)?;
@@ -115,10 +139,12 @@ pub(crate) fn validate_draft_resource(resource: &DraftResourceRef) -> Result<(),
     Ok(())
 }
 
+/// Borrow the Markdown body from an editable resource payload.
 pub(crate) fn content_text(content: &DraftResourceContent) -> &str {
     &content.content
 }
 
+/// Decode persisted content only for supported resource categories.
 pub(crate) fn content_for_kind(
     _kind: &str,
     content: String,
@@ -130,6 +156,10 @@ pub(crate) fn content_for_kind(
     }
 }
 
+/// Replay mutations in order while checking resource existence and content invariants.
+///
+/// # Errors
+/// Rejects mutations inconsistent with resource existence, identity, or required content.
 pub(crate) fn apply_operations_to_state(
     mut state: ReconciliationResourceState,
     operations: &[DraftOperation],
@@ -173,6 +203,10 @@ pub(crate) fn apply_operations_to_state(
     Ok(state)
 }
 
+/// Compute a deterministic fingerprint of a complete reconciliation state.
+///
+/// # Errors
+/// Propagates failure to serialize the complete resource state for deterministic hashing.
 pub(crate) fn state_hash(state: &ReconciliationResourceState) -> Result<String, ServerError> {
     let bytes = serde_json::to_vec(state).map_err(|error| {
         ServerError::InvalidRequest(format!("failed to hash resource state: {error}"))
@@ -180,6 +214,7 @@ pub(crate) fn state_hash(state: &ReconciliationResourceState) -> Result<String, 
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
+/// Resolve a three-way scalar change when one side is unchanged or both sides agree.
 pub(crate) fn merge_scalar<T: Clone + PartialEq>(base: &T, current: &T, draft: &T) -> Option<T> {
     if current == draft {
         Some(current.clone())
@@ -192,6 +227,7 @@ pub(crate) fn merge_scalar<T: Clone + PartialEq>(base: &T, current: &T, draft: &
     }
 }
 
+/// Combine ancestor, upstream, and proposal state while preserving unresolved field conflicts.
 pub(crate) fn merge_resource_states(
     base: &ReconciliationResourceState,
     current: &ReconciliationResourceState,
@@ -321,6 +357,7 @@ pub(crate) fn merge_resource_states(
     )
 }
 
+/// Produce the minimal ordered mutations transforming one resource state into another.
 pub(crate) fn diff_resource_states(
     current: &ReconciliationResourceState,
     resolved: &ReconciliationResourceState,
@@ -364,6 +401,7 @@ pub(crate) fn diff_resource_states(
     }
 }
 
+/// Combine proposal freshness and conflicts into the enclosing review's coordination state.
 pub(crate) fn aggregate_draft_coordination(
     coordinations: &[DraftCoordination],
 ) -> DraftCoordination {
@@ -408,6 +446,10 @@ pub(crate) fn aggregate_draft_coordination(
     }
 }
 
+/// Fold ordered edits into publication mutations without losing resource identity or renames.
+///
+/// # Errors
+/// Rejects mutation sequences that cannot produce a valid publishable resource state.
 pub(crate) fn materialize_draft_operations(
     operations: &[DraftOperation],
 ) -> Result<Vec<DraftOperationInput>, ServerError> {
@@ -445,6 +487,10 @@ pub(crate) fn materialize_draft_operations(
     Ok(vec![materialized])
 }
 
+/// Merge Markdown changes against their common ancestor and preserve conflicts for resolution.
+///
+/// # Errors
+/// Rejects malformed resource content or incompatible content categories.
 pub(crate) fn merge_draft_contents(
     base: Option<DraftResourceContent>,
     update: Option<DraftResourceContent>,
@@ -453,6 +499,10 @@ pub(crate) fn merge_draft_contents(
     Ok(update)
 }
 
+/// Decode a persisted proposal mutation, rejecting unknown actions.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn draft_operation_action(value: &str) -> Result<DraftOperationAction, ServerError> {
     match value {
         "create" => Ok(DraftOperationAction::Create),
@@ -465,6 +515,10 @@ pub(crate) fn draft_operation_action(value: &str) -> Result<DraftOperationAction
     }
 }
 
+/// Decode the persisted proposal lifecycle, rejecting unknown states.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn draft_status(value: &str) -> Result<DraftStatus, ServerError> {
     match value {
         "open" => Ok(DraftStatus::Open),
@@ -477,6 +531,10 @@ pub(crate) fn draft_status(value: &str) -> Result<DraftStatus, ServerError> {
     }
 }
 
+/// Decode the persisted lifecycle event used by synchronization clients.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn draft_event_type(value: &str) -> Result<DraftEventType, ServerError> {
     match value {
         "created" => Ok(DraftEventType::Created),
@@ -496,11 +554,19 @@ pub(crate) fn draft_event_type(value: &str) -> Result<DraftEventType, ServerErro
 /// A transaction may persist conflict information before returning a business error.
 /// The caller must commit the transaction before converting this outcome to a result.
 pub(crate) enum CommitOutcome<T> {
+    /// The enclosing transaction may commit and return the operation's value.
     Success(T),
+    /// Reconciliation evidence must be committed before returning the contained failure.
     Failure(ServerError),
 }
 
 impl<T> CommitOutcome<T> {
+    /// Convert a committed outcome into the caller-visible result after transaction ownership has
+    /// been discharged.
+    ///
+    /// # Errors
+    /// Returns the stored operation failure. Any required transaction commit must already have
+    /// completed.
     pub(crate) fn into_result(self) -> Result<T, ServerError> {
         match self {
             Self::Success(value) => Ok(value),

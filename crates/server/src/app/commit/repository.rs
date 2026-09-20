@@ -2,132 +2,24 @@
 
 use super::model::{
     PendingTreeEntry, commit_scope, tree_entry_kind, tree_entry_scope, tree_entry_source,
-    validate_tree_materialization_paths,
 };
 use crate::app::auth::AuthPrincipal;
 use crate::app::commit::dto::{
     Blob, Commit, CommitListResponse, CommitPayload, Ref, Tree, TreeEntry, TreeEntryKind,
 };
 use crate::app::memory::model::object_id;
-use crate::app::memory::service::{
-    load_project_org_selection, pending_resource_entry, project_org_id,
-    validate_project_effective_memory,
-};
 use crate::error::ServerError;
 use crate::pagination::{PageInfo, page_info};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
-pub(crate) async fn create_project_commit(
-    tx: &mut Transaction<'_, Postgres>,
-    project_id: &str,
-    parent_commit_id: Option<&str>,
-) -> Result<String, ServerError> {
-    let org_id = project_org_id(tx, project_id).await?;
-    validate_project_effective_memory(tx, project_id, &org_id).await?;
-    let version = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT max(version)
-         FROM commits
-         WHERE scope = 'project' AND project_id = $1",
-    )
-    .bind(project_id)
-    .fetch_one(&mut **tx)
-    .await?
-    .unwrap_or(0)
-        + 1;
-    let mut entries = Vec::new();
-    let project_rows = sqlx::query(
-        "SELECT resource_id, resource_kind, path, name, body, description
-         FROM resources
-         WHERE scope = 'project' AND project_id = $1 AND status = 'active'
-         ORDER BY resource_kind, path",
-    )
-    .bind(project_id)
-    .fetch_all(&mut **tx)
-    .await?;
-    for row in project_rows {
-        entries
-            .push(pending_resource_entry(tx, &row, "project", Some(project_id), "project").await?);
-    }
-
-    let selected_rows = sqlx::query(
-        "SELECT r.resource_id, r.resource_kind, r.path, r.name, r.body, r.description
-         FROM project_org_resource_selections s
-         JOIN resources r ON r.resource_id = s.resource_id
-         WHERE s.project_id = $1 AND r.status = 'active'
-         ORDER BY r.resource_kind, r.path",
-    )
-    .bind(project_id)
-    .fetch_all(&mut **tx)
-    .await?;
-    for row in selected_rows {
-        entries.push(pending_resource_entry(tx, &row, "org", None, "selected_org").await?);
-    }
-
-    let project_org_selection = load_project_org_selection(tx, project_id).await?;
-    let selection_content = serde_json::to_string(&project_org_selection).map_err(|error| {
-        ServerError::InvalidRequest(format!(
-            "failed to serialize project org selection: {error}"
-        ))
-    })?;
-    let selection_blob_id = store_blob(tx, &selection_content).await?;
-    entries.push(PendingTreeEntry {
-        item_id: format!("project_org_selection:{project_id}"),
-        resource_kind: "project_org_selection".to_owned(),
-        scope: "daemon".to_owned(),
-        project_id: Some(project_id.to_owned()),
-        path: None,
-        blob_id: selection_blob_id,
-        source: "config".to_owned(),
-        description: String::new(),
-    });
-
-    validate_tree_materialization_paths(&entries)?;
-    let tree_id = store_tree(tx, &entries).await?;
-    create_commit(
-        tx,
-        "project",
-        &org_id,
-        Some(project_id),
-        &tree_id,
-        parent_commit_id,
-        version,
-    )
-    .await
-}
-
-pub(crate) async fn create_org_commit(
-    tx: &mut Transaction<'_, Postgres>,
-    org_id: &str,
-    parent_commit_id: Option<&str>,
-) -> Result<String, ServerError> {
-    let version = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT max(version) FROM commits WHERE scope = 'org' AND org_id = $1",
-    )
-    .bind(org_id)
-    .fetch_one(&mut **tx)
-    .await?
-    .unwrap_or(0)
-        + 1;
-    let rows = sqlx::query(
-        "SELECT resource_id, resource_kind, path, name, body, description
-         FROM resources
-         WHERE scope = 'org' AND org_id = $1 AND status = 'active'
-         ORDER BY resource_kind, path",
-    )
-    .bind(org_id)
-    .fetch_all(&mut **tx)
-    .await?;
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
-        entries.push(pending_resource_entry(tx, &row, "org", None, "org").await?);
-    }
-    validate_tree_materialization_paths(&entries)?;
-    let tree_id = store_tree(tx, &entries).await?;
-    create_commit(tx, "org", org_id, None, &tree_id, parent_commit_id, version).await
-}
-
+/// Persist a content-addressed payload once and return its stable identifier.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn store_blob(
     tx: &mut Transaction<'_, Postgres>,
     content: &str,
@@ -141,6 +33,13 @@ pub(crate) async fn store_blob(
     Ok(blob_id)
 }
 
+/// Persist a canonically ordered content-addressed tree and its resource entries.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) async fn store_tree(
     tx: &mut Transaction<'_, Postgres>,
     entries: &[PendingTreeEntry],
@@ -187,6 +86,13 @@ pub(crate) async fn store_tree(
     Ok(tree_id)
 }
 
+/// Persist immutable snapshot metadata linking a tree to its parent reference.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) async fn create_commit(
     tx: &mut Transaction<'_, Postgres>,
     scope: &str,
@@ -226,6 +132,10 @@ pub(crate) async fn create_commit(
     Ok(commit_id)
 }
 
+/// Decode snapshot metadata and author identity from a joined database row.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) fn commit_from_row(row: &sqlx::postgres::PgRow) -> Result<Commit, ServerError> {
     Ok(Commit {
         commit_id: row.try_get("commit_id")?,
@@ -239,6 +149,12 @@ pub(crate) fn commit_from_row(row: &sqlx::postgres::PgRow) -> Result<Commit, Ser
     })
 }
 
+/// Load immutable metadata for a required snapshot identity.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_commit_metadata(
     tx: &mut Transaction<'_, Postgres>,
     commit_id: &str,
@@ -255,6 +171,13 @@ pub(crate) async fn load_commit_metadata(
     commit_from_row(&row)
 }
 
+/// Assemble stored snapshot metadata, ordered tree entries, and referenced blobs.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) async fn load_commit_payload(
     tx: &mut Transaction<'_, Postgres>,
     commit_id: &str,
@@ -323,6 +246,14 @@ pub(crate) async fn load_commit_payload(
     })
 }
 
+/// Read the current project head using the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn current_project_ref(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -339,6 +270,12 @@ pub(crate) async fn current_project_ref(
     .ok_or_else(|| ServerError::not_found("ref", project_id))
 }
 
+/// Replace the project's main head and advance its reference revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn advance_project_ref(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -368,6 +305,13 @@ pub(crate) async fn advance_project_ref(
     Ok(())
 }
 
+/// Require a supplied ancestor to belong to the specified project.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) async fn validate_project_commit(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -392,6 +336,13 @@ pub(crate) async fn validate_project_commit(
     Ok(())
 }
 
+/// Require a supplied ancestor to belong to the specified organization.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) async fn validate_org_commit(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -416,6 +367,14 @@ pub(crate) async fn validate_org_commit(
     Ok(())
 }
 
+/// Read the current organization head using the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn current_org_ref(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -432,6 +391,12 @@ pub(crate) async fn current_org_ref(
     .ok_or_else(|| ServerError::not_found("ref", org_id))
 }
 
+/// Lock the organization reference before deriving a project's selected-resource snapshot.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_org_ref_for_project_projection(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -449,6 +414,12 @@ pub(crate) async fn lock_org_ref_for_project_projection(
     Ok(())
 }
 
+/// Replace the organization's main head and advance its reference revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn advance_org_ref(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -479,6 +450,12 @@ pub(crate) async fn advance_org_ref(
     Ok(())
 }
 
+/// Read the public project-reference representation from its stored row.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_project_ref(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -495,6 +472,12 @@ pub(crate) async fn load_project_ref(
     ref_from_row(&row)
 }
 
+/// Read the organization's main snapshot reference and its concurrency metadata.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_org_ref(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -511,6 +494,10 @@ pub(crate) async fn load_org_ref(
     ref_from_row(&row)
 }
 
+/// Decode a named snapshot reference and its optimistic concurrency metadata.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) fn ref_from_row(row: &sqlx::postgres::PgRow) -> Result<Ref, ServerError> {
     Ok(Ref {
         name: row.try_get("ref_name")?,
@@ -522,6 +509,10 @@ pub(crate) fn ref_from_row(row: &sqlx::postgres::PgRow) -> Result<Ref, ServerErr
     })
 }
 
+/// Check snapshot scope against organization identity and explicit project membership.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn commit_is_accessible(
     pool: &PgPool,
     principal: &AuthPrincipal,
@@ -545,6 +536,10 @@ pub(crate) async fn commit_is_accessible(
     .await?)
 }
 
+/// Read immutable snapshot history for the supplied project identity.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_project_commits(
     pool: &PgPool,
     project_id: &str,
@@ -572,6 +567,10 @@ pub(crate) async fn list_project_commits(
     })
 }
 
+/// Read immutable snapshot history for the supplied organization identity.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_org_commits(
     pool: &PgPool,
     org_id: &str,
@@ -592,4 +591,112 @@ pub(crate) async fn list_org_commits(
         items,
         page_info: page_info(),
     })
+}
+
+/// Read the project's latest snapshot sequence, treating an empty history as zero.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn latest_project_version(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: &str,
+) -> Result<Option<i64>, ServerError> {
+    Ok(sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT max(version)
+         FROM commits
+         WHERE scope = 'project' AND project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Read active project-owned Memory needed to materialize a snapshot.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn project_snapshot_resources(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: &str,
+) -> Result<Vec<crate::app::memory::model::CommitResource>, ServerError> {
+    Ok(
+        sqlx::query_as::<_, crate::app::memory::model::CommitResource>(
+            "SELECT resource_id, resource_kind, path, name, body, description
+         FROM resources
+         WHERE scope = 'project' AND project_id = $1 AND status = 'active'
+         ORDER BY resource_kind, path",
+        )
+        .bind(project_id)
+        .fetch_all(&mut **tx)
+        .await?,
+    )
+}
+
+/// Read active selected organization Memory needed for a project's effective snapshot.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn selected_snapshot_resources(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: &str,
+) -> Result<Vec<crate::app::memory::model::CommitResource>, ServerError> {
+    Ok(
+        sqlx::query_as::<_, crate::app::memory::model::CommitResource>(
+            "SELECT r.resource_id, r.resource_kind, r.path, r.name, r.body, r.description
+         FROM project_org_resource_selections s
+         JOIN resources r ON r.resource_id = s.resource_id
+         WHERE s.project_id = $1 AND r.status = 'active'
+         ORDER BY r.resource_kind, r.path",
+        )
+        .bind(project_id)
+        .fetch_all(&mut **tx)
+        .await?,
+    )
+}
+
+/// Read the organization's latest snapshot sequence, treating an empty history as zero.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn latest_org_version(
+    tx: &mut Transaction<'_, Postgres>,
+    org_id: &str,
+) -> Result<Option<i64>, ServerError> {
+    Ok(sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT max(version) FROM commits WHERE scope = 'org' AND org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Read active organization-owned Memory needed to materialize its authoritative snapshot.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn org_snapshot_resources(
+    tx: &mut Transaction<'_, Postgres>,
+    org_id: &str,
+) -> Result<Vec<crate::app::memory::model::CommitResource>, ServerError> {
+    Ok(
+        sqlx::query_as::<_, crate::app::memory::model::CommitResource>(
+            "SELECT resource_id, resource_kind, path, name, body, description
+         FROM resources
+         WHERE scope = 'org' AND org_id = $1 AND status = 'active'
+         ORDER BY resource_kind, path",
+        )
+        .bind(org_id)
+        .fetch_all(&mut **tx)
+        .await?,
+    )
 }

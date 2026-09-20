@@ -1,3 +1,5 @@
+//! Migration of legacy proposal state into revisioned reconciliation storage.
+
 mod common;
 
 use sqlx::Executor;

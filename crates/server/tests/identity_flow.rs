@@ -1,3 +1,5 @@
+//! OIDC admission, native token exchange, credential rotation, and revocation.
+
 mod common;
 
 #[tokio::test]

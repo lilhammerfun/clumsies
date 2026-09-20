@@ -1,3 +1,5 @@
+//! Migration removing retired metaprompt state without affecting active Memory.
+
 mod common;
 
 use sqlx::Executor;

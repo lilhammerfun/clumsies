@@ -13,16 +13,34 @@ use crate::identity::prefixed_id;
 use crate::pagination::admin_page;
 use std::collections::BTreeSet;
 
-pub async fn get_admin_org(pool: &sqlx::PgPool, org_id: &str) -> Result<AdminOrg, ServerError> {
+/// Return organization settings after verifying organization-administrator privileges.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, and propagates persistence
+/// failures.
+pub async fn get_admin_org(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+) -> Result<AdminOrg, ServerError> {
+    let org_id = &principal.org_id;
+    principal.require_org_admin()?;
+
     repository::load_admin_org(pool, org_id).await
 }
 
+/// Apply a revision-checked organization settings change and its audit record atomically.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, invalid input or lifecycle
+/// state, and propagates persistence failures.
 pub async fn update_admin_org(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     expected_revision: i64,
     request: UpdateAdminOrgRequest,
 ) -> Result<AdminOrg, ServerError> {
+    principal.require_org_admin()?;
+
     let mut tx = pool.begin().await?;
     let current = repository::lock_admin_org(&mut tx, &principal.org_id).await?;
     if current.revision != expected_revision {
@@ -46,7 +64,7 @@ pub async fn update_admin_org(
         None => current.allowed_email_domains,
     };
     repository::update_admin_org(&mut tx, &principal.org_id, &name, &allowed_email_domains).await?;
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -56,26 +74,41 @@ pub async fn update_admin_org(
     )
     .await?;
     tx.commit().await?;
-    get_admin_org(pool, &principal.org_id).await
+    get_admin_org(pool, principal).await
 }
 
+/// Return the administrator-visible member page with filtering applied before pagination.
+///
+/// # Errors
+/// Propagates missing required state, invalid stored values, and persistence failures from the
+/// participating resource operations.
 pub async fn list_admin_members(
     pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
     offset: i64,
     limit: i64,
     query: Option<&str>,
 ) -> Result<MemberListResponse, ServerError> {
+    principal.require_org_admin()?;
+
     let query = query.map(str::trim).filter(|query| !query.is_empty());
     let items = repository::list_admin_members(pool, offset, limit + 1, query).await?;
     let (items, page_info) = admin_page(items, offset, limit);
     Ok(MemberListResponse { items, page_info })
 }
 
+/// Validate an invitation's role and email policy, then persist the member and audit event.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, invalid input or lifecycle
+/// state, and propagates persistence failures.
 pub async fn create_admin_member(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     request: CreateMemberRequest,
 ) -> Result<Member, ServerError> {
+    principal.require_org_admin()?;
+
     if request.role == OrgRole::Owner && principal.role != "owner" {
         return Err(ServerError::Forbidden(
             "only an organization owner can create another owner".to_owned(),
@@ -92,7 +125,7 @@ pub async fn create_admin_member(
     let user_id = prefixed_id("usr");
     let mut tx = pool.begin().await?;
     repository::insert_member(&mut tx, &user_id, &email, request.role.as_str()).await?;
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -105,6 +138,11 @@ pub async fn create_admin_member(
     repository::load_member(pool, &user_id).await
 }
 
+/// Apply a member change while protecting the caller and the last active owner.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, invalid input or lifecycle
+/// state, and propagates persistence failures.
 pub async fn update_admin_member(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
@@ -112,6 +150,8 @@ pub async fn update_admin_member(
     expected_revision: i64,
     request: UpdateMemberRequest,
 ) -> Result<Member, ServerError> {
+    principal.require_org_admin()?;
+
     if user_id == principal.user_id
         && (request
             .role
@@ -158,7 +198,7 @@ pub async fn update_admin_member(
     if next_status == "disabled" {
         repository::revoke_user_sessions(&mut tx, &principal.org_id, user_id).await?;
     }
-    audit_event::service::insert_audit_event(
+    audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
@@ -171,12 +211,19 @@ pub async fn update_admin_member(
     repository::load_member(pool, user_id).await
 }
 
+/// Disable a member and revoke its credentials while preserving an active organization owner.
+///
+/// # Errors
+/// Rejects an identity outside the resource authorization boundary, invalid input or lifecycle
+/// state, and propagates persistence failures.
 pub async fn delete_admin_member(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     user_id: &str,
     expected_revision: i64,
 ) -> Result<DeleteResult, ServerError> {
+    principal.require_org_admin()?;
+
     if user_id == principal.user_id {
         return Err(ServerError::InvalidRequest(
             "the current user cannot disable their own account".to_owned(),
@@ -199,6 +246,10 @@ pub async fn delete_admin_member(
     })
 }
 
+/// Normalize an email address and reject malformed identity input.
+///
+/// # Errors
+/// Returns invalid input when the email has no valid local part or domain.
 fn normalize_email(email: &str) -> Result<String, ServerError> {
     let email = email.trim().to_ascii_lowercase();
     let Some((local, domain)) = email.split_once('@') else {
@@ -214,6 +265,10 @@ fn normalize_email(email: &str) -> Result<String, ServerError> {
     Ok(email)
 }
 
+/// Normalize and deduplicate allowed domains while rejecting invalid labels.
+///
+/// # Errors
+/// Returns invalid input for malformed, empty, or unsupported domain entries.
 fn normalize_email_domains(domains: Vec<String>) -> Result<Vec<String>, ServerError> {
     let mut normalized = BTreeSet::new();
     for domain in domains {
@@ -228,6 +283,7 @@ fn normalize_email_domains(domains: Vec<String>) -> Result<Vec<String>, ServerEr
     Ok(normalized.into_iter().collect())
 }
 
+/// Check DNS-style email-domain labels without performing network resolution.
 fn valid_domain(domain: &str) -> bool {
     !domain.is_empty()
         && domain.len() <= 253
@@ -242,6 +298,10 @@ fn valid_domain(domain: &str) -> bool {
         })
 }
 
+/// Require an invited email to satisfy the organization's configured domain allowlist.
+///
+/// # Errors
+/// Rejects an invitation outside the configured domain allowlist.
 fn enforce_invited_email_domain(
     email: &str,
     allowed_domains: &[String],
@@ -263,7 +323,3 @@ fn enforce_invited_email_domain(
 }
 
 // Transaction participants share the caller-owned transaction; only the outer service commits.
-pub(crate) use super::repository::load_org_ref;
-pub(crate) use super::repository::load_user_ref;
-pub(crate) use super::repository::load_user_status;
-pub(crate) use super::repository::user_ref_from_row;

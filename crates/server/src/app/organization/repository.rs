@@ -3,8 +3,14 @@
 use super::model::{LockedAdminOrg, LockedMember, member_status, org_role};
 use crate::app::organization::dto::{AdminOrg, Member, OrgRef, UserRef};
 use crate::error::ServerError;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
 
+/// Read public user identity without credential material.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_user_ref(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
@@ -18,9 +24,15 @@ pub(crate) async fn load_user_ref(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or_else(|| ServerError::not_found("user", user_id))?;
-    user_ref_from_row(&row)
+    UserRef::from_row(&row).map_err(ServerError::from)
 }
 
+/// Read the organization's public identity for embedding in other responses.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_org_ref(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -36,6 +48,10 @@ pub(crate) async fn load_org_ref(
     })
 }
 
+/// Read administrative organization settings and their concurrency revision.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_admin_org(pool: &PgPool, org_id: &str) -> Result<AdminOrg, ServerError> {
     let row = sqlx::query(
         "SELECT org_id, name, allowed_email_domains, revision, updated_at
@@ -48,6 +64,14 @@ pub(crate) async fn load_admin_org(pool: &PgPool, org_id: &str) -> Result<AdminO
     admin_org_from_row(&row)
 }
 
+/// Lock organization settings before a revision-checked mutation.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_admin_org(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -67,6 +91,12 @@ pub(crate) async fn lock_admin_org(
     })
 }
 
+/// Persist normalized organization settings at the next concurrency revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn update_admin_org(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -86,6 +116,10 @@ pub(crate) async fn update_admin_org(
     Ok(())
 }
 
+/// Read organization members with search and status filters applied before pagination.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_admin_members(
     pool: &PgPool,
     offset: i64,
@@ -111,6 +145,10 @@ pub(crate) async fn list_admin_members(
     rows.iter().map(member_from_row).collect()
 }
 
+/// Read the organization's admission allowlist before inviting a member.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_allowed_email_domains(
     pool: &PgPool,
     org_id: &str,
@@ -122,6 +160,10 @@ pub(crate) async fn load_allowed_email_domains(
         .ok_or_else(|| ServerError::not_found("org", org_id))
 }
 
+/// Check whether the normalized member email already exists.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn member_email_exists(pool: &PgPool, email: &str) -> Result<bool, ServerError> {
     Ok(sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($1))",
@@ -131,6 +173,12 @@ pub(crate) async fn member_email_exists(pool: &PgPool, email: &str) -> Result<bo
     .await?)
 }
 
+/// Persist a normalized invited member and its initial concurrency revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_member(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
@@ -149,6 +197,14 @@ pub(crate) async fn insert_member(
     Ok(())
 }
 
+/// Lock a member's current role, status, and revision before administration.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_member(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
@@ -165,6 +221,12 @@ pub(crate) async fn lock_member(
     })
 }
 
+/// Count enabled owners while enforcing the last-owner invariant.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn active_owner_count(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<i64, ServerError> {
@@ -175,6 +237,12 @@ pub(crate) async fn active_owner_count(
     .await?)
 }
 
+/// Persist the role and enabled state selected by the organization operation.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn update_member(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
@@ -194,6 +262,12 @@ pub(crate) async fn update_member(
     Ok(())
 }
 
+/// Invalidate a user's sessions and credentials as part of membership administration.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn revoke_user_sessions(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -219,6 +293,10 @@ pub(crate) async fn revoke_user_sessions(
     Ok(())
 }
 
+/// Read one required member's public identity and administrative state.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_member(pool: &PgPool, user_id: &str) -> Result<Member, ServerError> {
     let row = sqlx::query(
         "SELECT u.user_id, u.email, u.display_name, u.role, u.status, u.revision,
@@ -234,6 +312,12 @@ pub(crate) async fn load_member(pool: &PgPool, user_id: &str) -> Result<Member, 
     member_from_row(&row)
 }
 
+/// Read an organization's member state before granting project membership.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_user_status(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
@@ -245,16 +329,10 @@ pub(crate) async fn load_user_status(
         .ok_or_else(|| ServerError::not_found("user", user_id))
 }
 
-pub(crate) fn user_ref_from_row(row: &sqlx::postgres::PgRow) -> Result<UserRef, ServerError> {
-    Ok(UserRef {
-        user_id: row.try_get("user_id")?,
-        email: row.try_get("email")?,
-        display_name: row.try_get("display_name")?,
-        avatar_url: row.try_get("avatar_url")?,
-        role: row.try_get("role")?,
-    })
-}
-
+/// Decode organization settings from a persisted row.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 fn admin_org_from_row(row: &sqlx::postgres::PgRow) -> Result<AdminOrg, ServerError> {
     Ok(AdminOrg {
         org_id: row.try_get("org_id")?,
@@ -265,6 +343,10 @@ fn admin_org_from_row(row: &sqlx::postgres::PgRow) -> Result<AdminOrg, ServerErr
     })
 }
 
+/// Decode public identity and administrative membership state from a joined row.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 fn member_from_row(row: &sqlx::postgres::PgRow) -> Result<Member, ServerError> {
     Ok(Member {
         user_id: row.try_get("user_id")?,

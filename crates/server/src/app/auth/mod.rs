@@ -7,9 +7,11 @@ pub(crate) mod model;
 mod oidc;
 mod repository;
 pub(crate) mod routes;
-pub mod service;
+mod service;
 pub use error::AuthError;
 pub(crate) use model::user_capabilities;
-pub use model::{AuthPrincipal, OidcIdentity};
+pub use model::{AuthPrincipal, OidcIdentity, ProviderSummary};
 pub use oidc::{DiscoveredOidcProvider, OidcIdentityProvider};
 pub use service::AuthService;
+
+pub use service::get_me;

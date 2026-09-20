@@ -1,47 +1,26 @@
 //! SQL queries and persistence for draft resources.
 
-use super::model::{
-    apply_operations_to_state, content_for_kind, diff_resource_states, draft_event_type,
-    draft_operation_action, draft_status, ensure_writable_draft_scope, merge_resource_states,
-    state_hash, validate_draft_operation_resource, validate_draft_resource,
-    validate_new_resource_draft_operations,
-};
-use super::service::{
-    canonicalize_org_draft_target_is_selected, canonicalize_org_draft_targets_are_selected,
-    target_ref_for_draft,
-};
+use super::model::{content_for_kind, draft_event_type, draft_operation_action, draft_status};
 use crate::app::auth::AuthPrincipal;
-use crate::app::commit::service::{
-    load_org_ref, load_project_ref, validate_org_commit, validate_project_commit,
-};
 use crate::app::draft::dto::{
-    CreateDraftRebaseRequest, CreateDraftRequest, Draft, DraftCoordination, DraftDetail,
-    DraftEvent, DraftEventListResponse, DraftEventType, DraftFreshness, DraftListResponse,
-    DraftOperation, DraftOperationAction, DraftOperationBatchRequest, DraftOperationBatchResponse,
-    DraftOperationInput, DraftRebaseResult, DraftReconciliationCandidate,
-    DraftReconciliationStatus, DraftResourceContent, DraftResourceRef, DraftSyncState,
-    DraftSyncStatus, ReconciliationCandidateStatus, ReconciliationConflict,
-    ReconciliationConflictKind, ReconciliationResourceState, UpdateDraftRequest,
+    Draft, DraftCoordination, DraftEvent, DraftEventListResponse, DraftEventType, DraftFreshness,
+    DraftListResponse, DraftOperation, DraftOperationInput, DraftReconciliationStatus,
+    DraftResourceContent, DraftResourceRef, ReconciliationConflict, ReconciliationResourceState,
 };
-use crate::app::memory::dto::ResourceScope;
 use crate::app::memory::model::resource_scope;
-use crate::app::memory::service::{
-    lock_org_draft_selection_coordination, lock_org_draft_selection_coordination_for_project,
-    project_org_id,
-};
 use crate::app::organization::dto::UserRef;
-use crate::app::review::service::{
-    load_review, load_review_draft_ids, refresh_review_after_draft_content_change,
-    review_result_hash,
-};
-use crate::dto::DeleteResult;
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
 use crate::pagination::page_info;
 use sqlx::types::Json;
-use sqlx::{PgPool, Postgres, Row, Transaction};
-use time::OffsetDateTime;
+use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
 
+/// Load public identity fields for a required user within the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn user_ref(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
@@ -55,19 +34,17 @@ pub(crate) async fn user_ref(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or_else(|| ServerError::not_found("user", user_id))?;
-    user_ref_from_row(&row)
+    UserRef::from_row(&row).map_err(ServerError::from)
 }
 
-pub(crate) fn user_ref_from_row(row: &sqlx::postgres::PgRow) -> Result<UserRef, ServerError> {
-    Ok(UserRef {
-        user_id: row.try_get("user_id")?,
-        email: row.try_get("email")?,
-        display_name: row.try_get("display_name")?,
-        avatar_url: row.try_get("avatar_url")?,
-        role: row.try_get("role")?,
-    })
-}
-
+/// Resolve an explicit identity or path against the ancestor, current resources, and optional
+/// history.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates query failures and rejects a historical path associated with multiple resource
+/// identities.
 pub(crate) async fn resolve_org_draft_target_id(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -145,6 +122,13 @@ pub(crate) async fn resolve_org_draft_target_id(
     }
 }
 
+/// Require the target to be active organization Memory selected by the carrying project.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) async fn validate_org_draft_target_is_selected(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -199,6 +183,15 @@ pub(crate) async fn validate_org_draft_target_is_selected(
     ))
 }
 
+/// Lock the proposal and allocate its next dense operation ordinal before inserting the mutation.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates missing-proposal, serialization, and database failures. The acquired row lock
+/// remains held until the caller ends the transaction.
 pub(crate) async fn insert_draft_operation(
     tx: &mut Transaction<'_, Postgres>,
     draft_id: &str,
@@ -235,116 +228,12 @@ pub(crate) async fn insert_draft_operation(
     Ok(operation_id)
 }
 
-pub(crate) async fn append_draft_operation_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    expected_draft_version: i64,
-    mut operation: DraftOperationInput,
-    event_daemon_installation_id: Option<&str>,
-    org_coordination_already_locked: bool,
-) -> Result<i64, ServerError> {
-    let identity = sqlx::query(
-        "SELECT project_id, resource_scope
-         FROM drafts
-         WHERE draft_id = $1",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    let identity_scope = resource_scope(identity.try_get::<String, _>("resource_scope")?.as_str())?;
-    ensure_writable_draft_scope(identity_scope)?;
-    if identity_scope == ResourceScope::Org && !org_coordination_already_locked {
-        lock_org_draft_selection_coordination_for_project(
-            tx,
-            &identity.try_get::<String, _>("project_id")?,
-        )
-        .await?;
-    }
-    let row = sqlx::query(
-        "SELECT d.status, d.version, d.project_id, d.resource_scope, d.resource_kind,
-                d.base_commit_id,
-                COALESCE((
-                    SELECT operation.action = 'create'
-                    FROM draft_operations AS operation
-                    WHERE operation.draft_id = d.draft_id
-                    ORDER BY operation.ordinal
-                    LIMIT 1
-                ), FALSE) AS creates_resource
-         FROM drafts AS d
-         WHERE d.draft_id = $1
-         FOR UPDATE",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    let status: String = row.try_get("status")?;
-    let version: i64 = row.try_get("version")?;
-    let scope = resource_scope(row.try_get::<String, _>("resource_scope")?.as_str())?;
-    let draft_resource = DraftResourceRef {
-        scope,
-        id: None,
-        path: None,
-    };
-
-    if status != "open" && status != "submitted" {
-        return Err(ServerError::invalid_transition("draft", &status, "append"));
-    }
-    if version != expected_draft_version {
-        return Err(ServerError::version_conflict(
-            "draft",
-            expected_draft_version,
-            version,
-        ));
-    }
-    let creates_resource: bool = row.try_get("creates_resource")?;
-    if creates_resource && operation.action == DraftOperationAction::Delete {
-        return Err(ServerError::InvalidRequest(
-            "a draft-created resource must be discarded instead of deleted".to_owned(),
-        ));
-    }
-    validate_draft_operation_resource(&draft_resource, &operation)?;
-    if scope == ResourceScope::Org
-        && !creates_resource
-        && operation.action != DraftOperationAction::Create
-    {
-        let project_id: String = row.try_get("project_id")?;
-        let org_id = project_org_id(tx, &project_id).await?;
-        let base_commit_id: Option<String> = row.try_get("base_commit_id")?;
-        canonicalize_org_draft_target_is_selected(
-            tx,
-            &project_id,
-            &org_id,
-            base_commit_id.as_deref(),
-            &mut operation.resource,
-        )
-        .await?;
-    }
-
-    insert_draft_operation(tx, draft_id, operation).await?;
-    let updated = sqlx::query(
-        "UPDATE drafts
-         SET version = version + 1, updated_at = now()
-         WHERE draft_id = $1
-         RETURNING project_id, version",
-    )
-    .bind(draft_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    invalidate_draft_candidates(tx, draft_id).await?;
-    refresh_review_after_draft_content_change(tx, draft_id).await?;
-    insert_draft_event(
-        tx,
-        draft_id,
-        &updated.try_get::<String, _>("project_id")?,
-        DraftEventType::OperationAppended,
-        updated.try_get("version")?,
-        event_daemon_installation_id,
-    )
-    .await
-}
-
+/// Mark all current reconciliation evidence for the proposal as stale.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn invalidate_draft_candidates(
     tx: &mut Transaction<'_, Postgres>,
     draft_id: &str,
@@ -360,6 +249,12 @@ pub(crate) async fn invalidate_draft_candidates(
     Ok(())
 }
 
+/// Persist a proposal lifecycle event and return its monotonic synchronization cursor.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_draft_event(
     tx: &mut Transaction<'_, Postgres>,
     draft_id: &str,
@@ -386,159 +281,12 @@ pub(crate) async fn insert_draft_event(
     Ok(row.try_get("server_sequence")?)
 }
 
-pub(crate) async fn load_draft_detail(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-) -> Result<DraftDetail, ServerError> {
-    let row = sqlx::query(
-        "SELECT
-            d.draft_id, d.project_id, d.base_commit_id, d.title, d.description,
-            d.status, d.version,
-            d.resource_scope, d.resource_kind, d.target_id, d.path, d.daemon_installation_id,
-            d.created_at, d.updated_at,
-            u.user_id, u.email, u.display_name, u.avatar_url, u.role
-         FROM drafts d
-         JOIN users u ON u.user_id = d.author_user_id
-         WHERE d.draft_id = $1",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-
-    let daemon_installation_id: String = row.try_get("daemon_installation_id")?;
-    let resource_scope = resource_scope(row.try_get::<String, _>("resource_scope")?.as_str())?;
-    let resource = DraftResourceRef {
-        scope: resource_scope,
-        id: row.try_get("target_id")?,
-        path: row.try_get("path")?,
-    };
-    let operations = load_draft_operations(tx, draft_id).await?;
-    let allow_path_lookup = operations
-        .first()
-        .is_none_or(|operation| operation.input.action != DraftOperationAction::Create);
-    let coordination = load_draft_coordination(
-        tx,
-        draft_id,
-        row.try_get("project_id")?,
-        row.try_get("base_commit_id")?,
-        row.try_get("version")?,
-        &resource,
-        allow_path_lookup,
-    )
-    .await?;
-    let draft = Draft {
-        draft_id: row.try_get("draft_id")?,
-        project_id: row.try_get("project_id")?,
-        base_commit_id: row.try_get("base_commit_id")?,
-        author: user_ref_from_row(&row)?,
-        title: row.try_get("title")?,
-        description: row.try_get("description")?,
-        resource,
-        status: draft_status(row.try_get::<String, _>("status")?.as_str())?,
-        coordination,
-        version: row.try_get("version")?,
-        created_at: row.try_get("created_at")?,
-        updated_at: row.try_get("updated_at")?,
-    };
-    Ok(DraftDetail {
-        draft,
-        operations,
-        sync_state: DraftSyncState {
-            status: DraftSyncStatus::Synced,
-            server_cursor: Some(format!(
-                "draft:{}:{}",
-                draft_id,
-                row.try_get::<i64, _>("version")?
-            )),
-            daemon_installation_id: Some(daemon_installation_id),
-        },
-    })
-}
-
-pub(crate) async fn load_draft_coordination(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    project_id: String,
-    base_commit_id: Option<String>,
-    draft_version: i64,
-    resource: &DraftResourceRef,
-    allow_path_lookup: bool,
-) -> Result<DraftCoordination, ServerError> {
-    let current_commit_id = match resource.scope {
-        ResourceScope::Org => {
-            let org_id = project_org_id(tx, &project_id).await?;
-            load_org_ref(tx, &org_id).await?.commit_id
-        }
-        ResourceScope::Project => load_project_ref(tx, &project_id).await?.commit_id,
-    };
-    let freshness = if base_commit_id == current_commit_id {
-        DraftFreshness::Current
-    } else {
-        DraftFreshness::Behind
-    };
-    let has_upstream_resource_changes = if freshness == DraftFreshness::Behind {
-        let base_state =
-            resource_state_at_commit(tx, base_commit_id.as_deref(), resource, allow_path_lookup)
-                .await?;
-        let current_state = resource_state_at_commit(
-            tx,
-            current_commit_id.as_deref(),
-            resource,
-            allow_path_lookup,
-        )
-        .await?;
-        base_state != current_state
-    } else {
-        false
-    };
-    let candidate = if freshness == DraftFreshness::Behind {
-        sqlx::query(
-            "SELECT candidate_id, status
-             FROM draft_reconciliation_candidates
-             WHERE draft_id = $1 AND draft_version = $2
-               AND base_commit_id IS NOT DISTINCT FROM $3
-               AND current_commit_id IS NOT DISTINCT FROM $4
-               AND invalidated_at IS NULL
-             ORDER BY created_at DESC
-             LIMIT 1",
-        )
-        .bind(draft_id)
-        .bind(draft_version)
-        .bind(&base_commit_id)
-        .bind(&current_commit_id)
-        .fetch_optional(&mut **tx)
-        .await?
-    } else {
-        None
-    };
-    let (reconciliation, candidate_id) = match candidate {
-        Some(row) => {
-            let status: String = row.try_get("status")?;
-            (
-                match status.as_str() {
-                    "clean" => DraftReconciliationStatus::Clean,
-                    "conflicts" => DraftReconciliationStatus::Conflicts,
-                    _ => {
-                        return Err(ServerError::InvalidRequest(format!(
-                            "unknown reconciliation status: {status}"
-                        )));
-                    }
-                },
-                Some(row.try_get("candidate_id")?),
-            )
-        }
-        None => (DraftReconciliationStatus::Unknown, None),
-    };
-    Ok(DraftCoordination {
-        freshness,
-        current_commit_id,
-        has_upstream_resource_changes,
-        reconciliation,
-        candidate_id,
-    })
-}
-
+/// Read proposal mutations in their persisted semantic order.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn load_draft_operations(
     tx: &mut Transaction<'_, Postgres>,
     draft_id: &str,
@@ -578,6 +326,13 @@ pub(crate) async fn load_draft_operations(
         .collect()
 }
 
+/// Read one resource's identity and content at the specified ancestor snapshot.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource
+/// and rejects inconsistent persisted state or resource selections.
 pub(crate) async fn resource_state_at_commit(
     tx: &mut Transaction<'_, Postgres>,
     commit_id: Option<&str>,
@@ -643,6 +398,12 @@ pub(crate) async fn resource_state_at_commit(
     })
 }
 
+/// Check whether a different active resource occupies the proposed path in its ownership scope.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn path_is_occupied(
     tx: &mut Transaction<'_, Postgres>,
     commit_id: Option<&str>,
@@ -679,462 +440,10 @@ pub(crate) async fn path_is_occupied(
     .ok_or_else(|| ServerError::not_found("commit", commit_id))
 }
 
-pub(crate) async fn draft_result_state(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-) -> Result<ReconciliationResourceState, ServerError> {
-    let row = sqlx::query(
-        "SELECT base_commit_id, resource_scope, resource_kind, target_id, path
-         FROM drafts WHERE draft_id = $1",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    let operations = load_draft_operations(tx, draft_id).await?;
-    let resource = DraftResourceRef {
-        scope: resource_scope(row.try_get::<String, _>("resource_scope")?.as_str())?,
-        id: row.try_get("target_id")?,
-        path: row.try_get("path")?,
-    };
-    let allow_path_lookup = operations
-        .first()
-        .is_none_or(|operation| operation.input.action != DraftOperationAction::Create);
-    let base_commit_id: Option<String> = row.try_get("base_commit_id")?;
-    let base =
-        resource_state_at_commit(tx, base_commit_id.as_deref(), &resource, allow_path_lookup)
-            .await?;
-    apply_operations_to_state(base, &operations)
-}
-
-pub(crate) async fn create_reconciliation_candidate_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    expected_draft_version: i64,
-) -> Result<DraftReconciliationCandidate, ServerError> {
-    let row = sqlx::query(
-        "SELECT project_id, base_commit_id, resource_scope, resource_kind,
-                target_id, path, status, version
-         FROM drafts
-         WHERE draft_id = $1
-         FOR UPDATE",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    let draft_version: i64 = row.try_get("version")?;
-    if draft_version != expected_draft_version {
-        return Err(ServerError::version_conflict(
-            "draft",
-            expected_draft_version,
-            draft_version,
-        ));
-    }
-    let lifecycle: String = row.try_get("status")?;
-    if lifecycle != "open" && lifecycle != "submitted" {
-        return Err(ServerError::invalid_transition(
-            "draft",
-            &lifecycle,
-            "reconciled",
-        ));
-    }
-    let project_id: String = row.try_get("project_id")?;
-    let scope = resource_scope(row.try_get::<String, _>("resource_scope")?.as_str())?;
-    let base_commit_id: Option<String> = row.try_get("base_commit_id")?;
-    let current_commit_id = target_ref_for_draft(tx, &project_id, scope).await?;
-    if base_commit_id == current_commit_id {
-        return Err(ServerError::DraftAlreadyCurrent {
-            draft_id: draft_id.to_owned(),
-        });
-    }
-
-    if let Some(existing_id) = sqlx::query_scalar::<_, String>(
-        "SELECT candidate_id
-         FROM draft_reconciliation_candidates
-         WHERE draft_id = $1 AND draft_version = $2
-           AND base_commit_id IS NOT DISTINCT FROM $3
-           AND current_commit_id IS NOT DISTINCT FROM $4
-           AND invalidated_at IS NULL
-         LIMIT 1",
-    )
-    .bind(draft_id)
-    .bind(draft_version)
-    .bind(&base_commit_id)
-    .bind(&current_commit_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    {
-        return load_reconciliation_candidate(tx, draft_id, &existing_id).await;
-    }
-
-    invalidate_draft_candidates(tx, draft_id).await?;
-    let mut resource = DraftResourceRef {
-        scope,
-        id: row.try_get("target_id")?,
-        path: row.try_get("path")?,
-    };
-    let operations = load_draft_operations(tx, draft_id).await?;
-    let allow_path_lookup = operations
-        .first()
-        .is_none_or(|operation| operation.input.action != DraftOperationAction::Create);
-    if scope == ResourceScope::Org && resource.id.is_none() && allow_path_lookup {
-        let org_id = project_org_id(tx, &project_id).await?;
-        resource.id =
-            resolve_org_draft_target_id(tx, &org_id, base_commit_id.as_deref(), &resource, true)
-                .await?;
-    }
-    let base_state =
-        resource_state_at_commit(tx, base_commit_id.as_deref(), &resource, allow_path_lookup)
-            .await?;
-    let current_state = resource_state_at_commit(
-        tx,
-        current_commit_id.as_deref(),
-        &resource,
-        allow_path_lookup,
-    )
-    .await?;
-    let draft_state = apply_operations_to_state(base_state.clone(), &operations)?;
-    let (mut proposed_state, mut conflicts) =
-        merge_resource_states(&base_state, &current_state, &draft_state);
-    if let Some(proposed) = proposed_state.as_ref()
-        && path_is_occupied(tx, current_commit_id.as_deref(), proposed).await?
-    {
-        conflicts.push(ReconciliationConflict {
-            kind: ReconciliationConflictKind::PathOccupied,
-            field: "path".to_owned(),
-            base: base_state.resource.path.clone(),
-            current: current_state.resource.path.clone(),
-            draft: proposed.resource.path.clone(),
-        });
-        proposed_state = None;
-    }
-    let status = if conflicts.is_empty() {
-        ReconciliationCandidateStatus::Clean
-    } else {
-        ReconciliationCandidateStatus::Conflicts
-    };
-    let result_hash = proposed_state.as_ref().map(state_hash).transpose()?;
-    let candidate_id = prefixed_id("rcn");
-    sqlx::query(
-        "INSERT INTO draft_reconciliation_candidates (
-            candidate_id, draft_id, draft_version, base_commit_id, current_commit_id,
-            status, base_state, current_state, draft_state, proposed_state,
-            conflicts, result_hash
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-    )
-    .bind(&candidate_id)
-    .bind(draft_id)
-    .bind(draft_version)
-    .bind(&base_commit_id)
-    .bind(&current_commit_id)
-    .bind(match status {
-        ReconciliationCandidateStatus::Clean => "clean",
-        ReconciliationCandidateStatus::Conflicts => "conflicts",
-    })
-    .bind(Json(&base_state))
-    .bind(Json(&current_state))
-    .bind(Json(&draft_state))
-    .bind(proposed_state.as_ref().map(Json))
-    .bind(Json(&conflicts))
-    .bind(&result_hash)
-    .execute(&mut **tx)
-    .await?;
-    load_reconciliation_candidate(tx, draft_id, &candidate_id).await
-}
-
-pub(crate) async fn load_reconciliation_candidate(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    candidate_id: &str,
-) -> Result<DraftReconciliationCandidate, ServerError> {
-    let row = sqlx::query(
-        "SELECT candidate_id, draft_id, draft_version, base_commit_id, current_commit_id,
-                status, base_state, current_state, draft_state, proposed_state,
-                conflicts, result_hash, created_at, invalidated_at
-         FROM draft_reconciliation_candidates
-         WHERE candidate_id = $1 AND draft_id = $2",
-    )
-    .bind(candidate_id)
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("reconciliation_candidate", candidate_id))?;
-
-    let draft_row = sqlx::query(
-        "SELECT project_id, base_commit_id, resource_scope, version
-         FROM drafts WHERE draft_id = $1",
-    )
-    .bind(draft_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    let scope = resource_scope(draft_row.try_get::<String, _>("resource_scope")?.as_str())?;
-    let current =
-        target_ref_for_draft(tx, &draft_row.try_get::<String, _>("project_id")?, scope).await?;
-    let invalidated_at: Option<OffsetDateTime> = row.try_get("invalidated_at")?;
-    let valid = invalidated_at.is_none()
-        && row.try_get::<i64, _>("draft_version")? == draft_row.try_get::<i64, _>("version")?
-        && row.try_get::<Option<String>, _>("base_commit_id")?
-            == draft_row.try_get::<Option<String>, _>("base_commit_id")?
-        && row.try_get::<Option<String>, _>("current_commit_id")? == current;
-    if !valid && invalidated_at.is_none() {
-        sqlx::query(
-            "UPDATE draft_reconciliation_candidates SET invalidated_at = now()
-             WHERE candidate_id = $1 AND invalidated_at IS NULL",
-        )
-        .bind(candidate_id)
-        .execute(&mut **tx)
-        .await?;
-    }
-    let status: String = row.try_get("status")?;
-    Ok(DraftReconciliationCandidate {
-        candidate_id: row.try_get("candidate_id")?,
-        draft_id: row.try_get("draft_id")?,
-        draft_version: row.try_get("draft_version")?,
-        base_commit_id: row.try_get("base_commit_id")?,
-        current_commit_id: row.try_get("current_commit_id")?,
-        status: match status.as_str() {
-            "clean" => ReconciliationCandidateStatus::Clean,
-            "conflicts" => ReconciliationCandidateStatus::Conflicts,
-            _ => {
-                return Err(ServerError::InvalidRequest(format!(
-                    "unknown candidate status: {status}"
-                )));
-            }
-        },
-        base_state: row
-            .try_get::<Json<ReconciliationResourceState>, _>("base_state")?
-            .0,
-        current_state: row
-            .try_get::<Json<ReconciliationResourceState>, _>("current_state")?
-            .0,
-        draft_state: row
-            .try_get::<Json<ReconciliationResourceState>, _>("draft_state")?
-            .0,
-        proposed_state: row
-            .try_get::<Option<Json<ReconciliationResourceState>>, _>("proposed_state")?
-            .map(|state| state.0),
-        conflicts: row
-            .try_get::<Json<Vec<ReconciliationConflict>>, _>("conflicts")?
-            .0,
-        result_hash: row.try_get("result_hash")?,
-        valid,
-        created_at: row.try_get("created_at")?,
-        invalidated_at: if valid {
-            None
-        } else {
-            invalidated_at.or_else(|| Some(OffsetDateTime::now_utc()))
-        },
-    })
-}
-
-pub(crate) async fn apply_draft_rebase_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    author_user_id: &str,
-    expected_ref: Option<&str>,
-    request: CreateDraftRebaseRequest,
-) -> Result<DraftRebaseResult, ServerError> {
-    let row = sqlx::query(
-        "SELECT project_id, author_user_id, base_commit_id, resource_scope,
-                resource_kind, target_id, path, status, version, title, description
-         FROM drafts WHERE draft_id = $1 FOR UPDATE",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    if row.try_get::<String, _>("author_user_id")? != author_user_id {
-        return Err(ServerError::Forbidden(
-            "only the draft author can rebase it".to_owned(),
-        ));
-    }
-    let version: i64 = row.try_get("version")?;
-    if version != request.expected_draft_version {
-        return Err(ServerError::version_conflict(
-            "draft",
-            request.expected_draft_version,
-            version,
-        ));
-    }
-    let lifecycle: String = row.try_get("status")?;
-    if lifecycle != "open" && lifecycle != "submitted" {
-        return Err(ServerError::invalid_transition(
-            "draft", &lifecycle, "rebased",
-        ));
-    }
-    let candidate = load_reconciliation_candidate(tx, draft_id, &request.candidate_id).await?;
-    if !candidate.valid
-        || candidate.draft_version != version
-        || candidate.base_commit_id != row.try_get::<Option<String>, _>("base_commit_id")?
-    {
-        return Err(ServerError::ReconciliationCandidateInvalid {
-            candidate_id: request.candidate_id,
-        });
-    }
-    let project_id: String = row.try_get("project_id")?;
-    let scope = resource_scope(row.try_get::<String, _>("resource_scope")?.as_str())?;
-    let current_ref = target_ref_for_draft(tx, &project_id, scope).await?;
-    if current_ref.as_deref() != expected_ref {
-        return Err(ServerError::precondition_failed(
-            expected_ref,
-            current_ref.as_deref(),
-        ));
-    }
-    if candidate.current_commit_id != current_ref {
-        return Err(ServerError::ReconciliationCandidateInvalid {
-            candidate_id: request.candidate_id,
-        });
-    }
-    let resolved_state = match (candidate.status, request.resolved_state) {
-        (ReconciliationCandidateStatus::Clean, Some(_)) => {
-            return Err(ServerError::InvalidRequest(
-                "a clean candidate must be applied without resolved_state".to_owned(),
-            ));
-        }
-        (ReconciliationCandidateStatus::Clean, None) => {
-            candidate.proposed_state.clone().ok_or_else(|| {
-                ServerError::InvalidRequest("clean candidate has no result".to_owned())
-            })?
-        }
-        (ReconciliationCandidateStatus::Conflicts, Some(resolved)) => resolved,
-        (ReconciliationCandidateStatus::Conflicts, None) => {
-            return Err(ServerError::InvalidRequest(
-                "a conflicts candidate requires a resolved_state".to_owned(),
-            ));
-        }
-    };
-    if resolved_state.resource.scope != scope
-        || (resolved_state.exists && resolved_state.content.is_none())
-    {
-        return Err(ServerError::InvalidRequest(
-            "resolved state does not match the draft resource".to_owned(),
-        ));
-    }
-    if path_is_occupied(tx, current_ref.as_deref(), &resolved_state).await? {
-        return Err(ServerError::InvalidRequest(
-            "resolved state path is occupied in the current commit".to_owned(),
-        ));
-    }
-
-    let previous_operations = load_draft_operations(tx, draft_id).await?;
-    let previous_revision_id = prefixed_id("drv");
-    sqlx::query(
-        "INSERT INTO draft_revisions (
-            revision_id, draft_id, draft_version, base_commit_id, lifecycle_status,
-            title, description, operations
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-    )
-    .bind(&previous_revision_id)
-    .bind(draft_id)
-    .bind(version)
-    .bind(row.try_get::<Option<String>, _>("base_commit_id")?)
-    .bind(&lifecycle)
-    .bind(row.try_get::<String, _>("title")?)
-    .bind(row.try_get::<String, _>("description")?)
-    .bind(Json(&previous_operations))
-    .execute(&mut **tx)
-    .await?;
-
-    let operations = diff_resource_states(&candidate.current_state, &resolved_state);
-    sqlx::query("DELETE FROM draft_operations WHERE draft_id = $1")
-        .bind(draft_id)
-        .execute(&mut **tx)
-        .await?;
-    for operation in operations {
-        insert_draft_operation(tx, draft_id, operation).await?;
-    }
-    let next_version: i64 = sqlx::query_scalar(
-        "UPDATE drafts
-         SET base_commit_id = $2, version = version + 1, updated_at = now()
-         WHERE draft_id = $1 RETURNING version",
-    )
-    .bind(draft_id)
-    .bind(&current_ref)
-    .fetch_one(&mut **tx)
-    .await?;
-    invalidate_draft_candidates(tx, draft_id).await?;
-    let result_hash = state_hash(&resolved_state)?;
-    let review_row = sqlx::query(
-        "SELECT reviews.review_id, reviews.status, reviews.approved_result_hash
-         FROM reviews
-         JOIN review_drafts ON review_drafts.review_id = reviews.review_id
-         WHERE review_drafts.draft_id = $1
-         FOR UPDATE OF reviews",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let mut approval_invalidated = false;
-    if let Some(review_row) = review_row {
-        let status: String = review_row.try_get("status")?;
-        let approved_hash: Option<String> = review_row.try_get("approved_result_hash")?;
-        let review_id: String = review_row.try_get("review_id")?;
-        let draft_ids = load_review_draft_ids(tx, &review_id).await?;
-        let current_review_hash = review_result_hash(tx, &draft_ids).await?;
-        let preserve_approval =
-            status == "approved" && approved_hash.as_deref() == Some(&current_review_hash);
-        approval_invalidated = status == "approved" && !preserve_approval;
-        sqlx::query(
-            "UPDATE reviews
-             SET status = CASE WHEN status = 'approved' AND NOT $2 THEN 'open' ELSE status END,
-                 approved_result_hash = CASE WHEN status = 'approved' AND $2 THEN approved_result_hash ELSE NULL END,
-                 decision_body = CASE WHEN status = 'approved' AND $2 THEN decision_body ELSE NULL END,
-                 decided_by_user_id = CASE WHEN status = 'approved' AND $2 THEN decided_by_user_id ELSE NULL END,
-                 decided_at = CASE WHEN status = 'approved' AND $2 THEN decided_at ELSE NULL END,
-                 version = version + 1, updated_at = now()
-             WHERE review_id = $1",
-        )
-        .bind(&review_id)
-        .bind(preserve_approval)
-        .execute(&mut **tx)
-        .await?;
-    }
-    let rebase_id = prefixed_id("rbs");
-    sqlx::query(
-        "INSERT INTO draft_rebases (
-            rebase_id, draft_id, candidate_id, previous_revision_id,
-            applied_by_user_id, resulting_draft_version, result_hash
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    )
-    .bind(&rebase_id)
-    .bind(draft_id)
-    .bind(&candidate.candidate_id)
-    .bind(&previous_revision_id)
-    .bind(author_user_id)
-    .bind(next_version)
-    .bind(&result_hash)
-    .execute(&mut **tx)
-    .await?;
-    insert_draft_event(
-        tx,
-        draft_id,
-        &project_id,
-        DraftEventType::Rebased,
-        next_version,
-        None,
-    )
-    .await?;
-    let draft = load_draft_detail(tx, draft_id).await?;
-    let review = match sqlx::query_scalar::<_, String>(
-        "SELECT review_id FROM review_drafts WHERE draft_id = $1",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    {
-        Some(review_id) => Some(load_review(tx, &review_id).await?),
-        None => None,
-    };
-    Ok(DraftRebaseResult {
-        rebase_id,
-        previous_revision_id,
-        draft,
-        review,
-        approval_invalidated,
-    })
-}
-
+/// Check proposal authorship together with organization and project membership.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn draft_is_owned_by(
     pool: &PgPool,
     principal: &AuthPrincipal,
@@ -1159,6 +468,12 @@ pub(crate) async fn draft_is_owned_by(
     .await?)
 }
 
+/// Require every proposal in a batch to belong to the accessible authenticated author.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn ensure_drafts_owned_by(
     tx: &mut Transaction<'_, Postgres>,
     principal: &AuthPrincipal,
@@ -1191,6 +506,13 @@ pub(crate) async fn ensure_drafts_owned_by(
     }
 }
 
+/// Require all supplied proposal identities to have the expected author.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects identities outside the
+/// required ownership boundary.
 pub(crate) async fn ensure_drafts_authored_by(
     tx: &mut Transaction<'_, Postgres>,
     author_user_id: &str,
@@ -1214,81 +536,10 @@ pub(crate) async fn ensure_drafts_authored_by(
     }
 }
 
-pub(crate) async fn create_draft(
-    tx: &mut Transaction<'_, Postgres>,
-    author_user_id: &str,
-    mut request: CreateDraftRequest,
-) -> Result<String, ServerError> {
-    ensure_writable_draft_scope(request.resource.scope)?;
-    if request.resource.scope == ResourceScope::Org {
-        lock_org_draft_selection_coordination_for_project(tx, &request.project_id).await?;
-    }
-    let org_id = project_org_id(tx, &request.project_id).await?;
-    user_ref(tx, author_user_id).await?;
-    if let Some(base_commit_id) = request.base_commit_id.as_deref() {
-        match request.resource.scope {
-            ResourceScope::Org => validate_org_commit(tx, &org_id, base_commit_id).await?,
-            ResourceScope::Project => {
-                validate_project_commit(tx, &request.project_id, base_commit_id).await?
-            }
-        }
-    }
-    validate_draft_resource(&request.resource)?;
-    for operation in &request.operations {
-        validate_draft_operation_resource(&request.resource, operation)?;
-    }
-    validate_new_resource_draft_operations(&request.operations)?;
-    if request.resource.scope == ResourceScope::Org {
-        canonicalize_org_draft_targets_are_selected(
-            tx,
-            &request.project_id,
-            &org_id,
-            request.base_commit_id.as_deref(),
-            &mut request.resource,
-            &mut request.operations,
-        )
-        .await?;
-    }
-
-    let draft_id = prefixed_id("drf");
-    sqlx::query(
-        "INSERT INTO drafts (
-                draft_id, project_id, author_user_id, title, description,
-                resource_scope, resource_kind, base_commit_id, target_id, path, status, version,
-                daemon_installation_id
-             )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'open', 1, $11)",
-    )
-    .bind(&draft_id)
-    .bind(&request.project_id)
-    .bind(author_user_id)
-    .bind(&request.title)
-    .bind(request.description.as_deref().unwrap_or_default())
-    .bind(request.resource.scope.as_str())
-    .bind("memory")
-    .bind(&request.base_commit_id)
-    .bind(&request.resource.id)
-    .bind(&request.resource.path)
-    .bind(&request.daemon_installation_id)
-    .execute(&mut **tx)
-    .await?;
-
-    for operation in request.operations {
-        insert_draft_operation(tx, &draft_id, operation).await?;
-    }
-    insert_draft_event(
-        tx,
-        &draft_id,
-        &request.project_id,
-        DraftEventType::Created,
-        1,
-        Some(&request.daemon_installation_id),
-    )
-    .await?;
-
-    Ok(draft_id)
-}
-
+/// Read proposals for the supplied author and optional carrying project.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_drafts(
     pool: &PgPool,
     author_user_id: &str,
@@ -1399,7 +650,7 @@ pub(crate) async fn list_drafts(
                 draft_id: row.try_get("draft_id")?,
                 project_id: row.try_get("project_id")?,
                 base_commit_id: row.try_get("base_commit_id")?,
-                author: user_ref_from_row(row)?,
+                author: UserRef::from_row(row)?,
                 title: row.try_get("title")?,
                 description: row.try_get("description")?,
                 resource: DraftResourceRef {
@@ -1421,177 +672,11 @@ pub(crate) async fn list_drafts(
     })
 }
 
-pub(crate) async fn update_draft(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    expected_draft_version: i64,
-    request: UpdateDraftRequest,
-) -> Result<(), ServerError> {
-    let row = sqlx::query(
-        "SELECT title, description, status, version, project_id
-             FROM drafts
-             WHERE draft_id = $1
-             FOR UPDATE",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    let current_version: i64 = row.try_get("version")?;
-    if current_version != expected_draft_version {
-        return Err(ServerError::version_conflict(
-            "draft",
-            expected_draft_version,
-            current_version,
-        ));
-    }
-    let status = row.try_get::<String, _>("status")?;
-    if status != "open" && status != "submitted" {
-        return Err(ServerError::invalid_transition("draft", &status, "updated"));
-    }
-    let existing_title: String = row.try_get("title")?;
-    let existing_description: String = row.try_get("description")?;
-    let title = request.title.unwrap_or(existing_title);
-    let description = request.description.unwrap_or(existing_description);
-    let updated = sqlx::query(
-        "UPDATE drafts
-             SET title = $2, description = $3, version = version + 1, updated_at = now()
-             WHERE draft_id = $1
-             RETURNING project_id, version",
-    )
-    .bind(draft_id)
-    .bind(title)
-    .bind(description)
-    .fetch_one(&mut **tx)
-    .await?;
-    invalidate_draft_candidates(tx, draft_id).await?;
-    insert_draft_event(
-        tx,
-        draft_id,
-        &updated.try_get::<String, _>("project_id")?,
-        DraftEventType::Updated,
-        updated.try_get("version")?,
-        None,
-    )
-    .await?;
-    Ok(())
-}
-
-pub(crate) async fn discard_draft(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    actor_user_id: &str,
-    expected_draft_version: i64,
-) -> Result<DeleteResult, ServerError> {
-    let row = sqlx::query(
-        "SELECT project_id, status, version FROM drafts WHERE draft_id = $1 FOR UPDATE",
-    )
-    .bind(draft_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
-    let version: i64 = row.try_get("version")?;
-    if version != expected_draft_version {
-        return Err(ServerError::version_conflict(
-            "draft",
-            expected_draft_version,
-            version,
-        ));
-    }
-    let status: String = row.try_get("status")?;
-    if status != "open" && status != "submitted" {
-        return Err(ServerError::invalid_transition(
-            "draft",
-            &status,
-            "discarded",
-        ));
-    }
-    let next_version: i64 = sqlx::query_scalar(
-        "UPDATE drafts SET status = 'discarded', version = version + 1, updated_at = now()
-             WHERE draft_id = $1 RETURNING version",
-    )
-    .bind(draft_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    invalidate_draft_candidates(tx, draft_id).await?;
-    sqlx::query(
-        "UPDATE reviews
-             SET status = 'rejected', version = version + 1,
-                 decision_body = 'Draft discarded.', approved_result_hash = NULL,
-                 decided_by_user_id = $2, decided_at = now(),
-                 updated_at = now()
-             WHERE draft_id = $1 AND status IN ('open', 'approved')",
-    )
-    .bind(draft_id)
-    .bind(actor_user_id)
-    .execute(&mut **tx)
-    .await?;
-    insert_draft_event(
-        tx,
-        draft_id,
-        &row.try_get::<String, _>("project_id")?,
-        DraftEventType::Discarded,
-        next_version,
-        None,
-    )
-    .await?;
-    Ok(DeleteResult {
-        deleted: true,
-        id: draft_id.to_owned(),
-    })
-}
-
-pub(crate) async fn create_draft_operation_batch(
-    tx: &mut Transaction<'_, Postgres>,
-    request: DraftOperationBatchRequest,
-) -> Result<DraftOperationBatchResponse, ServerError> {
-    if request.operations.is_empty() {
-        return Err(ServerError::InvalidRequest(
-            "draft operation batch cannot be empty".to_owned(),
-        ));
-    }
-    let draft_ids = request
-        .operations
-        .iter()
-        .map(|item| item.draft_id.clone())
-        .collect::<Vec<_>>();
-    let rows = sqlx::query(
-        "SELECT DISTINCT project.org_id
-             FROM drafts AS draft
-             JOIN projects AS project ON project.project_id = draft.project_id
-             WHERE draft.draft_id = ANY($1)
-               AND draft.resource_scope = 'org'
-             ORDER BY project.org_id",
-    )
-    .bind(&draft_ids)
-    .fetch_all(&mut **tx)
-    .await?;
-    for row in rows {
-        lock_org_draft_selection_coordination(tx, &row.try_get::<String, _>("org_id")?).await?;
-    }
-    let mut accepted_operations = Vec::new();
-    let mut cursor = None;
-    let daemon_installation_id = request.daemon_installation_id;
-    for item in request.operations {
-        cursor = Some(
-            append_draft_operation_in_tx(
-                tx,
-                &item.draft_id,
-                item.expected_draft_version,
-                item.operation,
-                Some(&daemon_installation_id),
-                true,
-            )
-            .await?,
-        );
-        accepted_operations.push(item.local_operation_id);
-    }
-    Ok(DraftOperationBatchResponse {
-        cursor: cursor.expect("non-empty batch").to_string(),
-        accepted_operations,
-    })
-}
-
+/// Read the author's lifecycle events after a validated exclusive cursor with one look-ahead row.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) async fn list_draft_events(
     pool: &PgPool,
     author_user_id: &str,
@@ -1658,6 +743,10 @@ pub(crate) async fn list_draft_events(
     })
 }
 
+/// Decode a stored lifecycle event and its client synchronization correlation.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) fn draft_event_from_row(row: &sqlx::postgres::PgRow) -> Result<DraftEvent, ServerError> {
     Ok(DraftEvent {
         event_id: row.try_get("event_id")?,
@@ -1670,6 +759,11 @@ pub(crate) fn draft_event_from_row(row: &sqlx::postgres::PgRow) -> Result<DraftE
     })
 }
 
+/// Decode upstream freshness and candidate availability from the proposal projection.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
+/// or resource selections.
 pub(crate) fn draft_coordination_from_projection_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<DraftCoordination, ServerError> {
@@ -1702,4 +796,972 @@ pub(crate) fn draft_coordination_from_projection_row(
         reconciliation,
         candidate_id: row.try_get("candidate_id")?,
     })
+}
+
+/// Read proposal scope and carrying project before acquiring coordination locks.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn load_identity(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftIdentity>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftIdentity>(
+        "SELECT project_id, resource_scope
+         FROM drafts
+         WHERE draft_id = $1",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Lock proposal revision, lifecycle, and resource identity before appending a mutation.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn lock_append_state(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftAppendState>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftAppendState>(
+        "SELECT d.status, d.version, d.project_id, d.resource_scope, d.resource_kind,
+                d.base_commit_id,
+                COALESCE((
+                    SELECT operation.action = 'create'
+                    FROM draft_operations AS operation
+                    WHERE operation.draft_id = d.draft_id
+                    ORDER BY operation.ordinal
+                    LIMIT 1
+                ), FALSE) AS creates_resource
+         FROM drafts AS d
+         WHERE d.draft_id = $1
+         FOR UPDATE",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Advance a proposal revision and return its new value within the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn increment_version(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<DraftEventState, ServerError> {
+    Ok(sqlx::query_as::<_, DraftEventState>(
+        "UPDATE drafts
+         SET version = version + 1, updated_at = now()
+         WHERE draft_id = $1
+         RETURNING project_id, version",
+    )
+    .bind(draft_id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Read proposal metadata and its public author identity for detail assembly.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn load_detail_record(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftDetailRecord>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftDetailRecord>(
+        "SELECT
+            d.draft_id, d.project_id, d.base_commit_id, d.title, d.description,
+            d.status, d.version,
+            d.resource_scope, d.resource_kind, d.target_id, d.path, d.daemon_installation_id,
+            d.created_at, d.updated_at,
+            u.user_id, u.email, u.display_name, u.avatar_url, u.role
+         FROM drafts d
+         JOIN users u ON u.user_id = d.author_user_id
+         WHERE d.draft_id = $1",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Find live reconciliation evidence matching the exact proposal and upstream revisions.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn find_candidate_summary(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    draft_version: i64,
+    base_commit_id: &Option<String>,
+    current_commit_id: &Option<String>,
+) -> Result<Option<CandidateSummary>, ServerError> {
+    Ok(sqlx::query_as::<_, CandidateSummary>(
+        "SELECT candidate_id, status
+             FROM draft_reconciliation_candidates
+             WHERE draft_id = $1 AND draft_version = $2
+               AND base_commit_id IS NOT DISTINCT FROM $3
+               AND current_commit_id IS NOT DISTINCT FROM $4
+               AND invalidated_at IS NULL
+             ORDER BY created_at DESC
+             LIMIT 1",
+    )
+    .bind(draft_id)
+    .bind(draft_version)
+    .bind(base_commit_id)
+    .bind(current_commit_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Read proposal scope, resource identity, and ancestor needed to replay its mutations.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn load_base_state(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftBaseState>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftBaseState>(
+        "SELECT base_commit_id, resource_scope, resource_kind, target_id, path
+         FROM drafts WHERE draft_id = $1",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Lock proposal state before computing and persisting a reconciliation candidate.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn lock_reconciliation_state(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftReconciliationState>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftReconciliationState>(
+        "SELECT project_id, base_commit_id, resource_scope, resource_kind,
+                target_id, path, status, version
+         FROM drafts
+         WHERE draft_id = $1
+         FOR UPDATE",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Locate uninvalidated evidence for the exact proposal and upstream result fingerprints.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn find_current_candidate(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    draft_version: i64,
+    base_commit_id: &Option<String>,
+    current_commit_id: &Option<String>,
+) -> Result<Option<String>, ServerError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT candidate_id
+         FROM draft_reconciliation_candidates
+         WHERE draft_id = $1 AND draft_version = $2
+           AND base_commit_id IS NOT DISTINCT FROM $3
+           AND current_commit_id IS NOT DISTINCT FROM $4
+           AND invalidated_at IS NULL
+         LIMIT 1",
+    )
+    .bind(draft_id)
+    .bind(draft_version)
+    .bind(base_commit_id)
+    .bind(current_commit_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Persist reconciliation inputs, result, and conflicts for later revision-checked application.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn insert_candidate(
+    tx: &mut Transaction<'_, Postgres>,
+    input: NewCandidate<'_>,
+) -> Result<(), ServerError> {
+    sqlx::query(
+        "INSERT INTO draft_reconciliation_candidates (
+            candidate_id, draft_id, draft_version, base_commit_id, current_commit_id,
+            status, base_state, current_state, draft_state, proposed_state,
+            conflicts, result_hash
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+    )
+    .bind(input.candidate_id)
+    .bind(input.draft_id)
+    .bind(input.draft_version)
+    .bind(input.base_commit_id)
+    .bind(input.current_commit_id)
+    .bind(input.status)
+    .bind(Json(input.base_state))
+    .bind(Json(input.current_state))
+    .bind(Json(input.draft_state))
+    .bind(input.proposed_state.map(Json))
+    .bind(Json(input.conflicts))
+    .bind(input.result_hash)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Lock proposal lifecycle and revision before replacing its ancestor and mutations.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn lock_rebase_state(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftRebaseState>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftRebaseState>(
+        "SELECT project_id, author_user_id, base_commit_id, resource_scope,
+                resource_kind, target_id, path, status, version, title, description
+         FROM drafts WHERE draft_id = $1 FOR UPDATE",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Archive the proposal's pre-rebase metadata and ordered mutations as one immutable revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn insert_revision(
+    tx: &mut Transaction<'_, Postgres>,
+    input: NewDraftRevision<'_>,
+) -> Result<(), ServerError> {
+    sqlx::query(
+        "INSERT INTO draft_revisions (
+            revision_id, draft_id, draft_version, base_commit_id, lifecycle_status,
+            title, description, operations
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(input.revision_id)
+    .bind(input.draft_id)
+    .bind(input.draft_version)
+    .bind(input.base_commit_id)
+    .bind(input.lifecycle_status)
+    .bind(input.title)
+    .bind(input.description)
+    .bind(Json(input.operations))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Remove the proposal's old mutation sequence before inserting its replacement.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn delete_operations(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<(), ServerError> {
+    sqlx::query("DELETE FROM draft_operations WHERE draft_id = $1")
+        .bind(draft_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Replace a proposal's ancestor and advance the caller-supplied revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn advance_base(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    current_ref: &Option<String>,
+) -> Result<i64, ServerError> {
+    Ok(sqlx::query_scalar(
+        "UPDATE drafts
+         SET base_commit_id = $2, version = version + 1, updated_at = now()
+         WHERE draft_id = $1 RETURNING version",
+    )
+    .bind(draft_id)
+    .bind(current_ref)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Lock an approved review's content fingerprint before a proposal rebase.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn lock_review_approval(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<ReviewApprovalState>, ServerError> {
+    Ok(sqlx::query_as::<_, ReviewApprovalState>(
+        "SELECT reviews.review_id, reviews.status, reviews.approved_result_hash
+         FROM reviews
+         JOIN review_drafts ON review_drafts.review_id = reviews.review_id
+         WHERE review_drafts.draft_id = $1
+         FOR UPDATE OF reviews",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Persist the approval state chosen after comparing old and rebased proposal content.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn update_review_approval(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+    preserve_approval: bool,
+) -> Result<(), ServerError> {
+    sqlx::query(
+            "UPDATE reviews
+             SET status = CASE WHEN status = 'approved' AND NOT $2 THEN 'open' ELSE status END,
+                 approved_result_hash = CASE WHEN status = 'approved' AND $2 THEN approved_result_hash ELSE NULL END,
+                 decision_body = CASE WHEN status = 'approved' AND $2 THEN decision_body ELSE NULL END,
+                 decided_by_user_id = CASE WHEN status = 'approved' AND $2 THEN decided_by_user_id ELSE NULL END,
+                 decided_at = CASE WHEN status = 'approved' AND $2 THEN decided_at ELSE NULL END,
+                 version = version + 1, updated_at = now()
+             WHERE review_id = $1",
+        )
+        .bind(review_id)
+        .bind(preserve_approval)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Record the candidate and saved revision used to advance the proposal's ancestor.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn insert_rebase(
+    tx: &mut Transaction<'_, Postgres>,
+    input: NewDraftRebase<'_>,
+) -> Result<(), ServerError> {
+    sqlx::query(
+        "INSERT INTO draft_rebases (
+            rebase_id, draft_id, candidate_id, previous_revision_id,
+            applied_by_user_id, resulting_draft_version, result_hash
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(input.rebase_id)
+    .bind(input.draft_id)
+    .bind(input.candidate_id)
+    .bind(input.previous_revision_id)
+    .bind(input.author_user_id)
+    .bind(input.next_version)
+    .bind(input.result_hash)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Find the review associated with a proposal, if one exists.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn find_review(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<String>, ServerError> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT review_id FROM review_drafts WHERE draft_id = $1")
+            .bind(draft_id)
+            .fetch_optional(&mut **tx)
+            .await?,
+    )
+}
+
+/// Persist initial proposal identity, ownership, lifecycle, and ancestor metadata.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn insert_draft(
+    tx: &mut Transaction<'_, Postgres>,
+    input: NewDraft<'_>,
+) -> Result<(), ServerError> {
+    sqlx::query(
+        "INSERT INTO drafts (
+                draft_id, project_id, author_user_id, title, description,
+                resource_scope, resource_kind, base_commit_id, target_id, path, status, version,
+                daemon_installation_id
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'open', 1, $11)",
+    )
+    .bind(input.draft_id)
+    .bind(input.project_id)
+    .bind(input.author_user_id)
+    .bind(input.title)
+    .bind(input.description)
+    .bind(input.scope)
+    .bind(input.resource_kind)
+    .bind(input.base_commit_id)
+    .bind(input.target_id)
+    .bind(input.path)
+    .bind(input.daemon_installation_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Lock proposal title, description, lifecycle, and revision before a metadata edit.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn lock_metadata(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftMetadataState>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftMetadataState>(
+        "SELECT title, description, status, version, project_id
+             FROM drafts
+             WHERE draft_id = $1
+             FOR UPDATE",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Persist replacement proposal metadata and advance its concurrency revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn update_metadata(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    title: String,
+    description: String,
+) -> Result<DraftEventState, ServerError> {
+    Ok(sqlx::query_as::<_, DraftEventState>(
+        "UPDATE drafts
+             SET title = $2, description = $3, version = version + 1, updated_at = now()
+             WHERE draft_id = $1
+             RETURNING project_id, version",
+    )
+    .bind(draft_id)
+    .bind(title)
+    .bind(description)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Lock proposal lifecycle and revision before discarding it.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn lock_discard_state(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<Option<DraftDiscardState>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftDiscardState>(
+        "SELECT project_id, status, version FROM drafts WHERE draft_id = $1 FOR UPDATE",
+    )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Persist a proposal's discarded lifecycle and increment its revision.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn mark_discarded(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<i64, ServerError> {
+    Ok(sqlx::query_scalar(
+        "UPDATE drafts SET status = 'discarded', version = version + 1, updated_at = now()
+             WHERE draft_id = $1 RETURNING version",
+    )
+    .bind(draft_id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Reject an open or approved review whose proposal has been discarded.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn reject_discarded_review(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    actor_user_id: &str,
+) -> Result<(), ServerError> {
+    sqlx::query(
+        "UPDATE reviews
+             SET status = 'rejected', version = version + 1,
+                 decision_body = 'Draft discarded.', approved_result_hash = NULL,
+                 decided_by_user_id = $2, decided_at = now(),
+                 updated_at = now()
+             WHERE draft_id = $1 AND status IN ('open', 'approved')",
+    )
+    .bind(draft_id)
+    .bind(actor_user_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Read the owning organizations of a batch's proposals for ordered coordination locking.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn list_batch_organizations(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_ids: &Vec<String>,
+) -> Result<Vec<DraftBatchOrganization>, ServerError> {
+    Ok(sqlx::query_as::<_, DraftBatchOrganization>(
+        "SELECT DISTINCT project.org_id
+             FROM drafts AS draft
+             JOIN projects AS project ON project.project_id = draft.project_id
+             WHERE draft.draft_id = ANY($1)
+               AND draft.resource_scope = 'org'
+             ORDER BY project.org_id",
+    )
+    .bind(draft_ids)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// Read persisted reconciliation evidence, including its inputs and invalidation state.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn load_candidate_record(
+    tx: &mut Transaction<'_, Postgres>,
+    candidate_id: &str,
+    draft_id: &str,
+) -> Result<Option<CandidateRecord>, ServerError> {
+    Ok(sqlx::query_as::<_, CandidateRecord>(
+        "SELECT candidate_id, draft_id, draft_version, base_commit_id, current_commit_id,
+                status, base_state, current_state, draft_state, proposed_state,
+                conflicts, result_hash, created_at, invalidated_at
+         FROM draft_reconciliation_candidates
+         WHERE candidate_id = $1 AND draft_id = $2",
+    )
+    .bind(candidate_id)
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Read the current proposal revision and lifecycle used to validate stored evidence.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn load_candidate_draft_state(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+) -> Result<CandidateDraftState, ServerError> {
+    Ok(sqlx::query_as::<_, CandidateDraftState>(
+        "SELECT project_id, base_commit_id, resource_scope, version
+         FROM drafts WHERE draft_id = $1",
+    )
+    .bind(draft_id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Invalidate one stale reconciliation candidate within the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
+pub(super) async fn invalidate_candidate(
+    tx: &mut Transaction<'_, Postgres>,
+    candidate_id: &str,
+) -> Result<(), ServerError> {
+    sqlx::query(
+        "UPDATE draft_reconciliation_candidates SET invalidated_at = now()
+             WHERE candidate_id = $1 AND invalidated_at IS NULL",
+    )
+    .bind(candidate_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Stored reconciliation inputs, result, conflicts, and invalidation timestamp.
+#[derive(sqlx::FromRow)]
+pub(super) struct CandidateRecord {
+    /// Identifier of the reconciliation result being inspected or applied.
+    pub(super) candidate_id: String,
+    /// Stable identifier of the editable proposal.
+    pub(super) draft_id: String,
+    /// Proposal revision to which this record or candidate applies.
+    pub(super) draft_version: i64,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Reference head observed when computing freshness or reconciliation.
+    pub(super) current_commit_id: Option<String>,
+    /// Stored reconciliation outcome before checking whether the evidence is still valid.
+    pub(super) status: String,
+    /// Resource state at the proposal's ancestor commit.
+    pub(super) base_state: Json<ReconciliationResourceState>,
+    /// Resource state at the upstream reference head.
+    pub(super) current_state: Json<ReconciliationResourceState>,
+    /// Resource state produced by applying the proposal to its ancestor.
+    pub(super) draft_state: Json<ReconciliationResourceState>,
+    /// Automatically reconciled result, absent when conflicts require user resolution.
+    pub(super) proposed_state: Option<Json<ReconciliationResourceState>>,
+    /// Unresolved differences between ancestor, upstream, and proposed content.
+    pub(super) conflicts: Json<Vec<ReconciliationConflict>>,
+    /// Fingerprint of materialized content used to validate reconciliation or approval.
+    pub(super) result_hash: Option<String>,
+    /// UTC timestamp at which the record was created.
+    pub(super) created_at: time::OffsetDateTime,
+    /// UTC time at which a reconciliation candidate ceased to be usable.
+    pub(super) invalidated_at: Option<time::OffsetDateTime>,
+}
+
+/// Current proposal revision and lifecycle used to reject stale reconciliation evidence.
+#[derive(sqlx::FromRow)]
+pub(super) struct CandidateDraftState {
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Persisted organization or project ownership category.
+    pub(super) resource_scope: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+}
+
+/// Carrying project and ownership scope used before coordination locking.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftIdentity {
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Persisted organization or project ownership category.
+    pub(super) resource_scope: String,
+}
+
+/// Locked proposal metadata needed to validate an appended mutation.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftAppendState {
+    /// Proposal lifecycle controlling editing, review, and publication.
+    pub(super) status: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Persisted organization or project ownership category.
+    pub(super) resource_scope: String,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Whether the first draft operation introduces a new resource identity.
+    pub(super) creates_resource: bool,
+}
+
+/// Project identity and new proposal revision needed to persist a lifecycle event.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftEventState {
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+}
+
+/// Stored proposal metadata and public author identity used for detail assembly.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftDetailRecord {
+    /// Stable identifier of the editable proposal.
+    pub(super) draft_id: String,
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Human-readable summary of a proposal or review.
+    pub(super) title: String,
+    /// Human-readable explanation associated with the resource.
+    pub(super) description: String,
+    /// Proposal lifecycle controlling editing, review, and publication.
+    pub(super) status: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+    /// Persisted organization or project ownership category.
+    pub(super) resource_scope: String,
+    /// Stable identity of the resource affected by the operation.
+    pub(super) target_id: Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
+    pub(super) path: Option<String>,
+    /// Client installation identity used to correlate draft synchronization events.
+    pub(super) daemon_installation_id: String,
+    /// UTC timestamp at which the record was created.
+    pub(super) created_at: time::OffsetDateTime,
+    /// UTC timestamp of the latest persisted change.
+    pub(super) updated_at: time::OffsetDateTime,
+    /// Public identity of the author of this record.
+    #[sqlx(flatten)]
+    pub(super) author: crate::app::organization::dto::UserRef,
+}
+
+/// Identity and conflict status of evidence matching an exact proposal and upstream revision.
+#[derive(sqlx::FromRow)]
+pub(super) struct CandidateSummary {
+    /// Identifier of the reconciliation result being inspected or applied.
+    pub(super) candidate_id: String,
+    /// Whether the matching reconciliation evidence contains conflicts.
+    pub(super) status: String,
+}
+
+/// Resource identity and ancestor needed to replay a proposal's ordered mutations.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftBaseState {
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Persisted organization or project ownership category.
+    pub(super) resource_scope: String,
+    /// Stable identity of the resource affected by the operation.
+    pub(super) target_id: Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
+    pub(super) path: Option<String>,
+}
+
+/// Locked resource identity and proposal revision used to compute reconciliation evidence.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftReconciliationState {
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Persisted organization or project ownership category.
+    pub(super) resource_scope: String,
+    /// Stable identity of the resource affected by the operation.
+    pub(super) target_id: Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
+    pub(super) path: Option<String>,
+    /// Proposal lifecycle controlling editing, review, and publication.
+    pub(super) status: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+}
+
+/// Locked proposal lifecycle and revision before replacing its ancestor and mutations.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftRebaseState {
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Persisted identity of the author whose ownership is checked by the use case.
+    pub(super) author_user_id: String,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Persisted organization or project ownership category.
+    pub(super) resource_scope: String,
+    /// Proposal lifecycle controlling editing, review, and publication.
+    pub(super) status: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+    /// Human-readable summary of a proposal or review.
+    pub(super) title: String,
+    /// Human-readable explanation associated with the resource.
+    pub(super) description: String,
+}
+
+/// Locked review approval and content fingerprint checked during a proposal rebase.
+#[derive(sqlx::FromRow)]
+pub(super) struct ReviewApprovalState {
+    /// Stable identifier of a review spanning one or more proposals.
+    pub(super) review_id: String,
+    /// Review lifecycle whose approval may survive a content-preserving rebase.
+    pub(super) status: String,
+    /// Content fingerprint covered by the current review approval.
+    pub(super) approved_result_hash: Option<String>,
+}
+
+/// Locked title, description, lifecycle, and revision needed for a metadata update.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftMetadataState {
+    /// Human-readable summary of a proposal or review.
+    pub(super) title: String,
+    /// Human-readable explanation associated with the resource.
+    pub(super) description: String,
+    /// Proposal lifecycle controlling editing, review, and publication.
+    pub(super) status: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+}
+
+/// Locked lifecycle and revision used to validate a proposal discard.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftDiscardState {
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: String,
+    /// Proposal lifecycle controlling editing, review, and publication.
+    pub(super) status: String,
+    /// Monotonic revision or snapshot sequence used to detect concurrent changes.
+    pub(super) version: i64,
+}
+
+/// Proposal ownership used to acquire organization coordination locks in stable order.
+#[derive(sqlx::FromRow)]
+pub(super) struct DraftBatchOrganization {
+    /// Organization boundary to which the resource or identity belongs.
+    pub(super) org_id: String,
+}
+
+/// Borrowed reconciliation states and exact revisions to persist as reusable evidence.
+pub(super) struct NewCandidate<'a> {
+    /// Identifier of the reconciliation result being inspected or applied.
+    pub(super) candidate_id: &'a str,
+    /// Stable identifier of the editable proposal.
+    pub(super) draft_id: &'a str,
+    /// Proposal revision to which this record or candidate applies.
+    pub(super) draft_version: i64,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: &'a Option<String>,
+    /// Reference head observed when computing freshness or reconciliation.
+    pub(super) current_commit_id: &'a Option<String>,
+    /// Proposal lifecycle controlling editing, review, and publication.
+    pub(super) status: &'a str,
+    /// Resource state at the proposal's ancestor commit.
+    pub(super) base_state: &'a ReconciliationResourceState,
+    /// Resource state at the upstream reference head.
+    pub(super) current_state: &'a ReconciliationResourceState,
+    /// Resource state produced by applying the proposal to its ancestor.
+    pub(super) draft_state: &'a ReconciliationResourceState,
+    /// Automatically reconciled result, absent when conflicts require user resolution.
+    pub(super) proposed_state: Option<&'a ReconciliationResourceState>,
+    /// Unresolved differences between ancestor, upstream, and proposed content.
+    pub(super) conflicts: &'a [ReconciliationConflict],
+    /// Fingerprint of materialized content used to validate reconciliation or approval.
+    pub(super) result_hash: &'a Option<String>,
+}
+
+/// Pre-rebase proposal metadata and ordered mutations saved as immutable history.
+pub(super) struct NewDraftRevision<'a> {
+    /// Identifier of an immutable saved draft revision.
+    pub(super) revision_id: &'a str,
+    /// Stable identifier of the editable proposal.
+    pub(super) draft_id: &'a str,
+    /// Proposal revision to which this record or candidate applies.
+    pub(super) draft_version: i64,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: Option<String>,
+    /// Proposal lifecycle captured before replacing its ancestor and operations.
+    pub(super) lifecycle_status: &'a str,
+    /// Human-readable summary of a proposal or review.
+    pub(super) title: String,
+    /// Human-readable explanation associated with the resource.
+    pub(super) description: String,
+    /// Ordered mutations applied to the proposal's base state.
+    pub(super) operations: &'a [DraftOperation],
+}
+
+/// Candidate, saved revision, and resulting proposal revision recorded for a rebase.
+pub(super) struct NewDraftRebase<'a> {
+    /// Stable identifier of the recorded reconciliation application.
+    pub(super) rebase_id: &'a str,
+    /// Stable identifier of the editable proposal.
+    pub(super) draft_id: &'a str,
+    /// Identifier of the reconciliation result being inspected or applied.
+    pub(super) candidate_id: &'a str,
+    /// Saved draft revision that permits auditing the state before rebase.
+    pub(super) previous_revision_id: &'a str,
+    /// Persisted identity of the author whose ownership is checked by the use case.
+    pub(super) author_user_id: &'a str,
+    /// Proposal revision to publish after the current mutation.
+    pub(super) next_version: i64,
+    /// Fingerprint of materialized content used to validate reconciliation or approval.
+    pub(super) result_hash: &'a str,
+}
+
+/// Validated identity, author, ancestor, and metadata for initial proposal persistence.
+pub(super) struct NewDraft<'a> {
+    /// Stable identifier of the editable proposal.
+    pub(super) draft_id: &'a str,
+    /// Project boundary containing the resource or proposal.
+    pub(super) project_id: &'a str,
+    /// Persisted identity of the author whose ownership is checked by the use case.
+    pub(super) author_user_id: &'a str,
+    /// Human-readable summary of a proposal or review.
+    pub(super) title: &'a str,
+    /// Human-readable explanation associated with the resource.
+    pub(super) description: &'a str,
+    /// Ownership boundary determining which reference and resource set apply.
+    pub(super) scope: &'a str,
+    /// Stored content category used to validate and materialize the payload.
+    pub(super) resource_kind: &'a str,
+    /// Commit against which the proposal was authored; absent before the first commit.
+    pub(super) base_commit_id: &'a Option<String>,
+    /// Stable identity of the resource affected by the operation.
+    pub(super) target_id: &'a Option<String>,
+    /// Resource path within its ownership scope, used to determine the materialized destination.
+    pub(super) path: &'a Option<String>,
+    /// Client installation identity used to correlate draft synchronization events.
+    pub(super) daemon_installation_id: &'a str,
 }

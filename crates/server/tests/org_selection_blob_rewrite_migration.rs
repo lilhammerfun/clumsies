@@ -1,3 +1,5 @@
+//! Migration rewriting stored organization selection configuration blobs.
+
 mod common;
 
 use sqlx::Executor;

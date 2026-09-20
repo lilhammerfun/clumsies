@@ -4,12 +4,16 @@ use crate::error::ServerError;
 use crate::http::HttpError;
 use serde::{Deserialize, Serialize};
 
+/// Continuation cursor and information about results beyond the returned page.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageInfo {
+    /// Opaque position to use when requesting the following page.
     pub next_cursor: Option<String>,
+    /// Whether at least one additional result exists beyond this page.
     pub has_more: bool,
 }
 
+/// Describe a complete result collection with no continuation page.
 pub(crate) fn page_info() -> PageInfo {
     PageInfo {
         next_cursor: None,
@@ -17,6 +21,7 @@ pub(crate) fn page_info() -> PageInfo {
     }
 }
 
+/// Trim the look-ahead row and construct the next administrative page cursor.
 pub(crate) fn admin_page<T>(mut items: Vec<T>, offset: i64, limit: i64) -> (Vec<T>, PageInfo) {
     let has_more = items.len() > limit as usize;
     if has_more {
@@ -32,25 +37,38 @@ pub(crate) fn admin_page<T>(mut items: Vec<T>, offset: i64, limit: i64) -> (Vec<
     )
 }
 
+/// Search text combined with administrative pagination input.
 #[derive(Debug, Deserialize)]
 pub(crate) struct AdminSearchQuery {
+    /// Validated pagination input for the administrative listing.
     #[serde(flatten)]
     pub(crate) page: AdminPageQuery,
+    /// Optional user-entered search text applied before pagination.
     pub(crate) q: Option<String>,
 }
 
+/// Untrusted cursor and page-size input from an administrative HTTP request.
 #[derive(Debug, Deserialize)]
 pub(crate) struct AdminPageQuery {
+    /// Maximum results requested for this page, subject to API bounds.
     pub(crate) limit: Option<String>,
+    /// Opaque server position used to resume synchronization or pagination.
     pub(crate) cursor: Option<String>,
 }
 
+/// Validated offset and bounded page size for administrative queries.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AdminPage {
+    /// Zero-based result offset after cursor validation.
     pub(crate) offset: i64,
+    /// Maximum results requested for this page, subject to API bounds.
     pub(crate) limit: i64,
 }
 
+/// Decode the cursor and validate the administrative page-size bounds.
+///
+/// # Errors
+/// Rejects malformed cursors and limits outside the supported administrative page bounds.
 pub(crate) fn parse_admin_page(query: AdminPageQuery) -> Result<AdminPage, HttpError> {
     let limit = match query.limit {
         Some(limit) => limit.parse::<i64>().map_err(|_| {

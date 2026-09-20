@@ -1,3 +1,5 @@
+//! Bearer credential validation and administrative route authorization.
+
 mod common;
 
 use axum::body::Body;

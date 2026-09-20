@@ -10,10 +10,13 @@ use sqlx::PgPool;
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct HttpOperation {
+    /// HTTP method bound to the registered route.
     pub(crate) method: &'static str,
+    /// Registered HTTP path pattern, including named resource parameters.
     pub(crate) path: &'static str,
 }
 
+/// Register resource routes and derive test-only operation metadata from the same declarations.
 macro_rules! define_routes {
     ($function:ident, $operations:ident, {
         $(

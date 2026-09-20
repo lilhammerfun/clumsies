@@ -7,19 +7,30 @@ use crate::app::installation::dto::{
 };
 use std::collections::BTreeSet;
 
+/// Secret setup cookie value paired with its public status response.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetupSessionCredentials {
+    /// Public setup-session metadata associated with the issued credentials.
     pub session: CreateSetupSessionResponse,
+    /// Secret setup or authorization credential; never log its plaintext value.
     pub token: String,
 }
 
+/// Organization, owner, and initial project identities created atomically during setup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InitializedInstallation {
+    /// Organization boundary to which the resource or identity belongs.
     pub org_id: String,
+    /// Stable identity of the user represented or targeted by this record.
     pub user_id: String,
+    /// Project boundary containing the resource or proposal.
     pub project_id: String,
 }
 
+/// Validate and normalize first-run organization and project settings.
+///
+/// # Errors
+/// Rejects invalid organization or project names and malformed admission domains.
 pub(super) fn normalize_configuration(
     request: ReplaceSetupConfigurationRequest,
 ) -> Result<SetupConfiguration, InstallationError> {
@@ -30,6 +41,10 @@ pub(super) fn normalize_configuration(
     })
 }
 
+/// Trim a human-readable name and enforce the setup contract's length and nonempty requirements.
+///
+/// # Errors
+/// Rejects empty names and values exceeding the setup contract's size limit.
 fn normalize_name(value: &str, field: &str) -> Result<String, InstallationError> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 120 || value.chars().any(char::is_control) {
@@ -40,6 +55,10 @@ fn normalize_name(value: &str, field: &str) -> Result<String, InstallationError>
     Ok(value.to_owned())
 }
 
+/// Normalize an email address and reject malformed identity input.
+///
+/// # Errors
+/// Returns invalid input when the email has no valid local part or domain.
 pub(super) fn normalize_email(email: &str) -> Result<String, InstallationError> {
     let email = email.trim().to_ascii_lowercase();
     let Some((local, domain)) = email.split_once('@') else {
@@ -51,6 +70,10 @@ pub(super) fn normalize_email(email: &str) -> Result<String, InstallationError> 
     Ok(email)
 }
 
+/// Normalize and deduplicate allowed domains while rejecting invalid labels.
+///
+/// # Errors
+/// Returns invalid input for malformed, empty, or unsupported domain entries.
 fn normalize_email_domains(domains: Vec<String>) -> Result<Vec<String>, InstallationError> {
     let mut normalized = BTreeSet::new();
     for domain in domains {
@@ -65,6 +88,7 @@ fn normalize_email_domains(domains: Vec<String>) -> Result<Vec<String>, Installa
     Ok(normalized.into_iter().collect())
 }
 
+/// Check DNS-style email-domain labels without performing network resolution.
 fn valid_domain(domain: &str) -> bool {
     !domain.is_empty()
         && domain.len() <= 253
@@ -79,6 +103,10 @@ fn valid_domain(domain: &str) -> bool {
         })
 }
 
+/// Require the verified email to satisfy the configured organization admission policy.
+///
+/// # Errors
+/// Rejects a verified email outside the configured admission allowlist.
 pub(super) fn enforce_email_domain(
     email: &str,
     allowed_domains: &[String],
@@ -98,6 +126,10 @@ pub(super) fn enforce_email_domain(
     }
 }
 
+/// Decode the persisted singleton installation phase.
+///
+/// # Errors
+/// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(super) fn installation_state(value: &str) -> Result<InstallationState, InstallationError> {
     match value {
         "setup_required" => Ok(InstallationState::SetupRequired),

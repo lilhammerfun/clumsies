@@ -77,8 +77,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
       - name: Check Rust formatting
         run: cargo fmt --all --check
+
+      - name: Lint server and all test targets
+        run: cargo clippy -p server --all-targets -- -D warnings
+
+      - name: Check server documentation including private items
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p server --no-deps --document-private-items
 
       - name: Run Rust tests
         run: cargo test --workspace

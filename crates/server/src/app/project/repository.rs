@@ -2,12 +2,17 @@
 
 use super::model::{LockedProject, ProjectCreation, ProjectUpdateState, project_role};
 use crate::app::organization::dto::UserRef;
-use crate::app::organization::service::user_ref_from_row;
 use crate::app::project::dto::{AdminProject, Project, ProjectMember, ProjectRef};
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
 
+/// Read the requesting user's accessible projects and project-local roles.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_project_refs(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -35,6 +40,10 @@ pub(crate) async fn list_project_refs(
         .collect()
 }
 
+/// Check whether a user has an explicit membership in the project.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn project_member_exists(
     pool: &PgPool,
     project_id: &str,
@@ -56,6 +65,10 @@ pub(crate) async fn project_member_exists(
     .await?)
 }
 
+/// Read enabled organization members not already assigned to the project.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_project_member_candidates(
     pool: &PgPool,
     project_id: &str,
@@ -81,9 +94,15 @@ pub(crate) async fn list_project_member_candidates(
     .bind(query)
     .fetch_all(pool)
     .await?;
-    rows.iter().map(user_ref_from_row).collect()
+    rows.iter()
+        .map(|row| UserRef::from_row(row).map_err(ServerError::from))
+        .collect()
 }
 
+/// Read organization project metadata with filtering before the page limit.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_admin_projects(
     pool: &PgPool,
     org_id: &str,
@@ -109,6 +128,10 @@ pub(crate) async fn list_admin_projects(
     rows.iter().map(admin_project_from_row).collect()
 }
 
+/// Read administrative project metadata and its membership count.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_admin_project(
     pool: &PgPool,
     org_id: &str,
@@ -131,6 +154,14 @@ pub(crate) async fn load_admin_project(
     admin_project_from_row(&row)
 }
 
+/// Lock project metadata before a revision-checked administrative update.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_admin_project(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -154,6 +185,14 @@ pub(crate) async fn lock_admin_project(
     })
 }
 
+/// Lock and read a project's current concurrency revision before deletion.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_admin_project_revision(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -171,6 +210,12 @@ pub(crate) async fn lock_admin_project_revision(
     .ok_or_else(|| ServerError::not_found("project", project_id))
 }
 
+/// Delete project metadata within the caller's administrative transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn delete_admin_project(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -184,6 +229,10 @@ pub(crate) async fn delete_admin_project(
     Ok(())
 }
 
+/// Check project ownership without disclosing metadata from another organization.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn project_in_org(
     pool: &PgPool,
     org_id: &str,
@@ -198,6 +247,12 @@ pub(crate) async fn project_in_org(
     .await?)
 }
 
+/// Check project ownership using the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn project_in_org_tx(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -212,6 +267,10 @@ pub(crate) async fn project_in_org_tx(
     .await?)
 }
 
+/// Read joined member identities and project roles with filtering before pagination.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_project_members(
     pool: &PgPool,
     org_id: &str,
@@ -242,6 +301,12 @@ pub(crate) async fn list_project_members(
     rows.iter().map(project_member_from_row).collect()
 }
 
+/// Persist a project-local role for an already validated organization member.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_project_member(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -262,6 +327,10 @@ pub(crate) async fn insert_project_member(
         == 1)
 }
 
+/// Read one project member's public identity and local privileges.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_project_member(
     pool: &PgPool,
     org_id: &str,
@@ -285,6 +354,12 @@ pub(crate) async fn load_project_member(
     project_member_from_row(&row)
 }
 
+/// Replace an existing membership's project-local role.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn update_project_member(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -303,6 +378,12 @@ pub(crate) async fn update_project_member(
     )
 }
 
+/// Delete an existing project membership within the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn delete_project_member(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -319,6 +400,14 @@ pub(crate) async fn delete_project_member(
     )
 }
 
+/// Reject a duplicate project name before inserting or renaming project metadata.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn ensure_project_name_available(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -348,6 +437,12 @@ pub(crate) async fn ensure_project_name_available(
     Ok(())
 }
 
+/// Persist normalized project metadata and its initial version.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_project(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -368,6 +463,12 @@ pub(crate) async fn insert_project(
     Ok(())
 }
 
+/// Create a project's initial empty main snapshot reference.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_main_ref(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -385,6 +486,12 @@ pub(crate) async fn insert_main_ref(
     Ok(())
 }
 
+/// Create the initial concurrency revision for a project's organization selection.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn insert_selection_state(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -396,6 +503,12 @@ pub(crate) async fn insert_selection_state(
     Ok(())
 }
 
+/// Record an actor's idempotency key and payload fingerprint exactly once.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn claim_project_creation(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -425,6 +538,12 @@ pub(crate) async fn claim_project_creation(
         == 1)
 }
 
+/// Read a previous creation claim for idempotent response replay.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn load_project_creation(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
@@ -448,6 +567,10 @@ pub(crate) async fn load_project_creation(
     })
 }
 
+/// Read public projects joined to the supplied user's explicit memberships.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn list_projects(
     pool: &PgPool,
     user_id: &str,
@@ -468,6 +591,10 @@ pub(crate) async fn list_projects(
     rows.iter().map(project_from_row).collect()
 }
 
+/// Read required public project metadata.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_project(pool: &PgPool, project_id: &str) -> Result<Project, ServerError> {
     let row = sqlx::query(
         "SELECT project_id, name, description, revision, created_at, updated_at
@@ -481,6 +608,14 @@ pub(crate) async fn load_project(pool: &PgPool, project_id: &str) -> Result<Proj
     project_from_row(&row)
 }
 
+/// Lock a project's current revision before a conditional mutation.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// Database locks acquired here remain held until the caller ends the transaction.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn lock_project_revision(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -492,6 +627,12 @@ pub(crate) async fn lock_project_revision(
         .ok_or_else(|| ServerError::not_found("project", project_id))
 }
 
+/// Read project ownership and normalized fields needed to apply an update.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn load_project_update_state(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -511,6 +652,12 @@ pub(crate) async fn load_project_update_state(
     })
 }
 
+/// Persist normalized project metadata and advance its version.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn update_project(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -530,6 +677,12 @@ pub(crate) async fn update_project(
     Ok(())
 }
 
+/// Delete project metadata inside the caller's transaction.
+///
+/// Uses the caller's transaction without committing it.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 pub(crate) async fn delete_project(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
@@ -541,6 +694,10 @@ pub(crate) async fn delete_project(
     Ok(())
 }
 
+/// Decode administrative project metadata and aggregate membership count.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 fn admin_project_from_row(row: &sqlx::postgres::PgRow) -> Result<AdminProject, ServerError> {
     Ok(AdminProject {
         project_id: row.try_get("project_id")?,
@@ -553,6 +710,10 @@ fn admin_project_from_row(row: &sqlx::postgres::PgRow) -> Result<AdminProject, S
     })
 }
 
+/// Decode public member identity and project-local role.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 fn project_member_from_row(row: &sqlx::postgres::PgRow) -> Result<ProjectMember, ServerError> {
     Ok(ProjectMember {
         project_id: row.try_get("project_id")?,
@@ -568,6 +729,10 @@ fn project_member_from_row(row: &sqlx::postgres::PgRow) -> Result<ProjectMember,
     })
 }
 
+/// Decode public project metadata and its concurrency revision.
+///
+/// # Errors
+/// Propagates database access and row-decoding failures.
 fn project_from_row(row: &sqlx::postgres::PgRow) -> Result<Project, ServerError> {
     Ok(Project {
         project_id: row.try_get("project_id")?,

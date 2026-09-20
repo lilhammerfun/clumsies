@@ -13,9 +13,12 @@ use openidconnect::{
 use std::sync::RwLock;
 use url::Url;
 
+/// Maximum duration allowed to establish a provider HTTP connection.
 const OIDC_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Maximum total duration of one provider discovery or token HTTP request.
 const OIDC_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// OIDC client whose discovery endpoints are initialized for token exchange.
 type DiscoveredCoreClient = CoreClient<
     EndpointSet,
     EndpointNotSet,
@@ -25,8 +28,15 @@ type DiscoveredCoreClient = CoreClient<
     EndpointMaybeSet,
 >;
 
+/// Protocol boundary used by login operations to authorize and verify external identities.
 #[async_trait]
 pub trait OidcIdentityProvider: Send + Sync {
+    /// Build the provider authorization request with state, nonce, PKCE, and an optional login
+    /// hint.
+    ///
+    /// # Errors
+    /// Rejects invalid callback or provider configuration required to build the authorization
+    /// request.
     fn authorization_url(
         &self,
         provider_state: &str,
@@ -35,6 +45,12 @@ pub trait OidcIdentityProvider: Send + Sync {
         login_hint: Option<&str>,
     ) -> Result<String, AuthError>;
 
+    /// Redeem a provider code and verify the returned issuer, signature, nonce, and identity
+    /// claims.
+    ///
+    /// # Errors
+    /// Propagates token-endpoint failures and rejects invalid signatures, issuer, nonce, or
+    /// identity claims.
     async fn exchange_code(
         &self,
         code: &str,
@@ -43,16 +59,28 @@ pub trait OidcIdentityProvider: Send + Sync {
     ) -> Result<OidcIdentity, AuthError>;
 }
 
+/// Reused OIDC transport, discovery metadata, and refreshable verification keys.
 pub struct DiscoveredOidcProvider {
+    /// Verified or configured OIDC issuer identifying the external identity authority.
     issuer: String,
+    /// OIDC application identifier configured by the deployment.
     client_id: String,
+    /// OIDC application credential; never expose it in responses or logs.
     client_secret: String,
+    /// Server callback URL registered with the identity provider.
     callback_url: String,
+    /// Reusable protocol client configured for the identity provider.
     client: RwLock<DiscoveredCoreClient>,
+    /// Reused HTTP transport with bounded connection and request timeouts.
     http_client: reqwest::Client,
 }
 
 impl DiscoveredOidcProvider {
+    /// Initialize a reusable provider transport and verify its discovery metadata.
+    ///
+    /// # Errors
+    /// Rejects invalid provider settings, unavailable discovery endpoints, or invalid discovery
+    /// metadata.
     pub async fn discover(
         issuer: &str,
         client_id: String,
@@ -86,6 +114,11 @@ impl DiscoveredOidcProvider {
         })
     }
 
+    /// Borrow the currently discovered client configuration for one protocol operation.
+    ///
+    /// # Errors
+    /// Propagates provider discovery or refresh failures when no usable client metadata is
+    /// available.
     fn client(&self) -> Result<DiscoveredCoreClient, AuthError> {
         self.client
             .read()
@@ -93,6 +126,11 @@ impl DiscoveredOidcProvider {
             .map(|client| client.clone())
     }
 
+    /// Refresh discovery and verification keys without recreating the underlying HTTP transport.
+    ///
+    /// # Errors
+    /// Propagates discovery and signing-key retrieval failures without accepting unverified
+    /// identity data.
     async fn refresh_client(&self) -> Result<DiscoveredCoreClient, AuthError> {
         let client = discover_oidc_client(
             &self.issuer,
@@ -109,6 +147,10 @@ impl DiscoveredOidcProvider {
     }
 }
 
+/// Fetch and validate discovery metadata using the bounded reusable transport.
+///
+/// # Errors
+/// Propagates transport, timeout, and provider discovery-validation failures.
 async fn discover_oidc_client(
     issuer: &str,
     client_id: &str,
@@ -241,6 +283,7 @@ impl OidcIdentityProvider for DiscoveredOidcProvider {
     }
 }
 
+/// Recognize verification failures that warrant one refresh of the provider's signing keys.
 fn needs_jwks_refresh(error: &ClaimsVerificationError) -> bool {
     matches!(
         error,

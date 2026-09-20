@@ -1,6 +1,6 @@
 //! Process startup, ready-file ownership, and bounded graceful shutdown.
 
-use crate::app::auth::AuthService;
+use crate::app::auth::{AuthService, DiscoveredOidcProvider, ProviderSummary};
 use crate::app::build_app;
 use crate::app::installation::InstallationService;
 use crate::config::ServerConfig;
@@ -13,21 +13,33 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Upper bound on in-flight HTTP draining after a termination signal.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(4);
+/// Optional path used to publish readiness to the supervising process.
 const SERVER_READY_FILE_ENV: &str = "CLUMSIES_SERVER_READY_FILE";
 
+/// Whether a supervised future completed before the shutdown deadline.
 #[derive(Debug, PartialEq, Eq)]
 enum DrainResult<T> {
+    /// The supervised work completed within the shutdown limit.
     Finished(T),
+    /// The shutdown deadline elapsed before the supervised work completed.
     TimedOut,
 }
 
+/// Initialize configured dependencies, publish readiness, and drain HTTP work on shutdown.
+///
+/// # Errors
+/// Propagates configuration, database migration, listener, provider discovery, and
+/// readiness-publication failures.
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     telemetry::init()?;
     let ServerConfig {
         database_url,
         listen_addr,
         public_origin,
+        oidc,
+        setup_code,
     } = ServerConfig::from_env()?;
     let mut ready_file = ServerReadyFile::from_env()?;
 
@@ -39,8 +51,33 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some(public_origin) => public_origin,
         None => crate::config::PublicOrigin::for_loopback(listen_addr)?,
     };
-    let installation = InstallationService::from_env(pool.clone(), public_origin.secure_cookies())?;
-    let auth = AuthService::from_env(pool.clone(), &public_origin).await?;
+    let installation = InstallationService::new(
+        pool.clone(),
+        setup_code.as_deref(),
+        public_origin.secure_cookies(),
+    )?;
+    let auth = match oidc {
+        Some(config) => {
+            let callback_url = public_origin.oidc_callback_url();
+            let provider = DiscoveredOidcProvider::discover(
+                &config.issuer,
+                config.client_id,
+                config.client_secret,
+                callback_url.clone(),
+            )
+            .await?;
+            AuthService::with_provider(
+                pool.clone(),
+                std::sync::Arc::new(provider),
+                config.allowed_redirects,
+                Some(ProviderSummary {
+                    issuer: config.issuer,
+                    callback_url,
+                }),
+            )
+        }
+        None => AuthService::unconfigured(pool.clone()),
+    };
     let app = build_app(pool, auth, installation);
     ready_file.publish(listen_addr, &public_origin)?;
 
@@ -65,22 +102,33 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Process-owned readiness publication removed only while its identity still matches.
 #[derive(Debug)]
 struct ServerReadyFile {
+    /// Optional absolute destination owned by this process for readiness publication.
     path: Option<PathBuf>,
+    /// Unpredictable marker proving this process owns the published ready file.
     owner_token: String,
+    /// Open handle retaining the inode of the ready file owned by this process.
     published_file: Option<std::fs::File>,
 }
 
+/// Filesystem identity used to preserve a ready file replaced by another process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReadyFileIdentity {
+    /// Filesystem device identity used to avoid deleting a replacement ready file.
     #[cfg(unix)]
     device: u64,
+    /// Filesystem inode identity of the ready file owned by this process.
     #[cfg(unix)]
     inode: u64,
 }
 
 impl ServerReadyFile {
+    /// Read the optional readiness path and verify that this process may own its publication.
+    ///
+    /// # Errors
+    /// Rejects a relative or existing readiness path and propagates filesystem metadata failures.
     fn from_env() -> Result<Self, std::io::Error> {
         let path = std::env::var_os(SERVER_READY_FILE_ENV)
             .filter(|value| !value.is_empty())
@@ -88,6 +136,10 @@ impl ServerReadyFile {
         Self::new(path)
     }
 
+    /// Reserve readiness ownership metadata without creating or replacing the destination file.
+    ///
+    /// # Errors
+    /// Rejects relative paths and existing destinations; filesystem access errors are preserved.
     fn new(path: Option<PathBuf>) -> Result<Self, std::io::Error> {
         if let Some(path) = &path {
             if !path.is_absolute() {
@@ -117,6 +169,11 @@ impl ServerReadyFile {
         })
     }
 
+    /// Atomically publish readiness without replacing a file owned by another process.
+    ///
+    /// # Errors
+    /// Returns filesystem or serialization failures. An existing destination is never
+    /// overwritten.
     fn publish(
         &mut self,
         listen_addr: std::net::SocketAddr,
@@ -180,6 +237,7 @@ impl Drop for ServerReadyFile {
     }
 }
 
+/// Capture filesystem identity so cleanup cannot remove a replacement file.
 fn ready_file_identity(metadata: &std::fs::Metadata) -> ReadyFileIdentity {
     #[cfg(unix)]
     {
@@ -197,12 +255,14 @@ fn ready_file_identity(metadata: &std::fs::Metadata) -> ReadyFileIdentity {
     }
 }
 
+/// Read the ownership marker of the currently published ready file.
 fn ready_file_owner(path: &Path) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     let value: serde_json::Value = serde_json::from_reader(file).ok()?;
     value.get("owner_token")?.as_str().map(str::to_owned)
 }
 
+/// Choose a sibling staging path unique to this process's readiness publication.
 fn ready_temporary_path(path: &Path, owner_token: &str) -> PathBuf {
     let file_name = path
         .file_name()
@@ -214,6 +274,11 @@ fn ready_temporary_path(path: &Path, owner_token: &str) -> PathBuf {
     ))
 }
 
+/// Inspect or apply legacy authority conversion using an explicit expected plan fingerprint.
+///
+/// # Errors
+/// Propagates missing database configuration, connection failure, or migration-plan validation
+/// and application errors.
 pub async fn run_project_authority_migration(
     expected_plan_hash: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -230,6 +295,7 @@ pub async fn run_project_authority_migration(
     Ok(())
 }
 
+/// Supervise the serving future and bound draining after the shutdown signal.
 async fn run_with_shutdown_limit<Server, Shutdown, Output>(
     server: Server,
     shutdown: Shutdown,
@@ -265,6 +331,7 @@ where
     }
 }
 
+/// Wait for either supported process-termination signal.
 async fn shutdown_signal() {
     #[cfg(unix)]
     tokio::select! {
@@ -276,6 +343,7 @@ async fn shutdown_signal() {
     ctrl_c_signal().await;
 }
 
+/// Wait for the process interrupt signal and report listener failures.
 async fn ctrl_c_signal() {
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!(%error, "failed to listen for Ctrl-C");
@@ -283,6 +351,7 @@ async fn ctrl_c_signal() {
     }
 }
 
+/// Wait for process termination on supported platforms.
 #[cfg(unix)]
 async fn terminate_signal() {
     let mut signal = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
