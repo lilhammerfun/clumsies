@@ -44,8 +44,9 @@ Build with Xcode to extract new keys, then provide both English and `zh-Hans`
 translations in the catalog. Use catalog plural variations and whole sentences
 with interpolation; keep protocol values, identifiers, paths and user content
 separate from display labels. Number and date formatting follows the user's locale.
-Run the native tests in English and `LocalizationTests` with `-testLanguage zh-Hans`
-to check packaged resources, plural forms and language-dependent display labels.
+`bash apps/macos/Scripts/test.sh` runs the full suite in English, then
+`LocalizationTests` in Simplified Chinese to check packaged resources, plural
+forms and language-dependent display labels independently of the Mac's language.
 
 ## Dashboard preview
 
