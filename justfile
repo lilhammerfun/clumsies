@@ -30,6 +30,10 @@ alias promote-debug-macos := install-macos
 dev-macos:
     sh dev/dev-instance.sh up
 
+# Open a signed-in local Dev App with interactive Review scenarios.
+dev-macos-reviews:
+    sh dev/dev-instance.sh up --review-playground
+
 # Show the current worktree Dev Instance status.
 dev-macos-status:
     sh dev/dev-instance.sh status
