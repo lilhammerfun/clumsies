@@ -405,24 +405,13 @@ struct WorkspaceView: View {
                         }
 
                         if showsMemoryContentToolbar {
-                            Button {
-                                memoryModel.exportMemory()
-                            } label: {
-                                if memoryModel.isExportingMemory {
-                                    ProgressView().controlSize(.small)
-                                } else {
-                                    Image(systemName: "square.and.arrow.down")
-                                }
-                            }
-                            .disabled(!memoryModel.canExportMemory(memoryModel.visibleMemoryItems))
-                            .toolbarHelp(workspaceContext.activeProjectId == nil
-                                ? "Export Organization Memory as ZIP…"
-                                : "Export Project Memory as ZIP…")
-                            .accessibilityLabel(workspaceContext.activeProjectId == nil
-                                ? "Export Organization Memory as ZIP"
-                                : "Export Project Memory as ZIP")
-
                             Menu {
+                                Button(workspaceContext.activeProjectId == nil
+                                    ? "Export Organization Memory as ZIP…"
+                                    : "Export Project Memory as ZIP…") {
+                                    memoryModel.exportMemory()
+                                }
+                                .disabled(!memoryModel.canExportMemory(memoryModel.visibleMemoryItems))
                                 if let item = workspaceNavigation.currentItem {
                                     Button("Export File as ZIP…") {
                                         memoryModel.exportMemory([item], name: item.document.title)
@@ -702,12 +691,33 @@ struct WorkspaceView: View {
         }
 
         if let review = selectedReviewForToolbar {
-            if let update = reviewModel.updates[review.id] {
-                ToolbarItem(id: "review.update", placement: .automatic) {
-                    ReviewUpdateToolbarButton(model: update) { detail in
-                        reviewModel.endUpdate(review.id, result: detail)
+            if reviewModel.updates[review.id] != nil
+                || reviewToolbarOwnership.contains(.decision(.merge))
+                || reviewToolbarOwnership.contains(.decision(.resubmit)) {
+                ToolbarItem(id: "review.actions", placement: .automatic) {
+                    Menu {
+                        if let update = reviewModel.updates[review.id] {
+                            ReviewUpdateMenuItem(model: update) { detail in
+                                reviewModel.endUpdate(review.id, result: detail)
+                            }
+                        }
+                        if reviewToolbarOwnership.contains(.decision(.merge)) {
+                            Button("Merge Review") { performReviewToolbarAction(.merge) }
+                                .disabled(!reviewModel.canPerformReviewMenuAction(.merge))
+                        }
+                        if reviewToolbarOwnership.contains(.decision(.resubmit)) {
+                            Button("Resubmit Review") { performReviewToolbarAction(.resubmit) }
+                                .disabled(!reviewModel.canPerformReviewMenuAction(.resubmit))
+                        }
+                    } label: {
+                        reviewToolbarActionLabel(
+                            systemImage: "ellipsis", isPending: pendingReviewToolbarAction != nil)
                     }
+                    .menuIndicator(.hidden)
                     .disabled(pendingReviewToolbarAction != nil)
+                    .toolbarHelp("Review Actions")
+                    .accessibilityLabel("Review Actions")
+                    .accessibilityIdentifier("review-toolbar-actions")
                 }
             }
             if reviewToolbarOwnership.contains(.decision(.reject)) {
@@ -751,48 +761,6 @@ struct WorkspaceView: View {
                         : "Approve and Merge Review")
                     .accessibilityLabel("Approve and Merge Review")
                     .accessibilityIdentifier("review-toolbar-approve")
-                }
-            }
-
-            if reviewToolbarOwnership.contains(.decision(.merge)) {
-                ToolbarItem(id: "review.merge", placement: .automatic) {
-                    Button {
-                        performReviewToolbarAction(.merge)
-                    } label: {
-                        reviewToolbarActionLabel(
-                            systemImage: "arrow.triangle.merge",
-                            isPending: pendingReviewToolbarAction == .merge
-                        )
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        pendingReviewToolbarAction != nil
-                            || !reviewModel.canPerformReviewMenuAction(.merge)
-                    )
-                    .toolbarHelp("Merge the approved changes")
-                    .accessibilityLabel("Merge Review")
-                    .accessibilityIdentifier("review-toolbar-merge")
-                }
-            }
-
-            if reviewToolbarOwnership.contains(.decision(.resubmit)) {
-                ToolbarItem(id: "review.resubmit", placement: .automatic) {
-                    Button {
-                        performReviewToolbarAction(.resubmit)
-                    } label: {
-                        reviewToolbarActionLabel(
-                            systemImage: "arrow.clockwise",
-                            isPending: pendingReviewToolbarAction == .resubmit
-                        )
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        pendingReviewToolbarAction != nil
-                            || !reviewModel.canPerformReviewMenuAction(.resubmit)
-                    )
-                    .toolbarHelp("Resubmit this Review")
-                    .accessibilityLabel("Resubmit Review")
-                    .accessibilityIdentifier("review-toolbar-resubmit")
                 }
             }
         }

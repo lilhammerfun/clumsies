@@ -421,12 +421,20 @@ private struct ReviewFileUpdateIndicator: View {
 private struct ReviewFileUpdateTag: View {
     let isConflict: Bool
 
+    private var fill: Color {
+        isConflict
+            ? Color(red: 0.78, green: 0.24, blue: 0.16)
+            : Color(red: 0.78, green: 0.24, blue: 0.52)
+    }
+
     var body: some View {
         Text(isConflict ? "Conflict" : "Auto-rebased")
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background((isConflict ? Color.orange : Color.blue).opacity(0.18), in: Capsule())
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(fill, in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
+            .shadow(color: fill.opacity(0.24), radius: 1.5, y: 1)
             .fixedSize()
             .help(isConflict
                 ? "Choose which changes to keep in this file"
