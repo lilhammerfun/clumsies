@@ -164,10 +164,12 @@ private struct NativeAccountMenuLabel: View {
 struct UserIdentityLabel: View {
     let account: UserReference?
     let displayName: String
+    var size: AvatarView.Size = .regular
 
     var body: some View {
-        HStack(spacing: 9) {
-            AvatarView(account: account)
+        HStack(spacing: size == .small ? 6 : 9) {
+            AvatarView(account: account, size: size)
+                .accessibilityHidden(true)
             Text(displayName)
                 .lineLimit(1)
         }

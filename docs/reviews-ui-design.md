@@ -32,27 +32,25 @@ region without drawing an outer border; record boundaries come from system
 separators, focus, selection, hover, and inactive-window behavior. Do not enable
 alternating row backgrounds: AppKit continues their stripes through empty table
 space, making nonexistent Reviews look like blank rows. Pin the separator's
-leading alignment to the row rather than allowing trailing metadata such as the
-fixed update time to shorten it.
+leading alignment to the row rather than allowing the trailing author to shorten it.
 
 The list is a review queue. Each row answers four scan questions: what changed,
 where it belongs, who submitted it, and what needs attention next. Keep the row
 to two lines:
 
 ```
-[lifecycle icon] review title                   optional queue signal
-Submitted by author for project                 Updated <local date and time>
+[lifecycle icon] review title [status]           [small avatar] author
+project
 ```
 
-- Format updatedAt as a fixed local date and time, explicitly labeled Updated. It is the
-  last Review record update, not creation time or a live elapsed-time counter.
+- Keep the fixed Review update time in the detail header, not the list row.
 - Keep the complete description in the detail page; do not add a list excerpt.
-- Express Project and author as muted metadata on the left and the fixed
-  Review record update time independently on the right. The author is the
-  submitter, not necessarily the person who last updated the record, so never
-  label the update as theirs. If a Project name or timestamp cannot be
-  resolved, omit the value; never expose an opaque Project ID or raw protocol
-  timestamp.
+- Put the Project below the title and the author on the right using the shared
+  `UserIdentityLabel` with a small 20 pt avatar (the default remains 24 pt).
+  The author is the submitter. Do not repeat their name on the left. Long names
+  truncate within the trailing column and expose the full name in a tooltip.
+  Omit the Project subtitle when filtered to a Project or its name is unavailable;
+  never expose an opaque Project ID.
 - Put one lifecycle icon before the title. Open uses the pull-request icon,
   Merged uses the merge icon, and Rejected uses a red pull-request icon. The
   icon has an accessibility status name and semantic color, so color is never
