@@ -16,7 +16,6 @@ struct DocumentSessionView: View {
 
     @StateObject private var model: DocumentEditorModel
     @State private var reviewDraft: LocalDraft?
-    @State private var reconciliationUpdateRequest = 0
     @State private var documentDiffRetryRequest = 0
     @State private var confirmsOrganizationDeletion = false
 
@@ -31,31 +30,12 @@ struct DocumentSessionView: View {
     }
 
     var body: some View {
-        Group {
-            if let candidate = documentSessions.pendingDocumentReconciliationCandidates[item.id] {
-                DraftReconciliationView(
-                    candidate: candidate,
-                    updateRequest: self.reconciliationUpdateRequest,
-                    usesContextualUpdateAction: true,
-                    initialResolvedState: self.documentSessions.documentReconciliationResolution(for: self.item.id),
-                    onResolvedStateChange: {
-                        self.documentSessions.updateDocumentReconciliationResolution($0, for: self.item.id)
-                    },
-                    onUpdateStateChange: self.publishReconciliationToolbarState,
-                    onCancel: self.closeReconciliation,
-                    onApplied: self.closeReconciliation
-                ) { resolvedState in
-                    try await self.reconciler.applyReconciliation(
-                        draftId: candidate.draftId,
-                        candidate: candidate,
-                        resolvedState: resolvedState,
-                        documentItemId: self.item.id
-                    )
-                }
-                .id(candidate.candidateId)
-            } else {
-                self.documentContent
-            }
+        documentContent
+        .sheet(item: Binding(
+            get: { documentSessions.pendingDocumentReconciliationCandidates[item.id] },
+            set: { if $0 == nil { closeReconciliation() } }
+        )) { candidate in
+            reconciliationSheet(candidate)
         }
         .onChange(of: item.document) { _, latest in
             self.model.adoptAuthoritativeDocument(latest)
@@ -71,7 +51,6 @@ struct DocumentSessionView: View {
         }
         .onDisappear {
             self.model.flushSave(item: self.item, mode: self.mode)
-            self.clearReconciliationToolbarState()
         }
         .sheet(item: $reviewDraft) { draft in
             ReviewRequestSheet(
@@ -99,6 +78,47 @@ struct DocumentSessionView: View {
                 "This creates a deletion draft proposal. If reviewed and merged, "
                     + "the organization memory will be removed for every project that includes it."
             )
+        }
+    }
+
+    @ViewBuilder
+    private func reconciliationSheet(_ candidate: DraftReconciliationCandidate) -> some View {
+        let content = VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Update Draft").font(.title2.weight(.semibold))
+                Text(item.document.path).font(.body.monospaced())
+                    .textSelection(.enabled)
+                Text("Review the remote changes and resolve any conflicts before updating this draft.")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+            Divider()
+            DraftReconciliationView(
+                candidate: candidate,
+                updateButtonTitle: "Update Draft",
+                initialResolvedState: documentSessions.documentReconciliationResolution(for: item.id),
+                onResolvedStateChange: {
+                    documentSessions.updateDocumentReconciliationResolution($0, for: item.id)
+                },
+                onCancel: closeReconciliation,
+                onApplied: closeReconciliation
+            ) { resolvedState in
+                try await reconciler.applyReconciliation(
+                    draftId: candidate.draftId,
+                    candidate: candidate,
+                    resolvedState: resolvedState,
+                    documentItemId: item.id
+                )
+            }
+            .id(candidate.candidateId)
+        }
+        .frame(minWidth: 900, idealWidth: 1000, maxWidth: .infinity,
+               minHeight: 640, idealHeight: 720, maxHeight: .infinity)
+        if #available(macOS 15.0, *) {
+            content.presentationSizing(.fitted)
+        } else {
+            content
         }
     }
 
@@ -266,10 +286,6 @@ struct DocumentSessionView: View {
             reviewDraft = draft
         case .discardDraft(_, let draft):
             model.discard(draft, item: item)
-        case .applyReconciliation:
-            reconciliationUpdateRequest += 1
-        case .closeReconciliation:
-            closeReconciliation()
         case .moveToTrash:
             guard draftStore.canEditMemory(item),
                   MemoryFileTreeMenu.canProposeOrganizationDeletion(
@@ -282,25 +298,8 @@ struct DocumentSessionView: View {
         }
     }
 
-    private func publishReconciliationToolbarState(canUpdate: Bool, isUpdating: Bool) {
-        guard let sessionKey else { return }
-        workspaceNavigation.documentReconciliationToolbarState = .init(
-            sessionKey: sessionKey,
-            isLoading: false,
-            canUpdate: canUpdate,
-            isUpdating: isUpdating
-        )
-    }
-
     private func closeReconciliation() {
         guard let sessionKey else { return }
         documentSessions.finishDocumentReconciliation(for: sessionKey)
-        clearReconciliationToolbarState()
     }
-
-    private func clearReconciliationToolbarState() {
-        guard workspaceNavigation.documentReconciliationToolbarState?.sessionKey == sessionKey else { return }
-        workspaceNavigation.documentReconciliationToolbarState = nil
-    }
-
 }

@@ -68,9 +68,6 @@ final class WorkspaceCoordinator {
             navigation?.selectedItemId = nil
         }.store(in: &observations)
         sessions.didFinish.sink { [weak navigation] key in
-            if navigation?.documentReconciliationToolbarState?.sessionKey == key {
-                navigation?.documentReconciliationToolbarState = nil
-            }
             if navigation?.pendingDocumentCommand?.sessionKey == key {
                 navigation?.pendingDocumentCommand = nil
             }

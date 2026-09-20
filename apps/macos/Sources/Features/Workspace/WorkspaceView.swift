@@ -199,13 +199,6 @@ struct WorkspaceView: View {
         workspaceNavigation.selectedSection == .memory && !workspaceNavigation.showsProjectSettings
     }
 
-    private var documentReconciliationState: DocumentReconciliationToolbarState? {
-        guard let state = workspaceNavigation.documentReconciliationToolbarState,
-              let currentItem = workspaceNavigation.currentItem,
-              state.sessionKey == documentSessions.documentSessionKey(for: currentItem) else { return nil }
-        return state
-    }
-
     private func deferSidebarExpansionUpdate(_ expanded: Bool) {
         guard workspaceNavigation.sidebarExpanded != expanded else { return }
         DispatchQueue.main.async {
@@ -272,31 +265,20 @@ struct WorkspaceView: View {
                     if showsMemoryContentToolbar {
                         ToolbarItemGroup {
                             Button {
-                                if let state = documentReconciliationState {
-                                    workspaceNavigation.pendingDocumentCommand = .closeReconciliation(
-                                        sessionKey: state.sessionKey
-                                    )
-                                } else {
-                                    workspaceNavigation.goBack()
-                                }
+                                workspaceNavigation.goBack()
                             } label: {
                                 Image(systemName: "chevron.left")
                             }
-                            .disabled(
-                                documentReconciliationState?.isUpdating == true
-                                    || (documentReconciliationState == nil && !workspaceNavigation.canGoBack)
-                            )
-                            .help(documentReconciliationState == nil ? "Go Back" : "Back to Document")
-                            .accessibilityLabel(
-                                documentReconciliationState == nil ? "Go Back" : "Back to Document"
-                            )
+                            .disabled(!workspaceNavigation.canGoBack)
+                            .help("Go Back")
+                            .accessibilityLabel("Go Back")
 
                             Button {
                                 workspaceNavigation.goForward()
                             } label: {
                                 Image(systemName: "chevron.right")
                             }
-                            .disabled(documentReconciliationState != nil || !workspaceNavigation.canGoForward)
+                            .disabled(!workspaceNavigation.canGoForward)
                             .help("Go Forward")
                             .accessibilityLabel("Go Forward")
                         }
@@ -352,30 +334,7 @@ struct WorkspaceView: View {
                         }
 
                         if showsDocumentTabs, let item = workspaceNavigation.currentItem {
-                            if let state = documentReconciliationState {
-                                if state.isLoading || state.isUpdating {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .frame(width: 24, height: 24)
-                                        .help(state.isLoading ? "Reviewing changes" : "Syncing")
-                                        .accessibilityLabel(
-                                            state.isLoading ? "Reviewing changes" : "Syncing"
-                                        )
-                                } else {
-                                    Button {
-                                        workspaceNavigation.pendingDocumentCommand = .applyReconciliation(
-                                            sessionKey: state.sessionKey
-                                        )
-                                    } label: {
-                                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-                                    }
-                                    .disabled(!state.canUpdate)
-                                    .help("Sync")
-                                    .accessibilityLabel("Sync")
-                                }
-                            }
-
-                            if documentReconciliationState == nil, documentNeedsSync {
+                            if documentNeedsSync {
                                 switch documentSyncReadiness {
                                 case .pending:
                                     ProgressView()
@@ -435,8 +394,7 @@ struct WorkspaceView: View {
                             }
                             .pickerStyle(.segmented)
                             .disabled(
-                                documentReconciliationState != nil
-                                    || availableDocumentModes.count < 2
+                                availableDocumentModes.count < 2
                                     || documentSessions.isSynchronizingDocument(item.id)
                             )
                             .help("Document View")

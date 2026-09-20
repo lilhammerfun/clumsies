@@ -1608,30 +1608,71 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
     }
 
-    func testReconciliationToolbarCommandsRemainBoundToDocument() {
-        let projectP = MemoryDocumentSessionKey(projectId: "project-p", itemId: "document")
-        let projectQ = MemoryDocumentSessionKey(projectId: "project-q", itemId: "document")
-        XCTAssertEqual(
-            DocumentSessionCommand.applyReconciliation(sessionKey: projectP).sessionKey,
-            projectP
-        )
-        XCTAssertEqual(
-            DocumentSessionCommand.closeReconciliation(sessionKey: projectP).sessionKey,
-            projectP
-        )
-        XCTAssertNotEqual(
-            DocumentSessionCommand.applyReconciliation(sessionKey: projectP).sessionKey,
-            projectQ
-        )
-        XCTAssertNotEqual(
-            DocumentReconciliationToolbarState(
-                sessionKey: projectP,
-                isLoading: false,
-                canUpdate: true,
-                isUpdating: false
-            ).sessionKey,
-            projectQ
-        )
+    func testDocumentReconciliationPresentsASheetAndKeepsTheEditor() async throws {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "project"
+        let draft = localDraft(id: "draft", targetId: "memory")
+        let item = MemoryListItem(id: "memory", resource: nil, draft: draft,
+                                  inherited: false, projectContextId: "project")
+        let key = try XCTUnwrap(workspace.sessions.documentSessionKey(for: item))
+        let resource = ServerDraftResourceReference(scope: "project", id: "memory", path: "memory.md")
+        let state = ReconciliationResourceState(exists: true, resource: resource,
+            content: .init(description: nil, content: draft.document.body))
+        let candidate = DraftReconciliationCandidate(candidateId: "candidate", draftId: "server-draft",
+            draftVersion: 1, baseCommitId: "base", currentCommitId: "remote", status: .conflicts,
+            baseState: state, currentState: state, draftState: state, proposedState: nil,
+            conflicts: [.init(kind: "modify_modify", field: "content", base: "base",
+                              current: "remote", draft: "draft")],
+            resultHash: "result", valid: true, createdAt: draft.updatedAt, invalidatedAt: nil)
+        let model = DocumentEditorModel(item: item, drafts: workspace.edits, context: workspace.context,
+            feedback: workspace.feedback, sessions: workspace.sessions, memory: workspace.memory,
+            reviews: workspace.reviews, reconciliation: workspace.reconciliation)
+        let host = NSHostingView(rootView: DocumentSessionView(item: item, mode: .source, model: model)
+            .workspaceEnvironment(workspace))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+            window.close()
+        }
+        func editors(_ view: NSView) -> [NSTextView] {
+            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors)
+        }
+        host.layoutSubtreeIfNeeded()
+        let originalEditor = try XCTUnwrap(editors(host).first)
+        let originalFrame = window.frame
+        workspace.sessions.synchronizingDocumentSessions.insert(key)
+        workspace.sessions.pendingDocumentReconciliationCandidatesBySession[key] = candidate
+        for _ in 0..<20 {
+            host.layoutSubtreeIfNeeded()
+            if window.attachedSheet != nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let sheet = try XCTUnwrap(window.attachedSheet, "the warning flow must open a native sheet")
+        XCTAssertTrue(sheet.styleMask.contains(.resizable))
+        let content = try XCTUnwrap(sheet.contentView)
+        for _ in 0..<3 {
+            content.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(editors(host).first === originalEditor, "the document must stay mounted")
+        XCTAssertEqual(originalEditor.string, draft.document.body)
+        XCTAssertEqual(window.frame.size, originalFrame.size)
+        let resolutionEditor = try XCTUnwrap(editors(content).first { $0.isEditable })
+        XCTAssertGreaterThan(try XCTUnwrap(resolutionEditor.enclosingScrollView).bounds.height, 80)
+        workspace.sessions.finishDocumentReconciliation(for: key)
+        for _ in 0..<20 {
+            if window.attachedSheet == nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertNil(window.attachedSheet)
+        XCTAssertFalse(workspace.sessions.isSynchronizingDocument(item.id))
+        XCTAssertTrue(workspace.sessions.canCommitMemoryContextSwitch)
+        XCTAssertTrue(editors(host).first === originalEditor)
     }
 
     func testKeepFileAfterDeleteConflictUsesCurrentContentTemplate() {

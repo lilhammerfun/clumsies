@@ -3,13 +3,11 @@ import SwiftUI
 
 struct DraftReconciliationView: View {
     let candidate: DraftReconciliationCandidate
-    let updateRequest: Int
     let usesContextualUpdateAction: Bool
     let updateButtonTitle: String
     let conflictMarkerLength: Int?
     let initialResolution: ReconciliationResourceState
     let onResolvedStateChange: ((ReconciliationResourceState) -> Void)?
-    let onUpdateStateChange: ((Bool, Bool) -> Void)?
     let onCancel: () -> Void
     let onApplied: () -> Void
     let onApply: (ReconciliationResourceState?) async throws -> Void
@@ -31,24 +29,20 @@ struct DraftReconciliationView: View {
 
     init(
         candidate: DraftReconciliationCandidate,
-        updateRequest: Int = 0,
         usesContextualUpdateAction: Bool = false,
         updateButtonTitle: String = "Update",
         conflictMarkerLength: Int? = nil,
         initialResolvedState: ReconciliationResourceState? = nil,
         onResolvedStateChange: ((ReconciliationResourceState) -> Void)? = nil,
-        onUpdateStateChange: ((Bool, Bool) -> Void)? = nil,
         onCancel: @escaping () -> Void,
         onApplied: (() -> Void)? = nil,
         onApply: @escaping (ReconciliationResourceState?) async throws -> Void
     ) {
         self.candidate = candidate
-        self.updateRequest = updateRequest
         self.usesContextualUpdateAction = usesContextualUpdateAction
         self.updateButtonTitle = updateButtonTitle
         self.conflictMarkerLength = conflictMarkerLength
         self.onResolvedStateChange = onResolvedStateChange
-        self.onUpdateStateChange = onUpdateStateChange
         self.onCancel = onCancel
         self.onApplied = onApplied ?? onCancel
         self.onApply = onApply
@@ -111,16 +105,10 @@ struct DraftReconciliationView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { publishUpdateState() }
-        .onChange(of: canApply) { _, _ in publishUpdateState() }
-        .onChange(of: isApplying) { _, _ in publishUpdateState() }
         .onChange(of: resolvedExists) { _, _ in publishResolution() }
         .onChange(of: resolvedPath) { _, _ in publishResolution() }
         .onChange(of: resolvedContent) { _, _ in publishResolution() }
-        .onChange(of: updateRequest) { _, _ in
-            guard usesContextualUpdateAction else { return }
-            apply()
-        }
+        .interactiveDismissDisabled(!usesContextualUpdateAction && (hasEdits || isApplying))
         .confirmationDialog("Discard your conflict resolution edits?", isPresented: $confirmsDiscard) {
             Button("Discard Edits", role: .destructive) { onCancel() }
             Button("Keep Editing", role: .cancel) {}
@@ -152,11 +140,6 @@ struct DraftReconciliationView: View {
             || resolvedContent != Self.resolutionContentTemplate(
                 for: candidate, preferredState: initialResolution
             ).primaryText
-    }
-
-    private func publishUpdateState() {
-        guard usesContextualUpdateAction else { return }
-        onUpdateStateChange?(canApply, isApplying)
     }
 
     private func publishResolution() {
