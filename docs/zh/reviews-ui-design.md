@@ -114,7 +114,7 @@ Merged Result 编辑区或混入正文的待选择占位符。文件树同时保
    路径占用时可输入自定义路径。
 3. 选择完成后直接显示“最新 Remote → 更新后 Draft”的普通 Diff，文件更多菜单的 **Reset File Choices** 允许重新选择。
 4. 自动合并文件沿用普通 Diff。列表和文件树统一使用紧贴标题或文件名的 `InlineStatusBadge`：
-   **Conflict** 使用系统红色，**Auto-rebased** 使用系统紫色，统一白色 10 pt 半粗字和小型胶囊，无描边或阴影。
+   **Conflict** 使用系统红色，**Auto-rebased** 使用 GitHub merged 紫色（`#8250DF`），统一白色 10 pt 半粗字和小型胶囊，无描边或阴影。
    原生 List badge 固定在行尾，因此行内位置使用共享组件。`Auto-rebased` 来自当前
    Draft 版本已保存的无冲突 rebase 历史，重启后仍可读取，不能由候选预览推断。
    混合 Review 在列表中优先显示 Conflict，各文件分别显示实际状态；未 rebase 的当前文件不加标记。
