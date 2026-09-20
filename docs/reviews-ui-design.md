@@ -57,10 +57,11 @@ Submitted by author for project                 Updated <local date and time>
   Merged uses the merge icon, and Rejected uses a red pull-request icon. The
   icon has an accessibility status name and semantic color, so color is never
   the only signal. Do not repeat Open or Merged as row text.
-- Use the same native SwiftUI text badges in the list and file navigator. `Conflict`
-  uses `.badgeProminence(.increased)`; `Auto-rebased` uses `.decreased`. System
-  styling owns colors, text metrics, and selection contrast. Do not draw custom
-  capsules, borders, or shadows. A conflict takes precedence over completed automatic
+- Use the shared compact `InlineStatusBadge` immediately after the Review title or
+  filename, before flexible space. `Conflict` uses system red; `Auto-rebased` uses
+  system purple. Both use white 10 pt semibold text and a capsule, without borders
+  or shadows. SwiftUI's native List badge occupies the trailing slot and cannot provide
+  this inline placement. A conflict takes precedence over completed automatic
   updates elsewhere in the Review. `Checking…` is transient and failures show `Retry Needed`.
 - `Auto-rebased` means the server saved a clean result, not merely calculated a preview.
   Never ask the user to save an automatic rebase. Merged Reviews show their lifecycle
@@ -150,7 +151,7 @@ The same file navigator includes current files, automatic rebases, and conflicts
   conflicts have explicit choices; a custom path is available for path collisions.
 - Once choices are complete, show the ordinary diff from the latest remote state
   to the updated draft. **File Actions (…) → Reset File Choices** restores its choices.
-- Automatically rebased files use the ordinary diff and the native `Auto-rebased`
+- Automatically rebased files use the ordinary diff and the inline `Auto-rebased`
   badge beside their filename. Status is derived from persisted rebase history for
   the current Draft revision, so reloading or reopening the App retains it. Files
   never rebased have no badge. No status row, file counts, or result panel is added.

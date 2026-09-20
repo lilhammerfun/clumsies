@@ -89,13 +89,11 @@ struct ReviewListPage: View {
                                 ReviewRow(
                                     review: review,
                                     projectName: filters.projectId == nil ? projectName(for: review) : nil,
-                                    state: state
+                                    state: state,
+                                    errorMessage: reviewModel.updates[review.id]?.errorMessage
                                 )
                             }
-                            .badge(reviewModel.updates[review.id]?.errorMessage != nil
-                                   ? "Retry Needed" : (state.isQueueSignal ? state.title : nil))
                             .help(reviewModel.updates[review.id]?.errorMessage ?? review.title)
-                            .badgeProminence(state.title == ReviewReconciliationState.conflict.rawValue ? .increased : .decreased)
                             .task(id: review) { await reviewModel.prepareUpdate(review) }
                             .accessibilityIdentifier("review-row-\(review.id)")
                         }
@@ -335,6 +333,7 @@ struct ReviewRow: View {
     let review: ReviewRecord
     let projectName: String?
     let state: ReviewQueueStatePresentation
+    var errorMessage: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -345,11 +344,20 @@ struct ReviewRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 16) {
-                    Text(review.title)
-                        .font(.body.weight(.medium))
-                        .lineLimit(2)
-                        .layoutPriority(1)
-                        .help(review.title)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(review.title)
+                            .font(.body.weight(.medium))
+                            .lineLimit(2)
+                            .help(review.title)
+
+                        if errorMessage != nil {
+                            InlineStatusBadge(text: "Retry Needed", color: Color(nsColor: .systemRed))
+                        } else if state.isQueueSignal {
+                            InlineStatusBadge(text: state.title,
+                                              color: ReviewReconciliationState(rawValue: state.title)?.badgeColor)
+                        }
+                    }
+                    .layoutPriority(1)
 
                     Spacer(minLength: 0)
 
@@ -419,7 +427,8 @@ struct ReviewRow: View {
     private var accessibilityText: String {
         let updated = TimestampFormatting.absoluteText(review.updatedAt)
         let time = updated.map { ", updated \($0)" } ?? ""
-        let queueState = state.isQueueSignal ? ", \(state.title)" : ""
+        let queueState = errorMessage != nil ? ", Retry Needed"
+            : (state.isQueueSignal ? ", \(state.title)" : "")
         return "\(review.title), \(lifecycleTitle)\(queueState), \(context)\(time)"
     }
 }
