@@ -9,16 +9,6 @@ struct ReviewUpdateView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.plan != nil {
-                HStack {
-                    Text("\(model.candidates.count) files to update")
-                    Spacer()
-                    Text("\(model.unresolvedCount) files need resolution")
-                        .foregroundStyle(.secondary)
-                }
-                .font(.callout).padding(.horizontal, 16).padding(.vertical, 10)
-                Divider()
-            }
             if model.isLoading {
                 ProgressView("Checking all files against the latest remote version…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

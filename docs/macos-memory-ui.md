@@ -47,8 +47,8 @@ The Memory conflict action opens a separate native window with standard close,
 minimize, and zoom/full-screen controls. The main workspace remains usable; closing
 the source tab does not discard the resolution. The window remembers its frame,
 and a draggable divider separates the independently scrolling comparison and result.
-Remote and
-Draft conflict sections appear side by side; each choice updates the merged result
+Remote and Draft conflict sections appear side by side as unified diffs against
+their common original, with the choice button in each side's header. Each choice updates the merged result
 without dropping automatically merged changes. After choosing the content changes,
 the result remains editable. Path and deletion conflicts require explicit choices.
 Save to Draft stays disabled until all choices are complete; it does not approve or

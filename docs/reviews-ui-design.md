@@ -149,8 +149,10 @@ result. Closing, signing out, or quitting confirms unsaved resolution edits; sav
 blocks closing. Applying updates refreshes the Review detail.
 
 - Prepare all behind files against one shared reference. Show “Merges
-  automatically”, “Needs resolution”, or “Resolved” for each file.
-- Show Remote and Draft conflict sections side by side. Selecting either change
+  automatically”, “Needs resolution”, or “Resolved” for each file; omit a separate
+  file-count summary strip.
+- Show Remote and Draft conflict sections side by side as unified diffs against
+  their common original, with each choice button beside its heading. Selecting either change
   updates the merged result below while preserving automatic changes elsewhere.
   Once content conflicts are chosen, the result can be edited before saving.
 - Show path and deletion choices explicitly. Whole-file replacement is a secondary
