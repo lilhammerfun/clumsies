@@ -17,12 +17,14 @@ struct ReviewUpdateView<Content: View>: View {
                     fileDiff(from: candidate.currentState, to: resolution.state)
                         .overlay(alignment: .topTrailing) {
                             if resolution.hasEdits {
-                                Button { model.resetResolution(for: candidate) } label: {
-                                    Image(systemName: "arrow.uturn.backward")
+                                Menu {
+                                    Button("Reset File Choices") { model.resetResolution(for: candidate) }
+                                } label: {
+                                    Image(systemName: "ellipsis")
                                 }
-                                .buttonStyle(.borderless).padding(6)
-                                .help("Reset choices for this file")
-                                .accessibilityLabel("Reset File Choices")
+                                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(6)
+                                .help("File Actions")
+                                .accessibilityLabel("File Actions")
                             }
                         }
                 } else {
@@ -68,25 +70,19 @@ struct ReviewUpdateView<Content: View>: View {
     }
 }
 
-struct ReviewUpdateToolbarButton: View {
+struct ReviewUpdateMenuItem: View {
     @ObservedObject var model: ReviewUpdateModel
     let onApplied: (ReviewDetail) -> Void
 
     var body: some View {
-        Button {
+        Button(model.isApplying ? "Saving Review Updates…" : "Save Review Updates") {
             Task { if let detail = await model.submit() { onApplied(detail) } }
-        } label: {
-            if model.isApplying || model.isLoading {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: "square.and.arrow.down")
-            }
         }
         .disabled(!model.canApply)
-        .toolbarHelp(model.unresolvedCount > 0
+        .help(model.unresolvedCount > 0
             ? "Save Review Updates — choose Remote or Draft for each conflict before saving"
             : "Save Review Updates — save all file updates without approving or publishing the Review")
         .accessibilityLabel("Save Review Updates")
-        .accessibilityIdentifier("review-toolbar-update")
+        .accessibilityIdentifier("review-menu-update")
     }
 }

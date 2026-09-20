@@ -151,13 +151,14 @@ The same file navigator includes current files, automatic rebases, and conflicts
   hunk preserves all automatic changes outside that hunk. Path and deletion
   conflicts have explicit choices; a custom path is available for path collisions.
 - Once choices are complete, show the ordinary diff from the latest remote state
-  to the updated draft. A reset icon returns the file to its original choices.
-- Automatically merged files use the same ordinary diff. A blue **Auto-rebased** tag
+  to the updated draft. **File Actions (…) → Reset File Choices** restores its choices.
+- Automatically merged files use the same ordinary diff. A brand-pink **Auto-rebased** tag
   beside the file name in the navigator replaces the sync icon; it appears only
   for a valid, clean prepared candidate. Its tooltip explains that the toolbar
-  save applies it. Conflicts use an orange **Conflict** tag; current files have no marker.
+  save applies it. Conflicts use a warm vermilion **Conflict** tag; current files have no marker.
+  Tags use saturated solid fills, white text, full capsule ends, and a subtle edge and shadow.
   No status row above the diff, file counts, or extra result panel are shown.
-- **Save Review Updates** in the toolbar sends the complete ordered draft set.
+- **Review Actions (…) → Save Review Updates** sends the complete ordered draft set.
   It is disabled until every conflict is resolved. Server membership, version,
   candidate, and remote-reference checks apply in one transaction; any failure
   rolls back the whole update. This save does not approve or publish the Review.
@@ -195,11 +196,16 @@ the UI labels these honestly rather than pretending they are inline comments.
 
 ## 5. Toolbar decisions
 
-The toolbar owns the whole-Review update action and decisions. All use icons
-with tooltips and accessibility labels. Save Review Updates uses
-square.and.arrow.down and appears for a prepared, editable Review owned by the
-author. It is disabled while loading, saving, or awaiting conflict choices.
+The toolbar keeps Reject and Approve as direct actions. Updates, Merge, and
+Resubmit use explicit text entries in **Review Actions (…)**, with the same
+permissions and readiness checks. **Save Review Updates** appears for a prepared,
+editable Review owned by the author. It is disabled while loading, saving, or
+awaiting conflict choices. The menu remains openable when that entry is disabled.
 There is no separate update-window button inside an individual file detail.
+
+Elsewhere, Memory export actions share the existing **Memory Actions (…)** menu.
+Commands that need words to explain their outcome belong in action menus instead
+of adding an ambiguous icon to the toolbar.
 
 Toolbar controls use `toolbarHelp` to register a native AppKit tooltip, including
 disabled controls; the text names the action and explains why it is unavailable.
@@ -212,11 +218,11 @@ Decision actions retain menu-command parity:
   (`xmark`) and Approve (`checkmark`) in the standard toolbar style. Approve records the
   decision and merges into authority in one Server transaction; ordinary
   members remain read/comment participants and see neither authority action.
-- Approved: historical records retain Merge (`arrow.triangle.merge`) when
+- Approved: historical records retain **Review Actions (…) → Merge Review** when
   permitted and the Server supplied a nonempty approved result hash. Legacy
   approvals without that immutable result identity remain visible but cannot
   be merged.
-- Rejected: Resubmit (`arrow.clockwise`) for the Draft author.
+- Rejected: **Review Actions (…) → Resubmit Review** for the Draft author.
 
 Filter belongs only to the list page. Decision tools belong only to an active
 detail. Sync remains its own utility slot. Search remains independent and

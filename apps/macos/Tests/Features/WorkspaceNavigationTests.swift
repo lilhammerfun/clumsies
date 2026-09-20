@@ -477,8 +477,10 @@ final class WorkspaceNavigationTests: XCTestCase {
             "if showsMemoryContentToolbar {\n                        ToolbarItemGroup {"
         ))
         XCTAssertTrue(source.contains(
-            "if showsMemoryContentToolbar {\n                            Button {\n                                memoryModel.exportMemory()"
+            "if showsMemoryContentToolbar {\n                            Menu {"
         ))
+        XCTAssertTrue(source.contains("Export Organization Memory as ZIP…"))
+        XCTAssertTrue(source.contains("Export Project Memory as ZIP…"))
         XCTAssertTrue(source.contains(".disabled(!memoryModel.canExportMemory(memoryModel.visibleMemoryItems))"))
         XCTAssertTrue(source.contains(".toolbarHelp(\"Memory Actions\")"))
         XCTAssertTrue(source.contains("Request Review for All Project Changes…"))
