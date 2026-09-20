@@ -105,8 +105,9 @@ Server 对待审成员返回聚合 coordination：任一 Draft behind 则 Review
 Draft conflicts 则 Review conflicts。文件树标记只描述各文件状态；选择已是最新的文件时，
 不会再通过文件内按钮跳到另一个文件。整体状态位于文件分栏上方。
 
-作者点击工具栏的 **Update Review** 图标，在当前主窗口一次处理整个 Review，无逐文件
-sheet。图标带 tooltip 和 accessibility label；非作者看到等待作者更新的说明。
+作者点击工具栏的 **Update Review** 图标，打开一个可调整尺寸的原生 sheet 弹窗，集中处理
+整个 Review 的落后文件。原详情页及选中文件保留在后方；应用或取消后关闭弹窗并刷新详情。
+文件切换在同一个弹窗内完成。图标带 tooltip 和 accessibility label；非作者看到等待作者更新的说明。
 
 比较页签统一命名为 Remote changes（远端的修改）、Draft changes（草稿中的修改）、
 Merge preview（合并结果预览）。前两项分别比较同一起点到当前已发布版本、到草稿版本

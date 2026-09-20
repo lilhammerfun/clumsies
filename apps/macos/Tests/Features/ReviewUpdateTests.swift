@@ -142,6 +142,49 @@ final class ReviewUpdateTests: XCTestCase {
         add(attachment)
     }
 
+    func testUpdateSheetKeepsTheDetailWindowAndHasUsableEditorSpace() async throws {
+        let plan = fixture()
+        let model = ReviewUpdateModel(review: WorkspaceLoader.mapReview(plan.detail.review),
+            prepare: { plan }, apply: { _, _ in plan.detail })
+        await model.load()
+        let host = NSHostingView(rootView: Text("Review details remain here")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .sheet(isPresented: .constant(true)) {
+                ReviewUpdateView(model: model, onCancel: {}, onApplied: { _ in })
+                    .frame(minWidth: 900, idealWidth: 1100, minHeight: 600, idealHeight: 700)
+            })
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        let originalFrame = window.frame
+        window.orderFront(nil)
+        defer {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+            window.close()
+        }
+        for _ in 0..<20 {
+            host.layoutSubtreeIfNeeded()
+            if window.attachedSheet != nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let sheet = try XCTUnwrap(window.attachedSheet)
+        let content = try XCTUnwrap(sheet.contentView)
+        for _ in 0..<3 {
+            content.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        func editors(_ view: NSView) -> [NSTextView] {
+            (view as? NSTextView).map { $0.isEditable ? [$0] : [] } ?? view.subviews.flatMap(editors)
+        }
+        XCTAssertEqual(window.frame.size, originalFrame.size)
+        XCTAssertTrue(window.contentView === host)
+        XCTAssertTrue(editors(host).isEmpty, "the editor must not replace the detail page")
+        let editor = try XCTUnwrap(editors(content).first)
+        XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).bounds.height, 80)
+    }
+
     private func fixture() -> ReviewUpdatePlan {
         let user = UserReference(userId: "author", email: "author@example.test", displayName: "Author",
             avatarUrl: nil, role: "admin")

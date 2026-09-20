@@ -17,15 +17,7 @@ struct ReviewDetailPage: View {
 
     var body: some View {
         Group {
-            if let update = reviewModel.update, update.review.id == reviewId {
-                ReviewUpdateView(model: update, onCancel: {
-                    reviewModel.endUpdate()
-                    Task { await model.refreshDetail() }
-                }, onApplied: { result in
-                    reviewModel.endUpdate(result: result)
-                    Task { await model.refreshDetail() }
-                })
-            } else if self.model.loading {
+            if self.model.loading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let loadError = model.loadError {
@@ -46,6 +38,22 @@ struct ReviewDetailPage: View {
                     systemImage: "checkmark.bubble",
                     description: Text("This Review is no longer in the workspace.")
                 )
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { reviewModel.update?.review.id == reviewId },
+            set: { if !$0 { reviewModel.endUpdate() } }
+        ), onDismiss: {
+            Task { await model.refreshDetail() }
+        }) {
+            if let update = reviewModel.update, update.review.id == reviewId {
+                ReviewUpdateView(model: update, onCancel: {
+                    reviewModel.endUpdate()
+                }, onApplied: { result in
+                    reviewModel.endUpdate(result: result)
+                })
+                .frame(minWidth: 900, idealWidth: 1100, minHeight: 600, idealHeight: 700)
+                .interactiveDismissDisabled(update.hasEdits || update.isApplying)
             }
         }
         .task(id: reviewId) {
