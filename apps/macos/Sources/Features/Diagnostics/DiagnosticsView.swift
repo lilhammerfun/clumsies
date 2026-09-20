@@ -157,8 +157,8 @@ struct RetrievalRunDetailView: View {
                     Image(systemName: "ellipsis")
                 }
                 .menuIndicator(.hidden)
-                .help("More")
-                .accessibilityLabel("More")
+                .toolbarHelp("Retrieval Run Actions")
+                .accessibilityLabel("Retrieval Run Actions")
                 .disabled(!hasMoreActions)
             }
         }
@@ -306,12 +306,14 @@ private struct RetrievalRunList: View {
                 Button(action: onRefresh) {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Refresh Retrieval Runs")
+                .toolbarHelp("Refresh Retrieval Runs")
+                .accessibilityLabel("Refresh Retrieval Runs")
 
                 Button(role: .destructive, action: onClearHistory) {
                     Image(systemName: "trash")
                 }
-                .help("Clear Unpinned Retrieval History")
+                .toolbarHelp("Clear Unpinned Retrieval History")
+                .accessibilityLabel("Clear Unpinned Retrieval History")
                 .disabled(model.runs.isEmpty)
             }
         }

@@ -103,7 +103,7 @@ struct ProjectFilterMenu: View {
                 .disabled(isLoading)
             }
         }
-        .help(help)
+        .toolbarHelp(help)
         .accessibilityLabel("Project Filter")
         .accessibilityValue(selectionTitle)
     }

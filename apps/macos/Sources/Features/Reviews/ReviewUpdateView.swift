@@ -83,9 +83,9 @@ struct ReviewUpdateToolbarButton: View {
             }
         }
         .disabled(!model.canApply)
-        .help(model.unresolvedCount > 0
-            ? "Choose Remote or Draft for each conflict before saving"
-            : "Save all Review updates. This does not approve or publish the Review.")
+        .toolbarHelp(model.unresolvedCount > 0
+            ? "Save Review Updates — choose Remote or Draft for each conflict before saving"
+            : "Save Review Updates — save all file updates without approving or publishing the Review")
         .accessibilityLabel("Save Review Updates")
         .accessibilityIdentifier("review-toolbar-update")
     }

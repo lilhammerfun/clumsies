@@ -45,6 +45,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         false
     }
 
+    func applicationDidUpdate(_ notification: Notification) {
+        for window in NSApp.windows {
+            ToolbarHelp.fillMissingTooltips(in: window.toolbar?.items ?? [])
+        }
+    }
+
     func applicationShouldHandleReopen(
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool

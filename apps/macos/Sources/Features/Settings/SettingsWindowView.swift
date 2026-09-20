@@ -50,17 +50,17 @@ struct SettingsWindowView: View {
                     ToolbarItemGroup(placement: .navigation) {
                         Button { navigation.goBack() } label: { Image(systemName: "chevron.left") }
                             .disabled(!navigation.canGoBack)
-                            .help("Back")
+                            .toolbarHelp("Back")
                             .accessibilityLabel("Back")
                             .keyboardShortcut("[", modifiers: .command)
                         Button { navigation.goForward() } label: { Image(systemName: "chevron.right") }
                             .disabled(!navigation.canGoForward)
-                            .help("Forward")
+                            .toolbarHelp("Forward")
                             .accessibilityLabel("Forward")
                             .keyboardShortcut("]", modifiers: .command)
                     }
                     if navigation.isSaving {
-                        ToolbarItem { ProgressView().controlSize(.small).help("Saving changes…") }
+                        ToolbarItem { ProgressView().controlSize(.small).toolbarHelp("Saving changes…") }
                     }
                     if case .organization(let section) = navigation.destination {
                         ToolbarItem {
@@ -71,7 +71,7 @@ struct SettingsWindowView: View {
                             }
                             .disabled(navigation.hasUnsavedChanges || workspaceContext.isMutatingAdministration
                                 || administration.state(for: section).isLoading)
-                            .help(navigation.hasUnsavedChanges ? "Save or discard changes before refreshing" : "Refresh")
+                            .toolbarHelp(navigation.hasUnsavedChanges ? "Save or discard changes before refreshing" : "Refresh")
                             .accessibilityLabel("Refresh \(navigation.destination.title)")
                         }
                     }

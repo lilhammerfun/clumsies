@@ -326,6 +326,7 @@ private struct BundleResourcePicker: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .toolbarHelp("Finish Adding Memory")
                         .keyboardShortcut(.defaultAction)
                 }
             }
