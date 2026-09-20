@@ -422,15 +422,13 @@ private struct ReviewFileUpdateTag: View {
     let isConflict: Bool
 
     private var fill: Color {
-        isConflict
-            ? Color(red: 0.78, green: 0.24, blue: 0.16)
-            : Color(red: 0.78, green: 0.24, blue: 0.52)
+        isConflict ? .red : .yellow
     }
 
     var body: some View {
         Text(isConflict ? "Conflict" : "Auto-rebased")
             .font(.system(size: 9, weight: .medium, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(.black.opacity(0.9))
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(fill, in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.5))
