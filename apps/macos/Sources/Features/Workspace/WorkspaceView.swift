@@ -297,17 +297,6 @@ struct WorkspaceView: View {
                             }
                             .toolbarHelp("Add Memory")
                             .accessibilityLabel("Add Memory")
-
-                            Menu {
-                                Button("Delete Bundle", role: .destructive) {
-                                    confirmsBundleDeletion = true
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis")
-                            }
-                            .menuIndicator(.hidden)
-                            .toolbarHelp("Bundle Actions")
-                            .accessibilityLabel("Bundle Actions")
                         }
 
                         if let syncToolbarPresentation {
@@ -402,6 +391,19 @@ struct WorkspaceView: View {
                             .toolbarHelp("Document View")
                             .accessibilityLabel("Document View")
 
+                        }
+
+                        if workspaceNavigation.selectedSection == .bundles, bundleModel.selectedBundle != nil {
+                            Menu {
+                                Button("Delete Bundle", role: .destructive) {
+                                    confirmsBundleDeletion = true
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                            }
+                            .menuIndicator(.hidden)
+                            .toolbarHelp("Bundle Actions")
+                            .accessibilityLabel("Bundle Actions")
                         }
 
                         if showsMemoryContentToolbar {
@@ -691,35 +693,6 @@ struct WorkspaceView: View {
         }
 
         if let review = selectedReviewForToolbar {
-            if reviewModel.updates[review.id] != nil
-                || reviewToolbarOwnership.contains(.decision(.merge))
-                || reviewToolbarOwnership.contains(.decision(.resubmit)) {
-                ToolbarItem(id: "review.actions", placement: .automatic) {
-                    Menu {
-                        if let update = reviewModel.updates[review.id] {
-                            ReviewUpdateMenuItem(model: update) { detail in
-                                reviewModel.endUpdate(review.id, result: detail)
-                            }
-                        }
-                        if reviewToolbarOwnership.contains(.decision(.merge)) {
-                            Button("Merge Review") { performReviewToolbarAction(.merge) }
-                                .disabled(!reviewModel.canPerformReviewMenuAction(.merge))
-                        }
-                        if reviewToolbarOwnership.contains(.decision(.resubmit)) {
-                            Button("Resubmit Review") { performReviewToolbarAction(.resubmit) }
-                                .disabled(!reviewModel.canPerformReviewMenuAction(.resubmit))
-                        }
-                    } label: {
-                        reviewToolbarActionLabel(
-                            systemImage: "ellipsis", isPending: pendingReviewToolbarAction != nil)
-                    }
-                    .menuIndicator(.hidden)
-                    .disabled(pendingReviewToolbarAction != nil)
-                    .toolbarHelp("Review Actions")
-                    .accessibilityLabel("Review Actions")
-                    .accessibilityIdentifier("review-toolbar-actions")
-                }
-            }
             if reviewToolbarOwnership.contains(.decision(.reject)) {
                 ToolbarItem(id: "review.reject", placement: .automatic) {
                     Button {
@@ -763,9 +736,39 @@ struct WorkspaceView: View {
                     .accessibilityIdentifier("review-toolbar-approve")
                 }
             }
+            if reviewModel.updates[review.id] != nil
+                || reviewToolbarOwnership.contains(.decision(.merge))
+                || reviewToolbarOwnership.contains(.decision(.resubmit)) {
+                ToolbarItem(id: "review.actions", placement: .automatic) {
+                    Menu {
+                        if let update = reviewModel.updates[review.id] {
+                            ReviewUpdateMenuItem(model: update) { detail in
+                                reviewModel.endUpdate(review.id, result: detail)
+                            }
+                        }
+                        if reviewToolbarOwnership.contains(.decision(.merge)) {
+                            Button("Merge Review") { performReviewToolbarAction(.merge) }
+                                .disabled(!reviewModel.canPerformReviewMenuAction(.merge))
+                        }
+                        if reviewToolbarOwnership.contains(.decision(.resubmit)) {
+                            Button("Resubmit Review") { performReviewToolbarAction(.resubmit) }
+                                .disabled(!reviewModel.canPerformReviewMenuAction(.resubmit))
+                        }
+                    } label: {
+                        reviewToolbarActionLabel(
+                            systemImage: "ellipsis", isPending: pendingReviewToolbarAction != nil)
+                    }
+                    .menuIndicator(.hidden)
+                    .disabled(pendingReviewToolbarAction != nil)
+                    .toolbarHelp("Review Actions")
+                    .accessibilityLabel("Review Actions")
+                    .accessibilityIdentifier("review-toolbar-actions")
+                }
+            }
         }
 
-        reviewUtilityToolbarContent(hasLeadingActions: reviewToolbarOwnership.hasDecisionActions)
+        reviewUtilityToolbarContent(hasLeadingActions: reviewToolbarOwnership.hasDecisionActions
+            || reviewModel.selectedReviewId.flatMap { reviewModel.updates[$0] } != nil)
     }
 
     @ToolbarContentBuilder

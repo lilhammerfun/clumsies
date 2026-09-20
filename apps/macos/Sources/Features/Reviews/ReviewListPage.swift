@@ -42,10 +42,6 @@ struct ReviewListPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !reviewModel.reviews.isEmpty {
-                filterBar
-            }
-
             Group {
                 switch ReviewListContentState.resolve(
                     loadState: reviewModel.reviewLoadState,
@@ -92,11 +88,10 @@ struct ReviewListPage: View {
                             NavigationLink(value: route) {
                                 ReviewRow(
                                     review: review,
-                                    projectName: projectName(for: review),
+                                    projectName: filters.projectId == nil ? projectName(for: review) : nil,
                                     state: state
                                 )
                             }
-                            .listRowSeparator(.visible)
                             .accessibilityIdentifier("review-row-\(review.id)")
                         }
                     }
@@ -111,88 +106,40 @@ struct ReviewListPage: View {
         .navigationTitle("Reviews")
         .toolbar {
             if toolbarOwnership.contains(.filter) {
+                ToolbarItem(id: "review.project", placement: .navigation) {
+                    ProjectFilterMenu(
+                        projects: projects,
+                        selectedProjectId: filters.projectId,
+                        unscopedTitle: "All Projects",
+                        unscopedSystemImage: nil,
+                        isLoading: false,
+                        help: "Filter Reviews by Project",
+                        onCreate: nil,
+                        onSelect: { filters.projectId = $0 }
+                    )
+                }
                 ToolbarItem(id: "review.filter", placement: .navigation) {
                     ReviewStatusFilterControl(
                         reviews: reviewModel.reviews,
                         selection: $filters.status
                     )
                 }
-            }
-        }
-    }
-
-    private var filterBar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Spacer()
-
-                Menu(authorFilterTitle) {
-                    Button {
-                        filters.authorId = nil
-                    } label: {
-                        filterOption("All Authors", isSelected: filters.authorId == nil)
-                    }
-
-                    if authors.isEmpty {
-                        Button("No Authors") {}
-                            .disabled(true)
-                    } else {
-                        Divider()
-                        ForEach(authors, id: \.userId) { author in
-                            Button {
-                                filters.authorId = author.userId
-                            } label: {
-                                filterOption(
-                                    authorName(author),
-                                    isSelected: filters.authorId == author.userId
-                                )
+                ToolbarItem(id: "review.author", placement: .navigation) {
+                    ToolbarFilterMenu(selectionTitle: authorFilterTitle) {
+                        Picker("Author", selection: $filters.authorId) {
+                            Text("All Authors").tag(String?.none)
+                            ForEach(authors, id: \.userId) { author in
+                                Text(authorName(author)).tag(Optional(author.userId))
                             }
                         }
+                        .pickerStyle(.inline)
                     }
+                    .toolbarHelp("Filter Reviews by Author")
+                    .accessibilityLabel("Author Filter")
+                    .accessibilityValue(authorFilterTitle)
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Filter Reviews by Author")
-                .accessibilityLabel("Author Filter")
-                .accessibilityValue(authorFilterTitle)
-
-                Menu(projectFilterTitle) {
-                    Button {
-                        filters.projectId = nil
-                    } label: {
-                        filterOption("All Projects", isSelected: filters.projectId == nil)
-                    }
-
-                    if projects.isEmpty {
-                        Button("No Projects") {}
-                            .disabled(true)
-                    } else {
-                        Divider()
-                        ForEach(projects) { project in
-                            Button {
-                                filters.projectId = project.id
-                            } label: {
-                                filterOption(
-                                    project.name,
-                                    isSelected: filters.projectId == project.id
-                                )
-                            }
-                        }
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Filter Reviews by Project")
-                .accessibilityLabel("Project Filter")
-                .accessibilityValue(projectFilterTitle)
             }
-            .controlSize(.small)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-
-            Divider()
         }
-        .background(.bar)
     }
 
     private var authors: [UserReference] {
@@ -213,29 +160,13 @@ struct ReviewListPage: View {
 
     private var authorFilterTitle: String {
         guard let author = authors.first(where: { $0.userId == filters.authorId }) else {
-            return "Author"
+            return "All Authors"
         }
-        return "Author: \(authorName(author))"
-    }
-
-    private var projectFilterTitle: String {
-        guard let project = projects.first(where: { $0.id == filters.projectId }) else {
-            return "Projects"
-        }
-        return "Project: \(project.name)"
+        return authorName(author)
     }
 
     private func authorName(_ author: UserReference) -> String {
         author.displayName ?? author.email
-    }
-
-    @ViewBuilder
-    private func filterOption(_ title: String, isSelected: Bool) -> some View {
-        if isSelected {
-            Label(title, systemImage: "checkmark")
-        } else {
-            Text(title)
-        }
     }
 
     private func projectName(for review: ReviewRecord) -> String? {
@@ -342,7 +273,7 @@ struct ReviewQueueStatePresentation: Equatable {
             return .init(
                 title: "Conflicts",
                 symbolName: "exclamationmark.triangle",
-                tone: .warning,
+                tone: .negative,
                 isQueueSignal: true
             )
         }
@@ -409,63 +340,51 @@ struct ReviewRow: View {
     let state: ReviewQueueStatePresentation
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: 8) {
-                ReviewSymbolImage(systemName: lifecycleSymbolName)
-                    .foregroundStyle(lifecycleColor)
-                    .padding(.top, 2)
-                    .help(lifecycleTitle)
+        HStack(alignment: .top, spacing: 10) {
+            ReviewSymbolImage(systemName: lifecycleSymbolName)
+                .foregroundStyle(lifecycleColor)
+                .padding(.top, 2)
+                .help(lifecycleTitle)
 
-                Text(review.title)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                    .layoutPriority(1)
-                    .help(review.title)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 16) {
+                    Text(review.title)
+                        .font(.body.weight(.medium))
+                        .lineLimit(2)
+                        .layoutPriority(1)
+                        .help(review.title)
 
-                Spacer(minLength: 8)
+                    Spacer(minLength: 0)
 
-                if state.isQueueSignal {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 4) {
-                            ReviewSymbolImage(systemName: state.symbolName)
-                            Text(state.title)
-                        }
+                    if let updatedAt = TimestampFormatting.date(from: review.updatedAt) {
+                        Text(updatedAt, format: .dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-
-                        ReviewSymbolImage(systemName: state.symbolName)
+                            .help(metadataHelp)
                     }
-                    .font(.caption)
-                    .foregroundStyle(state.tone.color)
-                    .help(state.title)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(state.title)
                 }
-            }
 
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                metadata
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .help(metadataHelp)
-
-                Spacer(minLength: 8)
-
-                if let updatedAt = TimestampFormatting.absoluteText(review.updatedAt) {
-                    Text("Updated \(updatedAt)")
-                        .font(.caption)
+                HStack(spacing: 8) {
+                    Text(context)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .help(metadataHelp)
+                        .help("Submitted by \(author)")
+
+                    if state.isQueueSignal {
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(state.title)
+                            .foregroundStyle(state.tone.color)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
+                .font(.caption)
             }
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
     }
@@ -477,14 +396,6 @@ struct ReviewRow: View {
     private var context: String {
         guard let projectName, !projectName.isEmpty else { return author }
         return "\(projectName) · \(author)"
-    }
-
-    private var metadata: Text {
-        var text = Text("Submitted by \(author)")
-        if let projectName, !projectName.isEmpty {
-            text = text + Text(" for \(projectName)")
-        }
-        return text
     }
 
     private var lifecycleSymbolName: String {
