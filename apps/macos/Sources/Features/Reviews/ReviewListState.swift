@@ -120,7 +120,8 @@ enum ReviewReconciliationState: String, Hashable, Sendable {
     var badgeColor: Color? {
         switch self {
         case .conflict: Color(nsColor: .systemRed)
-        case .autoRebased: Color(nsColor: .systemPurple)
+        // GitHub Primer's light-theme bgColor-done-emphasis (#8250DF).
+        case .autoRebased: Color(.sRGB, red: 130.0 / 255, green: 80.0 / 255, blue: 223.0 / 255)
         case .checking: nil
         }
     }

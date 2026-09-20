@@ -59,7 +59,7 @@ Submitted by author for project                 Updated <local date and time>
   the only signal. Do not repeat Open or Merged as row text.
 - Use the shared compact `InlineStatusBadge` immediately after the Review title or
   filename, before flexible space. `Conflict` uses system red; `Auto-rebased` uses
-  system purple. Both use white 10 pt semibold text and a capsule, without borders
+  GitHub's merged purple (`#8250DF`). Both use white 10 pt semibold text and a capsule, without borders
   or shadows. SwiftUI's native List badge occupies the trailing slot and cannot provide
   this inline placement. A conflict takes precedence over completed automatic
   updates elsewhere in the Review. `Checking…` is transient and failures show `Retry Needed`.
