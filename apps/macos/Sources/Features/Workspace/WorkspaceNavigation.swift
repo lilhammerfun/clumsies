@@ -4,27 +4,16 @@ import Foundation
 enum DocumentSessionCommand: Equatable, Sendable {
     case requestReview(sessionKey: MemoryDocumentSessionKey, draft: LocalDraft)
     case discardDraft(sessionKey: MemoryDocumentSessionKey, draft: LocalDraft)
-    case applyReconciliation(sessionKey: MemoryDocumentSessionKey)
-    case closeReconciliation(sessionKey: MemoryDocumentSessionKey)
     case moveToTrash(sessionKey: MemoryDocumentSessionKey)
 
     var sessionKey: MemoryDocumentSessionKey {
         switch self {
         case .requestReview(let sessionKey, _),
              .discardDraft(let sessionKey, _),
-             .applyReconciliation(let sessionKey),
-             .closeReconciliation(let sessionKey),
              .moveToTrash(let sessionKey):
             sessionKey
         }
     }
-}
-
-struct DocumentReconciliationToolbarState: Equatable, Sendable {
-    let sessionKey: MemoryDocumentSessionKey
-    let isLoading: Bool
-    let canUpdate: Bool
-    let isUpdating: Bool
 }
 
 @MainActor
@@ -64,7 +53,6 @@ final class WorkspaceNavigation: ObservableObject {
     @Published var navigationBackStack: [String] = []
     @Published var navigationForwardStack: [String] = []
     @Published var pendingDocumentCommand: DocumentSessionCommand?
-    @Published var documentReconciliationToolbarState: DocumentReconciliationToolbarState?
 
     var selectedItem: MemoryListItem? {
         let itemId = activeVisibleTab?.itemId ?? selectedItemId
@@ -211,7 +199,6 @@ final class WorkspaceNavigation: ObservableObject {
 
     func clearPendingDocumentSessionPresentation() {
         pendingDocumentCommand = nil
-        documentReconciliationToolbarState = nil
     }
 
     func presentProjectCreation() {
@@ -365,9 +352,6 @@ final class WorkspaceNavigation: ObservableObject {
                     if pendingDocumentCommand?.sessionKey == sessionKey {
                         pendingDocumentCommand = nil
                     }
-                    if documentReconciliationToolbarState?.sessionKey == sessionKey {
-                        documentReconciliationToolbarState = nil
-                    }
                 }
             }
             self.activeTabId = nil
@@ -423,9 +407,6 @@ final class WorkspaceNavigation: ObservableObject {
         if let sessionKey = sessions.documentSessionKey(for: tab) {
             if pendingDocumentCommand?.sessionKey == sessionKey {
                 pendingDocumentCommand = nil
-            }
-            if documentReconciliationToolbarState?.sessionKey == sessionKey {
-                documentReconciliationToolbarState = nil
             }
         }
         sessions.clearDocumentSynchronizationState(for: tab)
