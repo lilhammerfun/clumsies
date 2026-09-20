@@ -419,7 +419,7 @@ struct ReviewRow: View {
         case "merged": String(localized: "Merged Review")
         case "approved": String(localized: "Approved Review")
         case "rejected": String(localized: "Rejected Review")
-        default: String(localized: "Open Review")
+        default: String(localized: "review.lifecycle.open", defaultValue: "Open Review", comment: "Accessibility description of a review awaiting a decision, not the Open Review button.")
         }
     }
 
@@ -437,7 +437,7 @@ struct ReviewStatusIndicator: View {
 
     static func title(for status: String) -> String {
         switch status {
-        case "open": String(localized: "Open")
+        case "open": String(localized: "review.status.open", defaultValue: "Open", comment: "Review lifecycle status, not the action that opens a file.")
         case "approved": String(localized: "Approved")
         case "rejected": String(localized: "Rejected")
         case "merged": String(localized: "Merged")
