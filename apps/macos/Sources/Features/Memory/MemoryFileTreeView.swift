@@ -672,7 +672,7 @@ struct FileTreeView: View {
                 self.memoryCatalog.staleResourceIds.contains($0.id)
             } == true
             if documentSessions.isSynchronizingDocument(singleItem.id) {
-                Button("Preparing Shared Changes…") {}
+                Button("Checking Remote Changes…") {}
                     .disabled(true)
             } else if let draft = singleItem.draft,
                       draft.freshness == .behind || resourceIsStale {
@@ -705,8 +705,8 @@ struct FileTreeView: View {
                     } else {
                         Button(
                             draft.hasUpstreamResourceChanges
-                                ? "Review Shared Changes"
-                                : "Update from Shared Version"
+                                ? "Review Remote Changes"
+                                : "Update from Remote Version"
                         ) {
                             guard self.operations.directoryOperationProgress == nil else { return }
                             self.memoryModel.syncDocument(singleItem)
@@ -715,7 +715,7 @@ struct FileTreeView: View {
                     }
                 }
             } else if resourceIsStale {
-                Button("Update from Shared Version") {
+                Button("Update from Remote Version") {
                     guard self.operations.directoryOperationProgress == nil else { return }
                     self.memoryModel.syncDocument(singleItem)
                 }

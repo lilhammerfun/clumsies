@@ -25,6 +25,36 @@ final class ReviewsModel: ObservableObject {
     @Published var selectedReviewId: String?
     @Published var pendingReviewReconciliationId: String?
     @Published var reviewDecisionReadiness: ReviewDecisionReadiness?
+    @Published private(set) var update: ReviewUpdateModel?
+
+    func beginUpdate(_ review: ReviewRecord) {
+        guard context.isReviewAuthor(review), review.freshness == .behind,
+              ["open", "approved", "rejected"].contains(review.status), update == nil else { return }
+        reviewDecisionReadiness = nil
+        update = ReviewUpdateModel(review: review, prepare: { [weak self] in
+            guard let self else { throw CancellationError() }
+            let authority = self.context.authorityGeneration
+            let latest: ReviewDetail = try await self.context.server.get("/api/v1/reviews/\(review.id)")
+            guard self.context.authorityGeneration == authority, !Task.isCancelled else {
+                throw CancellationError()
+            }
+            return try await self.context.server.send(
+                method: "POST", path: "/api/v1/reviews/\(review.id)/update-plans",
+                body: CreateReviewUpdatePlanRequest(expectedReviewVersion: latest.review.version)
+            )
+        }, apply: { [weak self] plan, request in
+            guard let self else { throw CancellationError() }
+            return try await self.reconciliation.applyReviewUpdate(
+                reviewId: review.id, plan: plan, request: request
+            )
+        })
+    }
+
+    func endUpdate(result: ReviewDetail? = nil) {
+        update?.invalidate()
+        update = nil
+        if let result { replaceReview(with: WorkspaceLoader.mapReview(result.review)) }
+    }
 
     private var reviewLoadTask: Task<Void, Never>?
 
@@ -83,7 +113,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     func canPerformReviewMenuAction(_ action: ReviewMenuAction) -> Bool {
-        guard context.phase == .ready,
+        guard update?.review.id != selectedReviewId, context.phase == .ready,
               navigation.selectedSection == .reviews,
               let selectedReviewId = selectedReviewId,
               let review = reviews.first(where: { $0.id == selectedReviewId }),
@@ -464,6 +494,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     func resetAuthority() {
+        endUpdate()
         cancelLoading()
         reviews.removeAll()
         reviewLoadState = .loading
@@ -473,6 +504,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     func retainAccessibleProjects(_ projectIds: Set<String>) {
+        if let update, !projectIds.contains(update.review.projectId) { endUpdate() }
         reviews = WorkspaceLoadPolicy.retainingAccessibleProjectRecords(
             reviews, accessibleProjectIds: projectIds, projectId: \.projectId
         )

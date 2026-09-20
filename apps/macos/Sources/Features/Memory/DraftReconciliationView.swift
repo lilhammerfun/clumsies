@@ -6,6 +6,7 @@ struct DraftReconciliationView: View {
     let updateRequest: Int
     let usesContextualUpdateAction: Bool
     let updateButtonTitle: String
+    let conflictMarkerLength: Int?
     let initialResolution: ReconciliationResourceState
     let onResolvedStateChange: ((ReconciliationResourceState) -> Void)?
     let onUpdateStateChange: ((Bool, Bool) -> Void)?
@@ -19,12 +20,13 @@ struct DraftReconciliationView: View {
     @State private var isApplying = false
     @State private var errorMessage: String?
     @State private var confirmsDiscard = false
-    @State private var comparison = Comparison.sharedChanges
+    @State private var comparison = Comparison.resolve
 
     private enum Comparison: String, CaseIterable {
-        case sharedChanges = "Shared changes"
-        case yourChanges = "Your changes"
-        case preview = "Result preview"
+        case resolve = "Resolve"
+        case remoteChanges = "Remote changes"
+        case draftChanges = "Draft changes"
+        case preview = "Merge preview"
     }
 
     init(
@@ -32,6 +34,7 @@ struct DraftReconciliationView: View {
         updateRequest: Int = 0,
         usesContextualUpdateAction: Bool = false,
         updateButtonTitle: String = "Update",
+        conflictMarkerLength: Int? = nil,
         initialResolvedState: ReconciliationResourceState? = nil,
         onResolvedStateChange: ((ReconciliationResourceState) -> Void)? = nil,
         onUpdateStateChange: ((Bool, Bool) -> Void)? = nil,
@@ -43,6 +46,7 @@ struct DraftReconciliationView: View {
         self.updateRequest = updateRequest
         self.usesContextualUpdateAction = usesContextualUpdateAction
         self.updateButtonTitle = updateButtonTitle
+        self.conflictMarkerLength = conflictMarkerLength
         self.onResolvedStateChange = onResolvedStateChange
         self.onUpdateStateChange = onUpdateStateChange
         self.onCancel = onCancel
@@ -65,7 +69,7 @@ struct DraftReconciliationView: View {
             if !candidate.valid {
                 HStack(spacing: 7) {
                     Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-                    Text("A newer shared version is available. Review the latest update again.")
+                    Text("A newer remote version is available. Check the latest version again.")
                     Spacer()
                 }
                 .font(.caption)
@@ -166,14 +170,14 @@ struct DraftReconciliationView: View {
             reconciliationDiff(
                 from: states.base,
                 to: states.draft,
-                title: "Shared Version → Updated Draft"
+                title: "Remote Version → Updated Draft"
             )
         } else {
             ContentUnavailableView(
                 "No Draft Changes",
                 systemImage: "doc.text",
                 description: Text(
-                    "Updating moves this draft to the latest shared version without leaving changes to this file."
+                    "Updating brings this draft up to date without leaving any changes to publish."
                 )
             )
         }
@@ -205,32 +209,26 @@ struct DraftReconciliationView: View {
             .disabled(isApplying)
             Divider()
 
-            VSplitView {
-                VStack(spacing: 0) {
-                    Picker("Compare versions", selection: $comparison) {
-                        ForEach(Comparison.allCases, id: \.self) { comparison in
-                            Text(comparison.rawValue).tag(comparison)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(10)
-
-                    switch comparison {
-                    case .sharedChanges:
-                        reconciliationDiff(from: candidate.baseState, to: candidate.currentState,
-                                           title: "Original Version → Latest Shared Version")
-                    case .yourChanges:
-                        reconciliationDiff(from: candidate.baseState, to: candidate.draftState,
-                                           title: "Original Version → Your Changes")
-                    case .preview:
-                        reconciliationDiff(from: candidate.currentState, to: resolvedState,
-                                           title: "Latest Shared Version → Final Result")
-                    }
+            Picker("Compare versions", selection: $comparison) {
+                ForEach(Comparison.allCases, id: \.self) { comparison in
+                    Text(comparison.rawValue).tag(comparison)
                 }
-                .frame(minHeight: 220, maxHeight: .infinity)
-
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(10)
+            switch comparison {
+            case .resolve:
                 resolvedContentPane
-                    .frame(minHeight: 180, maxHeight: .infinity)
+            case .remoteChanges:
+                reconciliationDiff(from: candidate.baseState, to: candidate.currentState,
+                                   title: "Draft's Starting Version → Remote Version")
+            case .draftChanges:
+                reconciliationDiff(from: candidate.baseState, to: candidate.draftState,
+                                   title: "Draft's Starting Version → Draft Version")
+            case .preview:
+                reconciliationDiff(from: candidate.currentState, to: resolvedState,
+                                   title: "Remote Version → Merged Result")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -286,14 +284,40 @@ struct DraftReconciliationView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Final Result").font(.caption.weight(.medium))
-                Text("Compare both sets of changes, then edit the final content below.")
+                Text("Choose between the published and draft versions, or edit the merged result below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                HStack {
+                    Button("Use Remote Version") { use(candidate.currentState) }
+                    Button("Use Draft Version") { use(candidate.draftState) }
+                }
+                .controlSize(.small)
+                .disabled(isApplying)
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             Divider()
 
+            if let length = conflictMarkerLength {
+                let sections = ContentConflictSection.parse(resolvedContent, markerLength: length)
+                if !sections.isEmpty {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Conflict \(index + 1)").font(.caption.weight(.semibold))
+                                    HStack(alignment: .top, spacing: 16) {
+                                        conflictChoice("Use Published Change", text: section.shared, section: section)
+                                        conflictChoice("Use Draft Change", text: section.proposed, section: section)
+                                    }
+                                }
+                            }
+                        }.padding(10)
+                    }
+                    .frame(maxHeight: 220)
+                    Divider()
+                }
+            }
             if resolvedExists {
                 TextEditor(text: $resolvedContent)
                     .font(.system(.body, design: .monospaced))
@@ -301,6 +325,7 @@ struct DraftReconciliationView: View {
                     .background(Color(nsColor: .textBackgroundColor))
                     .disabled(isApplying)
                     .accessibilityLabel("Final resolved content")
+                    .frame(minHeight: 120)
             } else {
                 ContentUnavailableView(
                     "File Removed",
@@ -316,6 +341,24 @@ struct DraftReconciliationView: View {
         let noun = candidate.conflicts.count == 1 ? "conflict" : "conflicts"
         guard !fields.isEmpty else { return "\(candidate.conflicts.count) \(noun)" }
         return "\(candidate.conflicts.count) \(noun): \(fields.joined(separator: ", "))"
+    }
+
+    private func use(_ state: ReconciliationResourceState) {
+        resolvedExists = state.exists
+        resolvedPath = state.resource.path ?? ""
+        resolvedContent = Self.resolutionContentTemplate(for: candidate, preferredState: state).primaryText
+    }
+
+    private func conflictChoice(_ title: String, text: String, section: ContentConflictSection) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text.isEmpty ? "(Removed)" : text)
+                .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            Button(title) {
+                let source = resolvedContent as NSString
+                guard NSMaxRange(section.range) <= source.length else { return }
+                resolvedContent = source.replacingCharacters(in: section.range, with: text)
+            }.disabled(isApplying)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var hasExistenceConflict: Bool {

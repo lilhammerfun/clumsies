@@ -13,6 +13,45 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 
+/// Prepare every pending proposal against the same shared reference for its author.
+///
+/// # Errors
+/// Rejects inaccessible reviews, non-authors, stale revisions, or closed reviews.
+pub(super) async fn create_review_update_plan(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Path(review_id): Path<String>,
+    Json(request): Json<dto::CreateReviewUpdatePlanRequest>,
+) -> Result<Json<dto::ReviewUpdatePlan>, HttpError> {
+    Ok(Json(
+        service::create_review_update_plan(&state.pool, &principal, &review_id, request).await?,
+    ))
+}
+
+/// Apply the complete inspected review update atomically without publishing it.
+///
+/// # Errors
+/// Rejects unauthorized, stale, incomplete, or invalid resolutions without partial writes.
+pub(super) async fn create_review_update(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Path(review_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<dto::CreateReviewUpdateRequest>,
+) -> Result<Json<dto::ReviewDetail>, HttpError> {
+    let expected_ref = parse_ref_if_match(&headers)?;
+    Ok(Json(
+        service::create_review_update(
+            &state.pool,
+            &principal,
+            &review_id,
+            expected_ref.as_deref(),
+            request,
+        )
+        .await?,
+    ))
+}
+
 /// Validate an author's proposal set and create or resubmit its review in one transaction.
 ///
 /// # Errors

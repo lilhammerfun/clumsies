@@ -1026,9 +1026,6 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertTrue(apply.contains("projectId ?? documentKey?.projectId"))
         XCTAssertTrue(apply.contains("projectId: reconciliationProjectId"))
         XCTAssertFalse(apply.contains("projectId: activeProjectId"))
-        let review = try source("Features/Reviews/ReviewDetailPage.swift")
-        XCTAssertTrue(review.contains("$0.draft.draftId == candidate.draftId"))
-        XCTAssertTrue(review.contains("}?.draft.projectId"))
     }
 
     func testDraftUploadBarrierRechecksAfterRetryPastDeadline() throws {
@@ -2179,20 +2176,11 @@ final class DaemonContractTests: XCTestCase {
         let discarded = file("discarded", status: "discarded", reconciliation: .conflicts)
         let behind = file("behind")
         let conflict = file("conflict", reconciliation: .conflicts)
-        let files = [current, discarded, behind, conflict]
-
         XCTAssertFalse(current.needsUpdate)
         XCTAssertFalse(discarded.needsUpdate)
         XCTAssertFalse(discarded.hasConflicts)
+        XCTAssertTrue(behind.needsUpdate)
         XCTAssertTrue(conflict.hasConflicts)
-        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(in: files, selectedId: current.id), conflict)
-        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(in: files, selectedId: discarded.id), conflict)
-        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(in: files, selectedId: behind.id), behind)
-        // After resolving a file, the same action advances to another pending file.
-        XCTAssertEqual(ReviewFileDescriptor.reconciliationTarget(
-            in: [current, discarded, behind, file("conflict", freshness: .current)], selectedId: conflict.id
-        ), behind)
-        XCTAssertNil(ReviewFileDescriptor.reconciliationTarget(in: [current, discarded], selectedId: current.id))
     }
 
     func testReviewDirectoryIsAvailableWhileSelectedFileWaitsForItsSnapshot() async throws {

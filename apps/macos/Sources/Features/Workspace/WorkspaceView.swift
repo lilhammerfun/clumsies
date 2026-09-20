@@ -615,7 +615,7 @@ struct WorkspaceView: View {
                 .navigationDestination(for: ReviewRoute.self) { route in
                     ReviewDetailPage(reviewId: route.reviewId,
                         loadsRemoteContent: loadsReviewDetail,
-                        model: ReviewDetailModel(reviewId: route.reviewId, context: store.context, feedback: store.feedback, reconciliation: store.reconciliation, reviews: store.reviews)
+                        model: ReviewDetailModel(reviewId: route.reviewId, context: store.context, feedback: store.feedback, reviews: store.reviews)
                     )
                     .toolbar {
                         if reviewToolbarOwnership.surface == .detail {
@@ -742,6 +742,18 @@ struct WorkspaceView: View {
         }
 
         if let review = selectedReviewForToolbar {
+            if review.freshness == .behind, workspaceContext.isReviewAuthor(review),
+               ["open", "approved", "rejected"].contains(review.status) {
+                ToolbarItem(id: "review.update", placement: .automatic) {
+                    Button { reviewModel.beginUpdate(review) } label: {
+                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                    }
+                    .disabled(reviewModel.update != nil || pendingReviewToolbarAction != nil)
+                    .help("Update all files in this Review to the latest remote version…")
+                    .accessibilityLabel("Update Review")
+                    .accessibilityIdentifier("review-toolbar-update")
+                }
+            }
             if reviewToolbarOwnership.contains(.decision(.reject)) {
                 ToolbarItem(id: "review.reject", placement: .automatic) {
                     Button {
@@ -757,7 +769,7 @@ struct WorkspaceView: View {
                             || !reviewModel.canPerformReviewMenuAction(.reject)
                     )
                     .help(review.freshness == .behind
-                        ? "Review the latest shared changes before deciding"
+                        ? "Update this Review to the latest remote version before deciding"
                         : "Reject this Review")
                     .accessibilityLabel("Reject Review")
                     .accessibilityIdentifier("review-toolbar-reject")
@@ -779,7 +791,7 @@ struct WorkspaceView: View {
                             || !reviewModel.canPerformReviewMenuAction(.approve)
                     )
                     .help(review.freshness == .behind
-                        ? "Review the latest shared changes before deciding"
+                        ? "Update this Review to the latest remote version before deciding"
                         : "Approve and merge this Review")
                     .accessibilityLabel("Approve and Merge Review")
                     .accessibilityIdentifier("review-toolbar-approve")

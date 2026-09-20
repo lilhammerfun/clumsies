@@ -1343,32 +1343,6 @@ pub(super) async fn mark_discarded(
     .await?)
 }
 
-/// Reject an open or approved review whose proposal has been discarded.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(super) async fn reject_discarded_review(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-    actor_user_id: &str,
-) -> Result<(), ServerError> {
-    sqlx::query(
-        "UPDATE reviews
-             SET status = 'rejected', version = version + 1,
-                 decision_body = 'Draft discarded.', approved_result_hash = NULL,
-                 decided_by_user_id = $2, decided_at = now(),
-                 updated_at = now()
-             WHERE draft_id = $1 AND status IN ('open', 'approved')",
-    )
-    .bind(draft_id)
-    .bind(actor_user_id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 /// Read the owning organizations of a batch's proposals for ordered coordination locking.
 ///
 /// Uses the caller's transaction without committing it.

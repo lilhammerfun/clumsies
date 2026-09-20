@@ -1,7 +1,8 @@
 //! Request and response data for review resources.
 
 use crate::app::draft::dto::{
-    Draft, DraftCoordination, DraftOperation, ReconciliationResourceState,
+    Draft, DraftCoordination, DraftOperation, DraftReconciliationCandidate,
+    ReconciliationResourceState,
 };
 use crate::app::organization::dto::UserRef;
 use crate::pagination::PageInfo;
@@ -43,6 +44,42 @@ pub struct CreateReviewSubmissionRequest {
     pub title: Option<String>,
     /// Human-readable explanation associated with the resource.
     pub description: Option<String>,
+}
+
+/// Review revision to inspect before preparing updates for all its proposals.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateReviewUpdatePlanRequest {
+    /// Exact review revision currently displayed by the author.
+    pub expected_review_version: i64,
+}
+
+/// One consistent review snapshot and the updates requiring author confirmation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewUpdatePlan {
+    /// Snapshot whose proposal revisions must be submitted together.
+    pub detail: ReviewDetail,
+    /// Reconciliation results for every behind proposal, in review order.
+    pub candidates: Vec<DraftReconciliationCandidate>,
+    /// Automatic text merges retaining individually selectable conflict sections.
+    pub content_merges: std::collections::BTreeMap<String, ReviewConflictContent>,
+}
+
+/// Partial merge with conflict markers that cannot collide with the input documents.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewConflictContent {
+    /// Text containing the shared, ancestor, and proposed versions of each conflict.
+    pub text: String,
+    /// Number of repeated characters in each generated conflict marker.
+    pub marker_length: usize,
+}
+
+/// Author-confirmed updates to the complete ordered proposal set.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateReviewUpdateRequest {
+    /// Review revision from the inspected plan.
+    pub expected_review_version: i64,
+    /// All reviewed proposals, with resolutions for those requiring updates.
+    pub drafts: Vec<ReviewDraftRequest>,
 }
 
 /// Lifecycle governing review decisions, resubmission, and publication.

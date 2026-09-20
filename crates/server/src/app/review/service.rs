@@ -42,6 +42,199 @@ use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
 use std::collections::BTreeSet;
 
+/// Lock the shared reference and reviewed proposals before authoring a whole-review update.
+///
+/// # Errors
+/// Rejects closed reviews, foreign authors, stale review revisions, and unavailable proposals.
+async fn lock_review_update(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+    author_user_id: &str,
+    expected_version: i64,
+) -> Result<ReviewDetail, ServerError> {
+    let coordination = repository::load_coordination(tx, review_id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("review", review_id))?;
+    lock_org_draft_selection_coordination_for_project(tx, &coordination.project_id).await?;
+    let row = repository::lock_merge_state(tx, review_id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("review", review_id))?;
+    if !["open", "approved", "rejected"].contains(&row.status.as_str()) {
+        return Err(ServerError::invalid_transition(
+            "review",
+            &row.status,
+            "updated",
+        ));
+    }
+    if row.version != expected_version {
+        return Err(ServerError::version_conflict(
+            "review",
+            expected_version,
+            row.version,
+        ));
+    }
+    for id in repository::load_review_draft_ids(tx, review_id).await? {
+        repository::lock_merge_draft(tx, &id).await?;
+    }
+    let detail = load_review_detail(tx, review_id).await?;
+    if detail.review.author.user_id != author_user_id {
+        return Err(ServerError::Forbidden(
+            "only the review author can update it".to_owned(),
+        ));
+    }
+    if detail.drafts.iter().any(|item| {
+        !matches!(
+            item.draft.status,
+            draft::dto::DraftStatus::Open | draft::dto::DraftStatus::Submitted
+        )
+    }) {
+        return Err(ServerError::InvalidRequest(
+            "the review has no editable proposal set".to_owned(),
+        ));
+    }
+    Ok(detail)
+}
+
+/// Prepare all behind proposals against one reference without changing their content.
+///
+/// # Errors
+/// Rejects inaccessible reviews, non-authors, stale revisions, and closed proposals.
+pub async fn create_review_update_plan(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+    review_id: &str,
+    request: super::dto::CreateReviewUpdatePlanRequest,
+) -> Result<super::dto::ReviewUpdatePlan, ServerError> {
+    ensure_review_member(pool, principal, review_id).await?;
+    let mut tx = pool.begin().await?;
+    let detail = lock_review_update(
+        &mut tx,
+        review_id,
+        &principal.user_id,
+        request.expected_review_version,
+    )
+    .await?;
+    let mut candidates = Vec::new();
+    for item in &detail.drafts {
+        if item.draft.coordination.freshness == draft::dto::DraftFreshness::Behind {
+            candidates.push(
+                create_reconciliation_candidate_in_tx(
+                    &mut tx,
+                    &item.draft.draft_id,
+                    item.draft.version,
+                )
+                .await?,
+            );
+        }
+    }
+    let detail = load_review_detail(&mut tx, review_id).await?;
+    tx.commit().await?;
+    let content_merges = candidates
+        .iter()
+        .filter_map(|candidate| {
+            super::model::conflict_content(candidate)
+                .map(|content| (candidate.candidate_id.clone(), content))
+        })
+        .collect();
+    Ok(super::dto::ReviewUpdatePlan {
+        detail,
+        candidates,
+        content_merges,
+    })
+}
+
+/// Apply the author's complete inspected proposal set in one transaction without publication.
+///
+/// # Errors
+/// Rejects unauthorized authors, stale references or revisions, changed membership, and invalid
+/// resolutions. Any failure rolls back every proposal update and approval change.
+pub async fn create_review_update(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+    review_id: &str,
+    expected_ref: Option<&str>,
+    request: super::dto::CreateReviewUpdateRequest,
+) -> Result<ReviewDetail, ServerError> {
+    ensure_review_member(pool, principal, review_id).await?;
+    let mut tx = pool.begin().await?;
+    let detail = lock_review_update(
+        &mut tx,
+        review_id,
+        &principal.user_id,
+        request.expected_review_version,
+    )
+    .await?;
+    if request
+        .drafts
+        .iter()
+        .map(|d| &d.draft_id)
+        .collect::<Vec<_>>()
+        != detail
+            .drafts
+            .iter()
+            .map(|d| &d.draft.draft_id)
+            .collect::<Vec<_>>()
+    {
+        return Err(ServerError::InvalidRequest(
+            "an update must include the complete ordered review".to_owned(),
+        ));
+    }
+    let current_ref = &detail.review.coordination.current_commit_id;
+    if current_ref.as_deref() != expected_ref {
+        return Err(ServerError::precondition_failed(
+            expected_ref,
+            current_ref.as_deref(),
+        ));
+    }
+    for (requested, item) in request.drafts.iter().zip(&detail.drafts) {
+        if requested.expected_draft_version != item.draft.version {
+            return Err(ServerError::version_conflict(
+                "draft",
+                requested.expected_draft_version,
+                item.draft.version,
+            ));
+        }
+        reconcile_review_draft(
+            &mut tx,
+            &principal.user_id,
+            expected_ref,
+            current_ref,
+            requested,
+            item.draft.base_commit_id.clone(),
+        )
+        .await?;
+    }
+    let result = load_review_detail(&mut tx, review_id).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+/// Remove a discarded proposal from a live review and invalidate approval of the previous set.
+///
+/// The last proposal remains as the rejected review's historical record. Other discarded drafts
+/// retain their own revision and event history but no longer participate in the pending review.
+///
+/// # Errors
+/// Propagates persistence failures; the caller must roll back the enclosing discard transaction.
+pub(crate) async fn remove_discarded_draft(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    actor_user_id: &str,
+) -> Result<(), ServerError> {
+    let Some(review_id) = repository::lock_review_for_draft(tx, draft_id).await? else {
+        return Ok(());
+    };
+    let remaining = repository::remaining_review_drafts(tx, &review_id, draft_id).await?;
+    repository::remove_review_member(
+        tx,
+        &review_id,
+        draft_id,
+        remaining.first().map(String::as_str),
+        actor_user_id,
+    )
+    .await
+}
+
 /// Hide reviews outside the principal's organization or accessible projects.
 ///
 /// # Errors
@@ -621,6 +814,9 @@ pub(crate) async fn create_review_decision_in_tx(
     decided_by_user_id: &str,
     request: CreateReviewDecisionRequest,
 ) -> Result<ReviewDetail, ServerError> {
+    if let Some(coordination) = repository::load_coordination(tx, review_id).await? {
+        lock_org_draft_selection_coordination_for_project(tx, &coordination.project_id).await?;
+    }
     let row = repository::lock_decision_state(tx, review_id)
         .await?
         .ok_or_else(|| ServerError::not_found("review", review_id))?;
@@ -947,6 +1143,9 @@ pub(crate) async fn create_review_submission_in_tx(
     expected_ref: Option<&str>,
     request: CreateReviewSubmissionRequest,
 ) -> Result<CommitOutcome<ReviewDetail>, ServerError> {
+    if let Some(coordination) = repository::load_coordination(tx, review_id).await? {
+        lock_org_draft_selection_coordination_for_project(tx, &coordination.project_id).await?;
+    }
     let Some(primary_request) = request.drafts.first() else {
         return Err(ServerError::InvalidRequest(
             "a review must contain at least one draft".to_owned(),

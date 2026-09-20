@@ -741,6 +741,64 @@ paths:
                 $ref: "#/components/schemas/ReviewComment"
         default:
           $ref: "#/components/responses/Error"
+  /api/v1/reviews/{review_id}/update-plans:
+    parameters:
+      - $ref: "#/components/parameters/ReviewId"
+    post:
+      operationId: createReviewUpdatePlan
+      summary: Prepare every behind file in a Review against the same shared reference.
+      description: Author only. Captures ordered membership and revisions, creates reconciliation candidates, and supplies diff3 text for content conflicts without changing proposal content.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewUpdatePlanRequest"
+      responses:
+        "200":
+          description: Complete Review snapshot and candidates for its behind files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewUpdatePlan"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/reviews/{review_id}/updates:
+    parameters:
+      - $ref: "#/components/parameters/ReviewId"
+    post:
+      operationId: createReviewUpdate
+      summary: Apply all inspected Review updates atomically, without publishing.
+      description: Author only. Requires the complete ordered draft set, its versions, and candidates for behind files. Validates If-Match against the planned shared reference. Any failure rolls back all file updates and approval changes.
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewUpdateRequest"
+      responses:
+        "200":
+          description: Updated Review, still awaiting approval or resubmission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewDetail"
+        "409":
+          description: A Review, Draft, or reconciliation candidate changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "412":
+          description: The shared reference changed after the plan was prepared.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/v1/reviews/{review_id}/decisions:
     parameters:
       - $ref: "#/components/parameters/ReviewId"
@@ -1647,6 +1705,49 @@ components:
           type: string
         description:
           type: string
+    CreateReviewUpdatePlanRequest:
+      type: object
+      required: [expected_review_version]
+      properties:
+        expected_review_version:
+          type: integer
+    ReviewUpdatePlan:
+      type: object
+      required: [detail, candidates, content_merges]
+      properties:
+        detail:
+          $ref: "#/components/schemas/ReviewDetail"
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/DraftReconciliationCandidate"
+        content_merges:
+          type: object
+          description: Candidate IDs mapped to partially merged text with collision-free diff3 conflict markers.
+          additionalProperties:
+            $ref: "#/components/schemas/ReviewConflictContent"
+    ReviewConflictContent:
+      type: object
+      required: [text, marker_length]
+      properties:
+        text:
+          type: string
+          description: Automatically merged sections plus diff3 sections labeled ours (shared), original (base), and theirs (proposed).
+        marker_length:
+          type: integer
+          minimum: 7
+    CreateReviewUpdateRequest:
+      type: object
+      required: [expected_review_version, drafts]
+      properties:
+        expected_review_version:
+          type: integer
+        drafts:
+          type: array
+          minItems: 1
+          description: Every member of the inspected Review in its original order, including current files.
+          items:
+            $ref: "#/components/schemas/ReviewDraftRequest"
     ReviewDraftRequest:
       type: object
       required: [draft_id, expected_draft_version]

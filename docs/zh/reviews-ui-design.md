@@ -24,9 +24,8 @@ Reviews 使用统一的原生导航层级：
 一行回答五个问题：改什么、属于哪个 Project、谁提交、何时更新、当前下一步是什么。
 
 ```text
-Review 标题                         图标 + 单一语义状态
-描述摘要
-Submitted by <author> for <project> · updated <relative time>
+[生命周期图标] Review 标题                 可选待办状态
+Submitted by <author> for <project>       Updated <本地日期和时分>
 ```
 
 状态展示按以下优先级折叠为一个 signal：
@@ -42,20 +41,17 @@ Submitted by <author> for <project> · updated <relative time>
 `approved_result_hash` 的历史记录。Merged 不因为 merge 后 Ref 前进而显示 stale。状态
 必须同时有文字或 accessibility label，不能只靠颜色。
 
-列表页工具栏只拥有 status Filter 和 Search。Filter 提供 Open、Approved、Rejected、
-Merged、All 及各自计数；加载、空列表、过滤后为空和失败分别使用 `ProgressView` 或有
+列表页工具栏只拥有 status Filter 和 Search。Filter 提供 Open、Rejected、Merged、All 及各自计数；加载、空列表、过滤后为空和失败分别使用 `ProgressView` 或有
 上下文的 `ContentUnavailableView`。后台刷新时已有行继续显示，失败 banner 提供重试。
 
 当前列表不显示评论数、未读数、文件数或真实 last-activity：Server 没有这些可靠字段，
-`updated_at` 只表示 Review 记录最近更新。macOS 虽能解码 `draft_ids[]`，列表投影目前只
-保留 primary `draft_id`，所以不得从列表 UI 推断 Review 只有一个文件。
+`updated_at` 只表示 Review 记录最近更新。时间使用固定的本地日期和时分，明确标注 Updated，不显示持续跳动的相对计时，也不把它称为创建时间。
 
 ## 3. 有序多 Draft 契约
 
 创建和重提请求使用非空 `drafts[]`，每项包含 `draft_id` 与
 `expected_draft_version`。Server 要求 Draft ID 不重复、由同一作者创建、属于同一 Project
-和 authority scope、包含操作，并在提交前与当前 Ref 协调。多 Draft Review 不接受只为
-其中一项携带的 reconciliation candidate；调用方必须先逐项协调。
+和 authority scope、包含操作，并在提交前与当前 Ref 协调。更新请求必须包含完整、有序的 Draft 集合；每个 behind Draft 携带自己的 candidate，冲突项另带最终结果。
 
 Server 的 `review_drafts(review_id, draft_id, ordinal)` 保存顺序并保证一个 Draft 最多属于
 一个 Review。`Review.draft_ids[]` 与 `ReviewDetail.drafts[]` 按 `ordinal` 返回；Reject 会
@@ -77,7 +73,8 @@ operation history 伪装成额外文件。这里没有额外 tie-breaker，不�
 详情内部使用两栏：
 
 ```text
-changed-file navigator | Review 元数据 + 当前文件 diff
+Review 元数据 + 整体待更新状态
+changed-file navigator | 当前文件 diff
 ```
 
 文件导航器复用 Memory 的 path tree、目录展开和原生行样式，但只管理 Review 文件选择，
@@ -95,29 +92,44 @@ diff；同一 Review 版本内，共享已完成和进行中的 commit 请求。
 主内容按顺序显示：
 
 1. 标题和朴素状态；
-2. 作者、Project、相对更新时间；
+2. 作者、Project、固定的最后更新时间；
 3. 可选描述；
-4. 待更新文件数及 `Review Shared Changes…` / `Resolve Conflicts…`；
+4. 整体待更新文件数及说明，指向工具栏的 Update Review 图标；
 5. 决策人、时间、说明与 immutable result hash；
 6. 当前文件的 unified diff。
 
 不要额外显示 `Changes` 标题或“20 changed lines”一类重复摘要。删除 Draft 显示明确的删除
 结果；只有元数据变化而正文不变时显示对应空状态，不能让主面板看似加载失败。
 
-Server 对列表返回聚合 coordination：任一 Draft behind 则 Review behind，任一 Draft
-conflicts 则 Review conflicts；多 Draft 情况不返回一个假装适用于全部文件的单一
-candidate ID。文件树逐项标注落后或已检测到的冲突。协调优先处理当前选中的落后文件；
-若当前文件已是最新，则定位其他冲突文件，再退回其他落后文件。已丢弃或已合并的 Draft
-不能作为协调目标。完成后重新加载 Review，继续处理剩余文件；决策动作
-只有在已渲染的 Review version/status/freshness 仍与列表记录完全一致时才可用。
+Server 对待审成员返回聚合 coordination：任一 Draft behind 则 Review behind，任一
+Draft conflicts 则 Review conflicts。文件树标记只描述各文件状态；选择已是最新的文件时，
+不会再通过文件内按钮跳到另一个文件。整体状态位于文件分栏上方。
 
-冲突处理由作者在 PR 详情内的原生 sheet 完成，不跳转 Memory。面板保留 Review 标题和
-当前文件路径，通过 `Shared changes`、`Your changes`、`Result preview` 分别查看
-原始版本到最新共享版本、原始版本到本次提议、最新共享版本到最终结果的差异。
-下方编辑最终正文；路径冲突编辑路径，删除冲突使用 `Keep File` 决定保留或删除。
-`Save to Review` 调用现有 rebase 接口，只更新待审内容，不发布共享库。保存期间禁止取消，
-取消有改动的编辑会先确认；保存失败保留输入。共享版本再次变化时 Server 拒绝旧候选，
-不会覆盖新版本。非作者显示等待作者处理，不提供无权限的编辑入口。
+作者点击工具栏的 **Update Review** 图标，在当前主窗口一次处理整个 Review，无逐文件
+sheet。图标带 tooltip 和 accessibility label；非作者看到等待作者更新的说明。
+
+比较页签统一命名为 Remote changes（远端的修改）、Draft changes（草稿中的修改）、
+Merge preview（合并结果预览）。前两项分别比较同一起点到当前已发布版本、到草稿版本
+的差异；预览比较当前已发布版本到最终合并结果的差异。全文选择使用
+Use Remote Version / Use Draft Version，单段选择使用 Use Remote Change /
+Use Draft Change。界面不再用 Shared / Your / Proposed 混指这两个来源。
+
+1. 一次为全部落后文件生成同一共享版本下的候选，列表区分自动合并、待解决、已解决。
+2. 保留可自动合并的段落；每处正文冲突可选已发布的改动或草稿改动，也可直接编辑最终正文，
+   或明确选择完整版本。路径和删除冲突保留路径输入与 Keep File。
+3. 路径有效且生成的冲突标记全部消除后才可 Mark Resolved。切换文件保留输入。
+4. **Apply All Updates** 提交完整有序集合。Server 在一个事务里校验成员、Review/Draft
+   版本、共享 Ref 和候选；任一文件失败则全部回滚。
+5. 更新只改变待审内容，不发布。成功后返回详情，刷新文件标记；全部当前时更新图标消失，
+   当前详情已加载且满足权限时才允许单独批准发布。
+
+请求失败保留输入，允许重试。Check Latest Again 会在替换已有编辑前明确确认；
+取消编辑也确认，提交期间禁止取消。后台刷新不销毁编辑状态，账号/authority reset 清空
+状态并拒绝迟到响应。
+
+丢弃成员时从待审集合移除并使原批准失效；丢弃 primary 后由下一存续成员接替。
+最后一个成员也被丢弃时，Review 变为 Rejected，并保留最后成员作为历史记录。
+数据库迁移修复旧的卡死成员关系，不恢复已丢弃内容。
 
 ## 5. Diff 与评论
 
@@ -137,7 +149,11 @@ candidate ID。文件树逐项标注落后或已检测到的冲突。协调优�
 
 ## 6. 工具栏与权限
 
-决策按钮只属于已打开的详情：
+更新与决策按钮只属于已打开的详情，使用图标、tooltip 和无障碍名称。Update Review
+使用 arrow.trianglehead.2.clockwise.rotate.90，仅作者且 Review behind 时显示，
+更新期间禁用。单独文件详情不再拥有更新按钮。
+
+决策动作：
 
 | Review 状态 | 当前动作 |
 | --- | --- |
@@ -161,7 +177,7 @@ Reviews 内不重复显示全局 `In Review` 图标；同步进行中、失败�
 | 初次加载 | 标注用途的 `ProgressView` |
 | 无 Review / 无过滤结果 | 对应 `ContentUnavailableView`，过滤空可 Show All |
 | 详情失败 | 明确错误与 Retry；清除 decision readiness |
-| stale / conflict | 单一语义提示和就近协调动作 |
+| stale / conflict | Review 整体说明和工具栏更新入口 |
 | narrow window | 使用系统侧栏和 toolbar overflow，不自造响应式 Web chrome |
 
 自动化覆盖路由只携带 ID、列表状态、工具栏 ownership、状态优先级、rendered-version
@@ -173,7 +189,7 @@ Access。
 
 - Public OpenAPI 声明了 Review list 的 limit/cursor，但当前 HTTP 只读取 `project_id`，SQL
   固定最多返回 200 条且 `has_more` 恒为 false；调用方不能把它宣传为真实分页。
-- 列表层 `ReviewRecord` 尚未保留或展示多 Draft 数量；必须进入详情查看完整文件集合。
-- 协调仍逐文件执行；每次保存后重新加载 Review。完整 PR commit 时间线尚未实现。
+- 列表不显示文件数量；进入详情查看完整文件集合。
+- 更新以整个 Review 为事务单位；完整 PR commit 时间线尚未实现。
 - 评论锚点没有 old/new side，删除行只能作为 diff 内容查看。
 - `ReviewDetail` 的单数兼容字段仍扩大了协议表面；移除前需要完成客户端版本迁移。

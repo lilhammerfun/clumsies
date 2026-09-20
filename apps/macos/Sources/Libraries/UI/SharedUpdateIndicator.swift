@@ -23,14 +23,14 @@ struct SharedUpdateStatusPresentation {
             return .init(
                 symbolName: "arrow.trianglehead.2.clockwise.rotate.90",
                 tint: .secondary,
-                help: "The shared version of this file has changed"
+                help: "The remote version of this file has changed"
             )
         }
         if isStale {
             return .init(
                 symbolName: "arrow.trianglehead.2.clockwise.rotate.90",
                 tint: .secondary,
-                help: "A newer shared version is available"
+                help: "A newer remote version is available"
             )
         }
         return nil
