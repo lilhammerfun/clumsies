@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
 jobs:
   macos-preview:
     if: github.event_name == 'workflow_dispatch' && inputs.distribution == 'preview'
@@ -52,12 +56,27 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: '0'
         run: cargo test --locked -p daemon --test agent_runtime_xpc_e2e -- --nocapture
 
+      - name: Sign the Preview in-app update
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          CLUMSIES_MACOS_DERIVED_DATA: ${{ github.workspace }}/build/macos-preview-derived
+          CLUMSIES_MACOS_OUTPUT_DIR: ${{ github.workspace }}/dist/macos-preview
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::warning::SPARKLE_PRIVATE_KEY is not configured. Publishing the DMG without changing the in-app update feed."
+            exit 0
+          fi
+          NATIVE_VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
+          sh apps/macos/Scripts/generate-appcast.sh "macos-preview-$GITHUB_RUN_NUMBER" \
+            "dist/macos-preview/Clumsies-$NATIVE_VERSION-preview.$GITHUB_RUN_NUMBER-macos-arm64.dmg"
+
       - uses: actions/upload-artifact@v4
         with:
           name: clumsies-macos-preview
           path: |
             dist/macos-preview/*.dmg
             dist/macos-preview/*.sha256
+            dist/macos-preview/preview-appcast.xml
           if-no-files-found: error
 
   publish-preview:
@@ -94,7 +113,12 @@ jobs:
           此体验版尚未经过 Apple 公证。首次打开若被拦截，确认下载来源可信后，在
           系统设置 → 隐私与安全 → 仍要打开。受管理的 Mac 可能不允许手动放行。
 
-          Updates: download a newer DMG and replace the installed App after quitting it.
+          Updates: use Update beside your account in the sidebar, or Settings → General → Check for Updates.
+          Signed updates download and install inside the App; choose Install and Relaunch when ready.
+          更新：点击侧栏头像右侧的 Update，下载完成后点击 Install and Relaunch，自动安装并重启。
+          Only releases with a signed preview-appcast.xml are offered as in-app updates.
+          只有包含签名更新清单的版本才会推送到应用内；其他版本仍可手动下载 DMG 安装。
+          Existing installations using the old update feed need this DMG installed once.
           Accounts, Memory, and settings remain in your user data directory.
 
           Source: $GITHUB_SHA
@@ -107,6 +131,13 @@ jobs:
               --notes-file "$RUNNER_TEMP/preview-notes.md"
           gh release upload "$TAG" dist/macos-preview/* --clobber
           gh release edit "$TAG" --draft=false --prerelease --latest=false
+
+          if [ -f dist/macos-preview/preview-appcast.xml ]; then
+            gh release view macos-updates >/dev/null 2>&1 || \
+              gh release create macos-updates --target "$GITHUB_SHA" --prerelease --latest=false \
+                --title "macOS update feeds" --notes "Stable URLs for Sparkle update feeds. Download installers from the versioned releases."
+            gh release upload macos-updates dist/macos-preview/preview-appcast.xml --clobber
+          fi
 
   macos-release:
     if: github.event_name == 'push' || inputs.distribution == 'notarized'
@@ -214,7 +245,7 @@ jobs:
         if: github.event_name == 'push'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: apps/macos/Scripts/generate-appcast.sh
+        run: apps/macos/Scripts/generate-appcast.sh "$GITHUB_REF_NAME" "dist/macos/Clumsies-${GITHUB_REF_NAME#v}-macos-universal.zip"
 
       - name: Stage tagged macOS artifacts
         if: github.event_name == 'push'
@@ -261,4 +292,9 @@ jobs:
               --generate-notes \
               --title "$GITHUB_REF_NAME"
           gh release upload "$GITHUB_REF_NAME" dist/macos/* --clobber
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+
+          gh release view macos-updates >/dev/null 2>&1 || \
+            gh release create macos-updates --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "macOS update feeds" --notes "Stable URLs for Sparkle update feeds. Download installers from the versioned releases."
+          gh release upload macos-updates dist/macos/appcast.xml --clobber

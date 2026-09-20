@@ -25,6 +25,10 @@ settings:
     CLUMSIES_DAEMON_LAUNCH_AGENTS_DIR: ""
     CLUMSIES_SERVER_URL: https://app.clumsies.ai
     CLUMSIES_CODEX_HOME: ""
+    CLUMSIES_UPDATE_FEED_URL: https://github.com/lilhammerfun/clumsies/releases/download/macos-updates/appcast.xml
+  configs:
+    Debug:
+      CLUMSIES_UPDATE_FEED_URL: https://github.com/lilhammerfun/clumsies/releases/download/macos-updates/preview-appcast.xml
 packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
@@ -71,7 +75,8 @@ targets:
         NSHighResolutionCapable: true
         NSHumanReadableCopyright: Copyright © 2026 Clumsies Lab
         NSPrincipalClass: NSApplication
-        SUFeedURL: https://github.com/lilhammerfun/clumsies/releases/latest/download/appcast.xml
+        SUFeedURL: $(CLUMSIES_UPDATE_FEED_URL)
+        SUVerifyUpdateBeforeExtraction: true
         SUPublicEDKey: oCAiBe/ez4wochO1I9ziO1uCEpmES+e7ypC74HJwIvw=
     settings:
       base:

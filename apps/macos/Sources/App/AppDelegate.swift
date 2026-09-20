@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private lazy var administration = AdministrationModel(
         context: store.context, onWorkspaceChanged: { [weak store] in await store?.reload() }
     )
-    private let softwareUpdateController = SoftwareUpdateController()
+    private let softwareUpdateController = SoftwareUpdateController(startingUpdater: NSClassFromString("XCTestCase") == nil)
     let administratorRecoveryState = NativeAdministratorRecoveryState()
     private var phaseObservation: AnyCancellable?
     private var startupTask: Task<Void, Never>?
@@ -72,6 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(checkForUpdates(_:)) {
+            return softwareUpdateController.canCheckForUpdates
+        }
         if menuItem.action == #selector(newProject(_:)) {
             return store.context.canCreateProject && store.context.phase == .ready
         }
@@ -222,7 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 store: store,
                 onSignOut: { [weak self] in self?.signOut() },
                 onOpenSettings: { [weak self] in self?.presentSettingsWindow() }
-            ).environmentObject(administration).workspaceEnvironment(store),
+            )
+            .environmentObject(administration)
+            .environmentObject(softwareUpdateController)
+            .workspaceEnvironment(store),
             title: store.context.organization?.name ?? "Clumsies Lab"
         )
     }

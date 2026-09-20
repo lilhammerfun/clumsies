@@ -138,10 +138,25 @@ gh workflow run release.yml --ref main -f distribution=preview -f ref=main
 ```
 
 CI 构建包含 App 与 daemon 的 Apple Silicon 包、完成 ad-hoc 签名、生成并挂载 DMG，检查内容、
-签名及架构，然后发布带有 DMG 和 SHA-256 校验文件的 GitHub 预发布版本，tag 为
-`macos-preview-<run-number>`。这个流程不需要 Apple 或 Sparkle 密钥，不覆盖 latest
-稳定版，也不发布自动更新清单；体验版用户下载新 DMG 手动更新。当前 ONNX Runtime
-依赖没有 `x86_64-apple-darwin` 预编译库，因此暂不提供 Intel 体验包。
+签名及架构，然后发布带有 DMG 和 SHA-256 校验文件的 GitHub 预发布版本，
+tag 为 `macos-preview-<run-number>`。发布可下载的 DMG 仍不需要 Apple 或 Sparkle 密钥，
+也不覆盖 latest 稳定版。当前 ONNX Runtime 依赖没有 `x86_64-apple-darwin`
+预编译库，因此暂不提供 Intel 体验包。
+
+更新主入口位于侧栏底部头像右侧的 **Update** 按钮，与 Settings → General →
+Check for Updates 共用同一个更新器。Sparkle 在应用内下载并验签，用户点击
+**Install and Relaunch** 后自动替换 App 并重启。头像或名字仍可打开账户菜单，
+原来的右侧上下箭头不再显示。
+
+要将体验版推送到应用内，开发者需在仓库 Actions Secret 中配置一次
+`SPARKLE_PRIVATE_KEY`，且必须与 App 的 `SUPublicEDKey` 匹配；用户无需配置。
+CI 为已有 DMG 签名，并将 `preview-appcast.xml` 发布到专用 `macos-updates`
+Release。Debug／体验版使用此固定地址检查更新，下载包在解压前先验签。
+未配置密钥时仍发布可下载的 DMG，保留原更新源；密钥错误时更新清单生成失败。
+不再生成跳转下载页的 informational／Learn More 更新。
+
+Release 包使用同一专用 Release 中的 `appcast.xml`，避免旧 CLI Release 影响更新源。
+仍使用旧 `releases/latest/download/appcast.xml` 的体验版需要手动安装一次新 DMG。
 
 体验包沿用 `just install-macos` 的 Debug runtime 契约，使用正常的
 `ai.clumsies.desktop` App 身份及内置 daemon，不创建 Dev Instance。Release runtime
@@ -159,6 +174,9 @@ Release 流水线构建包含 daemon 的通用 App，完成 Developer ID 签名�
 - 同名 `.zip`：用于 Sparkle 自动更新，也可手动解压后将 App 移入应用程序目录。
 - `appcast.xml`：自动更新清单。生成时只扫描 ZIP，避免同版本 DMG 重复进入更新清单。
 
+tag 发布还会更新 `macos-updates/appcast.xml` 固定地址，并明确设置为 Latest，
+让仍使用旧更新地址的客户端也能找到正式版更新。
+
 两种格式都不要求用户安装编译工具。通过官网或 GitHub 分发无需 App Store 人工审核，
 Developer ID 签名和 Apple 公证可让 Gatekeeper 验证下载，无需体验版的手动放行；
 换成 ZIP 不会省掉这些检查。
@@ -169,6 +187,6 @@ Sparkle 私钥应配置在受保护的 `macos-signing` GitHub Environment，名�
 签名候选，不发布 Release 或更新清单；tag 发布还需要 Sparkle 私钥。
 
 `just test-macos-package` 会创建并挂载临时 DMG，验证 App 签名、二进制完整性及
-ZIP 更新清单选择。本地测试使用 ad-hoc 签名，不向 Apple 提交。已有 App 可通过
+DMG／ZIP 更新清单选择与未签名更新拒绝。本地测试使用 ad-hoc 签名，不向 Apple 提交。已有 App 可通过
 `sh apps/macos/Scripts/create-dmg.sh /path/to/Clumsies.app /tmp/Clumsies.dmg`
 预览包装效果；这条命令不会替产物完成正式签名或公证。
