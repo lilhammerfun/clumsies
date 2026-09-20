@@ -3,41 +3,50 @@ import Sparkle
 
 @MainActor
 final class SoftwareUpdateController: ObservableObject {
-    private let controller: SPUStandardUpdaterController
+    private let updater: SPUUpdater
+    private var observation: AnyCancellable?
 
-    init(startingUpdater: Bool = true) {
-        controller = SPUStandardUpdaterController(
+    convenience init(startingUpdater: Bool = true) {
+        let controller = SPUStandardUpdaterController(
             startingUpdater: startingUpdater,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        self.init(updater: controller.updater)
+    }
+
+    init(updater: SPUUpdater) {
+        self.updater = updater
+        observation = Publishers.MergeMany([
+            updater.publisher(for: \.canCheckForUpdates, options: [.new]),
+            updater.publisher(for: \.automaticallyChecksForUpdates, options: [.new]),
+            updater.publisher(for: \.automaticallyDownloadsUpdates, options: [.new]),
+            updater.publisher(for: \.allowsAutomaticUpdates, options: [.new]),
+        ])
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     func checkForUpdates() {
-        controller.checkForUpdates(nil)
+        guard canCheckForUpdates else { return }
+        updater.checkForUpdates()
     }
 
     var automaticallyChecksForUpdates: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
-        set {
-            objectWillChange.send()
-            controller.updater.automaticallyChecksForUpdates = newValue
-        }
+        get { updater.automaticallyChecksForUpdates }
+        set { updater.automaticallyChecksForUpdates = newValue }
     }
 
     var automaticallyDownloadsUpdates: Bool {
-        get { controller.updater.automaticallyDownloadsUpdates }
-        set {
-            objectWillChange.send()
-            controller.updater.automaticallyDownloadsUpdates = newValue
-        }
+        get { updater.automaticallyDownloadsUpdates }
+        set { updater.automaticallyDownloadsUpdates = newValue }
     }
 
     var allowsAutomaticUpdates: Bool {
-        controller.updater.allowsAutomaticUpdates
+        updater.allowsAutomaticUpdates
     }
 
     var canCheckForUpdates: Bool {
-        controller.updater.canCheckForUpdates
+        updater.canCheckForUpdates
     }
 }

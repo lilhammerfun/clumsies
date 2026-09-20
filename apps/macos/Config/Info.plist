@@ -47,8 +47,10 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>SUFeedURL</key>
-	<string>https://github.com/lilhammerfun/clumsies/releases/latest/download/appcast.xml</string>
+	<string>$(CLUMSIES_UPDATE_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>oCAiBe/ez4wochO1I9ziO1uCEpmES+e7ypC74HJwIvw=</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>
