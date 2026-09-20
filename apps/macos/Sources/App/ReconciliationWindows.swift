@@ -27,7 +27,7 @@ final class ReconciliationWindows {
         if pendingReviews.contains(where: \.hasEdits) {
             let alert = NSAlert()
             alert.messageText = "Discard unsaved Review choices?"
-            alert.informativeText = "Choose Review Actions (…) > Save Review Updates to keep your choices."
+            alert.informativeText = "Choose Review Actions (…) > Save Conflict Resolutions to keep your choices."
             alert.addButton(withTitle: "Keep Editing")
             alert.addButton(withTitle: "Discard Edits")
             guard alert.runModal() == .alertSecondButtonReturn else { return false }
