@@ -429,12 +429,12 @@ private struct ReviewFileUpdateTag: View {
 
     var body: some View {
         Text(isConflict ? "Conflict" : "Auto-rebased")
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .font(.system(size: 9, weight: .medium, design: .rounded))
             .foregroundStyle(.white)
-            .padding(.horizontal, 9).padding(.vertical, 4)
+            .padding(.horizontal, 6).padding(.vertical, 2)
             .background(fill, in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
-            .shadow(color: fill.opacity(0.24), radius: 1.5, y: 1)
+            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.5))
+            .shadow(color: fill.opacity(0.14), radius: 0.7, y: 0.5)
             .fixedSize()
             .help(isConflict
                 ? "Choose which changes to keep in this file"
