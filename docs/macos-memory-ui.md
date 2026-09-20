@@ -15,9 +15,9 @@ Project selection controls effective Memory, Drafts, and Review context. A proje
 
 The UI restores a selection only when it remains valid. Loading, conflict, offline, selection, and error states do not rely on color alone, and keyboard navigation remains available.
 
-File-name colors describe unpublished additions, modifications, and deletions. A gray Draft icon marks unsubmitted edits; a green pull-request icon marks submitted Drafts. Its tooltip identifies the Review, and clicking it or choosing **View Review** opens that Review, including for files in a multi-Draft Review. Merged and discarded Drafts have no file-tree status marker.
+The tree retains file-type icons and change colors: green for additions, amber for modifications, and red for deletions, including submitted changes until they are merged. [Inbox](inbox.md) collects Review events, remote shared updates affecting referenced Memory, and sync failures; the global sidebar shows its unread count. Background state no longer adds trailing file-tree badges or a global sync toolbar button.
 
-When synchronization is idle and changes are submitted, the sync status reports **Synced · N changes in review** and links to the Reviews. Synchronization does not submit or merge a Review. Failures and stale data take priority over this completion message.
+Documents have no extra Draft, Review, or remote-update status strip. **View Review**, **Review Remote Changes**, and **Update from Remote Version** remain available in the existing document and file menus where applicable. A deletion Draft explains the pending deletion in the document content. Conflict resolution and save failures stay visible at the operation; reading or archiving a notification does not publish, reconcile, or discard content.
 
 File menus use **Rename…** and **Delete…**. Their confirmations explain that the change is saved as a Draft and affects every project referencing the file after review and merge. **Remove from Project** only removes that project's reference.
 
@@ -31,7 +31,7 @@ Behind Drafts, including those with conflicts, can open the request sheet. The s
 
 The top toolbar exports all Memory in the current Project or Organization view, independent of the search filter. The file-tree context menu exports a file, multiple selected files, or every descendant of a selected folder, including files hidden by search. Mixed file/folder selections are deduplicated into one ZIP. Memory Actions also exports the open file.
 
-Exports preserve the original relative paths and UTF-8 contents, including local Draft renames, edits, new files, and pending editor text. Deletion Drafts are excluded. The native save dialog chooses the ZIP destination; Finder reveals the completed archive. Export uses the captured workspace view without publishing changes or refreshing it to a newer shared version.
+Exports preserve the original relative paths and UTF-8 contents, including local Draft renames, edits, new files, and pending editor text. Deletion Drafts are excluded. The native save dialog chooses the ZIP destination; Finder reveals the completed archive. Export uses the captured workspace view without publishing changes or refreshing it to a newer remote version.
 
 Unloaded bodies go through the existing version/hash-validated reader. Missing bodies, unsafe paths, or file-path collisions fail the export rather than omit files or overwrite a conflicting entry. Loading Draft inventory and active document synchronization block export. Compression runs off the main thread using macOS `ditto`, and the destination is replaced only after the archive is complete.
 

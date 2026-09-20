@@ -248,7 +248,7 @@ final class MemorySyncService: ObservableObject {
                 return
             }
             feedback.presentBackgroundError(
-                "Couldn’t update from the shared version. Existing content is unchanged. "
+                "Couldn’t update from the remote version. Existing content is unchanged. "
                     + error.localizedDescription,
                 source: errorSource
             )

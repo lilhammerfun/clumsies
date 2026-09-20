@@ -23,7 +23,7 @@ final class MemoryCatalog: ObservableObject {
     @Published var isPreparingWorkspaceIndex = false
 
     /// Project resources whose shared version moved forward after the app
-    /// loaded its snapshot; they show a sync icon and can be refreshed.
+    /// loaded its snapshot; their document context offers comparison and refresh.
     @Published var staleResourceIds: Set<String> = []
 
     /// Incremented when authoritative content replaces the document currently
@@ -425,7 +425,7 @@ enum DocumentDiffError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .baselineUnavailable:
-            "The previous shared content is unavailable, so an accurate Diff cannot be shown."
+            "The previous remote content is unavailable, so an accurate Diff cannot be shown."
         }
     }
 }

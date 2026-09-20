@@ -91,7 +91,7 @@ struct MemoryMainPane: View {
                             "Draft Source Unavailable",
                             systemImage: "arrow.trianglehead.2.clockwise.rotate.90",
                             description: Text(
-                                "The shared file was removed. Open Diff or Sync to reconcile this draft safely."
+                                "The remote file was removed. Open Diff or Sync to reconcile this draft safely."
                             )
                         )
                     } else {

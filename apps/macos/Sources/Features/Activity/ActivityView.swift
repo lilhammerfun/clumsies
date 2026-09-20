@@ -518,7 +518,7 @@ extension RecallFragment {
 
     fileprivate var scopeTitle: String {
         switch scope {
-        case .org?: "Shared memory"
+        case .org?: "Remote memory"
         case .project?: "Project memory"
         case nil: "Memory"
         }
