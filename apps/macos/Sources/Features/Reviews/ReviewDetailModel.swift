@@ -54,6 +54,7 @@ struct ReviewCommentPlacement: Equatable {
 
 struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     let id: String
+    let draftId: String
     let path: String
     let needsUpdate: Bool
     let hasConflicts: Bool
@@ -75,6 +76,7 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
             && detail.draft.coordination.freshness == .behind
         return .init(
             id: id,
+            draftId: detail.draft.draftId,
             path: path,
             needsUpdate: needsUpdate,
             hasConflicts: needsUpdate && detail.draft.coordination.reconciliation == .conflicts

@@ -88,6 +88,7 @@ struct ReviewDetailPage: View {
             HSplitView {
             ReviewFileNavigator(
                 files: self.model.fileDescriptors,
+                update: reviewModel.updates[reviewId],
                 selection: self.$model.selectedFileId
             )
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
@@ -383,6 +384,7 @@ struct ReviewDetailPage: View {
 
 private struct ReviewFileNavigator: View {
     let files: [ReviewFileDescriptor]
+    let update: ReviewUpdateModel?
     @Binding var selection: String?
 
     var body: some View {
@@ -391,13 +393,39 @@ private struct ReviewFileNavigator: View {
             selection: $selection
         ) { item in
             if let file = files.first(where: { $0.id == item.id }), file.needsUpdate {
-                Image(systemName: file.hasConflicts
-                      ? "exclamationmark.triangle.fill" : "arrow.trianglehead.2.clockwise.rotate.90")
-                    .foregroundStyle(file.hasConflicts ? Color.orange : Color.secondary)
-                    .help(file.hasConflicts ? "Conflicts with the remote version" : "Published version changed")
-                    .accessibilityLabel(file.hasConflicts ? "Conflicts" : "Needs update")
+                if let update {
+                    ReviewFileUpdateIndicator(model: update, file: file)
+                } else if file.hasConflicts {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .help("Conflicts with the remote version")
+                        .accessibilityLabel("Conflicts")
+                }
             }
         }
         .accessibilityIdentifier("review-file-tree")
+    }
+}
+
+private struct ReviewFileUpdateIndicator: View {
+    @ObservedObject var model: ReviewUpdateModel
+    let file: ReviewFileDescriptor
+
+    var body: some View {
+        let candidate = model.candidates.first { $0.draftId == file.draftId }
+        if let candidate, candidate.valid, candidate.status == .clean {
+            Text("Auto-rebased")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+                .fixedSize()
+                .help("Remote changes are included automatically. Save Review Updates to apply them.")
+        } else if candidate?.status == .conflicts || (model.plan == nil && file.hasConflicts) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .help("Conflicts with the remote version")
+                .accessibilityLabel("Conflicts")
+        }
     }
 }
