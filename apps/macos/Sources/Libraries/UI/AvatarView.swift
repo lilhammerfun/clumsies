@@ -61,7 +61,13 @@ private final class AvatarImageCache {
 }
 
 struct AvatarView: View {
+    enum Size: CGFloat {
+        case small = 20
+        case regular = 24
+    }
+
     let account: UserReference?
+    var size: Size = .regular
     @State private var image: NSImage?
 
     private var avatarURL: URL? {
@@ -74,13 +80,13 @@ struct AvatarView: View {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 24, height: 24)
+                    .frame(width: size.rawValue, height: size.rawValue)
                     .clipped()
             } else {
                 fallback
             }
         }
-        .frame(width: 24, height: 24)
+        .frame(width: size.rawValue, height: size.rawValue)
         .clipShape(Circle())
         .task(id: avatarURL) {
             if image != nil {
@@ -97,9 +103,9 @@ struct AvatarView: View {
         ZStack {
             Color.accentColor.opacity(0.2)
             Text(String((account?.displayName ?? account?.email ?? "C").prefix(1)).uppercased())
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: size == .small ? 10 : 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }
-        .frame(width: 24, height: 24)
+        .frame(width: size.rawValue, height: size.rawValue)
     }
 }

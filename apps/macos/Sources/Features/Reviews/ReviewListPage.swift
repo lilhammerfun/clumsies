@@ -361,20 +361,19 @@ struct ReviewRow: View {
 
                     Spacer(minLength: 0)
 
-                    if let updatedAt = TimestampFormatting.date(from: review.updatedAt) {
-                        Text(updatedAt, format: .dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .help(metadataHelp)
-                    }
+                    UserIdentityLabel(account: review.author, displayName: author, size: .small)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 180, alignment: .trailing)
+                        .help("Submitted by \(author)")
                 }
 
-                Text(context)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .help("Submitted by \(author)")
+                if let projectName, !projectName.isEmpty {
+                    Text(projectName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -386,11 +385,6 @@ struct ReviewRow: View {
 
     private var author: String {
         review.author.displayName ?? review.author.email
-    }
-
-    private var context: String {
-        guard let projectName, !projectName.isEmpty else { return author }
-        return "\(projectName) · \(author)"
     }
 
     private var lifecycleSymbolName: String {
@@ -418,18 +412,11 @@ struct ReviewRow: View {
         }
     }
 
-    private var metadataHelp: String {
-        TimestampFormatting.absoluteText(review.updatedAt)
-            .map { "Last Review record update: \($0)" }
-            ?? "Review submission"
-    }
-
     private var accessibilityText: String {
-        let updated = TimestampFormatting.absoluteText(review.updatedAt)
-        let time = updated.map { ", updated \($0)" } ?? ""
+        let project = projectName.map { ", \($0)" } ?? ""
         let queueState = errorMessage != nil ? ", Retry Needed"
             : (state.isQueueSignal ? ", \(state.title)" : "")
-        return "\(review.title), \(lifecycleTitle)\(queueState), \(context)\(time)"
+        return "\(review.title), \(lifecycleTitle)\(queueState)\(project), Submitted by \(author)"
     }
 }
 
