@@ -25,13 +25,15 @@ final class ReviewsModel: ObservableObject {
     @Published var selectedReviewId: String?
     @Published var pendingReviewReconciliationId: String?
     @Published var reviewDecisionReadiness: ReviewDecisionReadiness?
-    @Published private(set) var update: ReviewUpdateModel?
+    @Published private(set) var updates: [String: ReviewUpdateModel] = [:]
 
-    func beginUpdate(_ review: ReviewRecord) {
+    @discardableResult
+    func beginUpdate(_ review: ReviewRecord) -> ReviewUpdateModel? {
+        if let existing = updates[review.id] { return existing }
         guard context.isReviewAuthor(review), review.freshness == .behind,
-              ["open", "approved", "rejected"].contains(review.status), update == nil else { return }
+              ["open", "approved", "rejected"].contains(review.status) else { return nil }
         reviewDecisionReadiness = nil
-        update = ReviewUpdateModel(review: review, prepare: { [weak self] in
+        let update = ReviewUpdateModel(review: review, prepare: { [weak self] in
             guard let self else { throw CancellationError() }
             let authority = self.context.authorityGeneration
             let latest: ReviewDetail = try await self.context.server.get("/api/v1/reviews/\(review.id)")
@@ -48,11 +50,12 @@ final class ReviewsModel: ObservableObject {
                 reviewId: review.id, plan: plan, request: request
             )
         })
+        updates[review.id] = update
+        return update
     }
 
-    func endUpdate(result: ReviewDetail? = nil) {
-        update?.invalidate()
-        update = nil
+    func endUpdate(_ reviewId: String, result: ReviewDetail? = nil) {
+        updates.removeValue(forKey: reviewId)?.invalidate()
         if let result { replaceReview(with: WorkspaceLoader.mapReview(result.review)) }
     }
 
@@ -113,7 +116,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     func canPerformReviewMenuAction(_ action: ReviewMenuAction) -> Bool {
-        guard update?.review.id != selectedReviewId, context.phase == .ready,
+        guard selectedReviewId.flatMap({ updates[$0] }) == nil, context.phase == .ready,
               navigation.selectedSection == .reviews,
               let selectedReviewId = selectedReviewId,
               let review = reviews.first(where: { $0.id == selectedReviewId }),
@@ -494,7 +497,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     func resetAuthority() {
-        endUpdate()
+        for id in Array(updates.keys) { endUpdate(id) }
         cancelLoading()
         reviews.removeAll()
         reviewLoadState = .loading
@@ -504,7 +507,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     func retainAccessibleProjects(_ projectIds: Set<String>) {
-        if let update, !projectIds.contains(update.review.projectId) { endUpdate() }
+        for (id, update) in updates where !projectIds.contains(update.review.projectId) { endUpdate(id) }
         reviews = WorkspaceLoadPolicy.retainingAccessibleProjectRecords(
             reviews, accessibleProjectIds: projectIds, projectId: \.projectId
         )

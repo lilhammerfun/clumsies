@@ -323,6 +323,7 @@ final class ReviewDetailModel: ObservableObject {
             selectCurrentFile()
         }
         reviewModel.replaceReview(with: loadedReview)
+        reviewModel.beginUpdate(loadedReview)
     }
 
     func selectCurrentFile() {
@@ -364,7 +365,7 @@ final class ReviewDetailModel: ObservableObject {
 
     func markCurrentDetailDecisionReady() {
         guard let detail, changeSources != nil, !loadingFile, fileLoadError == nil,
-              reviewModel.update?.review.id != reviewId else {
+              reviewModel.updates[reviewId] == nil else {
             clearDecisionReadiness()
             return
         }

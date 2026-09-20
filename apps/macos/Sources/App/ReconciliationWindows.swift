@@ -2,14 +2,12 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Owns reconciliation windows independently of the document or Review tab.
+/// Owns document reconciliation windows independently of document tabs.
 @MainActor
 final class ReconciliationWindows {
     private let store: WorkspaceCoordinator
     private var observations: Set<AnyCancellable> = []
     private(set) var documentWindows: [MemoryDocumentSessionKey: ReconciliationWindowController] = [:]
-    private(set) var reviewWindow: ReconciliationWindowController?
-    private weak var displayedReview: ReviewUpdateModel?
 
     init(store: WorkspaceCoordinator) {
         self.store = store
@@ -17,15 +15,24 @@ final class ReconciliationWindows {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateDocumentWindows() }
             .store(in: &observations)
-        store.reviews.$update
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateReviewWindow() }
-            .store(in: &observations)
     }
 
     /// Closing the app must use the same unsaved-edit and in-flight-save guards.
     func closeAllIfAllowed() -> Bool {
-        let windows = Array(documentWindows.values) + [reviewWindow].compactMap { $0 }
+        let pendingReviews = store.reviews.updates.values
+        guard !pendingReviews.contains(where: \.isApplying) else {
+            NSSound.beep()
+            return false
+        }
+        if pendingReviews.contains(where: \.hasEdits) {
+            let alert = NSAlert()
+            alert.messageText = "Discard unsaved Review choices?"
+            alert.informativeText = "Save Review Updates in the Review toolbar to keep your choices."
+            alert.addButton(withTitle: "Keep Editing")
+            alert.addButton(withTitle: "Discard Edits")
+            guard alert.runModal() == .alertSecondButtonReturn else { return false }
+        }
+        let windows = Array(documentWindows.values)
         guard windows.allSatisfy({ $0.confirmCloseIfNeeded() }) else { return false }
         for controller in windows { controller.window?.close() }
         return true
@@ -66,26 +73,6 @@ final class ReconciliationWindows {
             documentWindows[key] = controller
             controller.showWindow(nil)
         }
-    }
-
-    private func updateReviewWindow() {
-        guard displayedReview !== store.reviews.update else { return }
-        reviewWindow?.dismiss()
-        reviewWindow = nil
-        displayedReview = store.reviews.update
-        guard let model = store.reviews.update else { return }
-        let controller = ReconciliationWindowController(
-            identity: model.review.id, title: "Update Review", subtitle: model.review.title,
-            autosaveName: "ClumsiesReviewUpdateWindow",
-            hasEdits: { model.hasEdits }, isSaving: { model.isApplying },
-            onClose: { [reviews = store.reviews] in reviews.endUpdate() }
-        )
-        controller.install(ReviewUpdateView(model: model,
-            onCancel: { [reviews = store.reviews] in reviews.endUpdate() },
-            onApplied: { [reviews = store.reviews] in reviews.endUpdate(result: $0) }
-        ))
-        reviewWindow = controller
-        controller.showWindow(nil)
     }
 }
 

@@ -17,14 +17,12 @@ final class ReviewUpdateTests: XCTestCase {
             })
         await model.load()
         XCTAssertEqual(model.candidates.count, 2)
-        XCTAssertEqual(model.selectedCandidateId, "conflict")
         XCTAssertFalse(model.canApply)
         let candidate = plan.candidates[1]
         XCTAssertFalse(model.canApply, "unresolved marker sections cannot be confirmed")
         let resolution = ReconciliationResourceState(exists: true,
             resource: candidate.draftState.resource, content: .init(description: nil, content: "Combined"))
         model.setResolution(resolved(candidate, choosing: resolution), for: candidate.candidateId)
-        model.selectedCandidateId = "clean"
         XCTAssertTrue(model.canApply)
         let result = await model.submit()
         XCTAssertNil(result)
@@ -94,16 +92,20 @@ final class ReviewUpdateTests: XCTestCase {
         let review = WorkspaceLoader.mapReview(plan.detail.review)
         workspace.reviews.reviews = [review]
         workspace.reviews.beginUpdate(review)
-        let update = try XCTUnwrap(workspace.reviews.update)
+        let update = try XCTUnwrap(workspace.reviews.updates[review.id])
         let candidate = plan.candidates[1]
         update.setResolution(resolved(candidate, choosing: candidate.draftState), for: candidate.candidateId)
         let detail = ReviewDetailModel(reviewId: review.id, context: workspace.context,
             feedback: workspace.feedback, reviews: workspace.reviews, fetchDetail: { _ in plan.detail })
         await detail.refreshDetail()
-        XCTAssertTrue(workspace.reviews.update === update)
+        XCTAssertTrue(workspace.reviews.updates[review.id] === update)
+        XCTAssertEqual(update.resolutions[candidate.candidateId]?.state, candidate.draftState)
+        workspace.reviews.selectedReviewId = "another-review"
+        workspace.reviews.selectedReviewId = review.id
+        XCTAssertTrue(workspace.reviews.beginUpdate(review) === update)
         XCTAssertEqual(update.resolutions[candidate.candidateId]?.state, candidate.draftState)
         workspace.clearAuthorityScopedWorkspace()
-        XCTAssertNil(workspace.reviews.update)
+        XCTAssertNil(workspace.reviews.updates[review.id])
         XCTAssertTrue(update.resolutions.isEmpty)
     }
 
@@ -126,86 +128,46 @@ final class ReviewUpdateTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
-    func testConflictEditorHasUsableSpaceInWholeReviewWorkspace() async throws {
+    func testInlineChoicesRetainAutomaticChangesAndResetWithoutAResultEditor() async throws {
         let plan = fixture()
         let model = ReviewUpdateModel(review: WorkspaceLoader.mapReview(plan.detail.review),
             prepare: { plan }, apply: { _, _ in plan.detail })
         await model.load()
-        let host = NSHostingView(rootView: ReviewUpdateView(model: model, onCancel: {}, onApplied: { _ in })
-            .frame(width: 1000, height: 720).background(Color(nsColor: .windowBackgroundColor)))
-        host.frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
-        let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable],
-            backing: .buffered, defer: false)
+        let candidate = plan.candidates[1]
+        let host = NSHostingView(rootView: ScrollView {
+            ReviewUpdateView(model: model, draftId: candidate.draftId) { Text("Current file") }
+                .padding(20)
+        })
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 850, height: 600),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        func editors(_ view: NSView) -> [NSTextView] {
+            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors)
+        }
         for _ in 0..<3 {
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(50))
         }
-        func textViews(_ view: NSView) -> [NSTextView] {
-            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
-        }
-        let editor = try XCTUnwrap(textViews(host).first)
-        XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).bounds.height, 80)
-        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        try data.write(to: URL(fileURLWithPath: "/tmp/clumsies-review-update-preview.png"))
-        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
-
-    func testUpdateWindowKeepsTheDetailWindowAndProtectsUnsavedEdits() async throws {
-        let plan = fixture()
-        let model = ReviewUpdateModel(review: WorkspaceLoader.mapReview(plan.detail.review),
-            prepare: { plan }, apply: { _, _ in plan.detail })
-        await model.load()
-        let host = NSHostingView(rootView: Text("Review details remain here")
-            .frame(maxWidth: .infinity, maxHeight: .infinity))
-        host.sizingOptions = []
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
-            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        let originalFrame = window.frame
-        window.orderFront(nil)
-        var closed = false
-        let controller = ReconciliationWindowController(identity: "review", title: "Update Review",
-            subtitle: model.review.title, autosaveName: "ReviewWindowTest-\(UUID().uuidString)",
-            hasEdits: { model.hasEdits }, isSaving: { model.isApplying }, onClose: { closed = true })
-        let originalMergeSize = try XCTUnwrap(controller.window).frame.size
-        controller.install(ReviewUpdateView(model: model, onCancel: {}, onApplied: { _ in }))
-        controller.showWindow(nil)
-        defer {
-            controller.dismiss()
-            window.close()
-        }
-        let mergeWindow = try XCTUnwrap(controller.window)
         XCTAssertNil(window.attachedSheet)
-        XCTAssertNil(mergeWindow.sheetParent)
-        let content = try XCTUnwrap(mergeWindow.contentView)
-        for _ in 0..<3 {
-            content.layoutSubtreeIfNeeded()
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        func editors(_ view: NSView) -> [NSTextView] {
-            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors)
-        }
-        XCTAssertEqual(window.frame.size, originalFrame.size)
-        XCTAssertEqual(mergeWindow.frame.size, originalMergeSize)
-        XCTAssertTrue(window.contentView === host)
-        XCTAssertTrue(editors(host).isEmpty, "the editor must not replace the detail page")
-        let editor = try XCTUnwrap(editors(content).first)
-        XCTAssertGreaterThan(try XCTUnwrap(editor.enclosingScrollView).bounds.height, 80)
-        let candidate = try XCTUnwrap(model.selectedCandidate)
-        model.setResolution(resolved(candidate, choosing: candidate.draftState), for: candidate.candidateId)
-        controller.confirmDiscard = { false }
-        mergeWindow.performClose(nil)
-        XCTAssertFalse(closed)
-        XCTAssertTrue(mergeWindow.isVisible)
-        controller.confirmDiscard = { true }
-        mergeWindow.performClose(nil)
-        XCTAssertTrue(closed)
+        XCTAssertTrue(editors(host).isEmpty, "Review must not show an editable merge-result area")
+        XCTAssertFalse(model.canApply)
+        var resolution = try XCTUnwrap(model.resolutions[candidate.candidateId])
+        let section = try XCTUnwrap(resolution.sections.first)
+        resolution.chooseContent(section.proposed, in: section)
+        model.setResolution(resolution, for: candidate.candidateId)
+        XCTAssertTrue(model.canApply)
+        XCTAssertEqual(model.resolutions[candidate.candidateId]?.text, "Proposed\n")
+        XCTAssertEqual(model.resolutions["clean"]?.state, plan.candidates[0].proposedState)
+        let result = await model.submit()
+        XCTAssertEqual(result?.review.reviewId, plan.detail.review.reviewId)
+        model.resetResolution(for: candidate)
+        XCTAssertFalse(model.canApply)
+        XCTAssertFalse(model.hasEdits)
+        XCTAssertEqual(model.resolutions[candidate.candidateId]?.sections.count, 1)
     }
 
     func testReviewDetailStaysInsideTheWindowAfterReloadAndResize() async throws {

@@ -12,7 +12,6 @@ final class ReviewUpdateModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isApplying = false
     @Published private(set) var errorMessage: String?
-    @Published var selectedCandidateId: String?
     @Published private(set) var resolutions: [String: DraftResolution] = [:]
     @Published private(set) var hasEdits = false
 
@@ -25,9 +24,6 @@ final class ReviewUpdateModel: ObservableObject {
     }
 
     var candidates: [DraftReconciliationCandidate] { plan?.candidates ?? [] }
-    var selectedCandidate: DraftReconciliationCandidate? {
-        candidates.first { $0.candidateId == selectedCandidateId }
-    }
     var unresolvedCount: Int {
         candidates.filter { $0.status == .conflicts && resolutions[$0.candidateId]?.canSave != true }.count
     }
@@ -51,8 +47,6 @@ final class ReviewUpdateModel: ObservableObject {
             for candidate in result.candidates {
                 resolutions[candidate.candidateId] = DraftResolution(candidate: candidate)
             }
-            selectedCandidateId = result.candidates.first(where: { $0.status == .conflicts })?.candidateId
-                ?? result.candidates.first?.candidateId
         } catch {
             guard generation == request, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
@@ -63,6 +57,12 @@ final class ReviewUpdateModel: ObservableObject {
         guard !isApplying else { return }
         resolutions[candidateId] = state
         hasEdits = true
+    }
+
+    func resetResolution(for candidate: DraftReconciliationCandidate) {
+        guard !isApplying else { return }
+        resolutions[candidate.candidateId] = DraftResolution(candidate: candidate)
+        hasEdits = resolutions.values.contains(where: \.hasEdits)
     }
 
     func submit() async -> ReviewDetail? {
