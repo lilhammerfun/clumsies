@@ -40,12 +40,13 @@ to two lines:
 
 ```
 [lifecycle icon] review title [status]           [small avatar] author
-project                                        Updated <local date and time>
+project                                        <local date and time>
 ```
 
 - Show the fixed Review update time below the author, right-aligned on the second
-  line, labeled Updated. It is the last record update, not creation time or a live
-  elapsed-time counter. Keep the update time in the detail header too.
+  line, without a text prefix. The tooltip and accessibility label identify it as
+  the last record update, not creation time or a live elapsed-time counter. Keep
+  the update time in the detail header too.
 - Keep the complete description in the detail page; do not add a list excerpt.
 - Put the Project below the title and the author on the right using the shared
   `UserIdentityLabel` with a small 20 pt avatar (the default remains 24 pt).

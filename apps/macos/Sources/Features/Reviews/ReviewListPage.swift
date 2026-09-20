@@ -376,7 +376,7 @@ struct ReviewRow: View {
                     Spacer(minLength: 0)
 
                     if let updatedAt = TimestampFormatting.date(from: review.updatedAt) {
-                        Text("Updated \(updatedAt, format: .dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())")
+                        Text(updatedAt, format: .dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())
                             .help("Last Review record update")
                     }
                 }
