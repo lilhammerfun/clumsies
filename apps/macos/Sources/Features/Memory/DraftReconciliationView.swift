@@ -284,7 +284,7 @@ struct DraftReconciliationView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Final Result").font(.caption.weight(.medium))
-                Text("Choose between the published and draft versions, or edit the merged result below.")
+                Text("Choose between the Remote and Draft versions, or edit the merged result below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack {
@@ -307,7 +307,7 @@ struct DraftReconciliationView: View {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Conflict \(index + 1)").font(.caption.weight(.semibold))
                                     HStack(alignment: .top, spacing: 16) {
-                                        conflictChoice("Use Published Change", text: section.shared, section: section)
+                                        conflictChoice("Use Remote Change", text: section.shared, section: section)
                                         conflictChoice("Use Draft Change", text: section.proposed, section: section)
                                     }
                                 }
