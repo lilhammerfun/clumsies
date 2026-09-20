@@ -97,27 +97,22 @@ jobs:
         run: |
           TAG="macos-preview-$GITHUB_RUN_NUMBER"
           cat > "$RUNNER_TEMP/preview-notes.md" <<EOF
-          ## Install / 安装
+          ## Install
 
           Download the DMG below, open it, and drag Clumsies.app into Applications.
           macOS 14 or later on Apple Silicon (M1 or newer). No build tools required.
 
-          下载下方 DMG，打开后将 Clumsies.app 拖入 Applications。支持 macOS 14 及以上、
-          Apple Silicon（M1 及更新机型），无需自行编译。默认连接 https://app.clumsies.ai，
-          登录需要组织访问权限。
+          The App connects to https://app.clumsies.ai by default. Signing in requires
+          access to an organization.
 
           This preview is ad-hoc signed and **not notarized by Apple**. After first trying
           to open it, use System Settings → Privacy & Security → Open Anyway only if you
           trust this download. Managed Macs may restrict this exception.
 
-          此体验版尚未经过 Apple 公证。首次打开若被拦截，确认下载来源可信后，在
-          系统设置 → 隐私与安全 → 仍要打开。受管理的 Mac 可能不允许手动放行。
-
           Updates: use Update beside your account in the sidebar, or Settings → General → Check for Updates.
           Signed updates download and install inside the App; choose Install and Relaunch when ready.
-          更新：点击侧栏头像右侧的 Update，下载完成后点击 Install and Relaunch，自动安装并重启。
           Only releases with a signed preview-appcast.xml are offered as in-app updates.
-          只有包含签名更新清单的版本才会推送到应用内；其他版本仍可手动下载 DMG 安装。
+          Other releases remain available for manual DMG installation.
           Existing installations using the old update feed need this DMG installed once.
           Accounts, Memory, and settings remain in your user data directory.
 
