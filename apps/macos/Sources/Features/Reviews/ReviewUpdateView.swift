@@ -13,13 +13,6 @@ struct ReviewUpdateView<Content: View>: View {
                 ProgressView("Checking the latest remote version…")
             } else if let candidate = model.candidates.first(where: { $0.draftId == draftId }),
                       let resolution = model.resolutions[candidate.candidateId] {
-                if candidate.status == .clean {
-                    Text("Auto-rebased")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(.quaternary, in: Capsule())
-                        .help("Remote changes are included automatically. Save Review Updates to apply them.")
-                }
                 if resolution.canSave {
                     fileDiff(from: candidate.currentState, to: resolution.state)
                         .overlay(alignment: .topTrailing) {
