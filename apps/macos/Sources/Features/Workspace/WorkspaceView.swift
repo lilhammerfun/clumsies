@@ -1022,15 +1022,17 @@ private struct GlobalSidebar: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Button("Update", action: softwareUpdateController.checkForUpdates)
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .tint(.accentColor)
-            .controlSize(.small)
-            .disabled(!softwareUpdateController.canCheckForUpdates)
-            .help("Check for updates or continue installing an update")
-            .accessibilityIdentifier("softwareUpdateButton")
-            .padding(.trailing, 10)
+            if softwareUpdateController.hasAvailableUpdate {
+                Button("Update", action: softwareUpdateController.checkForUpdates)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(.accentColor)
+                    .controlSize(.small)
+                    .disabled(!softwareUpdateController.canCheckForUpdates)
+                    .help("Check for updates or continue installing an update")
+                    .accessibilityIdentifier("softwareUpdateButton")
+                    .padding(.trailing, 10)
+            }
         }
     }
 

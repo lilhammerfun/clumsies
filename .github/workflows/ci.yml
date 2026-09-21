@@ -37,7 +37,9 @@ jobs:
           shellcheck apps/macos/Scripts/archive-preview.sh \
             apps/macos/Scripts/archive-release.sh apps/macos/Scripts/create-dmg.sh \
             apps/macos/Scripts/embed-daemon.sh apps/macos/Scripts/generate-appcast.sh \
+            apps/macos/Scripts/ensure-update-feeds.sh apps/macos/Scripts/test-update-feeds.sh \
             apps/macos/Scripts/test-distribution-package.sh apps/macos/Scripts/test-runtime-package.sh
+          sh apps/macos/Scripts/test-update-feeds.sh
 
       - name: Check retired terminology
         run: |

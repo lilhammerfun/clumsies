@@ -161,8 +161,9 @@ tag 为 `macos-preview-<run-number>`。发布可下载的 DMG 仍不需要 Apple
 也不覆盖 latest 稳定版。当前 ONNX Runtime 依赖没有 `x86_64-apple-darwin`
 预编译库，因此暂不提供 Intel 体验包。
 
-更新主入口位于侧栏底部头像右侧的 **Update** 按钮，与 Settings → General →
-Check for Updates 共用同一个更新器。Sparkle 在应用内下载并验签，用户点击
+只有 Sparkle 确认有可用更新后，侧栏底部头像右侧才显示 **Update** 按钮。
+关闭更新提示或结束更新流程后，按钮会消失。Settings → General → Check for Updates
+始终提供手动检查入口，与侧栏共用同一个更新器。Sparkle 在应用内下载并验签，用户点击
 **Install and Relaunch** 后自动替换 App 并重启。头像或名字仍可打开账户菜单，
 原来的右侧上下箭头不再显示。
 
@@ -172,6 +173,16 @@ CI 为已有 DMG 签名，并将 `preview-appcast.xml` 发布到专用 `macos-up
 Release。Debug／体验版使用此固定地址检查更新，下载包在解压前先验签。
 未配置密钥时仍发布可下载的 DMG，保留原更新源；密钥错误时更新清单生成失败。
 不再生成跳转下载页的 informational／Learn More 更新。
+
+两个发布通道始终提供有效清单。尚未发布符合条件的新版本时，清单不包含版本条目，
+Sparkle 正常返回“没有可用更新”。初始化空清单不需要签名密钥，也不会覆盖已有清单。
+如需修复缺失的清单地址而不发布 App，可运行：
+
+```sh
+gh workflow run release.yml --ref main -f distribution=update-feeds -f ref=main
+```
+
+体验版和 tag 发布也会初始化缺失的清单，并验证公开地址可访问，再发布符合条件的更新。
 
 Release 包使用同一专用 Release 中的 `appcast.xml`，避免旧 CLI Release 影响更新源。
 仍使用旧 `releases/latest/download/appcast.xml` 的体验版需要手动安装一次新 DMG。
