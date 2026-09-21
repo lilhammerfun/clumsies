@@ -1,4 +1,3 @@
-import MarkdownUI
 import SwiftUI
 
 struct MarkdownPreview: View {
@@ -6,9 +5,7 @@ struct MarkdownPreview: View {
 
     var body: some View {
         ScrollView {
-            Markdown(source)
-                .markdownTheme(.gitHub)
-                .textSelection(.enabled)
+            MarkdownContentView(source: source)
                 .frame(maxWidth: DocumentContentMetrics.maximumWidth, alignment: .leading)
                 .padding(.horizontal, DocumentContentMetrics.minimumHorizontalInset)
                 .padding(.vertical, 28)

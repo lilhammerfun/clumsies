@@ -6345,6 +6345,22 @@
         }
       }
     },
+    "Frontmatter": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frontmatter"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文档元数据"
+          }
+        }
+      }
+    },
     "General": {
       "localizations": {
         "en": {
