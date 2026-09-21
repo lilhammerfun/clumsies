@@ -932,6 +932,8 @@ run_up() {
 
   if [ "$review_playground" = 1 ]; then
     "$python" "$repo_root/dev/seed-review-playground.py" --prepare-app
+  elif [ "$runtime_mode" = local ]; then
+    "$python" "$repo_root/dev/seed-review-playground.py" --login-only
   fi
 
   open -n \

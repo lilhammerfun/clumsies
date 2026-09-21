@@ -5,6 +5,26 @@ import XCTest
 
 @MainActor
 final class StartupWindowLayoutTests: XCTestCase {
+    func testLocalDevelopmentNeverPresentsManualSetupButPrivateServersStillDo() throws {
+        let status = NativeSetupStatus(state: .setupRequired, setupCodeConfigured: true,
+                                       oidcConfigured: true, session: nil)
+        for (origin, instance, automatic) in [
+            ("http://127.0.0.1:18080", "dev-instance" as String?, true),
+            ("http://localhost:18080", "dev-instance", true),
+            ("http://127.0.0.1:18080", nil, false),
+            ("https://private.example.com", nil, false),
+            ("https://preview.example.com", "dev-instance", false),
+        ] {
+            let model = NativeServerAccessModel(
+                serverURL: try XCTUnwrap(URL(string: origin)), purpose: .appSignIn,
+                destination: .memoryOnly, recoveryState: NativeAdministratorRecoveryState(),
+                initialSetupStatus: status, developmentInstanceID: instance
+            )
+            XCTAssertEqual(model.usesAutomaticDevelopmentLogin, automatic)
+            XCTAssertEqual(model.showsSetup, !automatic)
+        }
+    }
+
     func testCompactLoadingResizesTheSameWindowAroundItsCenter() throws {
         let controller = StartupWindowController()
         defer { controller.close() }

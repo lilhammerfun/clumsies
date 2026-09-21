@@ -72,6 +72,8 @@ cherry-pick 相应提交。
 
 ## 4. 两种运行模式
 
+本地 `just dev-macos` 会在打开 App 前完成 Server 初始化和 fake-OIDC 自动登录。登录失败即停止启动，不把设置或登录页面交给测试者。远端 Preview 实例不使用本地测试凭据。
+
 ### 4.1 Local
 
 `just dev-macos` 构建 App、App 内 daemon 和 Server，使用当前实例的 Compose project

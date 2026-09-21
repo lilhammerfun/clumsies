@@ -22,7 +22,7 @@ struct NativeServerAccessView: View {
 
                 if model.recoveryReady {
                     recoveryContent
-                } else {
+                } else if !model.usesAutomaticDevelopmentLogin {
                     serverField
                     if model.showsSetup {
                         setupFields

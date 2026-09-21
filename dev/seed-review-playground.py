@@ -409,14 +409,19 @@ def main():
                         help="Advance only this playground's remote version to test stale submissions.")
     modes.add_argument("--prepare-app", action="store_true",
                         help="Initialize, sign in and seed before the local Dev App opens.")
+    modes.add_argument("--login-only", action="store_true",
+                        help="Initialize and sign in the local Dev App without seeding Reviews.")
     modes.add_argument("--verify", action="store_true",
                        help="Check all initial fixture states before interactive testing changes them.")
     args = parser.parse_args()
     os.umask(0o077)
     lab = Playground()
-    if lab.manifest_path.exists() and not (args.advance_remote or args.prepare_app or args.verify):
+    if lab.manifest_path.exists() and not (args.advance_remote or args.prepare_app or args.verify or args.login_only):
         raise SystemExit("This instance already has a playground. Its data was left unchanged.")
     lab.login()
+    if args.login_only:
+        lab.prepare_app()
+        return
     if args.prepare_app:
         lab.prepare_app()
     if args.verify:
