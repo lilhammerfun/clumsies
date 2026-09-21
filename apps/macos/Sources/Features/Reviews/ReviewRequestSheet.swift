@@ -75,27 +75,15 @@ struct ReviewRequestSheet: View {
                 }
             }
             .formStyle(.grouped)
+            .disabled(model.isSubmitting)
 
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Cancel") { self.dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button {
+            SheetActionBar(
+                confirmationTitle: Text("Request"), progressTitle: "Requesting review…",
+                isWorking: model.isSubmitting, canConfirm: !model.normalizedTitle.isEmpty,
+                cancel: { dismiss() }, confirm: {
                     Task { if await self.model.submit() { self.dismiss() } }
-                } label: {
-                    if self.model.isSubmitting {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text("Request")
-                    }
                 }
-                .disabled(self.model.isSubmitting || self.model.normalizedTitle.isEmpty)
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(12)
+            )
         }
         .frame(width: 480, height: 270)
     }
@@ -127,26 +115,14 @@ struct ReviewRequestSheet: View {
                 }
             }
 
-            Divider()
-
-            HStack {
-                Button("Back") { self.model.resetReconciliation() }
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button {
+            SheetActionBar(
+                confirmationTitle: Text("Update and Request Review"), cancellationTitle: "Back",
+                progressTitle: "Requesting review…", isWorking: model.isSubmitting,
+                canConfirm: !model.reconciliationCandidates.contains { !$0.valid },
+                cancel: model.resetReconciliation, confirm: {
                     Task { if await self.model.submitBatch() { self.dismiss() } }
-                } label: {
-                    if self.model.isSubmitting {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Update and Request Review")
-                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(self.model.isSubmitting || self.model.reconciliationCandidates.contains { !$0.valid })
-            }
-            .padding(12)
+            )
         }
         .frame(width: 620, height: 460)
     }

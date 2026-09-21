@@ -309,26 +309,26 @@ struct InboxMessageView: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(24)
             Divider()
             MarkdownPreview(source: item.body ?? "")
-            Divider()
-            HStack {
-                if let error = error ?? receiptError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-                Spacer()
-                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-                if let projectId {
-                    Button("Open Memory") {
-                        isOpening = true
-                        openTask = Task {
-                            defer { isOpening = false }
-                            do { try await open(.project(projectId)); dismiss() }
-                            catch is CancellationError { dismiss() }
-                            catch { self.error = error.localizedDescription }
-                        }
-                    }
-                    .disabled(isOpening)
-                    .keyboardShortcut(.defaultAction)
-                }
+            if let error = error ?? receiptError {
+                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24).padding(.vertical, 12)
             }
-            .padding(16)
+            SheetActionBar(
+                confirmationTitle: projectId == nil ? Text("Close") : Text("Open Memory"),
+                cancellationTitle: "Close", progressTitle: "Opening…", isWorking: isOpening,
+                allowsCancellationWhileWorking: true,
+                cancel: projectId == nil ? nil : { dismiss() }, confirm: {
+                    guard let projectId else { dismiss(); return }
+                    isOpening = true
+                    openTask = Task {
+                        defer { isOpening = false }
+                        do { try await open(.project(projectId)); dismiss() }
+                        catch is CancellationError { dismiss() }
+                        catch { self.error = error.localizedDescription }
+                    }
+                }
+            )
         }
         .frame(width: 640, height: 600)
         .onDisappear { openTask?.cancel() }

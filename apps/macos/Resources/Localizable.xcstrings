@@ -1356,18 +1356,18 @@
         }
       }
     },
-    "Additional options": {
+    "Adding…": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Additional options"
+            "value": "Adding…"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "更多选项"
+            "value": "正在添加…"
           }
         }
       }
@@ -2029,22 +2029,6 @@
         }
       }
     },
-    "Attach Repositories…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Attach Repositories…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "关联仓库…"
-          }
-        }
-      }
-    },
     "Audit Log": {
       "localizations": {
         "en": {
@@ -2251,7 +2235,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "记忆包"
+            "value": "Bundle"
           }
         }
       }
@@ -2267,7 +2251,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "记忆包操作"
+            "value": "Bundle 操作"
           }
         }
       }
@@ -2283,7 +2267,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "记忆包刷新失败，请重试"
+            "value": "Bundle 刷新失败，请重试"
           }
         }
       }
@@ -2299,7 +2283,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "记忆包"
+            "value": "Bundle"
           }
         }
       }
@@ -2315,7 +2299,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "无法加载记忆包"
+            "value": "无法加载 Bundle"
           }
         }
       }
@@ -2700,6 +2684,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "选择“评审操作（…）> 保存冲突解决结果”以保留你的选择。"
+          }
+        }
+      }
+    },
+    "Choose a Bundle to add its memory to this project.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a Bundle to add its memory to this project."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择一个 Bundle，将其中的记忆加入项目。"
           }
         }
       }
@@ -4045,6 +4045,22 @@
         }
       }
     },
+    "Create Project": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create Project"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建项目"
+          }
+        }
+      }
+    },
     "Create a Project to start organizing local memory.": {
       "localizations": {
         "en": {
@@ -4072,7 +4088,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "创建个人记忆包，为经常开展的工作收集记忆。"
+            "value": "创建个人 Bundle，为经常开展的工作收集记忆。"
           }
         }
       }
@@ -4121,6 +4137,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "创建 CLUMSIES.md，以及用于知识、流程和经验的初始文件夹。"
+          }
+        }
+      }
+    },
+    "Creating project…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creating project…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在创建项目…"
           }
         }
       }
@@ -4472,7 +4504,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "删除记忆包"
+            "value": "删除 Bundle"
           }
         }
       }
@@ -6260,7 +6292,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "无法获取最新的记忆包数据。已保留现有记忆包。"
+            "value": "无法获取最新的 Bundle 数据。已保留现有 Bundle。"
           }
         }
       }
@@ -6518,22 +6550,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "包含 Agent 已持有并复用的片段。Token 数量指已选内容的大小，不代表新发送的 Token 或模型用量。"
-          }
-        }
-      }
-    },
-    "Initial memory": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Initial memory"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "初始记忆"
           }
         }
       }
@@ -6965,7 +6981,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "正在加载记忆包…"
+            "value": "正在加载 Bundle…"
           }
         }
       }
@@ -7957,7 +7973,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "新建记忆包"
+            "value": "新建 Bundle"
           }
         }
       }
@@ -8074,6 +8090,22 @@
         }
       }
     },
+    "No Bundle": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Bundle"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不使用 Bundle"
+          }
+        }
+      }
+    },
     "No Bundles": {
       "localizations": {
         "en": {
@@ -8085,7 +8117,23 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "暂无记忆包"
+            "value": "暂无 Bundle"
+          }
+        }
+      }
+    },
+    "No Bundles yet. You can add memory after creating the project.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Bundles yet. You can add memory after creating the project."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂无 Bundle。创建项目后可以添加记忆。"
           }
         }
       }
@@ -9212,6 +9260,22 @@
         }
       }
     },
+    "Opening…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在打开…"
+          }
+        }
+      }
+    },
     "Operation Failed": {
       "localizations": {
         "en": {
@@ -9240,6 +9304,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "操作失败：%@"
+          }
+        }
+      }
+    },
+    "Optional": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选填"
+          }
+        }
+      }
+    },
+    "Optional. Link local folders to this project on this Mac. You can add them later in Project Settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional. Link local folders to this project on this Mac. You can add them later in Project Settings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可选。将此 Mac 上的本地文件夹关联到项目，也可以稍后在项目设置中添加。"
           }
         }
       }
@@ -9838,6 +9934,22 @@
         }
       }
     },
+    "Project name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project name"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目名称"
+          }
+        }
+      }
+    },
     "Project role changed": {
       "extractionState": "manual",
       "localizations": {
@@ -10382,7 +10494,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "正在刷新记忆包…"
+            "value": "正在刷新 Bundle…"
           }
         }
       }
@@ -10766,7 +10878,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "从记忆包移除"
+            "value": "从 Bundle 移除"
           }
         }
       }
@@ -11123,18 +11235,18 @@
         }
       }
     },
-    "Repositories can also be attached later on this Mac.": {
+    "Repositories": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Repositories can also be attached later on this Mac."
+            "value": "Repositories"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "之后也可以在这台 Mac 上关联仓库。"
+            "value": "仓库"
           }
         }
       }
@@ -11247,6 +11359,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "请求评审…"
+          }
+        }
+      }
+    },
+    "Requesting review…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requesting review…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在请求评审…"
           }
         }
       }
@@ -12547,6 +12675,22 @@
         }
       }
     },
+    "Saving…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saving…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在保存…"
+          }
+        }
+      }
+    },
     "Schema": {
       "localizations": {
         "en": {
@@ -12606,7 +12750,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "搜索记忆包"
+            "value": "搜索 Bundle"
           }
         }
       }
@@ -13818,7 +13962,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "记忆包将被永久删除，其中的记忆不受影响。"
+            "value": "Bundle 将被永久删除，其中的记忆不受影响。"
           }
         }
       }
@@ -14650,7 +14794,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "所选记忆包包含组织中不可用的记忆。"
+            "value": "所选 Bundle 包含组织中不可用的记忆。"
           }
         }
       }
@@ -14666,7 +14810,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "所选记忆包已不可用。"
+            "value": "所选 Bundle 已不可用。"
           }
         }
       }
@@ -15595,7 +15739,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "未命名记忆包"
+            "value": "未命名 Bundle"
           }
         }
       }
@@ -16574,6 +16718,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "流程路径必须使用 workflow/ 命名空间。"
+          }
+        }
+      }
+    },
+    "Working…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在处理…"
           }
         }
       }

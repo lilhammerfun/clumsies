@@ -297,39 +297,35 @@ private struct BundleResourcePicker: View {
     @State private var query = ""
 
     var body: some View {
-        NavigationStack {
-            List {
-                ForEach(MemoryKind.allCases) { kind in
-                    let candidates = filteredResources.filter { $0.kind == kind }
-                    if !candidates.isEmpty {
-                        Section(kind.title) {
-                            ForEach(candidates) { resource in
-                                Toggle(isOn: selectionBinding(for: resource.id)) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(resource.document.title)
-                                            .lineLimit(1)
-                                        Text(resourceLocation(resource))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            NavigationStack {
+                List {
+                    ForEach(MemoryKind.allCases) { kind in
+                        let candidates = filteredResources.filter { $0.kind == kind }
+                        if !candidates.isEmpty {
+                            Section(kind.title) {
+                                ForEach(candidates) { resource in
+                                    Toggle(isOn: selectionBinding(for: resource.id)) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(resource.document.title)
+                                                .lineLimit(1)
+                                            Text(resourceLocation(resource))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
+                                    .accessibilityLabel(
+                                        "\(resource.document.title), \(resourceLocation(resource))"
+                                    )
                                 }
-                                .accessibilityLabel(
-                                    "\(resource.document.title), \(resourceLocation(resource))"
-                                )
                             }
                         }
                     }
                 }
+                .searchable(text: $query, prompt: "Search memory")
+                .navigationTitle("Add Memory")
             }
-            .searchable(text: $query, prompt: "Search memory")
-            .navigationTitle("Add Memory")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .toolbarHelp(String(localized: "Finish Adding Memory"))
-                        .keyboardShortcut(.defaultAction)
-                }
-            }
+            SheetActionBar(confirmationTitle: Text("Done"), confirm: { dismiss() })
         }
         .frame(width: 620, height: 600)
     }

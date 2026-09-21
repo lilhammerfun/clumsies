@@ -122,6 +122,17 @@ private struct MemoryGuidelinesPreview: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            previewContent.padding(24)
+            SheetActionBar(
+                confirmationTitle: Text("Set Up Guidelines"), cancellationTitle: "Close",
+                cancel: { dismiss() }, confirm: onUse
+            )
+        }
+        .frame(width: 680, height: 640)
+    }
+
+    private var previewContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Memory Guidelines").font(.title2.bold())
             Text("Choose how agents maintain your memory. You can edit these guidelines at any time. App updates will preserve your changes.")
@@ -140,16 +151,7 @@ private struct MemoryGuidelinesPreview: View {
                     .padding()
             }
             .background(.background)
-            HStack {
-                Text(self.document.path).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Close") { self.dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Set Up Guidelines", action: self.onUse)
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-            }
+            Text(document.path).font(.caption).foregroundStyle(.secondary)
         }
-        .padding(24)
-        .frame(width: 680, height: 640)
     }
 }
