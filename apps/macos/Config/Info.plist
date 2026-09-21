@@ -50,6 +50,8 @@
 	<string>$(CLUMSIES_UPDATE_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>oCAiBe/ez4wochO1I9ziO1uCEpmES+e7ypC74HJwIvw=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
 </dict>
