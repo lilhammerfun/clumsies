@@ -13,6 +13,10 @@
 
 Clumsies helps teams maintain shared Markdown guidance for coding agents: architecture decisions, project constraints, and procedures. The organization keeps published **Memory**; each **Project** selects the Memory it uses and connects it to local repositories. Agents retrieve relevant guidance while they work and can propose changes when a user asks.
 
+![Clumsies macOS dashboard showing memory growth, retrieval activity, and coverage](assets/screenshots/macos-dashboard.png)
+
+*The macOS dashboard brings together memory growth, retrieval activity, and coverage.*
+
 ## How you use it
 
 The [quickstart](https://docs.clumsies.ai/quickstart/) follows one workflow:
