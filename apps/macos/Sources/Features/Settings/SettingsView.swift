@@ -3,6 +3,7 @@ import SwiftUI
 
 struct GeneralSettingsView: View {
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
+    let onRestart: () -> Void
     @State private var language = AppLanguage.restored()
     @State private var showsLanguageChangeNotice = false
 
@@ -41,7 +42,7 @@ struct GeneralSettingsView: View {
             } header: {
                 Text("Language")
             } footer: {
-                Text("Choose a language for Clumsies without changing your Mac's language. Changes take effect when you reopen Clumsies.")
+                Text("Choose a language for Clumsies without changing your Mac's language. Restart Clumsies to apply the change.")
             }
             Section("Updates") {
                 Toggle(
@@ -68,11 +69,11 @@ struct GeneralSettingsView: View {
         .formStyle(.grouped)
         .font(.system(size: 13))
         .toggleStyle(.switch)
-        .alert("Reopen Clumsies to apply the language", isPresented: $showsLanguageChangeNotice) {
-            Button("Quit Clumsies") { NSApp.terminate(nil) }
+        .alert("Restart Clumsies to apply the language?", isPresented: $showsLanguageChangeNotice) {
+            Button("Restart and Apply", action: onRestart)
             Button("Later", role: .cancel) {}
         } message: {
-            Text("Your language choice is saved. Quit and reopen Clumsies to apply it to all windows and menus.")
+            Text("Clumsies will save pending changes and reopen automatically in the selected language.")
         }
     }
 }

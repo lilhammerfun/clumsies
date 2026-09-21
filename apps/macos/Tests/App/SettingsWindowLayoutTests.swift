@@ -91,7 +91,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
         let workspace = WorkspaceCoordinator()
         let controller = SettingsWindowController(
             store: workspace, administration: AdministrationModel(context: workspace.context, onWorkspaceChanged: {}), softwareUpdateController: SoftwareUpdateController(startingUpdater: false),
-            onShowLogs: {}, navigation: navigation
+            onShowLogs: {}, onRestart: {}, navigation: navigation
         )
         let window = NSWindow()
         window.isReleasedWhenClosed = false

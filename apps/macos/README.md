@@ -34,9 +34,11 @@ workflow.
 
 Clumsies supports English and Simplified Chinese. In **Clumsies → Settings → General
 → Language**, choose **Follow System**, **English**, or **简体中文**. The choice applies
-only to Clumsies, so an English-language Mac can run Clumsies in Chinese. Quit and
-reopen the app to apply the change to all windows, menus, and dialogs. The quit
-action uses the normal save and unsaved-change checks.
+only to Clumsies, so an English-language Mac can run Clumsies in Chinese.
+**Restart and Apply** uses the normal save and unsaved-change checks, then waits
+for the current process to exit before reopening the same App automatically.
+Cancelling quit or failing to save cancels the restart. **Later** applies the
+choice on the next launch.
 
 The preference uses the app's `AppleLanguages` override and also recognizes a
 language selected in macOS System Settings. **Follow System** removes that

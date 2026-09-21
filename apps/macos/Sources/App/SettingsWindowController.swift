@@ -26,6 +26,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let administration: AdministrationModel
     private let softwareUpdateController: SoftwareUpdateController
     private let onShowLogs: () -> Void
+    private let onRestart: () -> Void
     private var authorityObservation: AnyCancellable?
     private var organizationID: String?
     private var accountID: String?
@@ -42,12 +43,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     init(store: WorkspaceCoordinator, administration: AdministrationModel, softwareUpdateController: SoftwareUpdateController,
-         onShowLogs: @escaping () -> Void,
+         onShowLogs: @escaping () -> Void, onRestart: @escaping () -> Void,
          navigation: SettingsNavigation = SettingsNavigation()) {
         self.store = store
         self.administration = administration
         self.softwareUpdateController = softwareUpdateController
         self.onShowLogs = onShowLogs
+        self.onRestart = onRestart
         self.navigation = navigation
         organizationID = store.context.organization?.orgId
         accountID = store.context.account?.userId
@@ -84,7 +86,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         if window == nil {
             let host = NSHostingController(rootView: SettingsWindowView(softwareUpdateController: softwareUpdateController, navigation: navigation,
-                onShowLogs: onShowLogs
+                onShowLogs: onShowLogs, onRestart: onRestart
             ).environmentObject(administration).workspaceEnvironment(store))
             host.sizingOptions = []
             host.sceneBridgingOptions = .all
