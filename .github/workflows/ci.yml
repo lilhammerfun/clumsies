@@ -279,7 +279,7 @@ jobs:
     # Site delivery synchronizes the shared Compose/Caddy configuration first.
     needs: [changes, build, site_delivery]
     if: >-
-      always() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.build.result == 'success' && needs.changes.outputs.server_delivery == 'true' &&
       (needs.site_delivery.result == 'success' || needs.site_delivery.result == 'skipped')
     permissions:
