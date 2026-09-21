@@ -5,6 +5,31 @@ import XCTest
 
 @MainActor
 final class DiagnosticsWindowLayoutTests: XCTestCase {
+    func testRetrievalTableStaysInsideTheAvailableDetailWidth() async throws {
+        let detail = try retrievalDetail(runId: "layout")
+        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(serviceName: "test.layout.unused"),
+                                              fetchRun: { _ in detail })
+        await model.select(runId: "layout")
+        for width: CGFloat in [692, 1052] {
+            let host = NSHostingView(rootView: RetrievalRunDetailView(model: model)
+                .frame(width: width, height: 600))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 600),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer { window.close() }
+            host.layoutSubtreeIfNeeded()
+            func table(in view: NSView) -> NSTableView? {
+                if let table = view as? NSTableView { return table }
+                return view.subviews.lazy.compactMap { table(in: $0) }.first
+            }
+            let scroll = try XCTUnwrap(table(in: host)?.enclosingScrollView)
+            let frame = scroll.convert(scroll.bounds, to: host)
+            XCTAssertGreaterThanOrEqual(frame.minX, -1)
+            XCTAssertLessThanOrEqual(frame.maxX, width + 1)
+        }
+    }
+
     func testReadableRunListWidthIsAHardMinimum() {
         XCTAssertEqual(
             RetrievalDiagnosticsLayout.runListMinimumWidth,
@@ -60,6 +85,24 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
         XCTAssertEqual(candidates.filter(RetrievalCandidateFilter.selected.includes), [selected])
         XCTAssertEqual(candidates.filter(RetrievalCandidateFilter.excluded.includes), [excluded])
         XCTAssertEqual(selected.deltaAction, .reuse)
+    }
+
+    func testCandidateColumnsSortNumericallyWithMissingRanksLast() throws {
+        let two = try retrievalDetail(runId: "two", rank: 2).candidates[0]
+        let eleven = try retrievalDetail(runId: "eleven", rank: 11).candidates[0]
+        let missing = try retrievalDetail(runId: "missing").candidates[0]
+        let tied = try retrievalDetail(runId: "tied", rank: 2).candidates[0]
+        let candidates = [missing, eleven, two, tied]
+
+        for column in RetrievalCandidateSort.Column.allCases {
+            let ascending = RetrievalCandidateSort(column: column)
+            let descending = RetrievalCandidateSort(column: column, order: .reverse)
+            XCTAssertEqual(candidates.sorted(using: [ascending]), [two, tied, eleven, missing])
+            XCTAssertEqual(candidates.sorted(using: [descending]), [eleven, two, tied, missing])
+        }
+        let exact = try retrievalDetail(runId: "exact", exactRank: 1).candidates[0]
+        XCTAssertEqual([two, missing, exact].sorted(using: [RetrievalCandidateSort(column: .bm25)]),
+                       [exact, two, missing])
     }
 
     func testRunSelectionIgnoresLateResultsAndClearsLoadingImmediately() async throws {
@@ -130,12 +173,14 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
 
     private func retrievalDetail(
         runId: String,
-        selected: Bool = true
+        selected: Bool = true,
+        rank: Int? = nil,
+        exactRank: Int? = nil
     ) throws -> RetrievalRunDetail {
         let json = """
         {
           "run": {
-            "run_id": "\(runId)", "project_id": "project-1", "query": "test query",
+            "run_id": "\(runId)", "project_id": "project-1", "query": "验证 macOS 更新按钮和 appcast 清单，检查发布流程与签名验证。",
             "activation_state_fingerprint": "state", "status": "succeeded",
             "resource_count": 1, "unit_count": 1,
             "latencies": {
@@ -154,6 +199,12 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
                         "end_byte": 8, "heading_path": []},
             "content_hash": "content", "resource_content_hash": "resource",
             "token_count": 2, "evidence_excerpt": "evidence",
+            "final_rank": \(rank.map(String.init) ?? "null"),
+            "bm25_rank": \(rank.map(String.init) ?? "null"),
+            "exact_rank": \(exactRank.map(String.init) ?? "null"),
+            "vector_rank": \(rank.map(String.init) ?? "null"),
+            "rrf_rank": \(rank.map(String.init) ?? "null"),
+            "reranker_rank": \(rank.map(String.init) ?? "null"),
             "selected": \(selected),
             "exclusion_reason": "\(selected ? "selected" : "not_reranked")",
             "delta_action": \(selected ? "\"reuse\"" : "null")

@@ -1,5 +1,4 @@
 import AppKit
-import MarkdownUI
 import SwiftUI
 
 /// Content column: the agent activity this project has produced, newest first.
@@ -24,12 +23,17 @@ struct ActivitySessionList: View {
                     systemImage: "bubble.left.and.bubble.right",
                     description: Text(
                         self.model.selectedProjectId == nil
-                            ? "Agent activity from bound projects appears here with user requests and recalled memory."
+                            ? "Agent activity from bound projects appears here with user messages and recalled memory."
                             : "Try another project or choose All Projects."
                     )
                 )
             } else {
-                List(selection: self.$model.selectedSessionId) {
+                // Native navigation may clear the List's selection while its rows
+                // are offscreen. Only an explicit row selection changes the session.
+                List(selection: Binding(
+                    get: { self.model.selectedSessionId },
+                    set: { if let id = $0 { self.model.selectedSessionId = id } }
+                )) {
                     ForEach(self.model.sessions) { session in
                         ActivitySessionRow(session: session)
                             .tag(session.id)
@@ -101,14 +105,14 @@ struct ActivitySessionDetail: View {
     @ObservedObject var model: ActivityModel
 
     var body: some View {
-        NavigationStack {
+        Group {
             Group {
                 if let session = model.selectedSession {
                     if session.tasks.isEmpty {
                         ContentUnavailableView(
-                            "No User Requests",
+                            "No User Messages",
                             systemImage: "text.bubble",
-                            description: Text("No user requests were found in this activity.")
+                            description: Text("No user messages were found in this activity.")
                         )
                     } else {
                         self.taskList(session)
@@ -131,7 +135,7 @@ struct ActivitySessionDetail: View {
                     ContentUnavailableView(
                         "Select an Activity",
                         systemImage: "sidebar.left",
-                        description: Text("Choose an item to see its requests and recalled memory.")
+                        description: Text("Choose an item to see its messages and recalled memory.")
                     )
                 }
             }
@@ -145,10 +149,9 @@ struct ActivitySessionDetail: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ActivitySessionHeader(session: session, totalTasks: self.model.totalTasks)
 
-                ForEach(Array(session.tasks.enumerated()), id: \.element.id) { index, task in
+                ForEach(session.tasks) { task in
                     Divider()
                     ActivityTaskSection(
-                        number: index + 1,
                         task: task,
                         session: session,
                         model: self.model
@@ -168,7 +171,7 @@ struct ActivitySessionDetail: View {
                         .controlSize(.small)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical)
-                        .accessibilityLabel("More requests")
+                        .accessibilityLabel("More messages")
                         .task(id: offset) { await self.model.loadMoreTasks() }
                 } else if self.model.isLoadingDetail {
                     ProgressView().controlSize(.small).padding(.vertical)
@@ -205,7 +208,7 @@ private struct ActivitySessionHeader: View {
             .foregroundStyle(.secondary)
 
             Label(
-                "\(self.totalTasks) requests",
+                "\(self.totalTasks) user messages",
                 systemImage: "text.bubble"
             )
             .font(.caption)
@@ -221,28 +224,24 @@ private struct ActivitySessionHeader: View {
 }
 
 private struct ActivityTaskSection: View {
-    let number: Int
     let task: RecallTask
     let session: RecallSession
     let model: ActivityModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Request \(self.number)")
-                    .font(.headline)
-                Spacer()
-                if let time = task.time {
-                    Text(Self.date(time))
-                        .font(.caption)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Label("User message", systemImage: "person.crop.circle")
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    if let time = task.time {
+                        Text(Self.date(time))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                Label("User request", systemImage: "person.crop.circle")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
                 Text(self.task.text)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -251,7 +250,7 @@ private struct ActivityTaskSection: View {
 
             if self.task.activations.isEmpty {
                 Label(
-                    "The agent did not ask Clumsies for memory while handling this request.",
+                    "The agent did not ask Clumsies for memory while handling this message.",
                     systemImage: "brain"
                 )
                     .font(.callout)
@@ -265,8 +264,6 @@ private struct ActivityTaskSection: View {
                         onOpenRetrieval: {
                             self.model.openRetrieval(
                                 session: self.session,
-                                task: self.task,
-                                requestNumber: self.number,
                                 activation: activation
                             )
                         }
@@ -290,10 +287,11 @@ private struct ActivityActivationRow: View {
     let onOpenRetrieval: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Label("Memory search", systemImage: "sparkle.magnifyingglass")
-                    .fontWeight(.medium)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
                 Spacer()
                 if let status = Self.visibleStatusTitle(activation.runStatus) {
                     Text(status)
@@ -302,14 +300,9 @@ private struct ActivityActivationRow: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Agent query")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text(self.activation.query)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(self.activation.query)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 10) {
                 if !self.activation.fragments.isEmpty {
@@ -360,6 +353,7 @@ private struct ActivityActivationRow: View {
                             runId: self.activation.runId,
                             model: self.model
                         )
+                        .id(fragment.unitKey + ":" + (self.activation.runId ?? ""))
                     }
                 }
             }
@@ -382,16 +376,22 @@ struct ActivityFragmentRow: View {
     let runId: String?
     let model: ActivityModel
     @StateObject private var content = ActivityFragmentModel()
+    @State private var isExpanded = false
 
     private var displayedFragment: RecallFragment { content.fullFragment ?? fragment }
 
     var body: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(self.fragment.displayTitle)
-                        .font(.headline)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .help(self.fragment.displayTitle)
                     Text(self.fragment.locationTitle)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(self.fragment.locationTitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     HStack(spacing: 8) {
@@ -409,8 +409,10 @@ struct ActivityFragmentRow: View {
                 .textSelection(.enabled)
 
                 if !self.displayedFragment.content.isEmpty {
-                    Markdown(self.displayedFragment.content)
-                        .markdownTheme(.gitHub)
+                    Text(verbatim: self.displayedFragment.content)
+                        .font(.callout)
+                        .lineLimit(self.isExpanded ? nil : 3)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -419,14 +421,20 @@ struct ActivityFragmentRow: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if self.content.isLoading {
+                Button(self.isExpanded ? "Collapse source" : "Show source") {
+                    self.isExpanded.toggle()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+
+                if self.isExpanded && self.content.isLoading {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
                         Text("Loading the recorded chunk…")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                } else if self.content.loadFailed {
+                } else if self.isExpanded && self.content.loadFailed {
                     HStack(alignment: .firstTextBaseline) {
                         Text("The full retrieval record is unavailable. Showing the recorded preview.")
                         Spacer()
@@ -434,7 +442,7 @@ struct ActivityFragmentRow: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                } else if self.displayedFragment.truncated {
+                } else if self.isExpanded && self.displayedFragment.truncated {
                     Text("Only the recorded preview is available for this chunk.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -443,7 +451,9 @@ struct ActivityFragmentRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)
         }
-        .task(id: runId) { await self.loadFullFragment() }
+        .task(id: self.isExpanded) {
+            if self.isExpanded { await self.loadFullFragment() }
+        }
     }
 
     private func loadFullFragment() async {
@@ -456,36 +466,15 @@ struct ActivityFragmentRow: View {
 
 struct ActivityRetrievalDetail: View {
     let selection: ActivityRetrievalSelection
-    let onBack: () -> Void
     @StateObject private var retrieval: RetrievalDiagnosticsModel
 
-    init(selection: ActivityRetrievalSelection, daemon: DaemonXPCClient, onBack: @escaping () -> Void) {
+    init(selection: ActivityRetrievalSelection, daemon: DaemonXPCClient) {
         self.selection = selection
-        self.onBack = onBack
         _retrieval = StateObject(wrappedValue: RetrievalDiagnosticsModel(daemon: daemon))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                Button("Back to Activity", systemImage: "chevron.left", action: self.onBack)
-                    .buttonStyle(.borderless)
-                    .keyboardShortcut("[", modifiers: .command)
-                Text("\(self.selection.sessionTitle) / Request \(self.selection.requestNumber)")
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(self.selection.requestText)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .help(self.selection.requestText)
-                    .textSelection(.enabled)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            Divider()
-            RetrievalRunDetailView(model: self.retrieval)
-        }
+        RetrievalRunDetailView(model: self.retrieval)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle("Retrieval Process")
         .task(id: selection.runId) { await self.retrieval.select(runId: self.selection.runId) }

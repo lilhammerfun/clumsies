@@ -1,10 +1,7 @@
 import Foundation
 
-struct ActivityRetrievalSelection: Equatable {
+struct ActivityRetrievalSelection: Hashable {
     let sessionId: String
-    let sessionTitle: String
-    let requestNumber: Int
-    let requestText: String
     let runId: String
 }
 
@@ -216,11 +213,10 @@ final class ActivityModel: ObservableObject {
         }
     }
 
-    func openRetrieval(session: RecallSession, task: RecallTask, requestNumber: Int, activation: RecallActivation) {
+    func openRetrieval(session: RecallSession, activation: RecallActivation) {
         guard session.id == selectedSessionId, let runId = activation.runId else { return }
         retrievalSelection = ActivityRetrievalSelection(
-            sessionId: session.id, sessionTitle: session.activityDisplayTitle,
-            requestNumber: requestNumber, requestText: task.text, runId: runId
+            sessionId: session.id, runId: runId
         )
     }
 
