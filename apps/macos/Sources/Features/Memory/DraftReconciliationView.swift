@@ -46,21 +46,14 @@ struct DraftReconciliationView: View {
                 cleanDiff
             }
             if !usesContextualUpdateAction {
-                Divider()
-                HStack {
-                    Button("Cancel") {
+                SheetActionBar(
+                    confirmationTitle: Text(updateButtonTitle), progressTitle: "Saving…",
+                    isWorking: isApplying, canConfirm: resolution.canSave,
+                    confirmationIdentifier: "draft-resolution-save",
+                    cancel: {
                         if resolution.hasEdits { confirmsDiscard = true } else { onCancel() }
-                    }
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(isApplying)
-                    Spacer()
-                    if isApplying { ProgressView().controlSize(.small) }
-                    Button(updateButtonTitle, action: apply)
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(isApplying || !resolution.canSave)
-                        .accessibilityIdentifier("draft-resolution-save")
-                }.padding(12)
+                    }, confirm: apply
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

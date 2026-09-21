@@ -618,18 +618,13 @@ private struct RetrievalEvidenceReviewSheet: View {
                     }
                 }
 
-                Divider()
-
-                HStack {
-                    Spacer()
-
-                    Button("Cancel") {
+                SheetActionBar(
+                    confirmationTitle: Text(action.title), progressTitle: "Saving…",
+                    isWorking: model.isMutating,
+                    cancel: {
                         model.resetEvidenceSelection()
                         isPresented = false
-                    }
-                    .keyboardShortcut(.cancelAction)
-
-                    Button(action.title) {
+                    }, confirm: {
                         Task {
                             if action != .done {
                                 guard await model.resolveEvidenceReview() else { return }
@@ -637,18 +632,19 @@ private struct RetrievalEvidenceReviewSheet: View {
                             isPresented = false
                         }
                     }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(model.isMutating)
-                }
-                .padding(16)
+                )
             }
             .frame(minWidth: 620, minHeight: 560)
+            .interactiveDismissDisabled(model.isMutating)
             .onAppear {
                 model.resetEvidenceSelection()
             }
         } else {
-            ProgressView()
-                .frame(width: 620, height: 560)
+            VStack(spacing: 0) {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                SheetActionBar(confirmationTitle: Text("Close"), confirm: { isPresented = false })
+            }
+            .frame(width: 620, height: 560)
         }
     }
 }

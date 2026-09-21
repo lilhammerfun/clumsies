@@ -121,16 +121,21 @@ struct DashboardView: View {
             }
         }
         .sheet(item: $definition) { metric in
-            VStack(alignment: .leading, spacing: 16) {
-                Label(metric.title, systemImage: "chart.bar.doc.horizontal").font(.title3.weight(.semibold))
-                Text(metric.explanation).font(.body).foregroundStyle(.secondary).lineSpacing(5)
-                if [.retrieval, .directories, .top, .recency].contains(metric),
-                   let limit = model.snapshot?.retrieval.retentionPerProject {
-                    Text("Based on retrieval history retained on this Mac, up to \(limit) requests per project. Activity on other devices is not included.")
-                        .font(.callout).foregroundStyle(.secondary).lineSpacing(5)
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label(metric.title, systemImage: "chart.bar.doc.horizontal").font(.title3.weight(.semibold))
+                    Text(metric.explanation).font(.body).foregroundStyle(.secondary).lineSpacing(5)
+                    if [.retrieval, .directories, .top, .recency].contains(metric),
+                       let limit = model.snapshot?.retrieval.retentionPerProject {
+                        Text("Based on retrieval history retained on this Mac, up to \(limit) requests per project. Activity on other devices is not included.")
+                            .font(.callout).foregroundStyle(.secondary).lineSpacing(5)
+                    }
                 }
-                HStack { Spacer(); Button("Done") { definition = nil }.keyboardShortcut(.defaultAction) }
-            }.padding(28).frame(width: 480)
+                .padding(24)
+                SheetActionBar(confirmationTitle: Text("Done"), confirm: { definition = nil })
+            }
+            .frame(width: 480)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 

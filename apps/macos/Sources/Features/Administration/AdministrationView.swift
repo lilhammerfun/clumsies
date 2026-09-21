@@ -192,16 +192,11 @@ private struct OrganizationEditSheet: View {
                 if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
             .formStyle(.grouped)
-            Divider()
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(workspaceContext.isMutatingAdministration)
-                Button("Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canSave)
-            }
-            .padding(12)
+            SheetActionBar(
+                confirmationTitle: Text("Save"), progressTitle: "Saving…",
+                isWorking: workspaceContext.isMutatingAdministration, canConfirm: canSave,
+                cancel: { dismiss() }, confirm: save
+            )
         }
         .frame(width: 460, height: editsDomains ? 320 : 210)
         .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
@@ -428,16 +423,11 @@ private struct AdministrationAddMemberSheet: View {
             }
             .formStyle(.grouped)
 
-            Divider()
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .disabled(workspaceContext.isMutatingAdministration)
-                Button("Add") { add() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canAdd)
-            }
-            .padding(12)
+            SheetActionBar(
+                confirmationTitle: Text("Add"), progressTitle: "Adding…",
+                isWorking: workspaceContext.isMutatingAdministration, canConfirm: canAdd,
+                cancel: { dismiss() }, confirm: add
+            )
         }
         .frame(width: 460, height: 285)
         .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)

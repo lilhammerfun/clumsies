@@ -5,11 +5,9 @@ struct ProjectCreationSheet: View {
     @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var bundleStore: BundleStore
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
-    @EnvironmentObject private var projectService: ProjectService
     @Environment(\.dismiss) private var dismiss
     @FocusState private var nameFocused: Bool
     @StateObject private var model: ProjectCreationModel
-    @State private var showsOptions = false
 
     init(model: @autoclosure @escaping () -> ProjectCreationModel) {
         _model = StateObject(wrappedValue: model())
@@ -17,60 +15,128 @@ struct ProjectCreationSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            formContent.padding(24)
+            SheetActionBar(
+                confirmationTitle: Text("Create Project"),
+                progressTitle: "Creating project…",
+                isWorking: model.isCreating,
+                canConfirm: ProjectMetadataValidation.isValid(name: model.name, description: model.description),
+                cancel: { dismiss() },
+                confirm: create
+            )
+        }
+        .frame(width: 520)
+        .fixedSize(horizontal: false, vertical: true)
+        .interactiveDismissDisabled(model.isCreating)
+        .onAppear { nameFocused = true }
+    }
+
+    private var formContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
             Text("New Project")
                 .font(.headline)
-                .padding(.top, 20)
-            Form {
-                Section {
-                    TextField("Name", text: self.$model.name).focused(self.$nameFocused)
-                    TextField("Description", text: self.$model.description, axis: .vertical)
-                        .lineLimit(2...4)
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 16) {
+                GridRow(alignment: .firstTextBaseline) {
+                    Text("Name")
+                        .gridColumnAlignment(.trailing)
+                    TextField("Name", text: $model.name, prompt: Text("Project name"))
+                        .labelsHidden()
+                        .focused($nameFocused)
                 }
-                Section {
-                    DisclosureGroup("Additional options", isExpanded: self.$showsOptions) {
-                        Picker("Initial memory", selection: self.$model.selectedBundleId) {
-                            Text("None").tag(Optional<String>.none)
-                            ForEach(self.bundleStore.bundles) { bundle in
+                GridRow(alignment: .firstTextBaseline) {
+                    Text("Description")
+                    TextField("Description", text: $model.description, prompt: Text("Optional"), axis: .vertical)
+                        .labelsHidden()
+                        .lineLimit(3...5)
+                }
+                Divider()
+                    .gridCellUnsizedAxes(.horizontal)
+                GridRow(alignment: .firstTextBaseline) {
+                    Text("Bundle")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Picker("Bundle", selection: $model.selectedBundleId) {
+                            Text("No Bundle").tag(Optional<String>.none)
+                            ForEach(bundleStore.bundles) { bundle in
                                 Text(bundle.name).tag(Optional(bundle.id))
                             }
                         }
-                        ForEach(self.model.repositories, id: \.path) { repository in
-                            HStack {
-                                Text(repository.lastPathComponent).lineLimit(1)
-                                    .help(repository.path)
-                                Spacer()
-                                Button {
-                                    self.model.repositories.removeAll { $0 == repository }
-                                } label: { Image(systemName: "minus.circle") }
-                                    .buttonStyle(.borderless)
-                                    .accessibilityLabel("Remove \(repository.lastPathComponent)")
-                            }
-                        }
-                        Button("Attach Repositories…") { self.chooseRepositories() }
-                        Text("Repositories can also be attached later on this Mac.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .disabled(bundleStore.bundles.isEmpty)
+                        bundleHelp
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                if let errorMessage = model.errorMessage {
-                    Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
+                GridRow(alignment: .firstTextBaseline) {
+                    Text("Repositories")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("Add Repositories…") { chooseRepositories() }
+                        if !model.repositories.isEmpty {
+                            ScrollView {
+                                VStack(spacing: 0) {
+                                    ForEach(model.repositories, id: \.path) { repository in
+                                        HStack(spacing: 8) {
+                                            Image(systemName: "folder")
+                                                .foregroundStyle(.secondary)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(repository.lastPathComponent)
+                                                Text(repository.path)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .help(repository.path)
+                                            Button {
+                                                model.repositories.removeAll { $0 == repository }
+                                            } label: { Image(systemName: "minus.circle") }
+                                                .buttonStyle(.borderless)
+                                                .accessibilityLabel("Remove \(repository.lastPathComponent)")
+                                        }
+                                        .frame(height: 48)
+                                    }
+                                }
+                            }
+                            .frame(height: CGFloat(min(model.repositories.count, 3)) * 48)
+                        }
+                        Text("Optional. Link local folders to this project on this Mac. You can add them later in Project Settings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
-            .formStyle(.grouped)
-            .disabled(self.model.isCreating)
-            HStack {
-                if self.model.isCreating { ProgressView().controlSize(.small) }
-                Spacer()
-                Button("Cancel", role: .cancel) { self.dismiss() }
-                    .keyboardShortcut(.cancelAction).disabled(self.model.isCreating)
-                Button("Create") { self.create() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!ProjectMetadataValidation.isValid(name: self.model.name, description: self.model.description) || self.model.isCreating)
+            .textFieldStyle(.roundedBorder)
+            .disabled(model.isCreating)
+            if let errorMessage = model.errorMessage {
+                Text(errorMessage)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
-            .padding(16)
         }
-        .frame(width: 480, height: showsOptions ? 500 : 320)
-        .interactiveDismissDisabled(model.isCreating)
-        .onAppear { self.nameFocused = true }
+    }
+
+    @ViewBuilder
+    private var bundleHelp: some View {
+        switch bundleStore.bundleLoadState {
+        case .loading:
+            Text("Loading Bundles…")
+        case .failed:
+            Button("Bundle refresh failed - Try Again") {
+                Task { await workspaceActions.reload() }
+            }
+        case .loaded:
+            if bundleStore.bundles.isEmpty {
+                Text("No Bundles yet. You can add memory after creating the project.")
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Choose a Bundle to add its memory to this project.")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func chooseRepositories() {
@@ -78,7 +144,7 @@ struct ProjectCreationSheet: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.prompt = String(localized: "Attach")
+        panel.prompt = String(localized: "Add")
         panel.begin { response in
             guard response == .OK else { return }
             let existing = Set(model.repositories.map(\.standardized.path))
@@ -376,16 +442,11 @@ private struct ProjectDetailsSheet: View {
                 if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
             .formStyle(.grouped)
-            Divider()
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { self.dismiss() }
-                    .disabled(self.workspaceContext.isMutatingAdministration)
-                Button("Save") { self.save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!self.canSave)
-            }
-            .padding(12)
+            SheetActionBar(
+                confirmationTitle: Text("Save"), progressTitle: "Saving…",
+                isWorking: workspaceContext.isMutatingAdministration, canConfirm: canSave,
+                cancel: { dismiss() }, confirm: save
+            )
         }
         .frame(width: 460, height: 280)
         .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
@@ -429,9 +490,26 @@ private struct ProjectMemberSheet: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            memberContent.padding(24)
+            SheetActionBar(
+                confirmationTitle: Text("Add"), progressTitle: "Adding…",
+                isWorking: workspaceContext.isMutatingAdministration, canConfirm: model.canAdd,
+                cancel: { dismiss() }, confirm: {
+                    Task { if await model.add() { dismiss() } }
+                }
+            )
+        }
+        .frame(width: 440, height: 430)
+        .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
+        .task(id: model.searchGeneration) { await model.search() }
+        .onDisappear { model.cancel() }
+    }
+
+    private var memberContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add project member").font(.headline)
-            ClassicSearchField(text: self.$model.query, prompt: String(localized: "Search members"), width: 404,
+            ClassicSearchField(text: self.$model.query, prompt: String(localized: "Search members"), width: 392,
                 accessibilityIdentifier: "project-member-search")
                 .frame(height: 24)
                 .disabled(self.workspaceContext.isMutatingAdministration)
@@ -467,29 +545,17 @@ private struct ProjectMemberSheet: View {
                     }
                 }
             }
-            HStack {
-                if model.nextCursor != nil {
-                    Button("Show More") {
-                        self.model.loadMore()
+            if model.nextCursor != nil || (model.isLoading && !model.members.isEmpty) {
+                HStack {
+                    if model.nextCursor != nil {
+                        Button("Show More") { model.loadMore() }
+                            .disabled(model.isLoading || workspaceContext.isMutatingAdministration)
                     }
-                    .disabled(self.model.isLoading || self.workspaceContext.isMutatingAdministration)
+                    if model.isLoading && !model.members.isEmpty { ProgressView().controlSize(.small) }
+                    Spacer()
                 }
-                if self.model.isLoading && !self.model.members.isEmpty { ProgressView().controlSize(.small) }
-                Spacer()
-                Button("Cancel", role: .cancel) { self.dismiss() }
-                    .disabled(self.workspaceContext.isMutatingAdministration)
-                Button("Add") { Task { if await self.model.add() { self.dismiss() } } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!self.model.canAdd)
             }
         }
-        .padding(18)
-        .frame(width: 440, height: 430)
-        .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
-        .task(id: model.searchGeneration) {
-            await self.model.search()
-        }
-        .onDisappear { self.model.cancel() }
     }
 
 }
