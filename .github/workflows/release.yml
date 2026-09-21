@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       distribution:
-        description: Preview DMG needs no Apple credentials; notarized builds require Developer ID
+        description: Preview DMG, notarized app, or initialize missing update feeds
         type: choice
-        options: [preview, notarized]
+        options: [preview, notarized, update-feeds]
         default: preview
         required: true
       ref:
@@ -24,6 +24,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  update-feeds:
+    if: github.event_name == 'workflow_dispatch' && inputs.distribution == 'update-feeds'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize and verify update feeds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: sh apps/macos/Scripts/ensure-update-feeds.sh
+
   macos-preview:
     if: github.event_name == 'workflow_dispatch' && inputs.distribution == 'preview'
     runs-on: macos-26
@@ -85,6 +98,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: clumsies-macos-preview
@@ -109,7 +123,7 @@ jobs:
           to open it, use System Settings → Privacy & Security → Open Anyway only if you
           trust this download. Managed Macs may restrict this exception.
 
-          Updates: use Update beside your account in the sidebar, or Settings → General → Check for Updates.
+          Updates: use Settings → General → Check for Updates. Update appears beside your account when a new update is available.
           Signed updates download and install inside the App; choose Install and Relaunch when ready.
           Only releases with a signed preview-appcast.xml are offered as in-app updates.
           Other releases remain available for manual DMG installation.
@@ -127,10 +141,8 @@ jobs:
           gh release upload "$TAG" dist/macos-preview/* --clobber
           gh release edit "$TAG" --draft=false --prerelease --latest=false
 
+          sh apps/macos/Scripts/ensure-update-feeds.sh
           if [ -f dist/macos-preview/preview-appcast.xml ]; then
-            gh release view macos-updates >/dev/null 2>&1 || \
-              gh release create macos-updates --target "$GITHUB_SHA" --prerelease --latest=false \
-                --title "macOS update feeds" --notes "Stable URLs for Sparkle update feeds. Download installers from the versioned releases."
             gh release upload macos-updates dist/macos-preview/preview-appcast.xml --clobber
           fi
 
@@ -270,6 +282,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - name: Download native macOS artifacts
         uses: actions/download-artifact@v4
         with:
@@ -289,7 +302,5 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" dist/macos/* --clobber
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
 
-          gh release view macos-updates >/dev/null 2>&1 || \
-            gh release create macos-updates --target "$GITHUB_SHA" --prerelease --latest=false \
-              --title "macOS update feeds" --notes "Stable URLs for Sparkle update feeds. Download installers from the versioned releases."
+          sh apps/macos/Scripts/ensure-update-feeds.sh
           gh release upload macos-updates dist/macos/appcast.xml --clobber

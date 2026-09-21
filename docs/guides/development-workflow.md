@@ -133,8 +133,10 @@ checksum. Downloadable Preview DMGs need no Apple or Sparkle secrets. Intel
 previews are not available because the current ONNX Runtime dependency has no
 prebuilt `x86_64-apple-darwin` library. They do not change the latest stable release.
 
-The primary update action is **Update** beside the user's account at the bottom
-of the sidebar. It shares the updater with Settings → General → Check for Updates.
+The **Update** button beside the user's account appears only after Sparkle finds
+an available update. Dismissing the update or finishing the update cycle clears
+the button. Settings → General → Check for Updates remains available for manual
+checks and shares the same updater.
 Sparkle downloads and verifies the update in the App, then **Install and Relaunch**
 replaces the App and restarts it. The account menu remains available by clicking
 the avatar or name; its old trailing chevron is removed.
@@ -147,6 +149,18 @@ archive signature before extraction. A missing key leaves DMG publishing availab
 and the existing update feed unchanged; an invalid key fails feed generation.
 No informational/“Learn More” update is generated. The signing key is maintained
 by developers once, not configured by users.
+
+Both release channels always have a valid feed. If no eligible update has been
+published, the feed has no version entries and Sparkle reports no update.
+Initializing an empty feed does not require a signing key and never overwrites
+an existing feed. To repair missing feed URLs without publishing an App, run:
+
+```sh
+gh workflow run release.yml --ref main -f distribution=update-feeds -f ref=main
+```
+
+Preview and tagged releases also initialize missing feeds and verify the public
+URLs before publishing eligible updates.
 
 Release apps use `appcast.xml` on the same dedicated release, so unrelated CLI
 releases cannot redirect the update feed. Existing apps still using
