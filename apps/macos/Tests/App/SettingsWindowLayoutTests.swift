@@ -13,7 +13,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
             status.finish("server:settings", token: status.begin("server:settings"), failure: failure)
             for pane in SettingsPane.allCases {
                 let icon = NSHostingView(rootView: SettingsIcon(symbol: pane.systemImage))
-                XCTAssertEqual(icon.fittingSize, NSSize(width: 20, height: 20),
+                XCTAssertEqual(icon.fittingSize, NSSize(width: 16, height: 16),
                     "A connection indication belongs to the window, never inside a sidebar icon.")
             }
         }

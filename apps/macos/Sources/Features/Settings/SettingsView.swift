@@ -18,6 +18,7 @@ struct GeneralSettingsView: View {
             Section {
                 VStack(spacing: 10) {
                     SettingsIcon(symbol: SettingsPane.general.systemImage, size: 52)
+                        .font(.system(size: 42))
                     Text("General").font(.system(size: 22, weight: .semibold))
                     Text("App language, information and software updates.")
                         .foregroundStyle(.secondary)
