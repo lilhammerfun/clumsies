@@ -22,6 +22,7 @@ struct SettingsWindowView: View {
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
     @ObservedObject var navigation: SettingsNavigation
     let onShowLogs: () -> Void
+    let onRestart: () -> Void
 
     private var canShowOrganization: Bool {
         workspaceContext.canAdministerOrganization && workspaceContext.phase != .authenticationRequired
@@ -171,7 +172,7 @@ struct SettingsWindowView: View {
     private var detail: some View {
         switch navigation.destination {
         case .pane(.general):
-            GeneralSettingsView(softwareUpdateController: softwareUpdateController)
+            GeneralSettingsView(softwareUpdateController: softwareUpdateController, onRestart: onRestart)
         case .pane(.agent):
             AgentsSettingsView(model: AgentsSettingsModel(context: workspaceContext, integration: agentIntegration))
         case .pane(.advanced):

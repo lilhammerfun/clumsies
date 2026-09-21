@@ -2557,18 +2557,18 @@
         }
       }
     },
-    "Choose a language for Clumsies without changing your Mac's language. Changes take effect when you reopen Clumsies.": {
+    "Choose a language for Clumsies without changing your Mac's language. Restart Clumsies to apply the change.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Choose a language for Clumsies without changing your Mac's language. Changes take effect when you reopen Clumsies."
+            "value": "Choose a language for Clumsies without changing your Mac's language. Restart Clumsies to apply the change."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "为 Clumsies 单独选择语言，不影响 Mac 的系统语言。重新打开 Clumsies 后生效。"
+            "value": "单独选择 Clumsies 的语言，无需更改 Mac 的系统语言。重启 Clumsies 后生效。"
           }
         }
       }
@@ -2877,6 +2877,22 @@
         }
       }
     },
+    "Clumsies could not restart": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies could not restart"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法重启 Clumsies"
+          }
+        }
+      }
+    },
     "Clumsies could not start local daemon": {
       "localizations": {
         "en": {
@@ -2953,6 +2969,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Clumsies 将移除在设置中管理的 Agent 集成，并解除此仓库与项目的绑定。"
+          }
+        }
+      }
+    },
+    "Clumsies will save pending changes and reopen automatically in the selected language.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies will save pending changes and reopen automatically in the selected language."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies 会先保存待处理的更改，再自动重新打开并使用所选语言。"
           }
         }
       }
@@ -9509,22 +9541,6 @@
         }
       }
     },
-    "Quit Clumsies": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Quit Clumsies"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "退出 Clumsies"
-          }
-        }
-      }
-    },
     "RRF": {
       "shouldTranslate": false
     },
@@ -10456,22 +10472,6 @@
         }
       }
     },
-    "Reopen Clumsies to apply the language": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reopen Clumsies to apply the language"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "重新打开 Clumsies 以切换语言"
-          }
-        }
-      }
-    },
     "Repair Selected Integrations": {
       "localizations": {
         "en": {
@@ -10884,6 +10884,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "响应正文不是 UTF-8 编码。"
+          }
+        }
+      }
+    },
+    "Restart Clumsies to apply the language?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart Clumsies to apply the language?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重启 Clumsies 以应用所选语言？"
+          }
+        }
+      }
+    },
+    "Restart and Apply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart and Apply"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重启并应用"
           }
         }
       }
@@ -16053,18 +16085,18 @@
         }
       }
     },
-    "Your language choice is saved. Quit and reopen Clumsies to apply it to all windows and menus.": {
+    "Your language choice is saved. Try restarting again, or quit and open Clumsies manually.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your language choice is saved. Quit and reopen Clumsies to apply it to all windows and menus."
+            "value": "Your language choice is saved. Try restarting again, or quit and open Clumsies manually."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "语言选择已保存。退出并重新打开 Clumsies 后，所有窗口和菜单都会使用所选语言。"
+            "value": "语言选择已保存。请再次尝试重启，或退出后手动打开 Clumsies。"
           }
         }
       }

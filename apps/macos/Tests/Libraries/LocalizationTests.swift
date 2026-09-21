@@ -21,6 +21,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(String(localized: "Language", bundle: chinese), "语言")
         XCTAssertEqual(String(localized: "App language", bundle: chinese), "应用语言")
         XCTAssertEqual(String(localized: "Follow System", bundle: chinese), "跟随系统")
+        XCTAssertEqual(String(localized: "Restart and Apply", bundle: chinese), "重启并应用")
         XCTAssertEqual(String(localized: "Open", bundle: chinese), "打开")
         for count in [0, 1, 2, 25] {
             XCTAssertEqual(String(localized: "\(count) requests", bundle: english, locale: Locale(identifier: "en")), "\(count) \(count == 1 ? "request" : "requests")")

@@ -34,9 +34,10 @@ An organization owner/admin completes publication. [Review and publish](/quickst
 
 In **Clumsies → Settings → General → Language**, choose **Follow System**,
 **English**, or **简体中文**. This changes only Clumsies: you can keep your Mac in
-English and use Clumsies in Chinese. Quit and reopen Clumsies to apply the change
-to all windows and menus. You can quit from the language-change prompt or choose
-**Later** and reopen when convenient.
+English and use Clumsies in Chinese. Choose **Restart and Apply** to save pending
+changes and reopen the same App automatically with the selected language. If you
+keep editing or a save fails, the restart is cancelled. **Later** keeps the
+current session open and applies the choice on the next launch.
 
 ## When something does not work
 

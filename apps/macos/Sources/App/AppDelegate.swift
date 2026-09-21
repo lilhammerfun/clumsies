@@ -18,11 +18,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private lazy var reconciliationWindows = ReconciliationWindows(store: store)
     private lazy var settingsWindowController = SettingsWindowController(
         store: store, administration: administration, softwareUpdateController: softwareUpdateController,
-        onShowLogs: { [weak self] in self?.showLogsInFinder() }
+        onShowLogs: { [weak self] in self?.showLogsInFinder() },
+        onRestart: { [weak self] in self?.restartApplication() }
     )
     private var statusItem: NSStatusItem?
     private lazy var statusMenu = makeStatusMenu()
     private var isFlushingForTermination = false
+    private let restartController = AppRestartController()
     private var mainWorkspaceAccountID: String?
     private var mainWorkspaceOrganizationID: String?
 
@@ -60,10 +62,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard settingsWindowController.confirmDiscardIfNeeded() else { return .terminateCancel }
-        guard reconciliationWindows.closeAllIfAllowed() else { return .terminateCancel }
-        guard store.hasPendingChanges else { return .terminateNow }
         guard !isFlushingForTermination else { return .terminateLater }
+        guard settingsWindowController.confirmDiscardIfNeeded(),
+              reconciliationWindows.closeAllIfAllowed() else {
+            _ = finishTermination(allowed: false)
+            return .terminateCancel
+        }
+        guard store.hasPendingChanges else {
+            return finishTermination(allowed: true) ? .terminateNow : .terminateCancel
+        }
         isFlushingForTermination = true
         Task { [weak self] in
             guard let self else {
@@ -72,12 +79,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             let didSave = await store.flushPendingChanges()
             isFlushingForTermination = false
-            if !didSave {
+            let canTerminate = finishTermination(allowed: didSave)
+            if !canTerminate {
                 presentMainWindow()
             }
-            sender.reply(toApplicationShouldTerminate: didSave)
+            sender.reply(toApplicationShouldTerminate: canTerminate)
         }
         return .terminateLater
+    }
+
+    private func restartApplication() {
+        guard !isFlushingForTermination else { return }
+        restartController.request { NSApp.terminate(nil) }
+    }
+
+    private func finishTermination(allowed: Bool) -> Bool {
+        do {
+            return try restartController.finishTermination(allowed: allowed)
+        } catch {
+            ClientDiagnostics.record("app_restart_failed", ClientDiagnostics.failureFields(error))
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Clumsies could not restart")
+            alert.informativeText = String(localized: "Your language choice is saved. Try restarting again, or quit and open Clumsies manually.")
+            alert.addButton(withTitle: String(localized: "OK"))
+            alert.runModal()
+            return false
+        }
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
