@@ -109,9 +109,7 @@ struct SettingsWindowView: View {
                     Section {
                         if let account = workspaceContext.account {
                             HStack(spacing: 10) {
-                                Image(systemName: "person.crop.circle.fill")
-                                    .font(.system(size: 34))
-                                    .foregroundStyle(.secondary)
+                                AvatarView(account: account, size: .large)
                                     .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(account.displayName ?? account.email)

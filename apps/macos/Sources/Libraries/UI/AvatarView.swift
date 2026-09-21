@@ -64,6 +64,7 @@ struct AvatarView: View {
     enum Size: CGFloat {
         case small = 20
         case regular = 24
+        case large = 34
     }
 
     let account: UserReference?
@@ -103,7 +104,7 @@ struct AvatarView: View {
         ZStack {
             Color.accentColor.opacity(0.2)
             Text(String((account?.displayName ?? account?.email ?? "C").prefix(1)).uppercased())
-                .font(.system(size: size == .small ? 10 : 11, weight: .semibold))
+                .font(.system(size: size == .small ? 10 : size == .regular ? 11 : 16, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }
         .frame(width: size.rawValue, height: size.rawValue)
