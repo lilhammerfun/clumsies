@@ -7,7 +7,7 @@ use crate::app::project::dto::{
     Project, ProjectListResponse, ProjectMember, ProjectMemberCandidateListResponse,
     ProjectMemberListResponse, ProjectRole, UpdateProjectMemberRequest, UpdateProjectRequest,
 };
-use crate::app::{audit_event, organization};
+use crate::app::{audit_event, inbox, organization};
 use crate::dto::DeleteResult;
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
@@ -321,6 +321,15 @@ pub async fn create_admin_project_member(
             format!("{project_id}:{}", request.user_id),
         ));
     }
+    inbox::notify_access_change(
+        &mut tx,
+        principal,
+        &request.user_id,
+        Some(project_id),
+        None,
+        Some(request.role.as_str()),
+    )
+    .await?;
     let target_id = format!("{project_id}:{}", request.user_id);
     audit_event::insert_audit_event(
         &mut tx,
@@ -352,6 +361,7 @@ pub async fn update_admin_project_member(
 
     let mut tx = pool.begin().await?;
     ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
+    let previous_role = repository::lock_project_member_role(&mut tx, project_id, user_id).await?;
     if !repository::update_project_member(&mut tx, project_id, user_id, request.role.as_str())
         .await?
     {
@@ -360,6 +370,15 @@ pub async fn update_admin_project_member(
             format!("{project_id}:{user_id}"),
         ));
     }
+    inbox::notify_access_change(
+        &mut tx,
+        principal,
+        user_id,
+        Some(project_id),
+        Some(&previous_role),
+        Some(request.role.as_str()),
+    )
+    .await?;
     let target_id = format!("{project_id}:{user_id}");
     audit_event::insert_audit_event(
         &mut tx,
@@ -389,12 +408,22 @@ pub async fn delete_admin_project_member(
 
     let mut tx = pool.begin().await?;
     ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
+    let previous_role = repository::lock_project_member_role(&mut tx, project_id, user_id).await?;
     if !repository::delete_project_member(&mut tx, project_id, user_id).await? {
         return Err(ServerError::not_found(
             "project_member",
             format!("{project_id}:{user_id}"),
         ));
     }
+    inbox::notify_access_change(
+        &mut tx,
+        principal,
+        user_id,
+        Some(project_id),
+        Some(&previous_role),
+        None,
+    )
+    .await?;
     let target_id = format!("{project_id}:{user_id}");
     audit_event::insert_audit_event(
         &mut tx,

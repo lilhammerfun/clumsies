@@ -49,6 +49,23 @@
         }
       }
     },
+    "## Your projects\n\nProjects bring together the Memory your team uses. When someone adds you to a project, it appears in your project list.\n\n## Work with Memory\n\nOpen a project to browse its Memory. Your edits stay in Drafts until they are reviewed and published.\n\n## Stay informed\n\nInbox tells you about Reviews, remote updates to Memory your projects use, and changes to your access. Your everyday Draft edits do not create notifications.\n\nIf you do not have a project yet, ask a project administrator to add you.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "## Your projects\n\nProjects bring together the Memory your team uses. When someone adds you to a project, it appears in your project list.\n\n## Work with Memory\n\nOpen a project to browse its Memory. Your edits stay in Drafts until they are reviewed and published.\n\n## Stay informed\n\nInbox tells you about Reviews, remote updates to Memory your projects use, and changes to your access. Your everyday Draft edits do not create notifications.\n\nIf you do not have a project yet, ask a project administrator to add you."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "## 你的项目\n\n项目汇集了团队使用的 Memory。有人将你加入项目后，你就能在项目列表中找到它。\n\n## 使用 Memory\n\n打开项目即可浏览其中的 Memory。你的编辑会保留为草稿，经过评审和发布后才会更新远程内容。\n\n## 关注团队动态\n\n收件箱会通知你评审动态、项目所用 Memory 的远程更新，以及你的访问权限变更。日常编辑草稿不会产生通知。\n\n如果你还没有项目，可以请项目管理员将你加入。"
+          }
+        }
+      }
+    },
     "%@\n%@": {
       "shouldTranslate": false
     },
@@ -116,6 +133,23 @@
         }
       }
     },
+    "%@ added you as %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ added you as %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 已将你加入项目，角色为%2$@。"
+          }
+        }
+      }
+    },
     "%@ added: %@": {
       "localizations": {
         "en": {
@@ -128,6 +162,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@新增：%2$@"
+          }
+        }
+      }
+    },
+    "%@ changed your organization role: %@ → %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ changed your organization role: %@ → %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 将你的组织角色从%2$@改为%3$@。"
+          }
+        }
+      }
+    },
+    "%@ changed your project role: %@ → %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ changed your project role: %@ → %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 将你的项目角色从%2$@改为%3$@。"
           }
         }
       }
@@ -160,6 +228,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@路径：%2$@ → %3$@"
+          }
+        }
+      }
+    },
+    "%@ removed your access to this project.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ removed your access to this project."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 已移除你对此项目的访问权限。"
           }
         }
       }
@@ -854,6 +939,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "访问权限"
+          }
+        }
+      }
+    },
+    "Access Changes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Access Changes"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "访问权限变更"
           }
         }
       }
@@ -1558,6 +1660,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "已有内容"
+          }
+        }
+      }
+    },
+    "An administrator": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An administrator"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "管理员"
           }
         }
       }
@@ -2985,6 +3104,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Clumsies 会先保存待处理的更改，再自动重新打开并使用所选语言。"
+          }
+        }
+      }
+    },
+    "Clumsies · %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies · %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies · %1$@"
           }
         }
       }
@@ -6085,6 +6221,23 @@
         }
       }
     },
+    "Get started with projects, Memory, and your team.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get started with projects, Memory, and your team."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "了解项目、Memory 和团队协作。"
+          }
+        }
+      }
+    },
     "Give your memory a starting point": {
       "localizations": {
         "en": {
@@ -8517,6 +8670,23 @@
         }
       }
     },
+    "Notifications about your team, Memory, and Reviews appear here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications about your team, Memory, and Reviews appear here."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "团队、Memory 和评审相关的通知会显示在这里。"
+          }
+        }
+      }
+    },
     "OK": {
       "localizations": {
         "en": {
@@ -8689,6 +8859,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "打开记忆"
+          }
+        }
+      }
+    },
+    "Open Project": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Project"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开项目"
           }
         }
       }
@@ -8993,6 +9180,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "组织角色"
+          }
+        }
+      }
+    },
+    "Organization role changed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Organization role changed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "组织角色已变更"
           }
         }
       }
@@ -9317,6 +9521,23 @@
         }
       }
     },
+    "Project access removed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project access removed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目访问权限已移除"
+          }
+        }
+      }
+    },
     "Project administrator access is required to manage project memory.": {
       "localizations": {
         "en": {
@@ -9361,6 +9582,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "项目记忆"
+          }
+        }
+      }
+    },
+    "Project role changed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project role changed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目角色已变更"
           }
         }
       }
@@ -9556,6 +9794,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "重新启用"
+          }
+        }
+      }
+    },
+    "Read Message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read Message"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "阅读消息"
           }
         }
       }
@@ -15781,6 +16036,40 @@
         }
       }
     },
+    "Welcome": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Welcome"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "欢迎"
+          }
+        }
+      }
+    },
+    "Welcome to Clumsies": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Welcome to Clumsies"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "欢迎使用 Clumsies"
+          }
+        }
+      }
+    },
     "Whole-file alternatives": {
       "localizations": {
         "en": {
@@ -16001,6 +16290,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "已是最新版本。"
+          }
+        }
+      }
+    },
+    "You've been added to a project": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You've been added to a project"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你已被加入项目"
           }
         }
       }

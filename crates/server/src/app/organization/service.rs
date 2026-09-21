@@ -195,6 +195,15 @@ pub async fn update_admin_member(
         ));
     }
     repository::update_member(&mut tx, user_id, &next_role, &next_status).await?;
+    crate::app::inbox::notify_access_change(
+        &mut tx,
+        principal,
+        user_id,
+        None,
+        Some(&current.role),
+        Some(&next_role),
+    )
+    .await?;
     if next_status == "disabled" {
         repository::revoke_user_sessions(&mut tx, &principal.org_id, user_id).await?;
     }

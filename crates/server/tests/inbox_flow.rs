@@ -34,6 +34,13 @@ async fn inbox(app: &Router) -> InboxListResponse {
     serde_json::from_value(body).unwrap()
 }
 
+// These source-event scenarios exclude the independent first-login welcome.
+async fn source_inbox(app: &Router) -> InboxListResponse {
+    let mut page = inbox(app).await;
+    page.items.retain(|item| item.kind != "welcome");
+    page
+}
+
 async fn post_with_ref(app: &Router, path: &str, body: Value) -> (StatusCode, Value) {
     post_at_ref(app, path, body, "ref-none").await
 }
@@ -125,13 +132,13 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
     assert_eq!(status, StatusCode::OK, "{review}");
     let review_id = review["review"]["review_id"].as_str().unwrap();
     let version = review["review"]["version"].as_i64().unwrap();
-    let first = inbox(&owner).await;
+    let first = source_inbox(&owner).await;
     assert_eq!(first.items.len(), 1);
     assert_eq!(first.items[0].kind, "review_requested");
     assert!(first.items[0].needs_action);
-    assert!(inbox(&author).await.items.is_empty());
+    assert!(source_inbox(&author).await.items.is_empty());
     assert!(
-        inbox(&outsider).await.items.is_empty(),
+        source_inbox(&outsider).await.items.is_empty(),
         "An org admin outside the project is not a recipient."
     );
     let receipt_path = format!("/api/v1/me/inbox/{}", first.items[0].notification_id);
@@ -157,9 +164,9 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         .0,
         StatusCode::OK
     );
-    assert_eq!(inbox(&owner).await.items[0].archived_version, 1);
+    assert_eq!(source_inbox(&owner).await.items[0].archived_version, 1);
     assert_eq!(
-        inbox(&owner).await.items[0].read_version,
+        source_inbox(&owner).await.items[0].read_version,
         0,
         "Archive must preserve unread state."
     );
@@ -181,7 +188,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
             .0,
             StatusCode::OK
         );
-        let receipt = inbox(&owner).await;
+        let receipt = source_inbox(&owner).await;
         assert_eq!(receipt.items[0].read_version, expected_read);
         assert_eq!(receipt.items[0].archived_version, expected_archive);
     }
@@ -198,7 +205,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         .0,
         StatusCode::OK
     );
-    let author_notice = inbox(&author).await;
+    let author_notice = source_inbox(&author).await;
     assert_eq!(author_notice.items[0].kind, "review_comment");
     assert_eq!(
         request(
@@ -211,7 +218,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         .0,
         StatusCode::OK
     );
-    let next = inbox(&owner).await;
+    let next = source_inbox(&owner).await;
     assert_eq!(
         next.items.len(),
         1,
@@ -234,7 +241,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         .0,
         StatusCode::OK
     );
-    assert_eq!(inbox(&owner).await.items[0].read_version, 1);
+    assert_eq!(source_inbox(&owner).await.items[0].read_version, 1);
     let count_before: i64 =
         sqlx::query_scalar("SELECT sum(version)::bigint FROM inbox_notifications")
             .fetch_one(&db.pool)
@@ -265,10 +272,10 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let rejected = inbox(&author).await;
+    let rejected = source_inbox(&author).await;
     assert_eq!(rejected.items[0].kind, "review_rejected");
     assert!(rejected.items[0].needs_action);
-    assert!(!inbox(&owner).await.items[0].needs_action);
+    assert!(!source_inbox(&owner).await.items[0].needs_action);
     let draft_path = format!(
         "/api/v1/drafts/{}",
         draft["draft"]["draft_id"].as_str().unwrap()
@@ -279,7 +286,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         "drafts": [{"draft_id": reopened["draft"]["draft_id"], "expected_draft_version": reopened["draft"]["version"]}]
     })).await;
     assert_eq!(status, StatusCode::OK, "{resubmitted}");
-    let request_again = inbox(&owner).await;
+    let request_again = source_inbox(&owner).await;
     assert_eq!(request_again.items[0].kind, "review_requested");
     assert_eq!(request_again.items[0].version, 3);
     assert!(request_again.items[0].needs_action);
@@ -287,7 +294,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
     let merge_body = json!({"expected_review_version": resubmitted["review"]["version"]});
     let (status, merged) = post_with_ref(&owner, &merge_path, merge_body.clone()).await;
     assert_eq!(status, StatusCode::OK, "{merged}");
-    let published = inbox(&author).await;
+    let published = source_inbox(&author).await;
     assert_eq!(published.items.len(), 2);
     let outcome = published
         .items
@@ -304,10 +311,13 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         .iter()
         .find(|item| item.kind == "shared_update")
         .unwrap();
-    assert_eq!(shared.project_id, installation.project_id);
+    assert_eq!(
+        shared.project_id.as_deref(),
+        Some(installation.project_id.as_str())
+    );
     assert_eq!(shared.version, 1);
-    assert!(inbox(&outsider).await.items.is_empty());
-    assert!(!inbox(&owner).await.items[0].needs_action);
+    assert!(source_inbox(&outsider).await.items.is_empty());
+    assert!(!source_inbox(&owner).await.items[0].needs_action);
     let (status, first_page) =
         request(&author, "GET", "/api/v1/me/inbox?limit=1", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
@@ -325,7 +335,19 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
     .await;
     let second_page: InboxListResponse = serde_json::from_value(second_page).unwrap();
     assert_eq!(second_page.items.len(), 1);
-    assert!(second_page.next_cursor.is_none());
+    let (_, third_page) = request(
+        &author,
+        "GET",
+        &format!(
+            "/api/v1/me/inbox?limit=1&cursor={}",
+            second_page.next_cursor.unwrap()
+        ),
+        Value::Null,
+    )
+    .await;
+    let third_page: InboxListResponse = serde_json::from_value(third_page).unwrap();
+    assert_eq!(third_page.items[0].kind, "welcome");
+    assert!(third_page.next_cursor.is_none());
     assert_ne!(
         first_page.items[0].notification_id,
         second_page.items[0].notification_id
@@ -335,7 +357,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         StatusCode::OK
     );
     assert_eq!(
-        inbox(&author)
+        source_inbox(&author)
             .await
             .items
             .iter()
@@ -366,7 +388,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         StatusCode::OK
     );
     assert_eq!(
-        inbox(&owner).await.items[0].archived_version,
+        source_inbox(&owner).await.items[0].archived_version,
         3,
         "Old restore cannot undo a newer archive."
     );
@@ -393,7 +415,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         StatusCode::OK
     );
     assert_eq!(
-        inbox(&owner).await.items[0].read_version,
+        source_inbox(&owner).await.items[0].read_version,
         3,
         "An old unread action cannot undo a newer read receipt."
     );
@@ -408,15 +430,15 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         .0,
         StatusCode::OK
     );
-    assert_eq!(inbox(&owner).await.items[0].read_version, 0);
-    assert_eq!(inbox(&owner).await.items[0].archived_version, 3);
+    assert_eq!(source_inbox(&owner).await.items[0].read_version, 0);
+    assert_eq!(source_inbox(&owner).await.items[0].archived_version, 3);
     sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2")
         .bind(&installation.project_id)
         .bind(&installation.user_id)
         .execute(&db.pool)
         .await
         .unwrap();
-    assert!(inbox(&owner).await.items.is_empty());
+    assert!(source_inbox(&owner).await.items.is_empty());
     assert_eq!(
         request(
             &owner,
@@ -495,7 +517,7 @@ async fn shared_updates_only_notify_members_of_projects_using_the_published_memo
     )
     .await;
     assert!(
-        inbox(&reader).await.items.is_empty(),
+        source_inbox(&reader).await.items.is_empty(),
         "Selecting Memory is not a remote update."
     );
     for (index, action) in ["update", "rename", "delete"].into_iter().enumerate() {
@@ -510,7 +532,7 @@ async fn shared_updates_only_notify_members_of_projects_using_the_published_memo
                 "new_path": if action == "rename" { json!("renamed.md") } else { Value::Null }}]
         })).await;
         assert_eq!(status, StatusCode::OK, "{draft}");
-        let before = inbox(&reader).await;
+        let before = source_inbox(&reader).await;
         assert_eq!(
             before.items.first().map(|item| item.version).unwrap_or(0),
             index as i64,
@@ -528,7 +550,7 @@ async fn shared_updates_only_notify_members_of_projects_using_the_published_memo
         .await;
         assert_eq!(status, StatusCode::OK, "{review}");
         assert_eq!(
-            inbox(&reader)
+            source_inbox(&reader)
                 .await
                 .items
                 .first()
@@ -546,19 +568,341 @@ async fn shared_updates_only_notify_members_of_projects_using_the_published_memo
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{merged}");
-        let received = inbox(&reader).await;
+        let received = source_inbox(&reader).await;
         assert_eq!(
             received.items.len(),
             1,
             "The unrelated project must receive no shared update."
         );
         assert_eq!(received.items[0].kind, "shared_update");
-        assert_eq!(received.items[0].project_id, projects[0]);
+        assert_eq!(
+            received.items[0].project_id.as_deref(),
+            Some(projects[0].as_str())
+        );
         assert_eq!(received.items[0].version, index as i64 + 1);
         assert!(
-            inbox(&owner).await.items.is_empty(),
+            source_inbox(&owner).await.items.is_empty(),
             "The publisher does not receive their own notification."
         );
     }
+    db.shutdown().await;
+}
+
+#[tokio::test]
+async fn welcome_is_original_content_once_per_user_and_survives_sign_in_and_receipts() {
+    let db = common::migrated_postgres().await;
+    common::initialize_installation(
+        db.pool.clone(),
+        "Inbox",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Project",
+    )
+    .await;
+    let (owner, _) = common::authenticated_router(db.pool.clone()).await;
+    let (status, member) = request(
+        &owner,
+        "POST",
+        "/api/v1/admin/members",
+        json!({"email": "new@example.com", "role": "member"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{member}");
+    let (first, _) = common::authenticated_router_as(
+        db.pool.clone(),
+        "new@example.com",
+        "new-subject",
+        "New member",
+    )
+    .await;
+    let page = inbox(&first).await;
+    assert_eq!(page.items.len(), 1);
+    let welcome = &page.items[0];
+    assert_eq!(welcome.kind, "welcome");
+    assert!(
+        welcome
+            .body
+            .as_ref()
+            .is_some_and(|body| body.contains("## ") && body.contains("Memory"))
+    );
+    assert!(welcome.project_id.is_none());
+    assert!(!welcome.can_open_project);
+    let path = format!("/api/v1/me/inbox/{}", welcome.notification_id);
+    for action in ["read", "archive"] {
+        assert_eq!(
+            request(
+                &first,
+                "PATCH",
+                &path,
+                json!({"version": 1, "action": action})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+    }
+    let (second, _) = common::authenticated_router_as(
+        db.pool.clone(),
+        "new@example.com",
+        "new-subject",
+        "New member",
+    )
+    .await;
+    let repeated = inbox(&second).await;
+    assert_eq!(repeated.items.len(), 1);
+    assert_eq!(repeated.items[0].occurred_at, welcome.occurred_at);
+    assert_eq!(repeated.items[0].version, 1);
+    assert_eq!(repeated.items[0].read_version, 1);
+    assert_eq!(repeated.items[0].archived_version, 1);
+    assert_eq!(
+        request(
+            &second,
+            "PATCH",
+            &path,
+            json!({"version": 2, "action": "read"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    db.shutdown().await;
+}
+
+#[tokio::test]
+async fn membership_notices_record_real_changes_and_survive_revoked_project_access() {
+    let db = common::migrated_postgres().await;
+    let installation = common::initialize_installation(
+        db.pool.clone(),
+        "Inbox",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Project",
+    )
+    .await;
+    let (owner, _) = common::authenticated_router(db.pool.clone()).await;
+    let (_, member) = request(
+        &owner,
+        "POST",
+        "/api/v1/admin/members",
+        json!({"email": "member@example.com", "role": "member"}),
+    )
+    .await;
+    let user_id = member["user_id"].as_str().unwrap();
+    let collection = format!("/api/v1/admin/projects/{}/members", installation.project_id);
+    let member_path = format!("{collection}/{user_id}");
+    let addition = json!({"user_id": user_id, "role": "member"});
+    assert_eq!(
+        request(&owner, "POST", &collection, addition.clone())
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let (recipient, _) = common::authenticated_router_as(
+        db.pool.clone(),
+        "member@example.com",
+        "member-subject",
+        "Member",
+    )
+    .await;
+    let added = source_inbox(&recipient).await;
+    assert_eq!(added.items.len(), 1);
+    assert_eq!(added.items[0].kind, "project_joined");
+    assert_eq!(added.items[0].actor_name.as_deref(), Some("Owner"));
+    assert_eq!(added.items[0].previous_role, None);
+    assert_eq!(added.items[0].new_role.as_deref(), Some("member"));
+    assert!(added.items[0].can_open_project);
+    assert!(source_inbox(&owner).await.items.is_empty());
+    assert_ne!(
+        request(&owner, "POST", &collection, addition).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        request(&owner, "PATCH", &member_path, json!({"role": "member"}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&recipient, "PATCH", &member_path, json!({"role": "admin"}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        source_inbox(&recipient).await.items.len(),
+        1,
+        "No-op, duplicate, and unauthorized changes must not notify."
+    );
+    // Fail notification persistence to verify the source role change rolls back with it.
+    sqlx::raw_sql("CREATE FUNCTION reject_access_notice() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test notification failure'; END $$; CREATE TRIGGER reject_access_notice BEFORE INSERT ON inbox_notifications FOR EACH ROW WHEN (NEW.kind = 'project_role_changed') EXECUTE FUNCTION reject_access_notice();")
+        .execute(&db.pool).await.unwrap();
+    assert_eq!(
+        request(&owner, "PATCH", &member_path, json!({"role": "admin"}))
+            .await
+            .0,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let role: String = sqlx::query_scalar(
+        "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
+    )
+    .bind(&installation.project_id)
+    .bind(user_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(role, "member");
+    assert_eq!(source_inbox(&recipient).await.items.len(), 1);
+    sqlx::raw_sql("DROP TRIGGER reject_access_notice ON inbox_notifications; DROP FUNCTION reject_access_notice();").execute(&db.pool).await.unwrap();
+    assert_eq!(
+        request(&owner, "PATCH", &member_path, json!({"role": "admin"}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let changed = source_inbox(&recipient).await;
+    let change = changed
+        .items
+        .iter()
+        .find(|item| item.kind == "project_role_changed")
+        .unwrap();
+    assert_eq!(change.previous_role.as_deref(), Some("member"));
+    assert_eq!(change.new_role.as_deref(), Some("admin"));
+
+    let principal = common::owner_principal(&db.pool).await;
+    let revision: i64 = sqlx::query_scalar("SELECT revision FROM users WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let update = server::app::organization::dto::UpdateMemberRequest {
+        role: Some(server::app::organization::dto::OrgRole::Admin),
+        status: None,
+    };
+    let changed_member = server::app::organization::update_admin_member(
+        &db.pool,
+        &principal,
+        user_id,
+        revision,
+        update.clone(),
+    )
+    .await
+    .unwrap();
+    server::app::organization::update_admin_member(
+        &db.pool,
+        &principal,
+        user_id,
+        changed_member.revision,
+        update,
+    )
+    .await
+    .unwrap();
+    let notices = source_inbox(&recipient).await;
+    assert_eq!(notices.items.len(), 3);
+    let org_change = notices
+        .items
+        .iter()
+        .find(|item| item.kind == "org_role_changed")
+        .unwrap();
+    assert!(org_change.project_id.is_none());
+    assert_eq!(org_change.previous_role.as_deref(), Some("member"));
+    assert_eq!(org_change.new_role.as_deref(), Some("admin"));
+
+    sqlx::query("INSERT INTO inbox_notifications (user_id, notification_id, org_id, project_id, kind, target_id, event_key) VALUES ($1, 'shared:test', $2, $3, 'shared_update', $3, 'test')")
+        .bind(user_id).bind(&principal.org_id).bind(&installation.project_id).execute(&db.pool).await.unwrap();
+    assert_eq!(source_inbox(&recipient).await.items.len(), 4);
+    assert_eq!(
+        request(&owner, "DELETE", &member_path, Value::Null).await.0,
+        StatusCode::OK
+    );
+    let removed = source_inbox(&recipient).await;
+    assert_eq!(
+        removed.items.len(),
+        4,
+        "Access history remains, remote source content is revoked."
+    );
+    assert!(
+        removed
+            .items
+            .iter()
+            .all(|item| !item.can_open_project && item.body.is_none())
+    );
+    let removal = removed
+        .items
+        .iter()
+        .find(|item| item.kind == "project_removed")
+        .unwrap();
+    assert_eq!(removal.project_name.as_deref(), Some("Project"));
+    assert_eq!(removal.previous_role.as_deref(), Some("admin"));
+    assert!(removal.new_role.is_none());
+    let receipt = format!("/api/v1/me/inbox/{}", removal.notification_id);
+    assert_eq!(
+        request(
+            &recipient,
+            "PATCH",
+            &receipt,
+            json!({"version": 1, "action": "archive"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &owner,
+            "PATCH",
+            &receipt,
+            json!({"version": 1, "action": "read"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(
+            &recipient,
+            "PATCH",
+            "/api/v1/me/inbox/shared:test",
+            json!({"version": 1, "action": "read"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(
+            &recipient,
+            "GET",
+            &format!("/api/v1/projects/{}", installation.project_id),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query("DELETE FROM projects WHERE project_id = $1")
+        .bind(&installation.project_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let history = source_inbox(&recipient).await;
+    assert_eq!(history.items.len(), 4);
+    assert!(
+        history
+            .items
+            .iter()
+            .all(|item| item.project_id.is_none() && !item.can_open_project)
+    );
+    assert_eq!(
+        history
+            .items
+            .iter()
+            .find(|item| item.kind == "project_removed")
+            .unwrap()
+            .project_name
+            .as_deref(),
+        Some("Project")
+    );
     db.shutdown().await;
 }

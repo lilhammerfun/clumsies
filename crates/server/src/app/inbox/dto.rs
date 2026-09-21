@@ -16,18 +16,26 @@ pub(super) struct InboxQuery {
 pub struct InboxNotification {
     /// Stable subject key within the authenticated user's inbox.
     pub notification_id: String,
-    /// Project whose current membership controls access.
-    pub project_id: String,
-    /// Display name resolved at read time.
-    pub project_name: String,
+    /// Optional project reference; personal access notices survive revoked membership.
+    pub project_id: Option<String>,
+    /// Project name, snapshotted for personal access notices.
+    pub project_name: Option<String>,
     /// Semantic reason for the most recent notification.
     pub kind: String,
-    /// Stable review or project identifier for navigation.
+    /// Subject identifier; navigation also depends on notification kind and current access.
     pub target_id: String,
-    /// Current review title, or the project name for shared updates.
+    /// Review title, project event name, or the title of original notification content.
     pub title: String,
     /// Display name of the latest actor, when still available.
     pub actor_name: Option<String>,
+    /// Optional original Markdown content, independent of a Review or Memory page.
+    pub body: Option<String>,
+    /// Role before an access change, absent for a newly added member.
+    pub previous_role: Option<String>,
+    /// Role after an access change, absent after removal.
+    pub new_role: Option<String>,
+    /// Whether the recipient can currently open the referenced project.
+    pub can_open_project: bool,
     /// Latest aggregated notification revision.
     pub version: i64,
     /// Read revision; marking the current notification unread clears it.

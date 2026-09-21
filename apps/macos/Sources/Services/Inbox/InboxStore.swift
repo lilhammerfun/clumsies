@@ -64,6 +64,10 @@ final class InboxStore: ObservableObject {
         }.store(in: &observations)
     }
 
+    var welcomeProjectId: String? {
+        context.projects.first { $0.id == context.activeProjectId }?.id ?? context.projects.first?.id
+    }
+
     var unreadCount: Int { items.filter { !$0.isRead && !$0.isArchived }.count }
 
     func prepare(serverURL: String) {
@@ -271,13 +275,22 @@ final class InboxStore: ObservableObject {
     }
 
     private func retainProjects(_ accessible: Set<String>) {
-        remoteItems.removeAll { $0.projectId.map { !accessible.contains($0) } == true }
+        remoteItems.removeAll { $0.type != .accessChanges && $0.projectId.map { !accessible.contains($0) } == true }
         localItems.removeAll { $0.projectId.map { !accessible.contains($0) } == true }
-        publishItems()
+        // Published emits before context.projects changes; use the incoming membership set.
+        publishItems(accessibleProjects: accessible)
     }
 
-    private func publishItems() {
-        items = (remoteItems + localItems).sorted {
+    private func publishItems(accessibleProjects: Set<String>? = nil) {
+        let accessible = accessibleProjects ?? Set(context.projects.map(\.id))
+        items = (remoteItems + localItems).map { item in
+            var item = item
+            if case .project(let projectId) = item.destination,
+               !accessible.contains(projectId) {
+                item.destination = nil
+            }
+            return item
+        }.sorted {
             if $0.occurredAt != $1.occurredAt { return $0.occurredAt > $1.occurredAt }
             return $0.id < $1.id
         }

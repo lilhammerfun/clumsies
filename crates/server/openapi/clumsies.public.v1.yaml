@@ -34,15 +34,19 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [notification_id, project_id, project_name, kind, target_id, title, actor_name, version, read_version, archived_version, needs_action, review_status, occurred_at]
+                      required: [notification_id, project_id, project_name, kind, target_id, title, actor_name, body, previous_role, new_role, can_open_project, version, read_version, archived_version, needs_action, review_status, occurred_at]
                       properties:
                         notification_id: { type: string }
-                        project_id: { type: string }
-                        project_name: { type: string }
-                        kind: { type: string, enum: [review_requested, review_comment, review_approved, review_rejected, review_merged, shared_update] }
+                        project_id: { type: [string, "null"] }
+                        project_name: { type: [string, "null"] }
+                        kind: { type: string, enum: [review_requested, review_comment, review_approved, review_rejected, review_merged, shared_update, welcome, project_joined, project_removed, project_role_changed, org_role_changed] }
                         target_id: { type: string }
                         title: { type: string }
                         actor_name: { type: [string, "null"] }
+                        body: { type: [string, "null"], description: Original Markdown content for a welcome message. }
+                        previous_role: { type: [string, "null"] }
+                        new_role: { type: [string, "null"] }
+                        can_open_project: { type: boolean, description: Current access to the referenced project; removal notices never offer navigation. }
                         version: { type: integer, minimum: 1 }
                         read_version: { type: integer, minimum: 0 }
                         archived_version: { type: integer, minimum: 0 }

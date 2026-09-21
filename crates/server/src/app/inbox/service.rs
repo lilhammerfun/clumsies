@@ -1,4 +1,4 @@
-//! Personal receipt operations; membership is checked in the same query as the read or write.
+//! Personal receipt operations; recipient and source access are checked in each read or write.
 
 use super::dto::{InboxListResponse, UpdateInboxRequest};
 use super::repository;
