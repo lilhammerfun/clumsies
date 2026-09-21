@@ -13,14 +13,16 @@ name: Site Delivery
 #                           (shared with Server Delivery)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/**"
-      - "site/**"
-      - "deploy/Caddyfile"
-      - "compose.production.yml"
-      - ".github/workflows/site-delivery.yml"
+  workflow_call:
+    secrets:
+      SITE_DEPLOY_HOST:
+        required: true
+      SITE_DEPLOY_SSH_KEY:
+        required: true
+      SITE_DEPLOY_USER:
+        required: false
+      DEPLOY_KNOWN_HOSTS:
+        required: true
   workflow_dispatch:
 
 concurrency:
@@ -31,8 +33,32 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  current:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      current: ${{ steps.target.outputs.current }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject superseded site changes
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            python3 dev/ci_impact.py current --component site_delivery
+          fi
+
+  deploy:
+    needs: current
+    if: needs.current.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:

@@ -138,6 +138,46 @@ CI 还会对 Dev Instance 脚本执行 ShellCheck、`just --dry-run` 和生命�
 hooks 与 remote 由 worktree 共享；`clumsies-commit-format` 会检查提交标题不超过 72 个
 字符，推荐采用 `<area>: <summary>`。
 
+### CI 分层与部署
+
+每次 PR 和 `main` 推送都会运行变更识别、workflow/策略检查和固定的 `build` 汇总检查。
+`dev/ci_impact.py` 根据 PR 相对共同祖先的完整差异，或一次 push 的完整范围，选择额外任务；
+删除和重命名前后的路径也参与判断。Actions 摘要会列出每层是否执行。
+
+| 改动范围 | 额外验证 | `main` CI 通过后的自动交付 |
+| --- | --- | --- |
+| README、仪表盘截图 | README/静态资源、文档构建、中英文搜索 | 无 |
+| `docs/`、`site/`、Bun 依赖 | 同上 | 站点 |
+| Server 源码和 migration | Server fmt/Clippy/文档/测试、daemon 集成测试、两种 Linux 架构镜像 | Server |
+| daemon 源码、内嵌 Clumsies 插件 | daemon 测试、macOS 测试、XPC/Dev 生命周期、签名安装包、脚本 | 无 |
+| macOS 源码和资源 | macOS 测试、签名安装包、脚本 | 无 |
+| Server / macOS 测试文件 | 对应测试任务 | 无 |
+| 共用 Cargo manifest/lockfile | 全部 Rust/原生检查和 Server 镜像 | Server |
+| 生产 Compose、环境变量模板 | Server/镜像、daemon 集成、文档和脚本 | 先站点，后 Server |
+| CI 策略、共享 action、未识别路径 | 全部检查 | 两者 |
+
+不能按 `.md` 后缀直接跳过：插件 skill 和 App 初始 Memory 会随程序交付。
+Git 历史不足、手动运行 **CI** 时都执行全量检查。`build` 在依赖失败后仍会运行；
+被选中的任务必须成功，只有明确未选中的任务才能跳过。
+
+macOS 单测、XPC 集成和安装包验证并行运行。Rust 缓存只存依赖，只有 `main` push 写入；
+Swift 缓存按 Xcode 和依赖声明保存包下载，不保存 App 二进制。新 PR 提交会取消旧的 CI；
+每次 `main` 推送保留自己的验证和交付。
+
+自动交付由通过 `build` 的 CI 调用，固定使用此次验证的提交。同一组件串行部署，
+如果已有更新的组件改动，旧提交不再自动交付；后续无关改动不会阻挡已验证的更新。
+只改 README 不会发布 Server 镜像或部署站点。手动 Server digest 重试/回滚、手动站点部署仍保留；
+手动 CI 只做全量验证，不部署。
+
+本地回归命令：
+
+```sh
+python3 -m unittest discover -s dev -p 'test_ci_impact.py' -v
+python3 dev/check-doc-assets.py --self-test
+python3 dev/check-doc-assets.py
+actionlint
+```
+
 ## 7. 当前边界
 
 - `down` 有意保留状态，删除 worktree 前必须 `reset`，否则实例目录和凭据仍会存在。

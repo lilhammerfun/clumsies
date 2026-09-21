@@ -1,0 +1,19 @@
+name: Set up native macOS builds
+description: Install native tools and cache downloaded Swift packages without caching app binaries.
+runs:
+  using: composite
+  steps:
+    - name: Install native development tools
+      shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+      run: brew install just xcodegen
+    - name: Identify Xcode
+      id: xcode
+      shell: bash
+      run: echo "version=$(xcodebuild -version | tr '\n' '-')" >> "$GITHUB_OUTPUT"
+    - name: Cache Swift package downloads
+      uses: actions/cache@v5
+      with:
+        path: ${{ env.CLUMSIES_MACOS_DERIVED_DATA }}/SourcePackages
+        key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.version }}-${{ hashFiles('apps/macos/project.yml', 'apps/macos/**/Package.resolved') }}

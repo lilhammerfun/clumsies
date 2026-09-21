@@ -88,12 +88,17 @@ access, or revoke tokens before retrying normal startup.
 
 ## GitHub delivery
 
-`.github/workflows/server-delivery.yml` runs only after the `CI` workflow has
-succeeded on `main`. It builds `linux/amd64` and `linux/arm64`, publishes the
-image to GHCR with OCI source/revision labels, records provenance, and deploys
-the exact manifest digest. A manual dispatch accepts only an existing immutable
-digest and its full commit, so it serves as retry and rollback rather than an
-untested source build.
+`CI` calls `.github/workflows/server-delivery.yml` after its `build` gate succeeds
+on `main`, only when the change affects Server delivery. The reusable workflow
+builds the exact validated commit for `linux/amd64` and `linux/arm64`, publishes
+to GHCR with OCI source/revision labels and provenance, and deploys the manifest
+digest. The same image architectures are build-checked without publishing on PRs.
+
+Delivery is serialized and rejects a commit if newer Server changes already
+exist on `main`; intervening unrelated docs changes do not discard the pending
+Server update. If both site and Server delivery are selected, site delivery
+first synchronizes their shared Compose/Caddy configuration. A manual dispatch
+accepts only an existing immutable digest and its full commit for retry or rollback.
 
 The GHCR package is linked to this repository through its OCI source label.
 Make the package public once so self-hosted installations can pull it without a
@@ -209,10 +214,13 @@ HTML/CSS, no build step).
 
 ### Deploy through CI/CD
 
-The `Site Delivery` workflow (`.github/workflows/site-delivery.yml`) builds the
-VitePress site and deploys it automatically on every `main` push that touches
-`docs/`, `site/`, `deploy/Caddyfile`, `compose.production.yml`, or the
-workflow itself. It can also be dispatched manually from the Actions tab.
+`CI` calls `Site Delivery` (`.github/workflows/site-delivery.yml`) after the
+selected checks pass on `main`. Changes to `docs/`, `site/`, Bun dependencies,
+`deploy/site.sh`, Caddy/Compose configuration, and CI delivery policy select it.
+README and screenshot changes alone do not deploy the site. The workflow builds
+and deploys the exact tested commit, serializes site deliveries, and skips a
+commit superseded by newer site changes. Manual dispatch remains available
+from the Actions tab for an explicit retry or rollback.
 
 The workflow needs these repository secrets in addition to the Server
 Delivery secrets:
