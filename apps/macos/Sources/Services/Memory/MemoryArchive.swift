@@ -1,6 +1,6 @@
 import Foundation
 
-enum MemoryExportError: LocalizedError {
+enum MemoryExportError: UserFacingError {
     case empty
     case invalidPath(String)
     case conflictingPath(String)
@@ -17,8 +17,8 @@ enum MemoryExportError: LocalizedError {
             String(localized: "Multiple memories use conflicting file paths: \(path)")
         case .contentUnavailable(let path):
             String(localized: "The full content of \(path) is unavailable. Refresh or reconcile it before exporting.")
-        case .compressionFailed(let status):
-            String(localized: "Could not create the memory ZIP archive (exit status \(status)).")
+        case .compressionFailed:
+            String(localized: "Couldn’t create the ZIP archive. Choose another location and try exporting again.")
         }
     }
 }
@@ -72,6 +72,7 @@ enum MemoryArchive {
         try process.run()
         process.waitUntilExit()
         guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            ClientDiagnostics.record("memory_export_failed", ["exit_status": String(process.terminationStatus)])
             throw MemoryExportError.compressionFailed(process.terminationStatus)
         }
         // Publish only a complete ZIP; an earlier failure leaves any existing export intact.

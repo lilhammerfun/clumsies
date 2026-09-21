@@ -94,10 +94,10 @@ final class ProjectMemberPickerModel: ObservableObject {
             let existingIds = Set(members.map(\.id))
             members.append(contentsOf: response.items.filter { !existingIds.contains($0.id) })
             nextCursor = response.pageInfo.nextCursor
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
         } catch {
             if generation == searchGeneration && !Task.isCancelled {
-                errorMessage = error.localizedDescription
+                errorMessage = error.actionMessage
                 loadFailed = true
             }
         }
@@ -111,7 +111,7 @@ final class ProjectMemberPickerModel: ObservableObject {
             try await administration.addAdminProjectMember(projectId: projectId, userId: selectedId, role: .member)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
             return false
         }
     }

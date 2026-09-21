@@ -96,7 +96,7 @@ final class ProjectStorageModel: ObservableObject {
             try check(request)
             move = current
             if current.state.isTerminal {
-                errorMessage = current.errorMessage ?? (current.state == .failed ? String(localized: "The storage move failed.") : nil)
+                errorMessage = current.state == .failed ? String(localized: "The storage move failed. Check the current storage location before trying again.") : nil
                 let loaded = try await fetchStorage(request.projectId)
                 try check(request)
                 storage = loaded
@@ -127,6 +127,6 @@ final class ProjectStorageModel: ObservableObject {
         guard requestId == request.id, context.activeProjectId == request.projectId,
               context.authorityGeneration == request.authority, !Task.isCancelled,
               !(error is CancellationError) else { return }
-        errorMessage = error.localizedDescription
+        errorMessage = error.actionMessage
     }
 }

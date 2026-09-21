@@ -15,7 +15,7 @@ struct MemoryGuidelinesSetupView: View {
         Group {
             if self.model.isLoading {
                 ContentLoadingView(title: String(localized: "Checking Memory Guidelines…"))
-            } else if let error = model.error {
+            } else if model.setup == nil, let error = model.error {
                 ContentUnavailableView {
                     Label("Memory Guidelines Unavailable", systemImage: "doc.badge.ellipsis")
                 } description: {
@@ -42,7 +42,7 @@ struct MemoryGuidelinesSetupView: View {
                                         documents: try MemoryGuidelines.defaultDocuments(occupiedPaths: setup.occupiedPaths)
                                     )
                                 } catch {
-                                    self.model.error = error.localizedDescription
+                                    self.model.error = error.actionMessage
                                 }
                             }
                             .buttonStyle(.link)
@@ -68,6 +68,7 @@ struct MemoryGuidelinesSetupView: View {
                 }
             }
         }
+        .pageFeedback(model.setup == nil ? nil : model.error)
         .task(id: workspaceContext.activeProjectId) { self.preview = nil; await self.model.prepare() }
         .sheet(item: $preview) { content in
             MemoryGuidelinesPreview(documents: content.documents) {

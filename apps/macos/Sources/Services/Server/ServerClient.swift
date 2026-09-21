@@ -12,10 +12,10 @@ enum ServerClientError: LocalizedError, Sendable {
             return String(localized: "The Server request path is invalid.")
         case .forbidden(let message):
             return message
-        case .response(let status, let message):
-            return String(localized: "Server request failed (\(status)): \(message)")
-        case .invalidResponse(let message):
-            return String(localized: "The Server returned invalid data: \(message)")
+        case .response(let status, _):
+            return ClientFailure(status: status).message
+        case .invalidResponse:
+            return ClientFailure.invalidResponse.message
         }
     }
 }
@@ -100,11 +100,25 @@ struct ServerClient: Sendable {
         let started = ContinuousClock.now
         let requestPath = try buildPath(path, query: query)
         let dataSourceGeneration = dataSourceTracker.generation
-        let response = try await requestLimiter.run {
+        let route = "server:" + method + ":" + path
+        // Writes report failure to their action owner (for example, the active form).
+        // Read/refresh requests maintain connection state without duplicating a failed Save.
+        let token = ["GET", "HEAD"].contains(method) ? await ClientServiceStatus.shared.begin(route) : nil
+        let response: DaemonServerResponse
+        do {
+            response = try await requestLimiter.run {
+                try Task.checkCancellation()
+                return try await sendRequest(
+                    .init(method: method, path: requestPath, headers: headers, body: body)
+                )
+            }
             try Task.checkCancellation()
-            return try await sendRequest(
-                .init(method: method, path: requestPath, headers: headers, body: body)
-            )
+            let failure: ClientFailure? = response.isStaleCache ? .connection
+                : ((200..<400).contains(response.status) ? nil : ClientFailure(status: response.status))
+            if let token { await ClientServiceStatus.shared.finish(route, token: token, failure: failure) }
+        } catch {
+            if let token { await ClientServiceStatus.shared.finish(route, token: token, failure: ClientFailure(error)) }
+            throw error
         }
         if response.isStaleCache, !Task.isCancelled {
             dataSourceTracker.markStale(generation: dataSourceGeneration)

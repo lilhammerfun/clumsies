@@ -38,14 +38,7 @@ struct ActivitySessionList: View {
                         ActivitySessionRow(session: session)
                             .tag(session.id)
                     }
-                    if let error = model.pageError {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(error).foregroundStyle(.secondary)
-                            Button("Try Again") { Task { await self.model.loadMoreSessions() } }
-                            Button("Refresh Activity") { Task { await self.model.load() } }
-                        }
-                        .font(.caption)
-                    } else if let cursor = model.nextCursor {
+                    if model.pageError == nil, let cursor = model.nextCursor {
                         ProgressView()
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
@@ -58,18 +51,8 @@ struct ActivitySessionList: View {
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !self.model.sessions.isEmpty {
-                if let error = model.errorMessage {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(error).foregroundStyle(.secondary)
-                        Button("Try Again") { Task { await self.model.load() } }
-                    }
-                    .font(.caption)
-                    .padding(8)
-                }
-            }
-        }
+        .pageFeedback(model.sessions.isEmpty ? nil : model.errorMessage) { Task { await model.load() } }
+        .pageFeedback(model.pageError) { Task { await model.loadMoreSessions() } }
     }
 }
 
@@ -140,6 +123,7 @@ struct ActivitySessionDetail: View {
                 }
             }
         }
+        .pageFeedback(model.selectedSession == nil ? nil : model.detailError) { Task { await model.retryDetail() } }
         .id(model.selectedSessionId)
         .task(id: model.selectedSummary?.sessionToken) { await self.model.loadSelectedSession() }
     }
@@ -157,16 +141,7 @@ struct ActivitySessionDetail: View {
                         model: self.model
                     )
                 }
-                if let error = model.detailError {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(error).foregroundStyle(.secondary)
-                        Button("Try Again") {
-                            Task { await self.model.retryDetail() }
-                        }
-                        Button("Refresh Activity") { Task { await self.model.load() } }
-                    }
-                    .padding(.vertical)
-                } else if let offset = model.nextTaskOffset {
+                if model.detailError == nil, let offset = model.nextTaskOffset {
                     ProgressView()
                         .controlSize(.small)
                         .frame(maxWidth: .infinity)
@@ -434,14 +409,6 @@ struct ActivityFragmentRow: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                } else if self.isExpanded && self.content.loadFailed {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("The full retrieval record is unavailable. Showing the recorded preview.")
-                        Spacer()
-                        Button("Try Again") { Task { await self.loadFullFragment() } }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 } else if self.isExpanded && self.displayedFragment.truncated {
                     Text("Only the recorded preview is available for this chunk.")
                         .font(.caption)
@@ -450,6 +417,10 @@ struct ActivityFragmentRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)
+        }
+        .pageFeedback(isExpanded && content.loadFailed
+            ? String(localized: "The full retrieval record is unavailable. Showing the recorded preview.") : nil) {
+            Task { await loadFullFragment() }
         }
         .task(id: self.isExpanded) {
             if self.isExpanded { await self.loadFullFragment() }

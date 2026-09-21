@@ -53,11 +53,6 @@ struct ProjectMemoryCacheSettings: View {
                         Label(diagnostic, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.secondary)
                     }
-                    if let errorMessage = model.errorMessage {
-                        Text(errorMessage)
-                            .textSelection(.enabled)
-                            .foregroundStyle(.red)
-                    }
 
                     HStack {
                         Button("Choose...") { Task { await self.chooseLocation(projectId: projectId) } }
@@ -80,6 +75,7 @@ struct ProjectMemoryCacheSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .pageFeedback(model.storage == nil ? nil : model.errorMessage)
         .task(id: workspaceContext.activeProjectId) {
             await self.model.loadStorage()
         }

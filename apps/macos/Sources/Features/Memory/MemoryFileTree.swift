@@ -227,7 +227,7 @@ struct MemoryDirectoryDeletionPlan: Hashable, Sendable {
     let draftsToDiscard: [LocalDraft]
 }
 
-enum MemoryDirectoryMutationError: LocalizedError, Equatable {
+enum MemoryDirectoryMutationError: UserFacingError, Equatable {
     case invalidDirectory
     case invalidName
     case readOnly

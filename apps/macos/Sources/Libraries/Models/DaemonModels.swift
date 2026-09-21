@@ -1006,26 +1006,5 @@ enum DaemonXPCError: LocalizedError, Sendable {
     case invalidReply
     case daemon(APIErrorPayload)
 
-    var errorDescription: String? {
-        let logHint = String(localized: "Review logs in \(ClumsiesIdentifiers.daemonLogDirectoryURL.path).")
-        switch self {
-        case .invalidRequest:
-            return String(localized: "Could not encode the daemon request.")
-        case .connectionFailed(let detail):
-            if let detail, !detail.isEmpty {
-                return String(localized: "The local Clumsies daemon is unavailable (\(detail)). \(logHint)")
-            }
-            return String(localized: "The local Clumsies daemon is unavailable. \(logHint)")
-        case .requestTimedOut(let timeout):
-            if let timeout {
-                return String(localized: "The local Clumsies daemon did not respond within \(String(format: "%.1f", timeout))s. \(logHint)")
-            }
-            return String(localized: "The local Clumsies daemon did not respond in time. \(logHint)")
-        case .invalidReply:
-            return String(localized: "The local Clumsies daemon returned an invalid response.")
-        case .daemon(let error):
-            let request = error.requestId.map { String(localized: " (request \($0))") } ?? ""
-            return "\(error.code): \(error.message)\(request)"
-        }
-    }
+    var errorDescription: String? { ClientFailure(self).message }
 }

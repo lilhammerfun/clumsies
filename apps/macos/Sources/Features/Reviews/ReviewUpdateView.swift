@@ -37,15 +37,12 @@ struct ReviewUpdateView<Content: View>: View {
             } else if model.plan != nil {
                 currentFile()
             }
-            if let error = model.errorMessage {
-                Text(error).foregroundStyle(.red).textSelection(.enabled)
-                Button("Check Latest Again") {
-                    if model.hasEdits { confirmsRestart = true }
-                    else { Task { await model.load(restart: true) } }
-                }
-            }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        .pageFeedback(model.errorMessage, retryTitle: String(localized: "Check Latest Again")) {
+            if model.hasEdits { confirmsRestart = true }
+            else { Task { await model.load(restart: true) } }
+        }
         .disabled(model.isApplying)
         .confirmationDialog("Check again and replace these resolution edits?", isPresented: $confirmsRestart) {
             Button("Discard Edits and Check Again", role: .destructive) {

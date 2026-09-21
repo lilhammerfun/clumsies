@@ -154,12 +154,12 @@ final class BundleStore: ObservableObject {
                 pendingBundleSaves[bundleId] = nil
                 bundleSaveTasks[bundleId] = nil
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             if pendingBundleSaves[bundleId]?.generation == generation {
                 bundleSaveTasks[bundleId] = nil
-                feedback.errorMessage = error.localizedDescription
+                feedback.errorMessage = error.actionMessage
             }
         }
     }
@@ -191,7 +191,7 @@ final class BundleStore: ObservableObject {
             }
         } catch {
             guard context.authorityGeneration == authority, !(error is CancellationError) else { return nil }
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
             return nil
         }
     }
@@ -215,7 +215,7 @@ final class BundleStore: ObservableObject {
             }
         } catch {
             guard context.authorityGeneration == authority, !(error is CancellationError) else { return false }
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
             return false
         }
     }
@@ -260,11 +260,11 @@ final class BundleStore: ObservableObject {
                 )
                 bundleLoadState = .loaded
                 didLoad.send()
-            } catch is CancellationError {
+            } catch where error.isUserCancellation {
                 return
             } catch {
                 guard let self, context.workspaceReloadGeneration == generation else { return }
-                bundleLoadState = .failed(error.localizedDescription)
+                bundleLoadState = .failed(error.userFacingMessage)
             }
         }
     }

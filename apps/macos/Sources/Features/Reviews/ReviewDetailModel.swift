@@ -248,8 +248,7 @@ final class ReviewDetailModel: ObservableObject {
             guard !Task.isCancelled,
                   detailRequestGeneration == request.generation else { return }
             clearDecisionReadiness()
-            loadError = error.localizedDescription
-            workspaceFeedback.errorMessage = error.localizedDescription
+            loadError = error.actionMessage
         }
     }
 
@@ -267,9 +266,10 @@ final class ReviewDetailModel: ObservableObject {
             clearDecisionReadiness()
             if detail == nil {
                 loading = false
-                loadError = error.localizedDescription
+                loadError = error.actionMessage
+            } else if let message = error.backgroundMessage {
+                workspaceFeedback.errorMessage = message
             }
-            workspaceFeedback.errorMessage = error.localizedDescription
         }
     }
 
@@ -366,7 +366,7 @@ final class ReviewDetailModel: ObservableObject {
                 guard !Task.isCancelled, self.detailRequestGeneration == generation,
                       self.selectedFileId == fileId else { return }
                 self.loadingFile = false
-                self.fileLoadError = error.localizedDescription
+                self.fileLoadError = error.actionMessage
                 ClientDiagnostics.record("review_file_load_failed", ClientDiagnostics.failureFields(error))
             }
         }
@@ -413,7 +413,7 @@ final class ReviewDetailModel: ObservableObject {
             await refreshDetail()
         } catch {
             guard detailRequestGeneration == generation, !Task.isCancelled else { return }
-            workspaceFeedback.errorMessage = error.localizedDescription
+            workspaceFeedback.errorMessage = error.actionMessage
             if let serverError = error as? ServerClientError,
                case .response(let status, _) = serverError,
                status == 409 {

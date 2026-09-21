@@ -58,6 +58,7 @@ struct FailureView: View {
     var onAdministratorRecovery: (() -> Void)?
     var onShowLogs: (() -> Void)?
     @State private var copied = false
+    @State private var exportError: String?
 
     var body: some View {
         VStack(spacing: 18) {
@@ -109,7 +110,7 @@ struct FailureView: View {
             }
 
             HStack(spacing: 12) {
-                Button("Export Diagnostics…") { DiagnosticsExport.present() }
+                Button("Export Diagnostics…") { DiagnosticsExport.present { exportError = $0 } }
                     .buttonStyle(.bordered)
 
                 Button(copied ? "Copied!" : "Copy Diagnostics") {
@@ -134,5 +135,7 @@ struct FailureView: View {
         .padding(38)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+        .pageFeedback(exportError)
+        .feedbackHost(showsService: false)
     }
 }

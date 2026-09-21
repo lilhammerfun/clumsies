@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-private enum NativeServerAccessError: LocalizedError {
+private enum NativeServerAccessError: UserFacingError {
     case missingOrganization
     case missingProject
     case missingSetupCode
@@ -215,7 +215,7 @@ final class NativeServerAccessModel: ObservableObject {
             do {
                 try await operation()
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = error.actionMessage
                 if recoveryState.isAuthenticated {
                     recoveryReady = true
                 }

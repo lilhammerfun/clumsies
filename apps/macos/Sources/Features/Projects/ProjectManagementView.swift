@@ -110,12 +110,7 @@ struct ProjectCreationSheet: View {
             }
             .textFieldStyle(.roundedBorder)
             .disabled(model.isCreating)
-            if let errorMessage = model.errorMessage {
-                Text(errorMessage)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
+            FormErrorMessage(message: model.errorMessage)
         }
     }
 
@@ -217,12 +212,16 @@ struct ProjectSettingsView: View {
                     ProjectMemoryCacheSettings(model: ProjectStorageModel(context: workspaceContext))
                 }
             } else if let error = administration.projectDetailStates[projectId]?.errorMessage {
-                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                ContentUnavailableView("Project Unavailable", systemImage: "folder", description: Text(error))
                 Button("Try Again") {
                     Task { await self.administration.loadProject(id: self.projectId, force: true) }
                 }
-            } else {
+            } else if administration.projectDetailStates[projectId]?.isLoading == true {
                 ProgressView("Loading project…")
+            } else {
+                ContentUnavailableView("Project Unavailable", systemImage: "folder",
+                    description: Text("Refresh to check your access to this project."))
+                Button("Retry") { Task { await administration.loadProject(id: projectId, force: true) } }
             }
         }
         .formStyle(.grouped)
@@ -286,16 +285,6 @@ private struct ProjectConfigurationSections: View {
 
     var body: some View {
         Group {
-            if let state = administration.projectDetailStates[project.id], state.isStale {
-                Section {
-                    Text(state.errorMessage ?? String(localized: "These project details are cached. Refresh before making changes."))
-                        .foregroundStyle(.secondary)
-                    Button("Try Again") {
-                        Task { await self.administration.loadProject(id: self.project.id, force: true) }
-                    }
-                    .disabled(self.workspaceContext.isMutatingAdministration || state.isLoading)
-                }
-            }
             Section {
                 LabeledContent("Name") {
                     Text(self.project.name).textSelection(.enabled)
@@ -358,8 +347,12 @@ private struct ProjectConfigurationSections: View {
                     Button("Delete Project…", role: .destructive) { self.confirmsProjectDeletion = true }
                         .disabled(!self.allowsMutation)
                 }
-                if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
+        }
+        .pageFeedback(errorMessage ?? administration.projectDetailStates[project.id]?.errorMessage)
+        .pageFeedback(administration.projectDetailStates[project.id]?.isStale == true
+            ? String(localized: "These project details are cached. Refresh before making changes.") : nil, isStatus: true) {
+            Task { await administration.loadProject(id: project.id, force: true) }
         }
         .sheet(isPresented: $showsEdit) {
             ProjectDetailsSheet(project: self.project
@@ -408,7 +401,7 @@ private struct ProjectConfigurationSections: View {
         errorMessage = nil
         Task {
             do { try await operation() }
-            catch { self.errorMessage = error.localizedDescription }
+            catch { self.errorMessage = error.actionMessage }
         }
     }
 }
@@ -433,13 +426,16 @@ private struct ProjectDetailsSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section("Project details") {
+                Section {
                     TextField("Name", text: self.$name)
                     TextField("Description", text: self.$description, axis: .vertical)
                         .lineLimit(3...6)
+                } header: {
+                    Text("Project details")
+                } footer: {
+                    FormErrorMessage(message: errorMessage)
                 }
                 .disabled(self.workspaceContext.isMutatingAdministration)
-                if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
             .formStyle(.grouped)
             SheetActionBar(
@@ -471,7 +467,7 @@ private struct ProjectDetailsSheet: View {
                 )
                 self.dismiss()
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.errorMessage = error.actionMessage
             }
         }
     }
@@ -534,17 +530,7 @@ private struct ProjectMemberSheet: View {
                 }
             }
             .disabled(self.workspaceContext.isMutatingAdministration)
-            if let errorMessage = model.errorMessage {
-                HStack {
-                    AdministrationInlineError(message: errorMessage)
-                    if self.model.loadFailed {
-                        Button("Try Again") {
-                            self.model.retry()
-                        }
-                        .disabled(self.model.isLoading || self.workspaceContext.isMutatingAdministration)
-                    }
-                }
-            }
+            FormErrorMessage(message: model.errorMessage, retry: model.loadFailed ? { model.retry() } : nil)
             if model.nextCursor != nil || (model.isLoading && !model.members.isEmpty) {
                 HStack {
                     if model.nextCursor != nil {
@@ -620,15 +606,10 @@ private struct ProjectLocalSetupSettings: View {
             }
             .disabled(self.workspaceContext.activeProjectId == nil || self.model.isLoading)
 
-            if let errorMessage = model.errorMessage {
-                Text(errorMessage)
-                    .textSelection(.enabled)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         } header: {
             Text("Repositories on This Mac")
         }
+        .pageFeedback(model.errorMessage)
         .task(id: [workspaceContext.activeProjectId ?? "", projectService.projectBindingsGeneration.uuidString]) {
             await self.model.load()
         }

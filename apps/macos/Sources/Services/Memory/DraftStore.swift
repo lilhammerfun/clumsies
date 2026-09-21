@@ -143,7 +143,7 @@ final class DraftStore: ObservableObject {
             }
             return true
         } catch {
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
             return false
         }
     }
@@ -411,7 +411,7 @@ final class DraftStore: ObservableObject {
             }
             return true
         } catch {
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
             return false
         }
     }
@@ -448,7 +448,7 @@ final class DraftStore: ObservableObject {
             }
             return true
         } catch {
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
             return false
         }
     }
@@ -527,12 +527,12 @@ final class DraftStore: ObservableObject {
                 pendingSaveKey: key,
                 pendingSaveGeneration: generation
             )
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             if pendingDocumentSaves[key]?.generation == generation {
                 documentSaveTasks[key] = nil
-                feedback.errorMessage = error.localizedDescription
+                feedback.errorMessage = error.actionMessage
             }
         }
     }
@@ -643,12 +643,12 @@ final class DraftStore: ObservableObject {
             inventory = try await WorkspaceLoader.listAllDraftSummaries { query in
                 try await self.context.daemon.listDrafts(query)
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
-                String(localized: "Couldn’t refresh Drafts. \(error.localizedDescription)")
+                String(localized: "Couldn’t refresh Drafts. \(error.userFacingMessage)")
             )
             return
         }
@@ -701,12 +701,12 @@ final class DraftStore: ObservableObject {
             for loaded in loadedBaselines {
                 catalog.installLoadedResourceIfCurrent(loaded)
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
-                String(localized: "Couldn’t refresh Draft source files. \(error.localizedDescription)")
+                String(localized: "Couldn’t refresh Draft source files. \(error.userFacingMessage)")
             )
             return
         }
@@ -720,12 +720,12 @@ final class DraftStore: ObservableObject {
                     resources: resourceSnapshot
                 )
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
-                String(localized: "Couldn’t refresh Draft details. \(error.localizedDescription)")
+                String(localized: "Couldn’t refresh Draft details. \(error.userFacingMessage)")
             )
             return
         }
@@ -820,11 +820,11 @@ final class DraftStore: ObservableObject {
                 )
                 draftInventoryLoadState = .loaded
                 documentsChanged.send()
-            } catch is CancellationError {
+            } catch where error.isUserCancellation {
                 return
             } catch {
                 guard let self, context.workspaceReloadGeneration == generation else { return }
-                draftInventoryLoadState = .failed(error.localizedDescription)
+                draftInventoryLoadState = .failed(error.userFacingMessage)
             }
         }
     }
@@ -852,7 +852,7 @@ final class DraftStore: ObservableObject {
     }
 }
 
-enum MemoryValidationError: LocalizedError, Sendable {
+enum MemoryValidationError: UserFacingError, Sendable {
     case invalidPath(String)
     case emptyRule
     case memoryCannotBeRenamed

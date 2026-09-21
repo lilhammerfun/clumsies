@@ -9,7 +9,8 @@ extension WorkspaceCoordinator {
         try context.ensureAuthority(authority)
         let status = try await context.daemon.syncStatus(projectId: projectId)
         if ["failed", "degraded"].contains(status.commitSync.state) {
-            throw ServerClientError.invalidResponse(status.commitSync.lastError?.message ?? String(localized: "Couldn't download the remote changes. Try again when connected."))
+            if let error = status.commitSync.lastError { throw error }
+            throw ActionFailure(String(localized: "Couldn't download the remote changes. Try again when connected."))
         }
         try context.ensureAuthority(authority)
         guard context.activeProjectId == projectId else { throw CancellationError() }
@@ -18,7 +19,7 @@ extension WorkspaceCoordinator {
         guard context.activeProjectId == projectId, navigation.selectedSection == .inbox else { throw CancellationError() }
         if let error = feedback.presentedBackgroundError,
            error.source == .staleResources(projectId: projectId) {
-            throw ServerClientError.invalidResponse(error.message)
+            throw ActionFailure(error.message)
         }
         revealInboxSharedUpdates(in: projectId)
     }
@@ -37,7 +38,7 @@ extension WorkspaceCoordinator {
     func openInboxDestination(_ destination: InboxDestination) async throws {
         let authority = context.authorityGeneration
         guard await flushPendingChanges() else {
-            throw ServerClientError.invalidResponse(String(localized: "Save the current edits before opening this notification."))
+            throw ActionFailure(String(localized: "Save the current edits before opening this notification."))
         }
         try context.ensureAuthority(authority)
         guard navigation.selectedSection == .inbox else { throw CancellationError() }
@@ -55,9 +56,9 @@ extension WorkspaceCoordinator {
             navigation.searchQuery = ""
             navigation.selectedSection = .memory
         case .retrySync:
-            let result = await refresh.retrySync(allProjects: true)
+            let result = await refresh.retrySync(allProjects: true, reportFailure: false)
             try context.ensureAuthority(authority)
-            if case .failed(let message) = result { throw ServerClientError.invalidResponse(message) }
+            if case .failed(let message) = result { throw ActionFailure(message) }
             await inbox.refresh()
         case .sharedChanges(let projectId):
             try await openInboxSharedUpdates(projectId: projectId)
@@ -70,7 +71,7 @@ extension WorkspaceCoordinator {
         }
         let authority = context.authorityGeneration
         guard await flushPendingChanges() else {
-            throw ServerClientError.invalidResponse(String(localized: "Save the current edits before switching projects."))
+            throw ActionFailure(String(localized: "Save the current edits before switching projects."))
         }
         try context.ensureAuthority(authority)
         guard navigation.selectedSection == .inbox else { throw CancellationError() }
@@ -78,7 +79,7 @@ extension WorkspaceCoordinator {
         try context.ensureAuthority(authority)
         guard context.phase == .ready, context.activeProjectId == projectId,
               context.activeProject?.isLoaded == true, !context.isSwitchingMemoryContext else {
-            throw ServerClientError.invalidResponse(String(localized: "Finish the current Memory operation before opening this project."))
+            throw ActionFailure(String(localized: "Finish the current Memory operation before opening this project."))
         }
     }
 }

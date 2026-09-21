@@ -38,6 +38,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
     @Published private(set) var isLoadingMore = false
     @Published private(set) var isMutating = false
     @Published var errorMessage: String?
+    @Published private(set) var pageError: String?
 
     private let daemon: DaemonXPCClient
     private let fetchRuns: @MainActor (RetrievalRunListRequest) async throws -> RetrievalRunListResponse
@@ -70,6 +71,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
         selectionGeneration = generation
         listGeneration = generation
         isLoadingMore = false
+        pageError = nil
         isLoading = true
         errorMessage = nil
         defer {
@@ -92,6 +94,10 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             let selected = selectedRunId.flatMap { selected in
                 response.items.first(where: { $0.runId == selected })?.runId
             } ?? response.items.first?.runId
+            if selectedRunId != selected {
+                detail = nil
+                evidenceDrafts = []
+            }
             selectedRunId = selected
             if let selected {
                 try await loadDetail(runId: selected, generation: generation)
@@ -101,11 +107,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             }
         } catch {
             guard selectionGeneration == generation, !Task.isCancelled else { return }
-            runs = []
-            nextCursor = nil
-            detail = nil
-            evidenceDrafts = []
-            errorMessage = error.localizedDescription
+            errorMessage = runs.isEmpty || detail == nil ? error.actionMessage : error.backgroundMessage
         }
     }
 
@@ -113,7 +115,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
         guard let cursor = nextCursor, !isLoadingMore, !isLoading else { return }
         let generation = listGeneration
         isLoadingMore = true
-        errorMessage = nil
+        pageError = nil
         defer { if listGeneration == generation { isLoadingMore = false } }
         do {
             let response = try await fetchRuns(
@@ -131,7 +133,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             nextCursor = response.nextCursor
         } catch {
             guard listGeneration == generation, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            pageError = error.actionMessage
         }
     }
 
@@ -157,7 +159,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             guard selectionGeneration == generation, !Task.isCancelled else { return }
             detail = nil
             evidenceDrafts = []
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 
@@ -257,7 +259,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             return true
         } catch {
             if selectionGeneration == generation {
-                errorMessage = error.localizedDescription
+                errorMessage = error.actionMessage
             }
             return false
         }

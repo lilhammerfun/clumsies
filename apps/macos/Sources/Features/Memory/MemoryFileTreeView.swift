@@ -172,21 +172,7 @@ struct FileTreeView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color(nsColor: .controlBackgroundColor))
-        .safeAreaInset(edge: .bottom) {
-            if let directoryOperationProgress = operations.directoryOperationProgress {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(directoryOperationProgress)
-                        .font(.caption)
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.bar)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(directoryOperationProgress)
-            }
-        }
+        .pageFeedback(operations.directoryOperationProgress, isStatus: true)
         .contextMenu(forSelectionType: String.self) { nodeIds in
             self.fileTreeMenu(for: nodeIds)
         }
@@ -327,7 +313,7 @@ struct FileTreeView: View {
             do {
                 try await self.draftStore.rename(item, to: document.path)
             } catch {
-                self.workspaceFeedback.errorMessage = error.localizedDescription
+                self.workspaceFeedback.errorMessage = error.actionMessage
             }
         }
     }
@@ -389,7 +375,7 @@ struct FileTreeView: View {
             dismissAlert()
             Task { await self.operations.renameDirectory(plan) }
         } catch {
-            workspaceFeedback.errorMessage = error.localizedDescription
+            workspaceFeedback.errorMessage = error.actionMessage
         }
     }
 

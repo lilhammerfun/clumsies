@@ -51,27 +51,19 @@ struct ReviewRequestSheet: View {
             }
         }
         .interactiveDismissDisabled(model.isSubmitting)
-        .alert(
-            "Could Not Request Review",
-            isPresented: Binding(
-                get: { self.model.errorMessage != nil },
-                set: { if !$0 { self.model.errorMessage = nil } }
-            )
-        ) {
-            Button("OK") { self.model.errorMessage = nil }
-        } message: {
-            Text(self.model.errorMessage ?? "")
-                .textSelection(.enabled)
-        }
     }
 
     private var requestForm: some View {
         VStack(spacing: 0) {
             Form {
-                Section("Review") {
+                Section {
                     TextField("Title", text: self.$model.title)
                     TextField("Description", text: self.$model.description, axis: .vertical)
                         .lineLimit(4...8)
+                } header: {
+                    Text("Review")
+                } footer: {
+                    FormErrorMessage(message: model.errorMessage)
                 }
             }
             .formStyle(.grouped)
@@ -115,6 +107,9 @@ struct ReviewRequestSheet: View {
                 }
             }
 
+            if let error = model.errorMessage {
+                FormErrorMessage(message: error).padding(.horizontal, 24).padding(.vertical, 12)
+            }
             SheetActionBar(
                 confirmationTitle: Text("Update and Request Review"), cancellationTitle: "Back",
                 progressTitle: "Requesting review…", isWorking: model.isSubmitting,

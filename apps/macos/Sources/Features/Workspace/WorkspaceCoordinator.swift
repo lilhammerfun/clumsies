@@ -113,6 +113,8 @@ final class WorkspaceCoordinator {
         let generation = UUID()
         context.workspaceReloadGeneration = generation
         let hadLoadedWorkspace = context.account != nil
+        let previousPhase = context.phase
+        let authority = context.authorityGeneration
         context.phase = .loading
         feedback.errorMessage = nil
         do {
@@ -168,11 +170,19 @@ final class WorkspaceCoordinator {
             guard context.workspaceReloadGeneration == generation else { return }
             context.phase = .authenticationRequired
         } catch {
-            guard context.workspaceReloadGeneration == generation else { return }
-            let messages = [error.localizedDescription, feedback.errorMessage]
-                .compactMap { $0 }
-                .filter { !$0.isEmpty }
-            context.phase = .failed(messages.joined(separator: "\n\n"))
+            finishFailedReload(error, generation: generation, authority: authority, previousPhase: previousPhase)
+        }
+    }
+
+    /// A refresh failure must not close an already usable main window.
+    func finishFailedReload(_ error: Error, generation: UUID, authority: UUID, previousPhase: ApplicationPhase) {
+        guard context.workspaceReloadGeneration == generation, context.authorityGeneration == authority else { return }
+        if error.isUserCancellation {
+            context.phase = previousPhase
+        } else if previousPhase == .ready, context.account != nil, ClientFailure(error).isServiceFailure {
+            context.phase = .ready
+        } else {
+            context.phase = .failed(error.userFacingMessage)
         }
     }
 
@@ -297,7 +307,7 @@ final class WorkspaceCoordinator {
             }
         } catch {
             guard context.projectSelectionGeneration == generation else { return }
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
         }
     }
 
@@ -351,11 +361,11 @@ final class WorkspaceCoordinator {
                 )
                 guard context.workspaceReloadGeneration == generation else { return }
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == generation else { return }
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
         }
     }
 
@@ -410,8 +420,8 @@ final class WorkspaceCoordinator {
             clearAuthorityScopedWorkspace()
             context.phase = .authenticationRequired
         } catch {
-            feedback.errorMessage = error.localizedDescription
-            context.phase = .failed(error.localizedDescription)
+            feedback.errorMessage = error.actionMessage
+            context.phase = .failed(error.userFacingMessage)
         }
     }
 
@@ -421,7 +431,7 @@ final class WorkspaceCoordinator {
             try await bundles.flushPendingChanges()
             return true
         } catch {
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
             return false
         }
     }
@@ -572,7 +582,7 @@ final class WorkspaceCoordinator {
                 workspaceGeneration: workspaceGeneration
             )
             feedback.resolveBackgroundError(.projectRefresh(projectId: projectId))
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == workspaceGeneration,
@@ -582,8 +592,7 @@ final class WorkspaceCoordinator {
                 return
             }
             feedback.presentBackgroundError(
-                String(localized: "Couldn’t refresh \(projectName). Existing content is still available. ")
-                    + error.localizedDescription,
+                error,
                 source: .projectRefresh(projectId: projectId)
             )
         }

@@ -813,7 +813,7 @@ final class DaemonContractTests: XCTestCase {
         let status = try source("Services/Daemon/DaemonSyncService.swift", method: "func refreshSyncStatus()")
         XCTAssertEqual(status.components(separatedBy: "daemon.syncStatus(projectId: projectId)").count - 1, 1)
         XCTAssertTrue(status.contains("!isRefreshingSyncStatus"))
-        XCTAssertTrue(status.contains("catch is CancellationError"))
+        XCTAssertTrue(status.contains("catch where error.isUserCancellation"))
         for operation in ["refreshOrgResourcesIfNeeded(", "refreshDraftInventory(", "refreshStaleResourcesIfNeeded("] {
             XCTAssertFalse(status.contains(operation))
             let data = try source("Features/Workspace/WorkspaceCoordinator.swift", method: "func refreshSynchronizedWorkspaceData()")
@@ -946,7 +946,7 @@ final class DaemonContractTests: XCTestCase {
             retry[completionClear.upperBound...].range(of: "await self.onRetryCompleted?()")
         )
         XCTAssertLessThan(completionClear.lowerBound, statusRefresh.lowerBound)
-        XCTAssertTrue(retry.contains("if self.feedback.errorMessage == nil"))
+        XCTAssertTrue(retry.contains("if reportFailure, self.feedback.errorMessage == nil"))
         XCTAssertFalse(retry.contains("guard !isRetryingSync"))
 
         XCTAssertTrue(source.contains(
@@ -1107,7 +1107,7 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertLessThan(gate.lowerBound, configClear.lowerBound)
         XCTAssertLessThan(configClear.lowerBound, authorityClear.lowerBound)
         XCTAssertLessThan(authorityClear.lowerBound, authenticationRequired.lowerBound)
-        XCTAssertTrue(signOut.contains("phase = .failed(error.localizedDescription)"))
+        XCTAssertTrue(signOut.contains("phase = .failed(error.userFacingMessage)"))
 
         let clearStart = try XCTUnwrap(
             source.range(of: "func clearAuthorityScopedWorkspace()")

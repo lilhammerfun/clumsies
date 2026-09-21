@@ -58,7 +58,7 @@ final class ReviewUpdateModel: ObservableObject {
             }
         } catch {
             guard generation == request, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 
@@ -98,7 +98,7 @@ final class ReviewUpdateModel: ObservableObject {
             return result
         } catch {
             guard generation == requestGeneration, !Task.isCancelled else { return nil }
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
             return nil
         }
     }

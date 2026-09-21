@@ -104,13 +104,7 @@ struct WorkspaceView: View {
                 regularWorkspace
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let message = workspaceFeedback.errorMessage {
-                WorkspaceOperationErrorBanner(message: message) {
-                    workspaceFeedback.dismissErrorMessage()
-                }
-            }
-        }
+        .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
         .sheet(isPresented: $workspaceNavigation.showsProjectCreation) {
             ProjectCreationSheet(model: ProjectCreationModel(projects: store.projects))
         }
@@ -924,46 +918,6 @@ private struct ActivityProjectFilter: View {
         ) { projectId in
             Task { await model.selectProject(projectId) }
         }
-    }
-}
-
-private struct WorkspaceOperationErrorBanner: View {
-    let message: String
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Operation Failed")
-                    .font(.headline)
-                Text(message)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Operation failed: \(message)")
-
-            Spacer(minLength: 16)
-
-            Button("Copy Details") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(message, forType: .string)
-            }
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.plain)
-            .toolbarHelp(String(localized: "Dismiss"))
-            .accessibilityLabel("Dismiss operation failure")
-        }
-        .padding(10)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
     }
 }
 

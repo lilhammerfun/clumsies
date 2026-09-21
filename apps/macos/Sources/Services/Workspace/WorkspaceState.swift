@@ -38,7 +38,7 @@ struct WorkspaceSnapshot: Sendable {
     let legacyAgentAdapterInspectionWarning: String?
 }
 
-enum WorkspaceLoadError: LocalizedError, Sendable {
+enum WorkspaceLoadError: UserFacingError, Sendable {
     case authenticationRequired
     case noProjects
     case sharedStateChangedDuringLoad

@@ -109,6 +109,27 @@ final class ReviewUpdateTests: XCTestCase {
         XCTAssertTrue(update.resolutions.isEmpty)
     }
 
+    func testDetailRefreshHidesConnectionNoiseButReportsLostAccess() async {
+        let plan = fixture()
+        let workspace = WorkspaceCoordinator()
+        let review = WorkspaceLoader.mapReview(plan.detail.review)
+        workspace.reviews.reviews = [review]
+        var failure: Error = URLError(.notConnectedToInternet)
+        let model = ReviewDetailModel(reviewId: review.id, context: workspace.context,
+            feedback: workspace.feedback, reviews: workspace.reviews,
+            fetchDetail: { _ in throw failure })
+        model.detail = plan.detail
+        model.commentDraft = "Keep this comment."
+        await model.refreshDetail()
+        XCTAssertNotNil(model.detail)
+        XCTAssertNil(model.loadError)
+        XCTAssertNil(workspace.feedback.errorMessage)
+        failure = ServerClientError.response(status: 403, message: "PRIVATE_BODY")
+        await model.refreshDetail()
+        XCTAssertEqual(workspace.feedback.errorMessage, ClientFailure.forbidden.message)
+        XCTAssertEqual(model.commentDraft, "Keep this comment.")
+    }
+
     func testExplicitRestartPreservesEditsOnFailureAndResetsThemOnlyAfterSuccess() async {
         let plan = fixture()
         var offline = false

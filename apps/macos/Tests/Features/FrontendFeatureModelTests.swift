@@ -3,6 +3,26 @@ import XCTest
 
 @MainActor
 final class FrontendFeatureModelTests: XCTestCase {
+    func testRepositoryRefreshKeepsDataOnlyWithinTheSameAuthority() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "project"
+        var attempts = 0
+        let model = ProjectRepositoriesModel(context: workspace.context, projects: workspace.projects) { project in
+            attempts += 1
+            if attempts > 1 { throw URLError(.notConnectedToInternet) }
+            return [.init(serverUrl: "https://example.com", workspaceRoot: "/private-project", projectId: project,
+                revision: 1, createdAt: "now", updatedAt: "now")]
+        }
+        await model.load()
+        await model.load()
+        XCTAssertEqual(model.bindings.count, 1)
+        XCTAssertNil(model.errorMessage)
+        workspace.context.authorityGeneration = UUID()
+        await model.load()
+        XCTAssertTrue(model.bindings.isEmpty)
+        XCTAssertEqual(model.errorMessage, ClientFailure.connection.message)
+    }
+
     func testProjectStorageIgnoresAnOldProjectResponse() async {
         let context = WorkspaceContext()
         context.activeProjectId = "first"

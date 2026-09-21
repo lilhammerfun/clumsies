@@ -80,6 +80,7 @@ struct GeneralSettingsView: View {
 
 struct SupportSettingsView: View {
     let onShowLogs: () -> Void
+    @State private var exportError: String?
 
     var body: some View {
         Form {
@@ -88,7 +89,7 @@ struct SupportSettingsView: View {
                     Button("Show in Finder", action: self.onShowLogs)
                 }
                 LabeledContent("Diagnostics") {
-                    Button("Export…") { DiagnosticsExport.present() }
+                    Button("Export…") { DiagnosticsExport.present { exportError = $0 } }
                 }
             } footer: {
                 Text("Use logs to help investigate a problem with Clumsies.")
@@ -96,5 +97,6 @@ struct SupportSettingsView: View {
         }
         .formStyle(.grouped)
         .font(.system(size: 13))
+        .pageFeedback(exportError)
     }
 }

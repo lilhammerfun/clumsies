@@ -103,11 +103,11 @@ final class ActivityModel: ObservableObject {
             if selectedSessionId == nil || !sessions.contains(where: { $0.id == selectedSessionId }) {
                 selectedSessionId = sessions.first?.id
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard loadGeneration == generation, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = hasLoaded ? error.backgroundMessage : error.actionMessage
         }
     }
 
@@ -124,11 +124,11 @@ final class ActivityModel: ObservableObject {
             let known = Set(sessions.map(\.id))
             sessions.append(contentsOf: response.sessions.filter { !known.contains($0.id) })
             nextCursor = response.nextCursor
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard generation == loadGeneration, !Task.isCancelled else { return }
-            pageError = error.localizedDescription
+            pageError = error.userFacingMessage
         }
     }
 
@@ -204,12 +204,12 @@ final class ActivityModel: ObservableObject {
             }
             totalTasks = response.totalTasks
             nextTaskOffset = response.nextOffset
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard detailGeneration == generation, !Task.isCancelled else { return }
             failedTaskOffset = offset
-            detailError = error.localizedDescription
+            detailError = offset != nil || selectedSession == nil ? error.actionMessage : error.backgroundMessage
         }
     }
 

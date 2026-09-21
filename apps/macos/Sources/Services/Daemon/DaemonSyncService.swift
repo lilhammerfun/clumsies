@@ -79,7 +79,8 @@ final class DaemonSyncService: ObservableObject {
     func retrySync(
         channel: String = "all",
         projectId: String? = nil,
-        allProjects: Bool = false
+        allProjects: Bool = false,
+        reportFailure: Bool = true
     ) async -> SyncRetryOutcome {
         let projectId = allProjects ? nil : projectId ?? context.activeProjectId
         let key = SyncRetryKey(channel: channel, projectId: projectId)
@@ -111,15 +112,15 @@ final class DaemonSyncService: ObservableObject {
                     try Task.checkCancellation()
                 }
                 return SyncRetryOutcome.completed
-            } catch is CancellationError {
+            } catch where error.isUserCancellation {
                 return .cancelled
             } catch {
                 guard !Task.isCancelled else { return .cancelled }
-                let message = error.localizedDescription
+                let message = error.userFacingMessage
                 self.feedback.syncRetryErrors[key] = message
                 if self.context.activeProjectId == projectId {
                     self.syncStatusAvailable = false
-                    if self.feedback.errorMessage == nil {
+                    if reportFailure, self.feedback.errorMessage == nil {
                         self.feedback.errorMessage = message
                         self.feedback.presentedSyncRetryErrorKey = key
                     }
@@ -163,7 +164,7 @@ final class DaemonSyncService: ObservableObject {
             if !syncStatusAvailable {
                 syncStatusAvailable = true
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == generation,
@@ -190,7 +191,7 @@ final class DaemonSyncService: ObservableObject {
                   !Task.isCancelled else {
                 return
             }
-            _ = await retrySync(projectId: context.activeProjectId)
+            _ = await retrySync(projectId: context.activeProjectId, reportFailure: false)
         }
     }
 

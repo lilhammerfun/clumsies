@@ -30,7 +30,7 @@ final class ActivityFragmentModel: ObservableObject {
             try Task.checkCancellation()
             guard loadGeneration == generation else { return }
             fullFragment = loaded
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
         } catch {
             if loadGeneration == generation { loadFailed = true }
         }

@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 enum DiagnosticsExport {
-    @MainActor static func present() {
+    @MainActor static func present(onFailure: @escaping @MainActor (String) -> Void) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "Clumsies-Diagnostics-\(Int(Date().timeIntervalSince1970))"
         panel.title = String(localized: "Export Diagnostics")
@@ -22,7 +22,8 @@ enum DiagnosticsExport {
                     NSWorkspace.shared.activateFileViewerSelecting([destination])
                 } catch {
                     ClientDiagnostics.record("diagnostic_export_failed", ClientDiagnostics.failureFields(error))
-                    NSAlert(error: error).runModal()
+                    guard !error.isUserCancellation else { return }
+                    onFailure(String(localized: "Couldn't Export Diagnostics") + ". " + error.userFacingMessage)
                 }
             }
         }

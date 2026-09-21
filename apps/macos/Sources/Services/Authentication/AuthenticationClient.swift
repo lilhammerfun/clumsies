@@ -3,7 +3,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-enum AuthenticationError: LocalizedError, Sendable {
+enum AuthenticationError: UserFacingError, Sendable {
     case callbackServer(String)
     case invalidAuthorizationURL
     case invalidRequestPath
@@ -16,15 +16,15 @@ enum AuthenticationError: LocalizedError, Sendable {
 
     var errorDescription: String? {
         switch self {
-        case .callbackServer(let message): message
+        case .callbackServer: String(localized: "Clumsies couldn’t start sign-in. Close other sign-in windows and try again.")
         case .invalidAuthorizationURL: String(localized: "Could not create the organization sign-in URL.")
         case .invalidRequestPath: String(localized: "The authenticated Server request path is invalid.")
         case .browserLaunchFailed: String(localized: "Could not open the system browser.")
         case .callbackTimedOut: String(localized: "Organization sign-in timed out.")
         case .invalidCallback: String(localized: "The organization sign-in callback is invalid.")
         case .stateMismatch: String(localized: "The organization sign-in state did not match.")
-        case .provider(let message): String(localized: "Organization sign-in failed: \(message)")
-        case .server(let status, let message): String(localized: "Server authentication failed (\(status)): \(message)")
+        case .provider: String(localized: "Sign-in wasn’t completed. Try again with your organization account.")
+        case .server(let status, _): ClientFailure(status: status).message
         }
     }
 }

@@ -35,7 +35,7 @@ final class ProjectCreationModel: ObservableObject {
                 repositoryPaths: repositories.map(\.path), bundleId: selectedBundleId
             )
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
             isCreating = false
             return nil
         }

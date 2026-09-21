@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-enum ServerOriginError: LocalizedError, Equatable, Sendable {
+enum ServerOriginError: UserFacingError, Equatable, Sendable {
     case empty
     case invalidURL
     case unsupportedScheme

@@ -145,6 +145,7 @@ final class WorkspaceContext: ObservableObject {
     }
 
     func resetAuthority() {
+        ClientServiceStatus.shared.reset()
         workspaceReloadGeneration = UUID()
         invalidateProjectSelection()
         account = nil
@@ -168,7 +169,7 @@ final class WorkspaceContext: ObservableObject {
     }
 }
 
-enum AdministrationError: LocalizedError, Sendable {
+enum AdministrationError: UserFacingError, Sendable {
     case forbidden
     case unavailable
     case stale

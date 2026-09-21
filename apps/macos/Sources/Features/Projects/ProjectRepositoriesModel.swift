@@ -7,6 +7,8 @@ final class ProjectRepositoriesModel: ObservableObject {
     private let projects: ProjectService
     private let fetchBindings: (String) async throws -> [DaemonProjectBinding]
     private var generation = UUID()
+    private var loadedProjectId: String?
+    private var loadedAuthority: UUID?
     @Published private(set) var bindings: [DaemonProjectBinding] = []
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
@@ -21,7 +23,9 @@ final class ProjectRepositoriesModel: ObservableObject {
     func load() async {
         let request = UUID()
         generation = request
-        bindings = []
+        if loadedProjectId != context.activeProjectId || loadedAuthority != context.authorityGeneration { bindings = [] }
+        loadedAuthority = context.authorityGeneration
+        loadedProjectId = context.activeProjectId
         errorMessage = nil
         isLoading = false
         guard let projectId = context.activeProjectId else { return }
@@ -36,7 +40,7 @@ final class ProjectRepositoriesModel: ObservableObject {
         } catch {
             guard generation == request, context.authorityGeneration == authority,
                   context.activeProjectId == projectId, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = bindings.isEmpty ? error.actionMessage : error.backgroundMessage
         }
     }
 
@@ -67,7 +71,7 @@ final class ProjectRepositoriesModel: ObservableObject {
         } catch {
             guard generation == request, context.authorityGeneration == authority,
                   context.activeProjectId == projectId, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 }

@@ -50,7 +50,7 @@ struct NativeSetupOIDCAuthorizationResponse: Decodable, Sendable {
     let authorizationUrl: String
 }
 
-enum NativeServerSetupError: LocalizedError, Sendable {
+enum NativeServerSetupError: UserFacingError, Sendable {
     case noSetupCode
     case oidcNotConfigured
     case alreadyInitialized
@@ -67,8 +67,8 @@ enum NativeServerSetupError: LocalizedError, Sendable {
             String(localized: "This Server has already been set up. Sign in instead.")
         case .invalidAuthorizationURL:
             String(localized: "The Server returned an invalid identity-provider URL.")
-        case .server(let status, let message):
-            String(localized: "Server setup failed (\(status)): \(message)")
+        case .server(let status, _):
+            ClientFailure(status: status).message
         }
     }
 }

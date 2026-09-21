@@ -31,8 +31,8 @@ struct BundleNavigator: View {
                     }
                 }
                 .listStyle(.inset)
-                .safeAreaInset(edge: .bottom) {
-                    BundleCollectionStatusBanner()
+                .pageFeedback(!bundleStore.bundles.isEmpty ? bundleStore.bundleLoadState.failureMessage : nil, isStatus: true) {
+                    Task { await workspaceActions.reload() }
                 }
             }
         }
@@ -93,37 +93,6 @@ private struct BundleCollectionStatusView: View {
     }
 }
 
-private struct BundleCollectionStatusBanner: View {
-    @Environment(\.workspaceActions) private var workspaceActions
-    @EnvironmentObject private var bundleStore: BundleStore
-
-    @ViewBuilder
-    var body: some View {
-        switch bundleStore.bundleLoadState {
-        case .loading:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Refreshing Bundles...")
-                    .font(.caption)
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
-        case .failed:
-            Button("Bundle refresh failed - Try Again") {
-                Task { await workspaceActions.reload() }
-            }
-            .buttonStyle(.plain)
-            .font(.caption)
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
-        case .loaded:
-            EmptyView()
-        }
-    }
-}
 
 private struct BundleEditor: View {
     @Environment(\.workspaceActions) private var workspaceActions
@@ -277,7 +246,7 @@ private struct BundleEditor: View {
             do {
                 try await bundleStore.flushBundleSave(bundle.id)
             } catch {
-                workspaceFeedback.errorMessage = error.localizedDescription
+                workspaceFeedback.errorMessage = error.actionMessage
             }
         }
     }

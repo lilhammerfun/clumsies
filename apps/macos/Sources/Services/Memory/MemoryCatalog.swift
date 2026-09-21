@@ -143,12 +143,12 @@ final class MemoryCatalog: ObservableObject {
             try Task.checkCancellation()
             guard resourceLoadRequests[resource.id]?.generation == generation else { return nil }
             installLoadedResourceIfCurrent(loaded)
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return nil
         } catch {
             guard !Task.isCancelled,
                   resourceLoadRequests[resource.id]?.generation == generation else { return nil }
-            return error.localizedDescription
+            return error.userFacingMessage
         }
         return nil
     }
@@ -419,7 +419,7 @@ final class MemoryCatalog: ObservableObject {
     }
 }
 
-enum DocumentDiffError: LocalizedError, Equatable, Sendable {
+enum DocumentDiffError: UserFacingError, Equatable, Sendable {
     case baselineUnavailable
 
     var errorDescription: String? {

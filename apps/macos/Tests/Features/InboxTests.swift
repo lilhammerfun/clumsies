@@ -9,6 +9,11 @@ final class InboxTests: XCTestCase {
         var version = 1
         var unavailable = false
         var pending = 0
+        var online = false
+    }
+
+    override func setUp() async throws {
+        ClientServiceStatus.shared.reset()
     }
 
     private func context() -> WorkspaceContext {
@@ -72,8 +77,8 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(changed.message.contains("Member → Admin"))
         let detail = NSHostingView(rootView: InboxMessageView(item: welcome, projectId: nil, open: { _ in
             XCTFail("A welcome without projects must not attempt navigation.")
-        }))
-        XCTAssertEqual(detail.fittingSize.height, 600)
+        }).frame(width: 800, height: 700))
+        XCTAssertEqual(detail.fittingSize, NSSize(width: 800, height: 700), "Message content should fill its navigation destination.")
         for notice in [welcome, changed, InboxItem.server(accountNotification("project_removed"))] {
             let row = NSHostingView(rootView: InboxRow(item: notice, isOpening: false, activate: {}).frame(width: 540))
             XCTAssertLessThanOrEqual(row.fittingSize.height, 55)
@@ -169,11 +174,11 @@ final class InboxTests: XCTestCase {
         let serverRow = try XCTUnwrap(store.items.firstIndex { $0.serverVersion != nil })
         list.selectRowIndexes(IndexSet(integer: serverRow), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(receipts, [.read], "Selecting a notification must mark it read without opening a destination.")
-        XCTAssertEqual(store.unreadCount, unread - 1)
-        XCTAssertFalse(try XCTUnwrap(store.items.first { $0.serverVersion != nil }).isArchived)
-        let readItem = try XCTUnwrap(store.items.first { $0.serverVersion != nil })
-        await store.acknowledge(readItem, action: .unread)
+        XCTAssertTrue(receipts.isEmpty, "Selection alone must not change read status.")
+        XCTAssertEqual(store.unreadCount, unread)
+        let selectedItem = try XCTUnwrap(store.items.first { $0.serverVersion != nil })
+        await store.acknowledge(selectedItem, action: .read)
+        await store.acknowledge(selectedItem, action: .unread)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(store.unreadCount, unread, "Explicit Mark as Unread must remain effective while the row stays selected.")
 
@@ -182,6 +187,71 @@ final class InboxTests: XCTestCase {
         hosting.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(250))
         XCTAssertNotNil(search.currentEditor(), "The workspace search command must focus Inbox search.")
+    }
+
+    private func click(_ point: NSPoint, in window: NSWindow) throws {
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
+            timestamp: timestamp, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 0))
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+            timestamp: timestamp, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        NSApp.postEvent(up, atStart: false)
+        window.sendEvent(down)
+    }
+
+    func testCheckboxSelectionDoesNotReadAndToolbarArchivesTheWholeSelection() async throws {
+        var receipts: [(String, InboxReceiptAction)] = []
+        let store = InboxStore(context: context(), defaults: try preferences(),
+            fetchPage: { _ in (.init(items: [self.notification("one"), self.notification("two")], nextCursor: nil), false) },
+            fetchLocal: { self.snapshot() }, updateReceipt: { id, request in receipts.append((id, request.action)) })
+        store.prepare(serverURL: "test")
+        let host = NSHostingView(rootView: InboxView(store: store, searchFocusToken: UUID(), open: { _ in
+            XCTFail("Selecting or archiving must not open a destination.")
+        }))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(250))
+        func table(in view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap { table(in: $0) }.first
+        }
+        let list = try XCTUnwrap(table(in: host))
+        func toggle(_ row: Int) throws {
+            let rect = list.rect(ofRow: row)
+            try click(list.convert(NSPoint(x: rect.minX + 18, y: rect.minY + 17), to: nil), in: window)
+        }
+        try toggle(0)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(list.selectedRowIndexes, IndexSet(integer: 0))
+        XCTAssertEqual(store.unreadCount, 2)
+        XCTAssertTrue(receipts.isEmpty)
+        try toggle(1)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(list.selectedRowIndexes.count, 2)
+        XCTAssertTrue(receipts.isEmpty, "Checkboxes must only change selection, including its first item.")
+        try toggle(0)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(list.selectedRowIndexes, IndexSet(integer: 1))
+        XCTAssertTrue(receipts.isEmpty, "Deselecting down to one item must not read the remaining item.")
+        try toggle(0)
+        try await Task.sleep(for: .milliseconds(100))
+        let archive = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue.contains("inbox.archive") }?.view)
+        let point = archive.convert(NSPoint(x: archive.bounds.midX, y: archive.bounds.midY), to: nil)
+        try click(point, in: window)
+        for _ in 0..<40 where receipts.count != 2 || !store.items.allSatisfy(\.isArchived) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(Set(receipts.map(\.0)), ["one", "two"])
+        XCTAssertTrue(receipts.allSatisfy { $0.1 == .archive })
+        XCTAssertTrue(store.items.allSatisfy(\.isArchived))
+        XCTAssertEqual(store.unreadCount, 0)
+        XCTAssertTrue(store.items.allSatisfy { !$0.isRead }, "Batch archiving must preserve unread state.")
     }
 
     func testRowsStayTwoLinesAtNarrowAndWideWindowSizes() throws {
@@ -195,6 +265,60 @@ final class InboxTests: XCTestCase {
             title: "Sync complete", message: "All changes are up to date.", occurredAt: Date(),
             needsAction: false, revision: "1", isRead: false, isArchived: false, destination: nil)
         XCTAssertNil(informational.actionTitle, "Information without a destination must not offer a fake detail page.")
+    }
+
+    func testWelcomeOpensInsideMainWindowAndMarksReadWithoutASheet() async throws {
+        let store = InboxStore(context: context(), defaults: try preferences(),
+            fetchPage: { _ in (.init(items: [self.accountNotification("welcome")], nextCursor: nil), false) },
+            fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in })
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        let host = NSHostingView(rootView: NavigationSplitView {
+            Text("Inbox").navigationSplitViewColumnWidth(220)
+        } detail: {
+            InboxView(store: store, searchFocusToken: UUID(), open: { _ in })
+        })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(250))
+        func find<V: NSView>(_ type: V.Type, in view: NSView) -> V? {
+            if let found = view as? V { return found }
+            return view.subviews.lazy.compactMap { find(type, in: $0) }.first
+        }
+        let list = try XCTUnwrap(find(NSTableView.self, in: host))
+        list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let row = list.rect(ofRow: 0)
+        let point = list.convert(NSPoint(x: row.maxX - 60, y: row.maxY - 15), to: nil)
+        let mouseUp = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+        let mouseDown = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        // AppKit buttons track synchronously; make the release available to that loop.
+        NSApp.postEvent(mouseUp, atStart: false)
+        window.sendEvent(mouseDown)
+        let expectedTitle = InboxItem.server(accountNotification("welcome")).title
+        // Native navigation and the destination's read acknowledgement finish independently.
+        for _ in 0..<40 where window.title != expectedTitle || store.unreadCount != 0 {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(window.sheets.isEmpty, "Reading a welcome message must not block the workspace with a sheet.")
+        XCTAssertEqual(window.title, expectedTitle)
+        XCTAssertEqual(store.unreadCount, 0)
+        XCTAssertFalse(window.toolbar?.items.contains { $0.itemIdentifier.rawValue.contains("inbox.filter") } ?? false)
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+            uniformTypeIdentifier: "public.png")
+        attachment.name = "Inbox welcome navigation"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     func testReadUnreadAndArchiveAreIndependentAndBatchArchiveCanBeUndone() async throws {
@@ -243,7 +367,7 @@ final class InboxTests: XCTestCase {
             fetchPage: { _ in (.init(items: [self.notification("one"), self.notification("two")], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in
                 count += 1
-                if count == 2 { throw URLError(.notConnectedToInternet) }
+                if count == 2 { throw ServerClientError.response(status: 403, message: "PRIVATE_RESPONSE") }
             })
         store.prepare(serverURL: "test")
         await store.refresh()
@@ -481,7 +605,7 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(store.items.isEmpty)
     }
 
-    func testOfflineReceiptDoesNotPretendSuccessAndLocalServiceFailureRemainsDiscoverable() async throws {
+    func testOfflineReceiptIsQueuedAndFailedStatusProbeDoesNotInventNotifications() async throws {
         let context = context(), defaults = try preferences()
         let responses = Responses()
         let store = InboxStore(context: context, defaults: defaults,
@@ -495,14 +619,156 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(store.isShowingSavedContent)
         let remote = try XCTUnwrap(store.items.first { $0.serverVersion != nil })
         await store.acknowledge(remote, action: .archive)
-        XCTAssertNotNil(store.receiptError)
-        XCTAssertFalse(try XCTUnwrap(store.items.first { $0.id == remote.id }).isArchived)
+        XCTAssertNil(store.receiptError)
+        XCTAssertTrue(try XCTUnwrap(store.items.first { $0.id == remote.id }).isArchived)
         responses.unavailable = true
         await store.refresh()
-        XCTAssertNotNil(store.items.first { $0.id == "local:unavailable" })
+        XCTAssertNil(store.items.first { $0.id == "local:unavailable" })
         XCTAssertNotNil(store.items.first { $0.id == "local:sync" }, "A local fetch failure retains known sync issues.")
         responses.unavailable = false
         await store.refresh()
         XCTAssertNil(store.items.first { $0.id == "local:unavailable" })
     }
+
+    func testOfflineReceiptsSurviveRelaunchCoalesceAndDoNotAcknowledgeNewVersions() async throws {
+        let context = context(), defaults = try preferences()
+        var online = false
+        var version = 1
+        var sent: [InboxReceiptAction] = []
+        func makeStore() -> InboxStore {
+            InboxStore(context: context, defaults: defaults,
+                fetchPage: { _ in (.init(items: [self.notification(version: version)], nextCursor: nil), !online) },
+                fetchLocal: { self.snapshot() }, updateReceipt: { _, receipt in
+                    guard online else { throw URLError(.notConnectedToInternet) }
+                    sent.append(receipt.action)
+                })
+        }
+        let first = makeStore()
+        first.prepare(serverURL: "test")
+        await first.refresh()
+        let item = try XCTUnwrap(first.items.first)
+        let readAccepted = await first.acknowledge(item, action: .read)
+        XCTAssertTrue(readAccepted)
+        await first.acknowledge(item, action: .unread)
+        await first.acknowledge(item, action: .archive)
+        XCTAssertTrue(sent.isEmpty)
+        let restarted = makeStore()
+        restarted.prepare(serverURL: "test")
+        await restarted.refresh()
+        XCTAssertFalse(try XCTUnwrap(restarted.items.first).isRead)
+        XCTAssertTrue(try XCTUnwrap(restarted.items.first).isArchived)
+        XCTAssertNil(restarted.receiptError)
+        online = true
+        version = 2
+        await restarted.refresh()
+        XCTAssertEqual(sent, [.unread, .archive], "Only the last read intent and last archive intent are replayed.")
+        XCTAssertFalse(try XCTUnwrap(restarted.items.first).isRead, "Acknowledging version 1 must not read version 2.")
+        XCTAssertFalse(try XCTUnwrap(restarted.items.first).isArchived)
+        let afterSync = makeStore()
+        afterSync.prepare(serverURL: "test")
+        await afterSync.refresh()
+        XCTAssertEqual(sent.count, 2, "Confirmed intents must be removed from disk.")
+    }
+
+    func testPermanentReceiptFailureRollsBackAndDoesNotRetryAfterRelaunch() async throws {
+        let context = context(), defaults = try preferences()
+        var attempts = 0
+        var status = 404
+        func makeStore() -> InboxStore {
+            InboxStore(context: context, defaults: defaults,
+                fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
+                fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in
+                    attempts += 1
+                    throw ServerClientError.response(status: status, message: "PRIVATE_BODY req_secret")
+                })
+        }
+        let store = makeStore()
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        let accepted = await store.acknowledge(try XCTUnwrap(store.items.first), action: .archive)
+        XCTAssertFalse(accepted)
+        XCTAssertFalse(try XCTUnwrap(store.items.first).isArchived)
+        XCTAssertEqual(store.receiptError, ClientFailure.missing.message)
+        let restarted = makeStore()
+        restarted.prepare(serverURL: "test")
+        await restarted.refresh()
+        XCTAssertEqual(attempts, 1)
+        status = 400
+        let invalid = await restarted.acknowledge(try XCTUnwrap(restarted.items.first), action: .archive)
+        XCTAssertFalse(invalid)
+        XCTAssertFalse(try XCTUnwrap(restarted.items.first).isArchived)
+        XCTAssertEqual(restarted.receiptError, String(localized: "Couldn't update this notification. Refresh Inbox and try again."))
+    }
+
+    func testAReadInFlightDoesNotBlockArchiveOrReplaceALaterUnreadIntent() async throws {
+        let started = expectation(description: "Receipt started")
+        var reply: CheckedContinuation<Void, Error>?
+        var sent: [InboxReceiptAction] = []
+        let store = InboxStore(context: context(), defaults: try preferences(),
+            fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
+            fetchLocal: { self.snapshot() }, updateReceipt: { _, request in
+                sent.append(request.action)
+                if sent.count == 1 {
+                    try await withCheckedThrowingContinuation { reply = $0; started.fulfill() }
+                }
+            })
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        let item = try XCTUnwrap(store.items.first)
+        let read = Task { await store.acknowledge(item, action: .read) }
+        await fulfillment(of: [started], timeout: 1)
+        await store.acknowledge(item, action: .archive)
+        await store.acknowledge(item, action: .unread)
+        XCTAssertTrue(try XCTUnwrap(store.items.first).isArchived)
+        XCTAssertFalse(try XCTUnwrap(store.items.first).isRead)
+        try XCTUnwrap(reply).resume()
+        _ = await read.value
+        XCTAssertFalse(try XCTUnwrap(store.items.first).isRead)
+        await store.refresh()
+        XCTAssertEqual(sent, [.read, .archive, .unread])
+    }
+
+    func testPendingReceiptsNeverReplayIntoAnotherAccount() async throws {
+        let context = context(), defaults = try preferences()
+        let responses = Responses()
+        var sends = 0
+        let store = InboxStore(context: context, defaults: defaults,
+            fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
+            fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in
+                guard responses.online else { throw URLError(.notConnectedToInternet) }
+                sends += 1
+            })
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        await store.acknowledge(try XCTUnwrap(store.items.first), action: .read)
+        context.authorityGeneration = UUID()
+        context.account = .init(userId: "other", email: "other@example.com", displayName: nil, avatarUrl: nil, role: "member")
+        responses.online = true
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        XCTAssertEqual(sends, 0)
+        XCTAssertFalse(try XCTUnwrap(store.items.first).isRead)
+    }
+
+    func testInitialFailureIsNotAnEmptyInboxAndRefreshKeepsExistingContent() async throws {
+        let responses = Responses()
+        responses.unavailable = true
+        let store = InboxStore(context: context(), defaults: try preferences(),
+            fetchPage: { _ in
+                if responses.unavailable { throw ServerClientError.response(status: 500, message: "SECRET") }
+                return (.init(items: [self.notification()], nextCursor: nil), false)
+            }, fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in })
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        XCTAssertTrue(store.hasLoaded)
+        XCTAssertEqual(store.errorMessage, ClientFailure.service.message)
+        responses.unavailable = false
+        await store.refresh()
+        XCTAssertNil(store.errorMessage)
+        responses.unavailable = true
+        await store.refresh()
+        XCTAssertEqual(store.items.count, 1)
+        XCTAssertNil(store.errorMessage, "A background failure should not duplicate the window's connection state.")
+    }
+
 }

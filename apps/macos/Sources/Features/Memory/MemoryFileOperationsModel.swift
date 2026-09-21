@@ -101,7 +101,7 @@ final class MemoryFileOperationsModel: ObservableObject {
             )
         } catch {
             guard isCurrent(authority: authority, project: project) else { return }
-            workspaceFeedback.errorMessage = error.localizedDescription
+            workspaceFeedback.errorMessage = error.actionMessage
         }
     }
 
@@ -119,7 +119,7 @@ final class MemoryFileOperationsModel: ObservableObject {
             )
         } catch {
             guard isCurrent(authority: authority, project: project) else { return }
-            workspaceFeedback.errorMessage = error.localizedDescription
+            workspaceFeedback.errorMessage = error.actionMessage
         }
     }
 
@@ -143,7 +143,7 @@ final class MemoryFileOperationsModel: ObservableObject {
             let prefix = completed == 0
                 ? ""
                 : String(localized: "Renamed \(completed) of \(plan.changes.count) memories. ")
-            workspaceFeedback.errorMessage = prefix + error.localizedDescription
+            workspaceFeedback.errorMessage = prefix + error.userFacingMessage
         }
     }
 

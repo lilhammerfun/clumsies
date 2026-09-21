@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct MemoryNavigator: View {
+    @Environment(\.workspaceActions) private var workspaceActions
     @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
     @EnvironmentObject private var projectService: ProjectService
     @EnvironmentObject private var documentSessions: DocumentSessions
@@ -13,9 +14,9 @@ struct MemoryNavigator: View {
 
     var body: some View {
         content
-            .safeAreaInset(edge: .bottom) {
-                DraftInventoryStatusBanner()
-            }
+            .pageFeedback(!memoryModel.visibleMemoryItems.isEmpty ? draftStore.draftInventoryLoadState.failureMessage : nil, isStatus: true) {
+                    Task { await workspaceActions.reload() }
+                }
             .onChange(of: workspaceNavigation.selectedKind) { _, _ in
                 workspaceNavigation.selectedItemId = nil
             }
@@ -131,37 +132,6 @@ struct MemoryMainPane: View {
     }
 }
 
-private struct DraftInventoryStatusBanner: View {
-    @Environment(\.workspaceActions) private var workspaceActions
-    @EnvironmentObject private var draftStore: DraftStore
-
-    @ViewBuilder
-    var body: some View {
-        switch draftStore.draftInventoryLoadState {
-        case .loading:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Loading Drafts...")
-                    .font(.caption)
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
-        case .failed:
-            Button("Draft refresh failed - Try Again") {
-                Task { await workspaceActions.reload() }
-            }
-            .buttonStyle(.plain)
-            .font(.caption)
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
-        case .loaded:
-            EmptyView()
-        }
-    }
-}
 
 private struct ResourceLoadingView: View {
     @EnvironmentObject private var memoryCatalog: MemoryCatalog

@@ -121,7 +121,7 @@ final class MemoryModel: ObservableObject {
                     }.value
                     NSWorkspace.shared.activateFileViewerSelecting([destination])
                 } catch {
-                    self.feedback.errorMessage = String(localized: "Could Not Export Memory: \(error.localizedDescription)")
+                    self.feedback.errorMessage = String(localized: "Could Not Export Memory: \(error.userFacingMessage)")
                 }
             }
         }
@@ -152,7 +152,7 @@ final class MemoryModel: ObservableObject {
         do {
             _ = try await createMemoryDraft(kind: kind, scope: scope)
         } catch {
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
         }
     }
 
@@ -166,7 +166,7 @@ final class MemoryModel: ObservableObject {
         guard let authority = try await catalog.loadStableOrgAuthoritySnapshot(
             allowingEmptyHead: true
         ) else {
-            throw ServerClientError.invalidResponse(
+            throw ActionFailure(
                 String(localized: "A fresh Organization Memory snapshot is required to create a Draft.")
             )
         }
@@ -226,7 +226,7 @@ final class MemoryModel: ObservableObject {
         var authorityCommitId = catalog.orgRefCommitId
         if refreshingAuthority {
             guard let authority = try await catalog.loadStableOrgAuthoritySnapshot(allowingEmptyHead: true) else {
-                throw ServerClientError.invalidResponse(String(localized: "Couldn’t check your organization's memory guidelines. Try again."))
+                throw ActionFailure(String(localized: "Couldn’t check your organization's memory guidelines. Try again."))
             }
             authorityResources = authority.resources
             authorityCommitId = authority.commitId
@@ -242,8 +242,8 @@ final class MemoryModel: ObservableObject {
               ) else { throw CancellationError() }
         switch edits.draftInventoryLoadState {
         case .loaded: break
-        case .failed(let message): throw ServerClientError.invalidResponse(message)
-        case .loading: throw ServerClientError.invalidResponse(String(localized: "Wait for drafts to finish loading, then try again."))
+        case .failed(let message): throw ActionFailure(message)
+        case .loading: throw ActionFailure(String(localized: "Wait for drafts to finish loading, then try again."))
         }
         var setup = try MemoryGuidelines.setup(
             projectId: projectId,
@@ -280,7 +280,7 @@ final class MemoryModel: ObservableObject {
               context.activeProjectId == current.projectId,
               navigation.selectedSection == .memory else { throw CancellationError() }
         guard let item = visibleMemoryItems.first(where: { $0.id == itemId }) else {
-            throw ServerClientError.invalidResponse(String(localized: "Memory guidelines were saved, but could not be opened. Refresh the project to open them."))
+            throw ActionFailure(String(localized: "Memory guidelines were saved, but could not be opened. Refresh the project to open them."))
         }
         navigation.open(item, mode: .preview)
         return current
@@ -396,13 +396,13 @@ final class MemoryModel: ObservableObject {
                 )
                 return
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             sessions.endDocumentSynchronization(key, generation: generation)
             return
         } catch {
             guard sessions.isCurrentDocumentSynchronization(key, generation: generation) else { return }
             sessions.endDocumentSynchronization(key, generation: generation)
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
             return
         }
 
@@ -557,13 +557,13 @@ final class MemoryModel: ObservableObject {
             }
             sessions.pendingDocumentReconciliationCandidatesBySession[key] = candidate
             sessions.documentReconciliationResolutions[key] = DraftResolution(candidate: candidate)
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             sessions.endDocumentSynchronization(key, generation: generation)
             return
         } catch {
             guard sessions.isCurrentDocumentSynchronization(key, generation: generation) else { return }
             sessions.endDocumentSynchronization(key, generation: generation)
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
         }
     }
 

@@ -61,14 +61,6 @@ struct DashboardView: View {
                             .padding(.horizontal, 9).padding(.vertical, 5)
                             .background(blue.opacity(0.09), in: Capsule())
                     }
-                    if let error = model.errorMessage {
-                        HStack {
-                            Label(error, systemImage: "exclamationmark.triangle")
-                                .font(.callout).foregroundStyle(.orange)
-                            Spacer()
-                            Button("Retry", action: onRefresh)
-                        }.padding(12).background(.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
-                    }
                     if let summary = model.summary {
                         if let notice = summary.snapshot.notice {
                             Label(notice, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
@@ -86,8 +78,13 @@ struct DashboardView: View {
                     } else if model.isLoading {
                         ProgressView("Loading dashboard…").frame(maxWidth: .infinity, minHeight: 400)
                     } else {
-                        ContentUnavailableView("Dashboard unavailable", systemImage: "chart.bar.xaxis",
-                            description: Text("Refresh to load this project's statistics."))
+                        ContentUnavailableView {
+                            Label("Dashboard unavailable", systemImage: "chart.bar.xaxis")
+                        } description: {
+                            Text(model.errorMessage ?? String(localized: "Refresh to load this project's statistics."))
+                        } actions: {
+                            Button("Retry", action: onRefresh)
+                        }
                     }
                 }.padding(28).frame(maxWidth: 1600)
                     .frame(maxWidth: .infinity)

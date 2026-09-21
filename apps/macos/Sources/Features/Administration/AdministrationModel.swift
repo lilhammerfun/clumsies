@@ -166,12 +166,12 @@ final class AdministrationModel: ObservableObject {
                 loadingProjectIds.removeAll()
                 refreshGeneration = UUID()
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard loadGenerations[section] == generation else { return }
             pageStates[section, default: .init()].isStale = true
-            pageStates[section, default: .init()].errorMessage = error.localizedDescription
+            pageStates[section, default: .init()].errorMessage = previous.isLoaded ? error.backgroundMessage : error.actionMessage
         }
     }
 
@@ -306,14 +306,14 @@ final class AdministrationModel: ObservableObject {
                 isLoaded: true, isLoading: true, isStale: result.isStale
             )
             await loadProjectMembers(projectId: id)
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard projectDetailLoadGenerations[id] == generation,
                   refreshGeneration == requestedRefreshGeneration,
                   context.canAccessProjectSettings(id), context.phase != .authenticationRequired else { return }
             projectDetailStates[id, default: .init()].isStale = true
-            projectDetailStates[id, default: .init()].errorMessage = error.localizedDescription
+            projectDetailStates[id, default: .init()].errorMessage = previous.isLoaded ? error.backgroundMessage : error.actionMessage
         }
     }
 
@@ -367,14 +367,14 @@ final class AdministrationModel: ObservableObject {
             if members.hasStaleServerResponse {
                 projectDetailStates[projectId, default: .init()].isStale = true
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard projectMemberLoadGenerations[projectId] == generation,
                   refreshGeneration == requestedRefreshGeneration else { return }
             projectMembers[projectId] = nil
             projectDetailStates[projectId, default: .init()].isStale = true
-            projectDetailStates[projectId, default: .init()].errorMessage = error.localizedDescription
+            projectDetailStates[projectId, default: .init()].errorMessage = error.actionMessage
         }
     }
 
@@ -589,7 +589,7 @@ final class AdministrationModel: ObservableObject {
         } catch {
             try context.ensureCurrentAdministrationMutation(generation)
             projectDetailStates[projectId, default: .init()].isStale = true
-            projectDetailStates[projectId, default: .init()].errorMessage = error.localizedDescription
+            projectDetailStates[projectId, default: .init()].errorMessage = error.actionMessage
             throw error
         }
     }
