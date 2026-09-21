@@ -1,6 +1,5 @@
 import Combine
 import Foundation
-import SwiftUI
 
 enum SettingsPane: String, CaseIterable, Identifiable {
     case general, agent, organization, advanced
@@ -19,19 +18,10 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .general: "gearshape.fill"
-        case .agent: "puzzlepiece.extension.fill"
-        case .organization: "building.2.fill"
-        case .advanced: "questionmark.circle.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .general: .gray
-        case .agent: .purple
-        case .organization: .blue
-        case .advanced: .gray
+        case .general: "gearshape"
+        case .agent: "puzzlepiece.extension"
+        case .organization: "building.2"
+        case .advanced: "questionmark.circle"
         }
     }
 
