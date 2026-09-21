@@ -546,7 +546,7 @@ final class AdministrationModel: ObservableObject {
             generation: generation,
             section: .projects,
             invalidating: [.audit],
-            refreshesWorkspace: true,
+            refreshesWorkspace: userId == context.account?.userId,
             refreshesPage: false
         )
         try await refreshAdminProjectAfterMemberMutation(projectId: projectId, generation: generation)
@@ -566,7 +566,7 @@ final class AdministrationModel: ObservableObject {
             generation: generation,
             section: .projects,
             invalidating: [.audit],
-            refreshesWorkspace: true,
+            refreshesWorkspace: userId == context.account?.userId,
             refreshesPage: false
         )
         try await refreshAdminProjectAfterMemberMutation(projectId: projectId, generation: generation)

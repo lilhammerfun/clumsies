@@ -21,9 +21,16 @@ enum ServerClientError: LocalizedError, Sendable {
 }
 
 struct ServerClient: Sendable {
-    let daemon: DaemonXPCClient
+    private let sendRequest: @Sendable (DaemonServerRequest) async throws -> DaemonServerResponse
     private let dataSourceTracker = ServerDataSourceTracker()
     private let requestLimiter = ServerRequestLimiter(limit: 12)
+
+    init(
+        daemon: DaemonXPCClient,
+        sendRequest: (@Sendable (DaemonServerRequest) async throws -> DaemonServerResponse)? = nil
+    ) {
+        self.sendRequest = sendRequest ?? { try await daemon.serverRequest($0) }
+    }
 
     var dataSource: String { dataSourceTracker.value }
 
@@ -95,7 +102,7 @@ struct ServerClient: Sendable {
         let dataSourceGeneration = dataSourceTracker.generation
         let response = try await requestLimiter.run {
             try Task.checkCancellation()
-            return try await daemon.serverRequest(
+            return try await sendRequest(
                 .init(method: method, path: requestPath, headers: headers, body: body)
             )
         }
