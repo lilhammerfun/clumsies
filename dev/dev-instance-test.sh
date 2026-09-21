@@ -265,11 +265,27 @@ printf 'open %s\n' "$*" >> "$FAKE_COMMAND_LOG"
   exit 97
 }
 case "$FAKE_OPEN_SERVER_URL" in
-  http://127.0.0.1:*|https://*) ;;
+  http://127.0.0.1:*) [ -f "$FAKE_INSTANCE_ROOT/signed-in" ] || exit 97 ;;
+  https://*) ;;
   *) exit 97 ;;
 esac
 : > "$FAKE_APP_STATE"
 : > "$FAKE_DAEMON_STATE"
+EOF
+
+cat > "$fake_bin/python" <<'EOF'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "$FAKE_REPO_ROOT/dev/seed-review-playground.py" ]; then
+  [ "$#" -eq 2 ] && [ "$2" = --login-only ] || exit 97
+  printf 'dev-login\n' >> "$FAKE_COMMAND_LOG"
+  [ "${FAKE_LOGIN_FAIL:-0}" = 0 ] || exit 74
+  [ -x "$FAKE_APP_PATH/Contents/Resources/clumsiesd" ] || exit 97
+  : > "$FAKE_INSTANCE_ROOT/signed-in"
+  : > "$FAKE_DAEMON_STATE"
+  exit 0
+fi
+exec /usr/bin/python3 "$@"
 EOF
 
 cat > "$fake_bin/launchctl" <<'EOF'
@@ -536,6 +552,7 @@ runner_environment() {
     HOME="$test_home" \
     CLUMSIES_DEV_ROOT="$dev_root" \
     CLUMSIES_DEV_SERVER_BIN="$test_root/fake-server" \
+    PYTHON="$fake_bin/python" \
     FAKE_COMMAND_LOG="$fake_log" \
     FAKE_REJECT_LOG="$fake_reject_log" \
     FAKE_DOCKER_STATE="$fake_docker_state" \
@@ -579,6 +596,7 @@ runner_environment() {
     FAKE_SERVER_PORT="${FAKE_SERVER_PORT:-49152}" \
     FAKE_SERVER_READY_DELAY_ATTEMPTS="${FAKE_SERVER_READY_DELAY_ATTEMPTS:-0}" \
     FAKE_XCODEBUILD_FAIL="${FAKE_XCODEBUILD_FAIL:-0}" \
+    FAKE_LOGIN_FAIL="${FAKE_LOGIN_FAIL:-0}" \
     FAKE_CURL_FAIL="${FAKE_CURL_FAIL:-0}" \
     FAKE_PAUSE_RESET_RM="${FAKE_PAUSE_RESET_RM:-0}" \
     PATH="$fake_bin:/usr/bin:/bin" \
@@ -666,6 +684,14 @@ grep -F -- "\${CLUMSIES_HOST_BIND_ADDRESS:-0.0.0.0}:\${CLUMSIES_DB_PORT:-5432}:5
 grep -F -- "\${CLUMSIES_HOST_BIND_ADDRESS:-0.0.0.0}:\${CLUMSIES_OIDC_PORT:-18081}:8080" "$repo_root/docker-compose.yml" >/dev/null
 grep -F -- "\${CLUMSIES_HOST_BIND_ADDRESS:-0.0.0.0}:\${CLUMSIES_SERVER_PORT:-18080}:8080" "$repo_root/docker-compose.yml" >/dev/null
 
+open_before=$(grep -c '^open ' "$fake_log" || true)
+if FAKE_LOGIN_FAIL=1 run up > "$test_root/failed-login.out" 2> "$test_root/failed-login.err"; then
+  echo "expected login failure to stop before opening the App" >&2
+  exit 1
+fi
+unset FAKE_LOGIN_FAIL
+[ "$(grep -c '^open ' "$fake_log" || true)" -eq "$open_before" ]
+[ ! -f "$fake_server_registry" ]
 run up > "$test_root/up.out"
 [ "$(stat -f '%Lp' "$runtime")" = 600 ]
 /usr/bin/python3 - "$runtime" "$repo_root" "$instance_root" "$instance_id" "$expected_build_id" <<'PY'
@@ -707,7 +733,9 @@ xcodebuild_after=$(grep -c '^xcodebuild ' "$fake_log" || true)
 [ ! -e "$instance_lock" ]
 
 xcodebuild_before=$(grep -c '^xcodebuild ' "$fake_log" || true)
+login_before=$(grep -c '^dev-login$' "$fake_log" || true)
 run up > "$test_root/repeated-up.out"
+[ "$(grep -c '^dev-login$' "$fake_log" || true)" -eq $((login_before + 1)) ]
 xcodebuild_after=$(grep -c '^xcodebuild ' "$fake_log" || true)
 [ "$xcodebuild_after" -eq $((xcodebuild_before + 1)) ]
 

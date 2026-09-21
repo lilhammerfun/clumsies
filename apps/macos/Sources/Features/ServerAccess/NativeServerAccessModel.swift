@@ -48,6 +48,7 @@ final class NativeServerAccessModel: ObservableObject {
     let purpose: Purpose
 
     private let destination: Destination
+    private let developmentInstanceID: String?
     let recoveryState: NativeAdministratorRecoveryState
     private let onCompleted: @MainActor () -> Void
 
@@ -57,11 +58,13 @@ final class NativeServerAccessModel: ObservableObject {
         destination: Destination,
         recoveryState: NativeAdministratorRecoveryState,
         initialSetupStatus: NativeSetupStatus? = nil,
+        developmentInstanceID: String? = ClumsiesIdentifiers.developmentInstanceID,
         onCompleted: @escaping @MainActor () -> Void = {}
     ) {
         serverOrigin = serverURL.absoluteString
         self.purpose = purpose
         self.destination = destination
+        self.developmentInstanceID = developmentInstanceID
         self.recoveryState = recoveryState
         self.onCompleted = onCompleted
         if let initialSetupStatus {
@@ -69,7 +72,13 @@ final class NativeServerAccessModel: ObservableObject {
         }
     }
 
+    var usesAutomaticDevelopmentLogin: Bool {
+        purpose == .appSignIn && developmentInstanceID != nil
+            && URL(string: serverOrigin)?.host.map(ServerOrigin.isLoopback) == true
+    }
+
     var title: String {
+        if usesAutomaticDevelopmentLogin { return String(localized: "Dev Instance is not ready") }
         if recoveryReady { return String(localized: "Recovery session ready") }
         if showsSetup { return String(localized: "Set up Clumsies Server") }
         return switch purpose {
@@ -79,6 +88,9 @@ final class NativeServerAccessModel: ObservableObject {
     }
 
     var subtitle: String {
+        if usesAutomaticDevelopmentLogin {
+            return String(localized: "Run just dev-macos in this worktree to initialize the local Server and sign in automatically.")
+        }
         if recoveryReady {
             return String(localized: "The administrator session is available in this App only and was not saved to disk.")
         }
@@ -158,7 +170,7 @@ final class NativeServerAccessModel: ObservableObject {
     }
 
     private func apply(_ status: NativeSetupStatus) {
-        showsSetup = status.state == .setupRequired
+        showsSetup = status.state == .setupRequired && !usesAutomaticDevelopmentLogin
         setupCodeConfigured = status.setupCodeConfigured
         oidcConfigured = status.oidcConfigured
         if let configuration = status.session?.configuration {

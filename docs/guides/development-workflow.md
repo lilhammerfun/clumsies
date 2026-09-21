@@ -39,7 +39,10 @@ For docs-only changes, build and preview VitePress; no macOS runtime is needed. 
 The complete instance requires Just, XcodeGen, Xcode, Rust, Bun, and Docker Desktop.
 Its canonical path determines the App identity, daemon service, runtime
 directories, Keychain service, Compose project, dynamic ports, and isolated
-`CODEX_HOME`.
+`CODEX_HOME`. Local `just dev-macos` initializes the Server and signs in the
+fake-OIDC owner through the daemon before opening the App. Login failure stops
+startup; the tester should never need the setup or sign-in screen. This does not
+apply to remote Preview instances.
 
 ```sh
 just dev-macos-status
