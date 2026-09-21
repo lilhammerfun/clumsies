@@ -5,9 +5,69 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Replace superseded PR runs; every main push retains its own validation/delivery.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CLUMSIES_AGENT_RUNTIME_BUILD_ID: ci-${{ github.sha }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      plan: ${{ steps.impact.outputs.plan }}
+      docs: ${{ steps.impact.outputs.docs }}
+      scripts: ${{ steps.impact.outputs.scripts }}
+      server: ${{ steps.impact.outputs.server }}
+      daemon: ${{ steps.impact.outputs.daemon }}
+      macos: ${{ steps.impact.outputs.macos }}
+      runtime: ${{ steps.impact.outputs.runtime }}
+      package: ${{ steps.impact.outputs.package }}
+      server_image: ${{ steps.impact.outputs.server_image }}
+      server_delivery: ${{ steps.impact.outputs.server_delivery }}
+      site_delivery: ${{ steps.impact.outputs.site_delivery }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select checks from the complete change range
+        id: impact
+        run: python3 dev/ci_impact.py plan
+
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install boundary checker dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+      - name: Test CI selection, gates, and deployment freshness
+        run: |
+          python3 -m unittest discover -s dev -p 'test_ci_impact.py' -v
+          python3 dev/check-doc-assets.py --self-test
+      - name: Validate workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Check repository and Agent runtime boundaries
+        run: |
+          sh dev/check-agent-runtime-boundary.sh
+          sh dev/check-retired-terms.sh
+
   scripts:
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +90,6 @@ jobs:
       - name: Check Agent runtime boundary
         run: |
           shellcheck dev/check-agent-runtime-boundary.sh
-          sh dev/check-agent-runtime-boundary.sh
 
       - name: Check macOS packaging scripts
         run: |
@@ -38,13 +97,13 @@ jobs:
             apps/macos/Scripts/archive-release.sh apps/macos/Scripts/create-dmg.sh \
             apps/macos/Scripts/embed-daemon.sh apps/macos/Scripts/generate-appcast.sh \
             apps/macos/Scripts/ensure-update-feeds.sh apps/macos/Scripts/test-update-feeds.sh \
-            apps/macos/Scripts/test-distribution-package.sh apps/macos/Scripts/test-runtime-package.sh
+            apps/macos/Scripts/test-distribution-package.sh apps/macos/Scripts/test-runtime-package.sh \
+            apps/macos/Scripts/test.sh
           sh apps/macos/Scripts/test-update-feeds.sh
 
       - name: Check retired terminology
         run: |
           shellcheck dev/check-retired-terms.sh
-          sh dev/check-retired-terms.sh
 
       - name: Check worktree Dev scripts
         run: |
@@ -54,106 +113,182 @@ jobs:
           shellcheck dev/dev-instance.sh dev/dev-instance-test.sh dev/dev-server.sh apps/macos/Scripts/promote-debug.sh apps/macos/Scripts/promote-debug-test.sh
           sh apps/macos/Scripts/promote-debug-test.sh
           docker compose config -q
+          docker compose --env-file .env.example -f compose.production.yml config -q
 
   docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-
+      - uses: oven-sh/setup-bun@v2
       - name: Install docs dependencies
         run: bun install --frozen-lockfile
+      - name: Check README and static site assets
+        run: python3 dev/check-doc-assets.py
+      - name: Build docs and check bilingual search
+        run: |
+          bun run build
+          bun dev/check-docs-search.mjs
 
-      - name: Build docs
-        run: bun run build
-
-      - name: Check Chinese and English documentation search
-        run: bun dev/check-docs-search.mjs
-
-  rust:
+  server:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-
-      - name: Check Rust formatting
-        run: cargo fmt --all --check
-
-      - name: Lint server and all test targets
-        run: cargo clippy -p server --all-targets -- -D warnings
-
-      - name: Check server documentation including private items
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Check Server formatting and lints
+        run: |
+          cargo fmt -p server --check
+          cargo clippy --locked -p server --all-targets -- -D warnings
+      - name: Check Server documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc -p server --no-deps --document-private-items
+        run: cargo doc --locked -p server --no-deps --document-private-items
+      - name: Run Server tests against isolated infrastructure
+        run: cargo test --locked -p server
 
-      - name: Run Rust tests
-        run: cargo test --workspace
-
-  macos:
-    runs-on: macos-26
+  daemon:
+    needs: changes
+    if: needs.changes.outputs.daemon == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install native development tools
-        run: |
-          brew update
-          brew install just xcodegen
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Check daemon formatting
+        run: cargo fmt -p daemon --check
+      - name: Run daemon unit, lifecycle, and real Server integration tests
+        run: cargo test --locked -p daemon
 
+  macos:
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      CLUMSIES_MACOS_DERIVED_DATA: ${{ github.workspace }}/.ci-derived
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-macos
       - name: Check native task boundary
         run: |
           just --list
           if grep -i bun justfile; then
-            echo "native macOS recipes must not invoke Bun" >&2
+            echo 'native macOS recipes must not invoke Bun' >&2
             exit 1
           fi
-          just --dry-run build-macos
-          just --dry-run test-macos
-          just --dry-run test-macos-live
-          just --dry-run test-macos-package
-          just --dry-run install-macos
-          just --dry-run promote-debug-macos
-          just --dry-run dev-macos
-          just --dry-run dev-macos-status
-          just --dry-run dev-macos-logs
-          just --dry-run dev-macos-down
-          just --dry-run dev-macos-reset
+          for recipe in build-macos test-macos test-macos-live test-macos-package install-macos promote-debug-macos dev-macos dev-macos-status dev-macos-logs dev-macos-down dev-macos-reset test-dev-macos; do
+            just --dry-run "$recipe"
+          done
           just --dry-run dev-macos-preview preview.json
-          just --dry-run test-dev-macos
-
-      - name: Check worktree Dev lifecycle
-        run: just test-dev-macos
-
-      - name: Lint (clippy, daemon)
-        run: cargo clippy -p daemon -- -D warnings
-
-      - name: Run native macOS tests
+      - name: Run native macOS tests in both languages
         run: just test-macos
 
+  runtime:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Check worktree Dev lifecycle
+        run: sh dev/dev-instance-test.sh
+      - name: Lint macOS daemon
+        run: cargo clippy --locked -p daemon -- -D warnings
       - name: Run Agent runtime process and XPC integration
-        run: cargo test -p daemon --test agent_runtime_xpc_e2e -- --nocapture
+        run: cargo test --locked -p daemon --test agent_runtime_xpc_e2e -- --nocapture
 
+  package:
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      CLUMSIES_MACOS_DERIVED_DATA: ${{ github.workspace }}/.ci-derived
+      CLUMSIES_MACOS_PACKAGE_TEST_DERIVED_DATA: ${{ github.workspace }}/.ci-derived
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-macos
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build and verify the signed Agent runtime package
         run: just test-macos-package
 
-  # Aggregator so branch protection rules that require a single "build"
-  # status check continue to resolve after the split. Also gives a
-  # convenient one-line pass/fail signal on the PR page.
+  server_image:
+    needs: changes
+    if: needs.changes.outputs.server_image == 'true'
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    with:
+      output: image
+      push: false
+      sign: 'false'
+      context: .
+      file: ./crates/server/Dockerfile
+      platforms: linux/amd64,linux/arm64
+      cache: true
+      cache-scope: server-ci
+      cache-mode: max
+      meta-images: ghcr.io/lilhammerfun/clumsies-server
+
+  # This check always resolves, even when detection or a dependency fails.
   build:
+    if: always()
+    needs: [changes, checks, scripts, docs, server, daemon, macos, runtime, package, server_image]
     runs-on: ubuntu-latest
-    needs: [scripts, docs, rust, macos]
+    timeout-minutes: 5
     steps:
-      - run: echo "All CI jobs passed."
+      - uses: actions/checkout@v4
+      - name: Require every selected check to pass
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 dev/ci_impact.py gate
+
+  site_delivery:
+    needs: [changes, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.site_delivery == 'true'
+    uses: ./.github/workflows/site-delivery.yml
+    secrets:
+      SITE_DEPLOY_HOST: ${{ secrets.SITE_DEPLOY_HOST }}
+      SITE_DEPLOY_SSH_KEY: ${{ secrets.SITE_DEPLOY_SSH_KEY }}
+      SITE_DEPLOY_USER: ${{ secrets.SITE_DEPLOY_USER }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+
+  server_delivery:
+    # Site delivery synchronizes the shared Compose/Caddy configuration first.
+    needs: [changes, build, site_delivery]
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.build.result == 'success' && needs.changes.outputs.server_delivery == 'true' &&
+      (needs.site_delivery.result == 'success' || needs.site_delivery.result == 'skipped')
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: ./.github/workflows/server-delivery.yml
+    secrets:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}

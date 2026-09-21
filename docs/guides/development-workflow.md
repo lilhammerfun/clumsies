@@ -90,6 +90,53 @@ worktree's loopback Local instance, never a Preview or production Server.
 | Dev lifecycle | `just test-dev-macos` |
 | public docs | `bun run build` |
 
+### CI selection and delivery
+
+Every PR and `main` push runs change detection, workflow/policy checks, and the
+stable `build` gate. `dev/ci_impact.py` selects additional jobs from the complete
+PR merge-base diff or push range, including deletions and both sides of renames.
+The selection table is recorded in the Actions run summary.
+
+| Changed surface | Additional validation | Automatic delivery after successful `main` CI |
+|---|---|---|
+| READMEs and dashboard screenshots | README/static asset checks, docs build, bilingual search | None |
+| `docs/`, `site/`, Bun dependencies | Same docs checks | Site |
+| Server source and migrations | Server fmt/Clippy/docs/tests, daemon integration tests, both Linux image architectures | Server |
+| daemon source or embedded Clumsies plugin | daemon tests, macOS tests, XPC/Dev lifecycle, signed package, scripts | None |
+| macOS source/resources | macOS tests, signed package, scripts | None |
+| Server / macOS test files | The corresponding test job | None |
+| Shared Cargo manifests/lockfile | All Rust/native checks and Server image | Server |
+| Production Compose or environment template | Server/image, daemon integration, docs and scripts | Site, then Server |
+| CI policy, shared actions, unknown paths | All checks | Both |
+
+A `.md` suffix does not imply documentation: the plugin skill and App starter
+Memory are shipped resources. Missing Git history and manual **CI** dispatch
+select all checks. The `build` gate runs even after failed dependencies; selected
+jobs must succeed, and only explicitly unselected jobs may be skipped.
+
+Native tests, XPC integration, and package verification run in parallel. Rust
+caches contain dependencies, with writes limited to `main` pushes. Swift caches
+contain package downloads keyed by Xcode and dependency declarations, not App
+binaries. A newer PR run cancels the superseded run; separate `main` runs keep
+their validations and deliveries.
+
+Automatic delivery is called by this CI run only after `build` passes, using
+its tested commit. Serialized component deliveries reject commits superseded
+by newer changes to that component, but allow unrelated intervening commits.
+README-only changes neither publish a Server image nor deploy the site.
+Manual Server digest retry/rollback and manual Site Delivery remain available;
+manual CI dispatch validates everything without deploying. See
+[organization deployment](./deploy-for-an-org.md#github-delivery).
+
+Run the policy regression checks locally with:
+
+```sh
+python3 -m unittest discover -s dev -p 'test_ci_impact.py' -v
+python3 dev/check-doc-assets.py --self-test
+python3 dev/check-doc-assets.py
+actionlint
+```
+
 ## macOS build and packaging
 
 Run these commands from the repository root. `just test-macos` runs the

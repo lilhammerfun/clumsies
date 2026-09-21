@@ -1,10 +1,16 @@
 name: Server Delivery
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
+  workflow_call:
+    secrets:
+      DEPLOY_HOST:
+        required: false
+      DEPLOY_KNOWN_HOSTS:
+        required: false
+      DEPLOY_SSH_KEY:
+        required: false
+      DEPLOY_USER:
+        required: false
   workflow_dispatch:
     inputs:
       image:
@@ -27,12 +33,25 @@ env:
   IMAGE_NAME: ghcr.io/lilhammerfun/clumsies-server
 
 jobs:
+  current:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      current: ${{ steps.target.outputs.current }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject superseded Server changes
+        id: target
+        run: python3 dev/ci_impact.py current --component server_delivery
+
   publish:
+    needs: current
     if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_sha == github.sha
+      needs.current.outputs.current == 'true' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: docker/github-builder/.github/workflows/build.yml@v1
     permissions:
       contents: read
@@ -50,10 +69,10 @@ jobs:
       meta-images: ghcr.io/lilhammerfun/clumsies-server
       meta-tags: |
         type=raw,value=main
-        type=raw,value=sha-${{ github.event.workflow_run.head_sha }}
+        type=raw,value=sha-${{ github.sha }}
       labels: |
         org.opencontainers.image.source=https://github.com/${{ github.repository }}
-        org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+        org.opencontainers.image.revision=${{ github.sha }}
         org.opencontainers.image.licenses=MIT
       sign: "true"
     secrets:
@@ -67,7 +86,7 @@ jobs:
     if: >-
       always() &&
       (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'workflow_run' &&
+       (github.event_name == 'push' &&
         needs.publish.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -78,7 +97,7 @@ jobs:
       - name: Resolve immutable delivery target
         id: target
         env:
-          AUTOMATIC_COMMIT: ${{ github.event.workflow_run.head_sha }}
+          AUTOMATIC_COMMIT: ${{ github.sha }}
           AUTOMATIC_DIGEST: ${{ needs.publish.outputs.digest }}
           EVENT_NAME: ${{ github.event_name }}
           MANUAL_COMMIT: ${{ inputs.commit }}

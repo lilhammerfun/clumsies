@@ -2,6 +2,7 @@
 
 set -eu
 
+derived_data="${CLUMSIES_MACOS_DERIVED_DATA:-/private/tmp/clumsies-macos-tests}"
 result_root=$(mktemp -d "${TMPDIR:-/private/tmp}/clumsies-macos-test-results.XXXXXX")
 trap 'rm -rf -- "$result_root"' EXIT
 
@@ -16,7 +17,7 @@ test_language() {
         -project apps/macos/Clumsies.xcodeproj \
         -scheme Clumsies \
         -configuration Debug \
-        -derivedDataPath /private/tmp/clumsies-macos-tests \
+        -derivedDataPath "$derived_data" \
         -resultBundlePath "$result_bundle" \
         -testLanguage "$language" \
         "$@" test
