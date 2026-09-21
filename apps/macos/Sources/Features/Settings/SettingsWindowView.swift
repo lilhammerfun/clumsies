@@ -2,15 +2,14 @@ import SwiftUI
 
 struct SettingsIcon: View {
     let symbol: String
-    let color: Color
     var size: CGFloat = 20
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: size * 0.56, weight: .medium))
-            .foregroundStyle(.white)
+            .font(.system(size: size * 0.8))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(.primary)
             .frame(width: size, height: size)
-            .background(color.gradient, in: RoundedRectangle(cornerRadius: size * 0.23))
             .accessibilityHidden(true)
     }
 }
@@ -130,7 +129,7 @@ struct SettingsWindowView: View {
                     Section {
                         ForEach(SettingsPane.allCases.filter { $0 != .organization || canShowOrganization }) { pane in
                             HStack(spacing: 9) {
-                                SettingsIcon(symbol: pane.systemImage, color: pane.color)
+                                SettingsIcon(symbol: pane.systemImage)
                                 Text(pane.title)
                             }
                             .padding(.vertical, 2)
@@ -192,9 +191,9 @@ struct SettingsWindowView: View {
         Form {
             OrganizationNameSection(onUnsavedChangesChange: { navigation.hasUnsavedChanges = $0 })
             Section {
-                organizationLink(.members, color: .blue)
-                organizationLink(.projects, color: .orange)
-                organizationLink(.access, color: .green)
+                organizationLink(.members)
+                organizationLink(.projects)
+                organizationLink(.access)
             }
             Section {
                 Button("Activity Log…") { navigation.navigate(to: .organization(.audit)) }
@@ -205,13 +204,13 @@ struct SettingsWindowView: View {
         .task { await administration.load(section: .organization) }
     }
 
-    private func organizationLink(_ section: AdministrationSection, color: Color) -> some View {
+    private func organizationLink(_ section: AdministrationSection) -> some View {
         let destination = SettingsDestination.organization(section)
         return Button {
             navigation.navigate(to: destination)
         } label: {
             HStack(spacing: 10) {
-                SettingsIcon(symbol: section.symbol, color: color)
+                SettingsIcon(symbol: section.symbol)
                 Text(destination.title)
                 Spacer()
                 Image(systemName: "chevron.right")
