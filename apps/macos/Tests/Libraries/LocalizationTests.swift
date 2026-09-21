@@ -23,6 +23,10 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(String(localized: "Follow System", bundle: chinese), "跟随系统")
         XCTAssertEqual(String(localized: "Restart and Apply", bundle: chinese), "重启并应用")
         XCTAssertEqual(String(localized: "Open", bundle: chinese), "打开")
+        XCTAssertEqual(String(localized: "Welcome to Clumsies", bundle: chinese), "欢迎使用 Clumsies")
+        XCTAssertEqual(String(localized: "Access Changes", bundle: chinese), "访问权限变更")
+        XCTAssertEqual(String(localized: "Read Message", bundle: chinese), "阅读消息")
+        XCTAssertEqual(String(localized: "\("Mia") changed your project role: \("Member") → \("Admin").", bundle: chinese), "Mia 将你的项目角色从Member改为Admin。")
         for count in [0, 1, 2, 25] {
             XCTAssertEqual(String(localized: "\(count) requests", bundle: english, locale: Locale(identifier: "en")), "\(count) \(count == 1 ? "request" : "requests")")
             XCTAssertEqual(String(localized: "\(count) requests", bundle: chinese, locale: Locale(identifier: "zh-Hans")), "\(count) 次请求")

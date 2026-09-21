@@ -25,13 +25,14 @@ struct InboxView: View {
     @State private var selection: Set<String> = []
     @State private var actionError: String?
     @State private var openingId: String?
+    @State private var message: InboxItem?
     @State private var actionTask: Task<Void, Never>?
 
     private var visibleItems: [InboxItem] {
         store.items.filter { item in
             (messageType == nil || item.type == messageType)
                 && (filter == .archived ? item.isArchived : !item.isArchived)
-                && (filter != .unread || !item.isRead)
+                && (filter != .unread || !item.isRead || selection == [item.id])
                 && (query.isEmpty || "\(item.title) \(item.summary)".localizedStandardContains(query))
         }
     }
@@ -58,45 +59,69 @@ struct InboxView: View {
                 }
                 .padding(12)
             }
-            List(selection: $selection) {
-                ForEach(visibleItems) { item in
-                    InboxRow(item: item, isOpening: openingId == item.id, isActionDisabled: isBusy) { activate(item) }
-                        .tag(item.id)
-                        .disabled(store.updatingIds.contains(item.id))
-                }
-            }
-            .listStyle(.inset)
-            .contextMenu(forSelectionType: String.self) { ids in
-                contextActions(for: visibleItems.filter { ids.contains($0.id) })
-            } primaryAction: { ids in
-                if ids.count == 1, let item = visibleItems.first(where: { ids.contains($0.id) }) {
-                    activate(item)
-                }
-            }
-            .overlay {
-                if visibleItems.isEmpty {
-                    if store.isLoading && !store.hasLoaded {
-                        ProgressView("Loading Inbox")
-                    } else {
-                        ContentUnavailableView(
-                            query.isEmpty ? "No Notifications" : "No Results",
-                            systemImage: "tray",
-                            description: Text(filter == .unread ? "You're up to date." : "Notifications about your Memory and Reviews appear here.")
-                        )
-                    }
-                }
-            }
+            notificationList
+        }
+        .sheet(item: $message) { item in
+            InboxMessageView(item: item, projectId: store.welcomeProjectId, receiptError: store.receiptError, open: open)
+                .task { await store.acknowledge(item, action: .read) }
+        }
+        .onChange(of: store.items.map(\.id)) { _, ids in
+            if let message, !ids.contains(message.id) { self.message = nil }
         }
         .navigationTitle("Inbox")
         .toolbar { toolbarContent }
         .onChange(of: visibleItems.map(\.id)) { _, ids in selection.formIntersection(ids) }
+        .onChange(of: selection) { _, ids in
+            if ids.count == 1, let item = visibleItems.first(where: { ids.contains($0.id) }) {
+                markRead(item)
+            }
+        }
         .onChange(of: searchFocusToken) { _, _ in searchFocusRequest += 1 }
         .task { await store.refresh() }
         .onDisappear { actionTask?.cancel() }
     }
 
+    private var notificationList: some View {
+        List(selection: $selection) {
+            ForEach(visibleItems) { item in
+                InboxRow(item: item, isOpening: openingId == item.id, isActionDisabled: openingId != nil) { activate(item) }
+                    .tag(item.id)
+            }
+        }
+        .listStyle(.inset)
+        .contextMenu(forSelectionType: String.self) { ids in
+            contextActions(for: visibleItems.filter { ids.contains($0.id) })
+        } primaryAction: { ids in
+            if ids.count == 1, let item = visibleItems.first(where: { ids.contains($0.id) }) {
+                activate(item)
+            }
+        }
+        .overlay {
+            if visibleItems.isEmpty {
+                if store.isLoading && !store.hasLoaded {
+                    ProgressView("Loading Inbox")
+                } else {
+                    ContentUnavailableView(
+                        query.isEmpty ? "No Notifications" : "No Results",
+                        systemImage: "tray",
+                        description: Text(filter == .unread ? "You're up to date." : "Notifications about your team, Memory, and Reviews appear here.")
+                    )
+                }
+            }
+        }
+    }
+
+    private func markRead(_ item: InboxItem) {
+        guard !item.isRead else { return }
+        Task { await store.acknowledge(item, action: .read) }
+    }
+
     private func activate(_ item: InboxItem) {
-        guard !isBusy, item.actionTitle != nil else { return }
+        guard openingId == nil, item.actionTitle != nil else { return }
+        if item.body != nil {
+            message = item
+            return
+        }
         actionError = nil
         openingId = item.id
         actionTask = Task {
@@ -116,7 +141,7 @@ struct InboxView: View {
     @ViewBuilder
     private func contextActions(for items: [InboxItem]) -> some View {
         if items.count == 1, let item = items.first, let title = item.actionTitle {
-            Button(title) { activate(item) }.disabled(isBusy)
+            Button(title) { activate(item) }.disabled(openingId != nil)
             Divider()
         }
         if !items.isEmpty {
@@ -261,5 +286,51 @@ struct InboxRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(item.isRead ? "Read notification" : "Unread notification")
         .accessibilityIdentifier("inbox-row-\(item.id)")
+    }
+}
+
+struct InboxMessageView: View {
+    @Environment(\.dismiss) private var dismiss
+    let item: InboxItem
+    let projectId: String?
+    var receiptError: String?
+    let open: @MainActor (InboxDestination) async throws -> Void
+    @State private var error: String?
+    @State private var isOpening = false
+    @State private var openTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(item.title).font(.title2.bold())
+                Text("Clumsies · \(item.occurredAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading).padding(24)
+            Divider()
+            MarkdownPreview(source: item.body ?? "")
+            Divider()
+            HStack {
+                if let error = error ?? receiptError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+                if let projectId {
+                    Button("Open Memory") {
+                        isOpening = true
+                        openTask = Task {
+                            defer { isOpening = false }
+                            do { try await open(.project(projectId)); dismiss() }
+                            catch is CancellationError { dismiss() }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    }
+                    .disabled(isOpening)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(16)
+        }
+        .frame(width: 640, height: 600)
+        .onDisappear { openTask?.cancel() }
     }
 }

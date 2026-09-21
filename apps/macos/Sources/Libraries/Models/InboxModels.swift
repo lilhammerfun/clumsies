@@ -2,8 +2,8 @@ import Foundation
 
 struct InboxNotification: Codable, Sendable {
     let notificationId: String
-    let projectId: String
-    let projectName: String
+    let projectId: String?
+    let projectName: String?
     let kind: String
     let targetId: String
     let title: String
@@ -14,6 +14,10 @@ struct InboxNotification: Codable, Sendable {
     let needsAction: Bool
     let reviewStatus: String?
     let occurredAt: String
+    let body: String?
+    let previousRole: String?
+    let newRole: String?
+    let canOpenProject: Bool
 }
 
 struct InboxPage: Codable, Sendable {
@@ -33,6 +37,7 @@ enum InboxReceiptAction: String, Codable, Sendable {
 enum InboxDestination: Hashable, Sendable {
     case review(String)
     case sharedChanges(projectId: String)
+    case project(String)
     case retrySync
 }
 
@@ -42,6 +47,8 @@ enum InboxMessageType: String, CaseIterable, Identifiable, Sendable {
     case reviewResults = "Review Results"
     case sharedUpdates = "Remote Updates"
     case syncErrors = "Sync Errors"
+    case welcome = "Welcome"
+    case accessChanges = "Access Changes"
 
     var id: Self { self }
 
@@ -52,6 +59,8 @@ enum InboxMessageType: String, CaseIterable, Identifiable, Sendable {
         case .reviewResults: String(localized: "Review Results")
         case .sharedUpdates: String(localized: "Remote Updates")
         case .syncErrors: String(localized: "Sync Errors")
+        case .welcome: String(localized: "Welcome")
+        case .accessChanges: String(localized: "Access Changes")
         }
     }
 }
@@ -68,15 +77,18 @@ struct InboxItem: Identifiable, Sendable {
     let revision: String
     var isRead: Bool
     var isArchived: Bool
-    let destination: InboxDestination?
+    var destination: InboxDestination?
     var serverVersion: Int?
+    var body: String?
 
     var actionTitle: String? {
+        if body != nil { return String(localized: "Read Message") }
         guard let destination else { return nil }
         return switch destination {
         case .review: String(localized: "Open Review")
         case .sharedChanges: String(localized: "Open Memory")
         case .retrySync: String(localized: "Retry Sync")
+        case .project: String(localized: "Open Project")
         }
     }
 
@@ -95,12 +107,22 @@ struct InboxItem: Identifiable, Sendable {
 
     static func server(_ notice: InboxNotification) -> Self {
         let type: InboxMessageType = switch notice.kind {
+        case "welcome": .welcome
+        case "project_joined", "project_removed", "project_role_changed", "org_role_changed": .accessChanges
         case "review_requested": .reviewRequests
         case "review_comment": .reviewComments
         case "shared_update": .sharedUpdates
         default: .reviewResults
         }
+        let previousRole = notice.previousRole.flatMap(AdminOrganizationRole.init(rawValue:))?.title ?? ""
+        let newRole = notice.newRole.flatMap(AdminOrganizationRole.init(rawValue:))?.title ?? ""
+        let actor = notice.actorName ?? String(localized: "An administrator")
         let reason: String = switch notice.kind {
+        case "welcome": String(localized: "Get started with projects, Memory, and your team.")
+        case "project_joined": String(localized: "\(actor) added you as \(newRole).")
+        case "project_removed": String(localized: "\(actor) removed your access to this project.")
+        case "project_role_changed": String(localized: "\(actor) changed your project role: \(previousRole) → \(newRole).")
+        case "org_role_changed": String(localized: "\(actor) changed your organization role: \(previousRole) → \(newRole).")
         case "review_requested": notice.reviewStatus == "open" ? String(localized: "Review requested") : updatedReviewReason(notice.reviewStatus)
         case "review_comment": String(localized: "New review comment")
         case "review_approved": String(localized: "Review approved")
@@ -108,15 +130,30 @@ struct InboxItem: Identifiable, Sendable {
         case "review_merged": String(localized: "Review merged")
         default: String(localized: "Remote Memory updated")
         }
-        let shared = notice.kind == "shared_update"
+        let title: String = switch notice.kind {
+        case "welcome": String(localized: "Welcome to Clumsies")
+        case "project_joined": String(localized: "You've been added to a project")
+        case "project_removed": String(localized: "Project access removed")
+        case "project_role_changed": String(localized: "Project role changed")
+        case "org_role_changed": String(localized: "Organization role changed")
+        default: notice.title
+        }
+        let destination: InboxDestination? = switch notice.kind {
+        case "welcome", "project_removed", "org_role_changed": nil
+        case "project_joined", "project_role_changed": notice.canOpenProject ? notice.projectId.map(InboxDestination.project) : nil
+        case "shared_update": notice.projectId.map { .sharedChanges(projectId: $0) }
+        case "review_requested", "review_comment", "review_approved", "review_rejected", "review_merged": .review(notice.targetId)
+        default: nil
+        }
         return .init(
             id: notice.notificationId, type: type, projectId: notice.projectId, projectName: notice.projectName,
-            title: notice.title, message: [reason, notice.actorName].compactMap { $0 }.joined(separator: " · "),
+            title: title, message: type == .accessChanges || type == .welcome ? reason
+                : [reason, notice.actorName].compactMap { $0 }.joined(separator: " · "),
             occurredAt: TimestampFormatting.date(from: notice.occurredAt) ?? .distantPast,
             needsAction: notice.needsAction, revision: String(notice.version),
             isRead: notice.readVersion >= notice.version, isArchived: notice.archivedVersion >= notice.version,
-            destination: shared ? .sharedChanges(projectId: notice.projectId) : .review(notice.targetId),
-            serverVersion: notice.version
+            destination: destination, serverVersion: notice.version,
+            body: notice.kind == "welcome" ? notice.body.map { String(localized: String.LocalizationValue($0)) } : nil
         )
     }
 }

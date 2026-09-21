@@ -49,6 +49,11 @@ extension WorkspaceCoordinator {
             let record = WorkspaceLoader.mapReview(detail)
             reviews.replaceReview(with: record)
             reviews.openReview(record)
+        case .project(let projectId):
+            try await selectInboxProject(projectId)
+            guard navigation.selectedSection == .inbox else { throw CancellationError() }
+            navigation.searchQuery = ""
+            navigation.selectedSection = .memory
         case .retrySync:
             let result = await refresh.retrySync(allProjects: true)
             try context.ensureAuthority(authority)

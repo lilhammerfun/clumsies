@@ -354,6 +354,25 @@ pub(crate) async fn load_project_member(
     project_member_from_row(&row)
 }
 
+/// Lock a membership so a notification records the role immediately preceding its change.
+///
+/// # Errors
+/// Returns not found for a missing member and propagates database failures.
+pub(crate) async fn lock_project_member_role(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: &str,
+    user_id: &str,
+) -> Result<String, ServerError> {
+    sqlx::query_scalar(
+        "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2 FOR UPDATE",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| ServerError::not_found("project_member", format!("{project_id}:{user_id}")))
+}
+
 /// Replace an existing membership's project-local role.
 ///
 /// Uses the caller's transaction without committing it.

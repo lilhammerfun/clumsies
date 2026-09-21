@@ -19,9 +19,10 @@ pub(crate) async fn notify_review(
 ) -> Result<(), ServerError> {
     sqlx::query(
         "INSERT INTO inbox_notifications
-            (user_id, notification_id, project_id, kind, target_id, actor_user_id, event_key)
-         SELECT m.user_id, 'review:' || r.review_id, r.project_id, $3, r.review_id, $2, $4
+            (user_id, notification_id, org_id, project_id, kind, target_id, actor_user_id, event_key)
+         SELECT m.user_id, 'review:' || r.review_id, p.org_id, r.project_id, $3, r.review_id, $2, $4
          FROM reviews r
+         JOIN projects p ON p.project_id = r.project_id
          JOIN project_members m ON m.project_id = r.project_id
          JOIN users u ON u.user_id = m.user_id
          WHERE r.review_id = $1 AND m.user_id <> $2 AND u.status = 'active' AND (
@@ -55,9 +56,10 @@ pub(crate) async fn notify_shared_update(
 ) -> Result<(), ServerError> {
     sqlx::query(
         "INSERT INTO inbox_notifications
-            (user_id, notification_id, project_id, kind, target_id, actor_user_id, event_key)
-         SELECT m.user_id, 'shared:' || m.project_id, m.project_id, 'shared_update', m.project_id, $3, $2
+            (user_id, notification_id, org_id, project_id, kind, target_id, actor_user_id, event_key)
+         SELECT m.user_id, 'shared:' || m.project_id, p.org_id, m.project_id, 'shared_update', m.project_id, $3, $2
          FROM project_members m JOIN users u ON u.user_id = m.user_id
+         JOIN projects p ON p.project_id = m.project_id
          WHERE m.project_id = $1 AND u.status = 'active' AND m.user_id <> $3
          ON CONFLICT (user_id, notification_id) DO UPDATE SET
              actor_user_id = EXCLUDED.actor_user_id, event_key = EXCLUDED.event_key,
@@ -67,7 +69,7 @@ pub(crate) async fn notify_shared_update(
     Ok(())
 }
 
-/// Reads a bounded keyset page, rechecking project membership and review existence.
+/// Reads personal notices and a bounded page of source notices with current project access.
 ///
 /// # Errors
 /// Invalid page sizes and database decoding failures are returned without partial pages.
@@ -78,18 +80,23 @@ pub(super) async fn list(
     limit: i64,
 ) -> Result<InboxListResponse, ServerError> {
     let mut rows = sqlx::query(
-        "SELECT n.*, p.name AS project_name, COALESCE(r.title, p.name) AS title,
+        "SELECT n.*, COALESCE(n.project_name_snapshot, p.name) AS project_name,
+                CASE WHEN n.kind = 'welcome' THEN 'Welcome to Clumsies'
+                     WHEN n.kind = 'org_role_changed' THEN 'Organization role changed'
+                     ELSE COALESCE(r.title, n.project_name_snapshot, p.name, 'Clumsies') END AS title,
+                (m.user_id IS NOT NULL AND n.kind <> 'project_removed') AS can_open_project,
                 COALESCE(u.display_name, u.email) AS actor_name, r.status AS review_status,
                 (((r.status = 'open' AND r.author_user_id <> $1) OR r.status = 'approved') AND $5 IN ('owner', 'admin')
                   OR (r.status = 'rejected' AND r.author_user_id = $1)) AS needs_action
          FROM inbox_notifications n
-         JOIN projects p ON p.project_id = n.project_id
-         JOIN project_members m ON m.project_id = p.project_id AND m.user_id = $1
-         LEFT JOIN reviews r ON n.kind <> 'shared_update' AND r.review_id = n.target_id AND r.project_id = p.project_id
+         LEFT JOIN projects p ON p.project_id = n.project_id AND p.org_id = n.org_id
+         LEFT JOIN project_members m ON m.project_id = p.project_id AND m.user_id = $1
+         LEFT JOIN reviews r ON n.kind IN ('review_requested', 'review_comment', 'review_approved', 'review_rejected', 'review_merged') AND r.review_id = n.target_id AND r.project_id = p.project_id
          LEFT JOIN users u ON u.user_id = n.actor_user_id
-         WHERE n.user_id = $1 AND p.org_id = $2
+         WHERE n.user_id = $1 AND n.org_id = $2
            AND ($3::text IS NULL OR n.notification_id > $3)
-           AND (n.kind = 'shared_update' OR r.review_id IS NOT NULL)
+           AND (n.kind IN ('welcome', 'project_joined', 'project_removed', 'project_role_changed', 'org_role_changed')
+                OR (m.user_id IS NOT NULL AND (n.kind = 'shared_update' OR r.review_id IS NOT NULL)))
          ORDER BY n.notification_id LIMIT $4",
     ).bind(&principal.user_id).bind(&principal.org_id).bind(cursor).bind(limit + 1)
         .bind(&principal.role).fetch_all(pool).await?;
@@ -106,6 +113,10 @@ pub(super) async fn list(
                 target_id: row.try_get("target_id")?,
                 title: row.try_get("title")?,
                 actor_name: row.try_get("actor_name")?,
+                body: row.try_get("body")?,
+                previous_role: row.try_get("previous_role")?,
+                new_role: row.try_get("new_role")?,
+                can_open_project: row.try_get("can_open_project")?,
                 version: row.try_get("version")?,
                 read_version: row.try_get("read_version")?,
                 archived_version: row.try_get("archived_version")?,
@@ -128,7 +139,8 @@ pub(super) async fn list(
 /// Changes only the authenticated user's displayed receipt version.
 ///
 /// # Errors
-/// Returns not found for missing or revoked subjects; invalid/future versions cannot write.
+/// Returns not found for missing or revoked source subjects; personal access notices remain writable.
+/// Invalid or future versions cannot write.
 pub(super) async fn update(
     pool: &PgPool,
     principal: &AuthPrincipal,
@@ -147,13 +159,15 @@ pub(super) async fn update(
                                  WHEN $5 = 'unread' AND n.version = $4 THEN 0 ELSE n.read_version END,
              archived_version = CASE WHEN $5 = 'archive' THEN GREATEST(n.archived_version, $4)
                                      WHEN $5 = 'restore' AND n.archived_version <= $4 THEN 0 ELSE n.archived_version END
-         FROM projects p, project_members m
-         WHERE n.user_id = $1 AND n.notification_id = $3 AND n.version >= $4
-           AND p.project_id = n.project_id AND p.org_id = $2
-           AND m.project_id = p.project_id AND m.user_id = $1
-           AND (n.kind = 'shared_update' OR EXISTS (
-               SELECT 1 FROM reviews r WHERE r.review_id = n.target_id AND r.project_id = p.project_id
-           ))",
+         WHERE n.user_id = $1 AND n.org_id = $2 AND n.notification_id = $3 AND n.version >= $4
+           AND (n.kind IN ('welcome', 'project_joined', 'project_removed', 'project_role_changed', 'org_role_changed')
+                OR EXISTS (
+                    SELECT 1 FROM projects p JOIN project_members m ON m.project_id = p.project_id
+                    WHERE p.project_id = n.project_id AND p.org_id = n.org_id AND m.user_id = $1
+                      AND (n.kind = 'shared_update' OR EXISTS (
+                          SELECT 1 FROM reviews r WHERE r.review_id = n.target_id AND r.project_id = p.project_id
+                      ))
+                ))",
     ).bind(&principal.user_id).bind(&principal.org_id).bind(id).bind(request.version)
         .bind(action).execute(pool).await?;
     if result.rows_affected() == 0 {

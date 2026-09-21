@@ -39,14 +39,86 @@ final class InboxTests: XCTestCase {
     private func notification(_ id: String = "review:one", version: Int = 1, kind: String = "review_comment") -> InboxNotification {
         .init(notificationId: id, projectId: "project", projectName: "Project", kind: kind,
             targetId: "one", title: "A comment", actorName: "Reviewer", version: version,
-            readVersion: 0, archivedVersion: 0, needsAction: false, reviewStatus: "open", occurredAt: "2026-09-20T00:00:00Z")
+            readVersion: 0, archivedVersion: 0, needsAction: false, reviewStatus: "open", occurredAt: "2026-09-20T00:00:00Z",
+            body: nil, previousRole: nil, newRole: nil, canOpenProject: true)
+    }
+
+    private func accountNotification(_ kind: String, canOpenProject: Bool = true) -> InboxNotification {
+        .init(notificationId: kind, projectId: kind == "welcome" || kind == "org_role_changed" ? nil : "project",
+            projectName: kind == "welcome" || kind == "org_role_changed" ? nil : "Project", kind: kind,
+            targetId: "project", title: "Clumsies", actorName: "Owner", version: 1,
+            readVersion: 0, archivedVersion: 0, needsAction: false, reviewStatus: nil, occurredAt: "2026-09-21T00:00:00Z",
+            body: kind == "welcome" ? "## Your projects\n\nOpen Memory to get started." : nil,
+            previousRole: kind == "project_joined" ? nil : "member", newRole: kind == "project_removed" ? nil : "admin",
+            canOpenProject: canOpenProject)
+    }
+
+    func testWelcomeHasReadableContentAndAccessMessagesUseExistingDestinations() throws {
+        let welcome = InboxItem.server(accountNotification("welcome"))
+        XCTAssertEqual(welcome.type, .welcome)
+        XCTAssertNotNil(welcome.body)
+        XCTAssertEqual(welcome.actionTitle, "Read Message")
+        XCTAssertNil(welcome.destination)
+        for kind in ["project_joined", "project_role_changed", "project_removed", "org_role_changed"] {
+            let item = InboxItem.server(accountNotification(kind))
+            XCTAssertEqual(item.type, .accessChanges)
+            XCTAssertNil(item.body, "Access events should not invent a message detail page.")
+            XCTAssertEqual(item.destination, kind == "project_joined" || kind == "project_role_changed" ? .project("project") : nil)
+            let inaccessible = InboxItem.server(accountNotification(kind, canOpenProject: false))
+            XCTAssertNil(inaccessible.destination)
+            XCTAssertNil(inaccessible.actionTitle)
+        }
+        let changed = InboxItem.server(accountNotification("project_role_changed"))
+        XCTAssertTrue(changed.message.contains("Member → Admin"))
+        let detail = NSHostingView(rootView: InboxMessageView(item: welcome, projectId: nil, open: { _ in
+            XCTFail("A welcome without projects must not attempt navigation.")
+        }))
+        XCTAssertEqual(detail.fittingSize.height, 600)
+        for notice in [welcome, changed, InboxItem.server(accountNotification("project_removed"))] {
+            let row = NSHostingView(rootView: InboxRow(item: notice, isOpening: false, activate: {}).frame(width: 540))
+            XCTAssertLessThanOrEqual(row.fittingSize.height, 55)
+        }
+    }
+
+    func testPersonalNoticesSurviveProjectRemovalButLoseProjectActions() async throws {
+        let context = context()
+        var receipts: [String] = []
+        let notices = [accountNotification("welcome"), accountNotification("project_joined"),
+            accountNotification("project_removed"), notification()]
+        let store = InboxStore(context: context, defaults: try preferences(),
+            fetchPage: { _ in (.init(items: notices, nextCursor: nil), false) },
+            fetchLocal: { self.snapshot() }, updateReceipt: { id, _ in receipts.append(id) })
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        XCTAssertEqual(store.items.count, 4)
+        XCTAssertEqual(store.items.first(where: { $0.id == "project_joined" })?.destination, .project("project"))
+        context.projects = []
+        await Task.yield()
+        XCTAssertEqual(Set(store.items.map(\.id)), ["welcome", "project_joined", "project_removed"])
+        XCTAssertTrue(store.items.allSatisfy { $0.destination == nil })
+        XCTAssertNil(store.welcomeProjectId)
+        await store.refresh()
+        XCTAssertEqual(store.items.count, 3, "Cached source content must stay hidden after access is revoked.")
+        let removed = try XCTUnwrap(store.items.first { $0.id == "project_removed" })
+        let archived = await store.acknowledge(removed, action: .archive)
+        XCTAssertTrue(archived)
+        XCTAssertEqual(receipts, ["project_removed"])
+        XCTAssertFalse(try XCTUnwrap(store.items.first { $0.id == "project_removed" }).isRead)
+        let welcome = try XCTUnwrap(store.items.first { $0.id == "welcome" })
+        let read = await store.acknowledge(welcome, action: .read)
+        XCTAssertTrue(read)
+        XCTAssertFalse(try XCTUnwrap(store.items.first { $0.id == "welcome" }).isArchived)
+        context.authorityGeneration = UUID()
+        XCTAssertTrue(store.items.isEmpty)
     }
 
     func testToolbarKeepsFiltersLeadingAndFocusesTheTrailingNativeSearch() async throws {
         let context = context()
+        var receipts: [InboxReceiptAction] = []
         let store = InboxStore(context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
-            fetchLocal: { self.snapshot(failed: true) })
+            fetchLocal: { self.snapshot(failed: true) },
+            updateReceipt: { _, request in receipts.append(request.action) })
         store.prepare(serverURL: "test")
         func root(_ token: UUID) -> some View {
             NavigationSplitView {
@@ -92,7 +164,18 @@ final class InboxTests: XCTestCase {
         list.selectRowIndexes(IndexSet(integersIn: 0..<2), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(list.selectedRowIndexes.count, 2, "The native list must support multi-selection.")
-        XCTAssertEqual(store.unreadCount, unread, "Selection alone must not mark notifications read.")
+        XCTAssertEqual(store.unreadCount, unread, "Bulk selection must preserve unread messages for archive actions.")
+
+        let serverRow = try XCTUnwrap(store.items.firstIndex { $0.serverVersion != nil })
+        list.selectRowIndexes(IndexSet(integer: serverRow), byExtendingSelection: false)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(receipts, [.read], "Selecting a notification must mark it read without opening a destination.")
+        XCTAssertEqual(store.unreadCount, unread - 1)
+        XCTAssertFalse(try XCTUnwrap(store.items.first { $0.serverVersion != nil }).isArchived)
+        let readItem = try XCTUnwrap(store.items.first { $0.serverVersion != nil })
+        await store.acknowledge(readItem, action: .unread)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(store.unreadCount, unread, "Explicit Mark as Unread must remain effective while the row stays selected.")
 
         window.makeFirstResponder(nil)
         hosting.rootView = root(UUID())

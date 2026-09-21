@@ -362,6 +362,7 @@ pub(super) async fn exchange_authorization_code(
         .bind(&code_id)
         .execute(&mut **tx)
         .await?;
+    crate::app::inbox::notify_welcome(tx, &user_id, &org_id).await?;
     let session_id = prefixed_id("ses");
     sqlx::query("INSERT INTO auth_sessions (session_id, user_id, org_id) VALUES ($1, $2, $3)")
         .bind(&session_id)
