@@ -32,10 +32,11 @@ An organization owner/admin completes publication. [Review and publish](/quickst
 
 ## Choose the app language
 
-Clumsies supports English and Simplified Chinese. In macOS **System Settings →
-General → Language & Region → Applications**, add Clumsies and choose **English**
-or **简体中文**. Save your edits and reopen Clumsies to apply the change. You can
-open this system pane from **Clumsies → Settings → General → Language**.
+In **Clumsies → Settings → General → Language**, choose **Follow System**,
+**English**, or **简体中文**. This changes only Clumsies: you can keep your Mac in
+English and use Clumsies in Chinese. Quit and reopen Clumsies to apply the change
+to all windows and menus. You can quit from the language-change prompt or choose
+**Later** and reopen when convenient.
 
 ## When something does not work
 

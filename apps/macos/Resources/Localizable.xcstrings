@@ -1594,18 +1594,34 @@
         }
       }
     },
-    "App information and software updates.": {
+    "App language": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "App information and software updates."
+            "value": "App language"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "应用信息和软件更新。"
+            "value": "应用语言"
+          }
+        }
+      }
+    },
+    "App language, information and software updates.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App language, information and software updates."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用语言、版本信息和软件更新。"
           }
         }
       }
@@ -1942,22 +1958,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "自动下载更新"
-          }
-        }
-      }
-    },
-    "Available languages": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Available languages"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "可用语言"
           }
         }
       }
@@ -2557,6 +2557,22 @@
         }
       }
     },
+    "Choose a language for Clumsies without changing your Mac's language. Changes take effect when you reopen Clumsies.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a language for Clumsies without changing your Mac's language. Changes take effect when you reopen Clumsies."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "为 Clumsies 单独选择语言，不影响 Mac 的系统语言。重新打开 Clumsies 后生效。"
+          }
+        }
+      }
+    },
     "Choose a version for each change above to continue.": {
       "localizations": {
         "en": {
@@ -2873,22 +2889,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Clumsies 无法启动本地守护进程"
-          }
-        }
-      }
-    },
-    "Clumsies follows your Mac's app language. In System Settings → General → Language & Region → Applications, add Clumsies and choose English or Simplified Chinese. Reopen Clumsies to apply the change.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clumsies follows your Mac's app language. In System Settings → General → Language & Region → Applications, add Clumsies and choose English or Simplified Chinese. Reopen Clumsies to apply the change."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clumsies 遵循 Mac 的应用语言设置。请在“系统设置 → 通用 → 语言与地区 → 应用程序”中添加 Clumsies，选择 English 或简体中文，然后重新打开 Clumsies。"
           }
         }
       }
@@ -5209,9 +5209,6 @@
         }
       }
     },
-    "English / 简体中文": {
-      "shouldTranslate": false
-    },
     "Enter a complete Server address, such as https://clumsies.example.com.": {
       "localizations": {
         "en": {
@@ -5912,6 +5909,22 @@
         }
       }
     },
+    "Follow System": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Follow System"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跟随系统"
+          }
+        }
+      }
+    },
     "Forward": {
       "localizations": {
         "en": {
@@ -6500,6 +6513,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "最近检索时间分布"
+          }
+        }
+      }
+    },
+    "Later": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Later"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "稍后"
           }
         }
       }
@@ -8616,22 +8645,6 @@
         }
       }
     },
-    "Open Language & Region Settings…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Language & Region Settings…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "打开语言与地区设置…"
-          }
-        }
-      }
-    },
     "Open Memory": {
       "localizations": {
         "en": {
@@ -9492,6 +9505,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "退出 %1$@"
+          }
+        }
+      }
+    },
+    "Quit Clumsies": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit Clumsies"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "退出 Clumsies"
           }
         }
       }
@@ -10423,6 +10452,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在重命名记忆：%1$lld/%2$lld…"
+          }
+        }
+      }
+    },
+    "Reopen Clumsies to apply the language": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reopen Clumsies to apply the language"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新打开 Clumsies 以切换语言"
           }
         }
       }
@@ -16004,6 +16049,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "位于 %1$@ 的指南会告诉 Agent 如何组织、更新和淘汰知识。你可以随时编辑。"
+          }
+        }
+      }
+    },
+    "Your language choice is saved. Quit and reopen Clumsies to apply it to all windows and menus.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your language choice is saved. Quit and reopen Clumsies to apply it to all windows and menus."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语言选择已保存。退出并重新打开 Clumsies 后，所有窗口和菜单都会使用所选语言。"
           }
         }
       }

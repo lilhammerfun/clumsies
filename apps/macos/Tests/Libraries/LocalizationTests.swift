@@ -19,6 +19,8 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(String(localized: "Inbox", bundle: chinese), "收件箱")
         XCTAssertEqual(String(localized: "Settings…", bundle: chinese), "设置…")
         XCTAssertEqual(String(localized: "Language", bundle: chinese), "语言")
+        XCTAssertEqual(String(localized: "App language", bundle: chinese), "应用语言")
+        XCTAssertEqual(String(localized: "Follow System", bundle: chinese), "跟随系统")
         XCTAssertEqual(String(localized: "Open", bundle: chinese), "打开")
         for count in [0, 1, 2, 25] {
             XCTAssertEqual(String(localized: "\(count) requests", bundle: english, locale: Locale(identifier: "en")), "\(count) \(count == 1 ? "request" : "requests")")
@@ -30,6 +32,9 @@ final class LocalizationTests: XCTestCase {
     @MainActor
     func testDisplayLabelsFollowLanguageWithoutChangingIdentifiers() {
         let isChinese = Bundle.main.preferredLocalizations.first == "zh-Hans"
+        XCTAssertEqual(AppLanguage.system.title, isChinese ? "跟随系统" : "Follow System")
+        XCTAssertEqual(AppLanguage.english.title, "English")
+        XCTAssertEqual(AppLanguage.simplifiedChinese.title, "简体中文")
         XCTAssertEqual(WorkspaceSection.inbox.title, isChinese ? "收件箱" : "Inbox")
         XCTAssertEqual(InboxMessageType.reviewRequests.title, isChinese ? "评审请求" : "Review Requests")
         XCTAssertEqual(InboxMessageType.reviewRequests.rawValue, "Review Requests")
@@ -41,6 +46,9 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AdminHealthStatus.down.rawValue, "down")
         XCTAssertEqual(SettingsDestination.search(isChinese ? "语言" : "language", canAdminister: false), [.pane(.general)])
         XCTAssertEqual(SettingsDestination.search("language", canAdminister: false), [.pane(.general)])
+        for query in ["中文", "简体中文", "跟随系统", "Follow System", "updates"] {
+            XCTAssertEqual(SettingsDestination.search(query, canAdminister: false), [.pane(.general)], query)
+        }
     }
 
     func testCatalogHasReviewedTranslationsForEveryLocalizableKey() throws {

@@ -3,6 +3,8 @@ import SwiftUI
 
 struct GeneralSettingsView: View {
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
+    @State private var language = AppLanguage.restored()
+    @State private var showsLanguageChangeNotice = false
 
     private var version: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? String(localized: "Unknown")
@@ -16,7 +18,7 @@ struct GeneralSettingsView: View {
                 VStack(spacing: 10) {
                     SettingsIcon(symbol: "gearshape.fill", color: .gray, size: 52)
                     Text("General").font(.system(size: 22, weight: .semibold))
-                    Text("App information and software updates.")
+                    Text("App language, information and software updates.")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -26,15 +28,20 @@ struct GeneralSettingsView: View {
                     .textSelection(.enabled)
             }
             Section {
-                LabeledContent("Available languages") {
-                    Text("English / 简体中文")
+                Picker("App language", selection: $language) {
+                    ForEach(AppLanguage.allCases, id: \.self) { language in
+                        Text(language.title).tag(language)
+                    }
                 }
-                Link("Open Language & Region Settings…",
-                     destination: URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension")!)
+                .accessibilityIdentifier("app-language-picker")
+                .onChange(of: language) { _, language in
+                    language.persist()
+                    showsLanguageChangeNotice = true
+                }
             } header: {
                 Text("Language")
             } footer: {
-                Text("Clumsies follows your Mac's app language. In System Settings → General → Language & Region → Applications, add Clumsies and choose English or Simplified Chinese. Reopen Clumsies to apply the change.")
+                Text("Choose a language for Clumsies without changing your Mac's language. Changes take effect when you reopen Clumsies.")
             }
             Section("Updates") {
                 Toggle(
@@ -61,6 +68,12 @@ struct GeneralSettingsView: View {
         .formStyle(.grouped)
         .font(.system(size: 13))
         .toggleStyle(.switch)
+        .alert("Reopen Clumsies to apply the language", isPresented: $showsLanguageChangeNotice) {
+            Button("Quit Clumsies") { NSApp.terminate(nil) }
+            Button("Later", role: .cancel) {}
+        } message: {
+            Text("Your language choice is saved. Quit and reopen Clumsies to apply it to all windows and menus.")
+        }
     }
 }
 

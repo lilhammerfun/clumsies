@@ -32,11 +32,16 @@ workflow.
 
 ## App language
 
-Clumsies supports English and Simplified Chinese and follows the macOS app language.
-To choose a language just for Clumsies, open **System Settings → General → Language &
-Region → Applications**, add Clumsies, choose **English** or **简体中文**, and reopen it.
-**Clumsies → Settings → General → Language** opens the same system pane.
-Save your edits before reopening. Unsupported languages fall back to English.
+Clumsies supports English and Simplified Chinese. In **Clumsies → Settings → General
+→ Language**, choose **Follow System**, **English**, or **简体中文**. The choice applies
+only to Clumsies, so an English-language Mac can run Clumsies in Chinese. Quit and
+reopen the app to apply the change to all windows, menus, and dialogs. The quit
+action uses the normal save and unsaved-change checks.
+
+The preference uses the app's `AppleLanguages` override and also recognizes a
+language selected in macOS System Settings. **Follow System** removes that
+override without changing system preferences. Unsupported languages fall back to
+English.
 
 `Resources/Localizable.xcstrings` is the translation source. Use literal localized
 SwiftUI text, and `String(localized:)` for AppKit, computed labels and errors.
