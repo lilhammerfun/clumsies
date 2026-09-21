@@ -34,7 +34,7 @@ The audit also covers Inbox receipts, Memory/Bundles/Reviews refresh feedback, w
 
 ServerClient writes still throw to their action owner, but no longer also create window service feedback. GET / HEAD reads and refreshes maintain connectivity state, avoiding a second copy of a failed Save behind its sheet.
 
-Settings icons remain 20 × 20 pt during connectivity/authentication failures. Initial unavailable content, field validation, destructive decisions and historical diagnostic records retain their own semantics.
+Settings icons use the same 16 × 16 pt frame and inherited text size as the main sidebar, including during connectivity/authentication failures. Initial unavailable content, field validation, destructive decisions and historical diagnostic records retain their own semantics.
 
 Error text and icons also convey the meaning without depending on red alone. [Apple: Differentiate Without Color Alone](https://developer.apple.com/help/app-store-connect/manage-app-accessibility/differentiate-without-color-alone-evaluation-criteria)
 

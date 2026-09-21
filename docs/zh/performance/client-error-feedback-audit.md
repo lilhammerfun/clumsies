@@ -39,7 +39,7 @@
 
 ServerClient 的写请求失败仍抛给调用方，但不再同时生成窗口级服务提示；GET / HEAD 的读取和刷新失败维护连接状态，避免保存失败在弹窗内外重复出现。
 
-设置侧栏图标不再包含连接提示，在连接和认证失败时仍保持 20 × 20 pt。真正的首次加载失败、无权限或对象不可用状态仍属于内容本身；字段校验、删除确认、未保存编辑保护和历史诊断记录保留。
+设置侧栏图标跟随正文大小，占位与主窗口一样为 16 × 16 pt，在连接和认证失败时也不变。真正的首次加载失败、无权限或对象不可用状态仍属于内容本身；字段校验、删除确认、未保存编辑保护和历史诊断记录保留。
 
 颜色不能是错误的唯一表达，因此红色同时配有错误文案和图标。[Apple：Differentiate Without Color Alone](https://developer.apple.com/help/app-store-connect/manage-app-accessibility/differentiate-without-color-alone-evaluation-criteria)
 

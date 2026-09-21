@@ -2,11 +2,10 @@ import SwiftUI
 
 struct SettingsIcon: View {
     let symbol: String
-    var size: CGFloat = 20
+    var size: CGFloat = 16
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: size * 0.8))
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(.primary)
             .frame(width: size, height: size)
@@ -128,7 +127,7 @@ struct SettingsWindowView: View {
                     }
                     Section {
                         ForEach(SettingsPane.allCases.filter { $0 != .organization || canShowOrganization }) { pane in
-                            HStack(spacing: 9) {
+                            HStack(spacing: 8) {
                                 SettingsIcon(symbol: pane.systemImage)
                                 Text(pane.title)
                             }
@@ -209,7 +208,7 @@ struct SettingsWindowView: View {
         return Button {
             navigation.navigate(to: destination)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 SettingsIcon(symbol: section.symbol)
                 Text(destination.title)
                 Spacer()
