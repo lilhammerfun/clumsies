@@ -20,11 +20,11 @@ Activity 是 macOS App 中的本地记忆活动视图。它把 DSH 与 Codex Des
 |---|---|
 | 全局侧栏 | 选中 Activity 工作区。 |
 | 会话列表 | 已绑定工作区中的 Agent 活动；每行显示 DSH 或 Codex host、标题和时间。 |
-| 详情 | 用户请求、原始 Memory 查询、检索状态与耗时，以及直接内联渲染为 Markdown 的完整历史片段。 |
+| 详情 | 用户请求、原始 Memory 查询、检索状态与耗时，以及保留原始 source 的三行片段预览。 |
 
 会话身份是 `(host, session_id)`，因为 session id 只要求在各自 host 内唯一。项目筛选会包含该 Project 绑定的全部工作区。
 
-有 run 身份的每次 Memory 检索提供 **Retrieval Process** 入口。点击后，工作区临时收起会话列表，保留全局侧栏，用完整宽度展示该次检索摘要与候选表；返回时恢复原会话和检索位置。一个用户请求可以包含多次检索，入口始终指向当前这一次。详情复用 **Report Inaccurate** 和 **Review Evidence**，可以为该 run 建立评估案例并核对证据。共享的 Diagnostics 视图也支持跨会话的 Retrieval Runs 列表。
+有 run 身份的每次 Memory 检索提供 **Retrieval Process** 入口。点击后，工作区临时收起会话列表，保留全局侧栏，用完整宽度展示该次检索摘要与候选表；通过原生导航栈的工具栏返回按钮恢复原会话和检索位置。详情顶部只显示 Agent query，不重复会话标题和用户 prompt；导航容器按详情区可用宽度布局，缩窄窗口时不把内容挤出窗口。一个用户请求可以包含多次检索，入口始终指向当前这一次。详情复用 **Report Inaccurate** 和 **Review Evidence**，可以为该 run 建立评估案例并核对证据。共享的 Diagnostics 视图也支持跨会话的 Retrieval Runs 列表。点击 Final、BM25、Vector、RRF 或 Rerank 列标题，可按该阶段的数值排名升序或降序排列；缺失排名的项始终在末尾。
 
 ## 用户请求与 Memory 查询不是同一份数据
 
@@ -34,6 +34,8 @@ Activity 是 macOS App 中的本地记忆活动视图。它把 DSH 与 Codex Des
 查询依次参与精确 id/path/title 匹配、BM25 全文检索、语义向量检索、reciprocal-rank fusion 与 cross-encoder rerank。最终装配会去除重叠片段，并应用相关性、单资源数量、总片段数和 token budget 限制。
 
 Activity 的会话页展示最终向 Agent 提供的片段。候选分数、排序中间量和被排除的候选放在按需打开的 Retrieval Process 详情里，让会话阅读仍围绕用户请求与检索结果展开。
+
+“结果”列的信息按钮解释所有交付状态和排除原因，悬停单个结果可查看该行的说明。“未重排”表示没有记录到重排结果：可能未进入重排范围，也可能是检索在重排完成前已中止，不代表相关性低。
 
 ### `add`、`replace` 与 `reuse`
 
@@ -106,7 +108,7 @@ payload.item = {
 
 新日志中，`structuredContent.run_id` 是关联本地 `retrieval_runs` 的权威身份。daemon 还会校验该 run 属于工作区绑定的 Project；查询文本只用于展示，不是身份键。
 
-选中候选的 `unit_key`、heading、最终顺序和预览来自该 run。每张可见且预览被截断或为空的片段卡使用 `run_id + unit_key` 和冻结 locator，从该次 run 保留的 corpus body 读取完整历史正文，并直接内联渲染 Markdown，不读取可能已经变化的当前 Memory。description-only 检索单元没有正文 byte range，因此只能如实返回当时保存的预览。快照缺失或检索历史已清理时，保留工具结果中的原始预览；历史记录不可用不等于没有发生检索。
+选中候选的 `unit_key`、heading、最终顺序和预览来自该 run。用户点击 **Show source** 展开被截断或为空的片段时，使用 `run_id + unit_key` 和冻结 locator，从该次 run 保留的 corpus body 读取完整历史正文，并按原始 source 展示，不渲染 Markdown，也不读取可能已经变化的当前 Memory。description-only 检索单元没有正文 byte range，因此只能如实返回当时保存的预览。快照缺失或检索历史已清理时，保留工具结果中的原始预览；历史记录不可用不等于没有发生检索。
 
 同一次关联读取还提供可选的 `total_us`：只显示已结束 run 记录的检索耗时，运行中或无法关联时保持缺失。该值不是模型回复耗时，也不能通过简单相加各阶段计时得出。片段数量包含 `reuse`，不表示本次新发送的内容数量。
 
@@ -133,7 +135,7 @@ Activity 不会为了生成视图把本地会话日志上传到 Server，也不�
 - `list_recalls` 只返回摘要，每页默认 20 条、最多 100 条。首次发现只在阻塞线程池读取有界日志头和标题预览，不解析完整会话或关联检索详情。
 - 后续页通过游标复用同一摘要快照，不重新扫描目录。手动刷新才建立新快照。
 - `get_recall_session` 使用摘要返回的 `session_token`，只解析选中的会话。任务按页返回，后续页复用首次解析结果，只为当前页补齐检索详情。
-- 移除原先 500 个请求、每个请求 100 次 activation 的静默截断；完整片段只在可见预览被截断或为空时读取。
+- 移除原先 500 个请求、每个请求 100 次 activation 的静默截断；完整片段只在用户展开被截断或为空的预览时读取，按原始 source 展示，不渲染 Markdown。
 - daemon 在内存中保留最近八个列表快照和四个选中会话，不建立额外持久化会话副本。快照被淘汰或 daemon 重启后，可通过 **Refresh Activity** 恢复；绑定变化后不能沿用旧快照越界读取。
 - 单个损坏的日志头会被跳过；选中会话正文读取失败时，在详情区域显示错误与重试。Codex discovery 失败时保留 DSH 结果；DSH 工作区目录无法枚举时请求失败。
 
@@ -151,3 +153,11 @@ Activity 不会为了生成视图把本地会话日志上传到 Server，也不�
 | XPC client 与模型 | `apps/macos/Sources/Services/Daemon/DaemonXPCClient.swift`、`apps/macos/Sources/Libraries/Models/DaemonModels.swift` |
 | Activity UI 与 host badge | `apps/macos/Sources/Features/Activity/ActivityView.swift`、`ActivityModel.swift` |
 | Workspace 接线 | `apps/macos/Sources/Features/Workspace/WorkspaceView.swift` |
+
+## 本地界面预览
+
+运行 `just dev-macos` 启动当前 worktree 的独立 Dev Instance，再运行
+`python3 dev/seed-activity.py`。重新打开 Dev App，在 Activity 中选择
+**Activity Preview** 项目。数据覆盖原始标题、表格、代码、长片段、复用片段、
+历史缺失、空结果、检索失败和数值列排序。`python3 dev/seed-activity.py --check`
+可在不启动实例的情况下检查数据。

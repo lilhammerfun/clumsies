@@ -661,29 +661,24 @@ struct WorkspaceView: View {
             )
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
-            ZStack {
-                // Keep the session views mounted so their selection, divider and
-                // exact scroll position survive a visit to the retrieval trace.
+            NavigationStack {
                 HSplitView {
                     ActivitySessionList(model: activityModel)
                         .frame(minWidth: 260, idealWidth: 300, maxWidth: 380, maxHeight: .infinity)
                     ActivitySessionDetail(model: activityModel)
                         .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .opacity(activityModel.retrievalSelection == nil ? 1 : 0)
-                .allowsHitTesting(activityModel.retrievalSelection == nil)
-                .accessibilityHidden(activityModel.retrievalSelection != nil)
-                .disabled(activityModel.retrievalSelection != nil)
-
-                if let selection = activityModel.retrievalSelection {
+                .navigationDestination(item: Binding(
+                    get: { activityModel.retrievalSelection },
+                    set: { if $0 == nil { activityModel.closeRetrieval() } }
+                )) { selection in
                     ActivityRetrievalDetail(
                         selection: selection,
-                        daemon: workspaceContext.daemon,
-                        onBack: activityModel.closeRetrieval
+                        daemon: workspaceContext.daemon
                     )
-                    .frame(minWidth: RetrievalDiagnosticsLayout.mainPaneMinimumWidth)
                 }
             }
+            .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
             .toolbar {
                 if activityModel.retrievalSelection == nil {
                     activityToolbarContent

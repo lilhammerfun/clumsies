@@ -100,28 +100,27 @@ final class WorkspaceNavigationTests: XCTestCase {
         let session = RecallSession(host: .codex, sessionId: "session-1", title: "Login", workspaceRoot: "/repo", createdAt: nil, tasks: [task])
         model.selectedSessionId = session.id
 
-        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: second)
+        model.openRetrieval(session: session, activation: second)
         XCTAssertEqual(model.retrievalSelection?.runId, "run-2")
-        XCTAssertEqual(model.retrievalSelection?.requestText, "Check login")
         XCTAssertEqual(model.retrievalSelection?.sessionId, session.id)
 
         model.closeRetrieval()
         XCTAssertNil(model.retrievalSelection)
         XCTAssertEqual(model.selectedSessionId, session.id)
 
-        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: first)
+        model.openRetrieval(session: session, activation: first)
         XCTAssertEqual(model.retrievalSelection?.runId, "run-1")
         model.selectedSessionId = "codex:another-session"
         XCTAssertNil(model.retrievalSelection)
-        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: first)
+        model.openRetrieval(session: session, activation: first)
         XCTAssertNil(model.retrievalSelection)
 
         model.selectedSessionId = session.id
-        model.openRetrieval(session: session, task: task, requestNumber: 1, activation: recallActivation(runId: nil))
+        model.openRetrieval(session: session, activation: recallActivation(runId: nil))
         XCTAssertNil(model.retrievalSelection)
     }
 
-    func testActivityChunkPreviewExpandsToFitAllRecordedContent() {
+    func testActivityChunkPreviewStaysCompactForLongSource() {
         let model = ActivityModel(daemon: DaemonXPCClient(serviceName: "test.activity.unused"))
         func previewHeight(_ content: String) -> CGFloat {
             let view = NSHostingView(rootView: ActivityFragmentRow(
@@ -135,7 +134,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         }
         let short = previewHeight("A short paragraph.")
         let long = previewHeight((1...20).map { "Paragraph \($0): **recorded memory**, shown without opening another page." }.joined(separator: "\n\n"))
-        XCTAssertGreaterThan(long, short + 300, "Chunk previews must grow with their content, without a fixed height or line limit.")
+        XCTAssertLessThan(long, short + 60, "Collapsed source previews must stay within three lines.")
     }
 
     private func recallActivation(runId: String?, callId: String = "call-1") -> RecallActivation {

@@ -591,6 +591,34 @@
         }
       }
     },
+    "%lld user messages": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld user message"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld user messages"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 条用户消息"
+          }
+        }
+      }
+    },
     "%lld%% of current memory": {
       "localizations": {
         "en": {
@@ -923,6 +951,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "关于%@"
+          }
+        }
+      }
+    },
+    "About Results": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About Results"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "结果说明"
           }
         }
       }
@@ -1436,6 +1480,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Agent 活动"
+          }
+        }
+      }
+    },
+    "Agent activity from bound projects appears here with user messages and recalled memory.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent activity from bound projects appears here with user messages and recalled memory."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这里会显示已绑定项目的 Agent 活动，包括用户消息和召回的记忆。"
           }
         }
       }
@@ -2708,6 +2768,22 @@
         }
       }
     },
+    "Choose an item to see its messages and recalled memory.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an item to see its messages and recalled memory."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择一项活动，查看用户消息和召回的记忆。"
+          }
+        }
+      }
+    },
     "Choose an item to see its requests and recalled memory.": {
       "localizations": {
         "en": {
@@ -3149,6 +3225,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "折叠 %lld 行未改动的内容"
+          }
+        }
+      }
+    },
+    "Collapse source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse source"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收起原文"
           }
         }
       }
@@ -7742,6 +7834,22 @@
         }
       }
     },
+    "More messages": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More messages"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更多消息"
+          }
+        }
+      }
+    },
     "More requests": {
       "localizations": {
         "en": {
@@ -8222,6 +8330,22 @@
         }
       }
     },
+    "No User Messages": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No User Messages"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有用户消息"
+          }
+        }
+      }
+    },
     "No User Requests": {
       "localizations": {
         "en": {
@@ -8494,6 +8618,22 @@
         }
       }
     },
+    "No reranking result was recorded. The candidate may be outside the reranking shortlist, or the run may have stopped before reranking finished. This does not mean low relevance.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No reranking result was recorded. The candidate may be outside the reranking shortlist, or the run may have stopped before reranking finished. This does not mean low relevance."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有记录到重排结果。候选片段可能未进入重排范围，也可能是本次检索在重排完成前已中止；这不表示相关性低。"
+          }
+        }
+      }
+    },
     "No retrieval records": {
       "localizations": {
         "en": {
@@ -8522,6 +8662,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "暂无被检索的记忆"
+          }
+        }
+      }
+    },
+    "No user messages were found in this activity.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No user messages were found in this activity."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此活动中没有用户消息。"
           }
         }
       }
@@ -8634,6 +8790,86 @@
           "stringUnit": {
             "state": "translated",
             "value": "未观测到不代表从未被检索"
+          }
+        }
+      }
+    },
+    "Not selected because its source range overlaps a selected chunk from the same resource.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected because its source range overlaps a selected chunk from the same resource."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未入选：原文范围与同一资源中已入选的片段重叠。"
+          }
+        }
+      }
+    },
+    "Not selected because reranking relevance fell below the cutoff.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected because reranking relevance fell below the cutoff."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未入选：重排后的相关性低于筛选阈值。"
+          }
+        }
+      }
+    },
+    "Not selected because selection stopped at the token budget.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected because selection stopped at the token budget."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未入选：筛选已因 token 预算限制而停止。"
+          }
+        }
+      }
+    },
+    "Not selected because the maximum number of chunks was reached.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected because the maximum number of chunks was reached."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未入选：本次检索的入选片段总数已达上限。"
+          }
+        }
+      }
+    },
+    "Not selected because this resource already contributed the maximum number of chunks.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected because this resource already contributed the maximum number of chunks."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未入选：来自同一资源的入选片段数已达上限。"
           }
         }
       }
@@ -11255,6 +11491,22 @@
         }
       }
     },
+    "Result shows how a selected chunk is passed to the agent, or why a candidate was not selected.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Result shows how a selected chunk is passed to the agent, or why a candidate was not selected."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“结果”说明入选片段如何交给 Agent，或候选片段为何没有入选。"
+          }
+        }
+      }
+    },
     "Retrieval Process": {
       "localizations": {
         "en": {
@@ -12695,6 +12947,38 @@
         }
       }
     },
+    "Selected and sent as new content: this chunk was not in the agent's supplied memory state.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected and sent as new content: this chunk was not in the agent's supplied memory state."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已入选并发送原文：Agent 传入的记忆状态中还没有这个片段。"
+          }
+        }
+      }
+    },
+    "Selected and sent with updated content: this chunk changed since the agent last received it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected and sent with updated content: this chunk changed since the agent last received it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已入选并发送新原文：片段内容与 Agent 上次接收的版本不同。"
+          }
+        }
+      }
+    },
     "Selected by default": {
       "localizations": {
         "en": {
@@ -12707,6 +12991,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "默认选中"
+          }
+        }
+      }
+    },
+    "Selected for this retrieval, but this record does not specify Add, Replace, or Reuse.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected for this retrieval, but this record does not specify Add, Replace, or Reuse."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已入选本次检索，但记录中没有注明是新增、替换还是复用。"
+          }
+        }
+      }
+    },
+    "Selected, but its unchanged content is already in the agent's supplied memory state, so the body is not sent again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected, but its unchanged content is already in the agent's supplied memory state, so the body is not sent again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已入选：Agent 传入的记忆状态中已有相同内容，因此不重复发送原文。"
           }
         }
       }
@@ -12991,6 +13307,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "在访达中显示"
+          }
+        }
+      }
+    },
+    "Show source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show source"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展开原文"
           }
         }
       }
@@ -13695,6 +14027,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Agent 已持有此未更改的记忆片段，因此没有再次发送其文本。"
+          }
+        }
+      }
+    },
+    "The agent did not ask Clumsies for memory while handling this message.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The agent did not ask Clumsies for memory while handling this message."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 处理这条消息时没有向 Clumsies 检索记忆。"
           }
         }
       }
@@ -15792,6 +16140,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "已使用"
+          }
+        }
+      }
+    },
+    "User message": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "User message"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户消息"
           }
         }
       }

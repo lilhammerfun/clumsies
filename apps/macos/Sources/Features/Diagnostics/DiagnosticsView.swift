@@ -117,7 +117,11 @@ struct RetrievalRunDetailView: View {
     var body: some View {
         RetrievalRunContent(model: model)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.flexible, placement: .automatic)
+            }
+
+            ToolbarItem(placement: .trailingPinned) {
                 Menu {
                     if model.detail?.run.status == .succeeded {
                         if model.detail?.evaluationCase == nil {
@@ -445,12 +449,44 @@ enum RetrievalCandidateFilter: String, CaseIterable, Identifiable {
     }
 }
 
+struct RetrievalCandidateSort: SortComparator {
+    enum Column: CaseIterable {
+        case final, bm25, vector, rrf, rerank
+
+        func rank(_ candidate: RetrievalCandidate) -> UInt64? {
+            switch self {
+            case .final: candidate.finalRank
+            case .bm25: candidate.bm25Rank ?? candidate.exactRank
+            case .vector: candidate.vectorRank
+            case .rrf: candidate.rrfRank
+            case .rerank: candidate.rerankerRank
+            }
+        }
+    }
+
+    let column: Column
+    var order: SortOrder = .forward
+
+    func compare(_ lhs: RetrievalCandidate, _ rhs: RetrievalCandidate) -> ComparisonResult {
+        switch (column.rank(lhs), column.rank(rhs)) {
+        case (nil, nil): .orderedSame
+        case (nil, _): .orderedDescending
+        case (_, nil): .orderedAscending
+        case let (left?, right?):
+            left == right ? .orderedSame
+                : (left < right) == (order == .forward) ? .orderedAscending : .orderedDescending
+        }
+    }
+}
+
 private struct CandidateTraceTable: View {
     let detail: RetrievalRunDetail
     @State private var filter: RetrievalCandidateFilter = .all
+    @State private var sortOrder = [RetrievalCandidateSort(column: .final)]
+    @State private var showsResultHelp = false
 
     private var candidates: [RetrievalCandidate] {
-        detail.candidates.filter(filter.includes)
+        detail.candidates.filter(filter.includes).sorted(using: sortOrder)
     }
 
     var body: some View {
@@ -474,8 +510,8 @@ private struct CandidateTraceTable: View {
             .padding(.horizontal, 16)
             .frame(height: 42)
             Divider()
-            Table(candidates) {
-                TableColumn("Final") { candidate in
+            Table(candidates, sortOrder: $sortOrder) {
+                TableColumn("Final", sortUsing: RetrievalCandidateSort(column: .final)) { candidate in
                     Text(rank(candidate.finalRank))
                         .monospacedDigit()
                 }
@@ -494,27 +530,30 @@ private struct CandidateTraceTable: View {
                     .help(candidate.evidenceExcerpt)
                 }
                 .width(min: 150, ideal: 220)
-                TableColumn("BM25") { candidate in
+                TableColumn("BM25", sortUsing: RetrievalCandidateSort(column: .bm25)) { candidate in
                     stage(rank: candidate.bm25Rank ?? candidate.exactRank, score: candidate.bm25Score)
                 }
                 .width(64)
-                TableColumn("Vector") { candidate in
+                TableColumn("Vector", sortUsing: RetrievalCandidateSort(column: .vector)) { candidate in
                     stage(rank: candidate.vectorRank, score: candidate.vectorScore)
                 }
                 .width(64)
-                TableColumn("RRF") { candidate in
+                TableColumn("RRF", sortUsing: RetrievalCandidateSort(column: .rrf)) { candidate in
                     stage(rank: candidate.rrfRank, score: candidate.rrfScore)
                 }
                 .width(64)
-                TableColumn("Rerank") { candidate in
+                TableColumn("Rerank", sortUsing: RetrievalCandidateSort(column: .rerank)) { candidate in
                     stage(rank: candidate.rerankerRank, score: candidate.rerankerRelevance)
                 }
                 .width(64)
                 TableColumn("Result") { candidate in
                     Text(result(candidate))
                         .foregroundStyle(candidate.selected ? .primary : .secondary)
+                        .help(candidate.selected
+                              ? candidate.deltaAction?.explanation ?? RetrievalExclusionReason.selected.explanation
+                              : candidate.exclusionReason.explanation)
                 }
-                .width(min: 80, ideal: 100)
+                .width(min: 100, ideal: 120)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
@@ -525,7 +564,52 @@ private struct CandidateTraceTable: View {
                     )
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    showsResultHelp = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("About Results")
+                .help("About Results")
+                .padding(.trailing, 8)
+                .popover(isPresented: $showsResultHelp, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("About Results").font(.headline)
+                        Text("Result shows how a selected chunk is passed to the agent, or why a candidate was not selected.")
+                            .font(.callout)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(RetrievalDeltaAction.allCases, id: \.self) { action in
+                                    resultDefinition(action.title, action.explanation)
+                                }
+                                Divider()
+                                ForEach(RetrievalExclusionReason.allCases, id: \.self) { reason in
+                                    resultDefinition(reason.label, reason.explanation)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 480)
+                    }
+                    .padding(16)
+                    .frame(width: 380)
+                }
+            }
         }
+    }
+
+    private func resultDefinition(_ title: String, _ explanation: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).fontWeight(.medium)
+            Text(explanation).foregroundStyle(.secondary)
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func stage(rank: UInt64?, score: Double?) -> some View {
@@ -720,6 +804,25 @@ private extension EvaluationEvidenceSuggestion {
 }
 
 private extension RetrievalExclusionReason {
+    var explanation: String {
+        switch self {
+        case .selected:
+            String(localized: "Selected for this retrieval, but this record does not specify Add, Replace, or Reuse.")
+        case .belowRelevance:
+            String(localized: "Not selected because reranking relevance fell below the cutoff.")
+        case .overlap:
+            String(localized: "Not selected because its source range overlaps a selected chunk from the same resource.")
+        case .perResourceLimit:
+            String(localized: "Not selected because this resource already contributed the maximum number of chunks.")
+        case .tokenBudget:
+            String(localized: "Not selected because selection stopped at the token budget.")
+        case .fragmentLimit:
+            String(localized: "Not selected because the maximum number of chunks was reached.")
+        case .notReranked:
+            String(localized: "No reranking result was recorded. The candidate may be outside the reranking shortlist, or the run may have stopped before reranking finished. This does not mean low relevance.")
+        }
+    }
+
     var label: String {
         switch self {
         case .selected: String(localized: "Selected")
@@ -729,6 +832,19 @@ private extension RetrievalExclusionReason {
         case .tokenBudget: String(localized: "Token Budget")
         case .fragmentLimit: String(localized: "Fragment Limit")
         case .notReranked: String(localized: "Not Reranked")
+        }
+    }
+}
+
+private extension RetrievalDeltaAction {
+    var explanation: String {
+        switch self {
+        case .add:
+            String(localized: "Selected and sent as new content: this chunk was not in the agent's supplied memory state.")
+        case .replace:
+            String(localized: "Selected and sent with updated content: this chunk changed since the agent last received it.")
+        case .reuse:
+            String(localized: "Selected, but its unchanged content is already in the agent's supplied memory state, so the body is not sent again.")
         }
     }
 }

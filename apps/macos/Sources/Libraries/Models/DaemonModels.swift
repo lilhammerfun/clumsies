@@ -660,7 +660,7 @@ enum RetrievalRunStatus: String, Codable, Hashable, Sendable {
     }
 }
 
-enum RetrievalExclusionReason: String, Codable, Hashable, Sendable {
+enum RetrievalExclusionReason: String, Codable, CaseIterable, Hashable, Sendable {
     case selected
     case belowRelevance = "below_relevance"
     case overlap
@@ -670,7 +670,7 @@ enum RetrievalExclusionReason: String, Codable, Hashable, Sendable {
     case notReranked = "not_reranked"
 }
 
-enum RetrievalDeltaAction: String, Codable, Hashable, Sendable {
+enum RetrievalDeltaAction: String, Codable, CaseIterable, Hashable, Sendable {
     case add
     case replace
     case reuse

@@ -17,18 +17,23 @@ Three columns, newest session first:
 | --- | --- |
 | Sidebar | The existing global sidebar, with Activity selected. |
 | Content | Agent activity for bound workspaces. Each row shows a **DSH** or **Codex** host badge, title, and time. |
-| Detail | The user request, the exact memory query written by the agent, search duration, and the selected memory chunks rendered inline as Markdown from their historical snapshots. |
+| Detail | The user request, the exact memory query written by the agent, search duration, and the selected memory chunks shown as three-line previews of their original source. |
 
 The host badge is part of session identity: session ids only need to be unique
 within a host.
 
 Each memory search offers **Retrieval Process** when a run identity is available.
 It opens that run's summary and full candidate table in the workspace, temporarily
-hiding the session list while keeping the global sidebar. Back returns to the
-same session and search. This drill-down belongs to one activation; a request
+hiding the session list while keeping the global sidebar. Native stack navigation
+provides the toolbar Back button and returns to the same session and search.
+The detail header shows the agent's query without repeating the session title or
+user prompt. Its navigation container fills the available detail width so it
+does not push content beyond the window when resized. This drill-down belongs to one activation; a request
 can contain several searches. The detail also reuses **Report Inaccurate** and
 **Review Evidence** to capture and review an evaluation case for that run. The
-shared diagnostics view also supports a cross-session retrieval-run list.
+shared diagnostics view also supports a cross-session retrieval-run list. Click the
+Final, BM25, Vector, RRF, or Rerank column header to sort by that stage’s numeric
+rank in either direction; candidates without a rank stay last.
 
 ## What a memory search means
 
@@ -46,6 +51,11 @@ fragment-count, and token-budget limits. Activity shows only the chunks made
 available to the agent. Model scores and excluded candidates appear in the
 Retrieval Process detail when requested, keeping the session's reading flow
 focused on requests and selected chunks.
+
+The Result column's info button explains all delivery actions and exclusion
+reasons; hovering a result explains that row. `Not Reranked` means no reranking
+result was recorded, either because the candidate missed the shortlist or the
+run stopped before reranking completed. It does not imply low relevance.
 
 The delivery state is a context delta, not a memory edit:
 
@@ -121,8 +131,8 @@ the run's recorded retrieval duration, not model response time or a sum of all
 stage timings. Chunk counts include `reuse` and do not mean newly sent content.
 
 Retrieval history stores only a bounded preview in each candidate row, but it
-also retains the complete resource body used by that run. Each visible truncated or empty chunk preview
-loads its complete text for an inline Markdown preview using `run_id + unit_key`
+also retains the complete resource body used by that run. Expanding **Show source** on a truncated or empty chunk preview
+loads its complete text without rendering Markdown using `run_id + unit_key`
 and the candidate's frozen locator. It never reads the current Memory document,
 which may have changed since the activity occurred. Description-only units have no body byte
 range and therefore fall back honestly to their stored preview. Missing or
@@ -150,8 +160,8 @@ rescanning directories. Explicit refresh discovers a new snapshot.
 `get_recall_session` takes a summary's opaque `session_token` and returns one
 page of tasks. Only a selected session is parsed in full; later pages reuse its
 raw snapshot and enrich only that page's retrievals. The old 500-task/100-activation
-truncation is removed. Complete memory chunks are read only when a visible
-preview is truncated or empty.
+truncation is removed. Complete memory chunks are read only when the user expands a
+truncated or empty preview.
 
 The daemon retains eight list snapshots and four selected session bodies in
 memory; it does not persist another transcript archive. Evicted handles or a
@@ -188,3 +198,11 @@ decorative skeleton rows.
 | Sidebar section | `apps/macos/Sources/Libraries/Models/MemoryModels.swift` (`WorkspaceSection.sessions`) |
 | Activity UI, host badge, and chunk detail | `apps/macos/Sources/Features/Activity/ActivityView.swift`, `ActivityModel.swift` |
 | Workspace wiring | `apps/macos/Sources/Features/Workspace/WorkspaceView.swift` |
+
+## Local UI preview
+
+Start this worktree’s isolated Dev Instance with `just dev-macos`, then run
+`python3 dev/seed-activity.py`. Reopen the Dev App and select Activity →
+**Activity Preview**. The fixture covers raw headings, tables, code, long source,
+reused chunks, missing history, empty/failed searches, and sortable numeric ranks.
+`python3 dev/seed-activity.py --check` validates the data without a running instance.
