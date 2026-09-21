@@ -1,4 +1,3 @@
-import MarkdownUI
 import SwiftUI
 
 struct MemoryGuidelinesSetupView: View {
@@ -145,10 +144,7 @@ private struct MemoryGuidelinesPreview: View {
             }
             .pickerStyle(.segmented)
             ScrollView {
-                Markdown(self.document.body)
-                    .markdownTheme(.gitHub)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                MarkdownContentView(source: self.document.body)
                     .padding()
             }
             .background(.background)
