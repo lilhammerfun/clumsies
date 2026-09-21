@@ -13,6 +13,10 @@
 
 Clumsies 帮助团队维护供 Coding Agent 使用的 Markdown 知识，例如架构决策、项目约束和操作流程。组织保存已发布的 **Memory**；每个 **Project（项目）** 选择需要使用的 Memory，再与本地仓库绑定。Agent 在工作时检索相关指导，也可以在用户明确要求后提出修改。
 
+![Clumsies macOS 仪表盘，展示 Memory 变化趋势、检索活动和覆盖情况](assets/screenshots/macos-dashboard.png)
+
+*在 macOS 仪表盘中查看 Memory 变化趋势、检索活动和覆盖情况。*
+
 ## 怎样使用
 
 [快速开始](https://docs.clumsies.ai/zh/quickstart/)围绕一条完整流程展开：
