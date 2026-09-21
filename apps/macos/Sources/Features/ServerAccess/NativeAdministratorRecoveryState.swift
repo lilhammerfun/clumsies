@@ -51,7 +51,7 @@ final class NativeAdministratorRecoveryState: ObservableObject {
             tokens = snapshot.tokens
         } catch {
             guard generation == requestGeneration, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 
@@ -78,7 +78,7 @@ final class NativeAdministratorRecoveryState: ObservableObject {
             tokens.removeAll { $0.id == token.id }
         } catch {
             guard generation == requestGeneration, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 
@@ -101,7 +101,7 @@ final class NativeAdministratorRecoveryState: ObservableObject {
             }
         } catch {
             guard generation == requestGeneration, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 }

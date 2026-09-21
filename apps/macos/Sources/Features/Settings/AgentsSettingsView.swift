@@ -77,12 +77,6 @@ struct AgentsSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                if let errorMessage = model.errorMessage {
-                    Section {
-                        Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
-                        Button("Retry") { Task { await self.model.load() } }.disabled(self.model.isWorking)
-                    }
-                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(self.onCompleted == nil ? .visible : .hidden)
@@ -104,6 +98,7 @@ struct AgentsSettingsView: View {
                 .padding(24)
             }
         }
+        .pageFeedback(model.errorMessage, retry: model.isWorking ? nil : { Task { await model.load() } })
         .task { await self.model.load() }
     }
 

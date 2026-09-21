@@ -36,14 +36,13 @@ struct DraftReconciliationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !candidate.valid {
-                Text("The remote version changed. Close this window and check the latest version again.")
-                    .font(.callout).foregroundStyle(.orange).padding(12)
-            }
             if candidate.status == .conflicts {
                 conflictResolution
             } else {
                 cleanDiff
+            }
+            if let message = errorMessage ?? (candidate.valid ? nil : String(localized: "The remote version changed. Close this window and check the latest version again.")) {
+                FormErrorMessage(message: message).padding(.horizontal, 24).padding(.vertical, 12)
             }
             if !usesContextualUpdateAction {
                 SheetActionBar(
@@ -70,13 +69,6 @@ struct DraftReconciliationView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("This replaces all merged changes and edits with the selected file version.")
-        }
-        .alert("Could Not Save Draft", isPresented: Binding(
-            get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("OK") { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "").textSelection(.enabled)
         }
     }
 
@@ -209,13 +201,14 @@ struct DraftReconciliationView: View {
 
     private func apply() {
         guard !isApplying, resolution.canSave else { return }
+        errorMessage = nil
         isApplying = true
         Task {
             defer { isApplying = false }
             do {
                 try await onApply(candidate.status == .conflicts ? resolution.state : nil)
                 onApplied()
-            } catch { errorMessage = error.localizedDescription }
+            } catch { errorMessage = error.actionMessage }
         }
     }
 }

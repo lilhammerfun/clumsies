@@ -59,13 +59,13 @@ final class DocumentEditorModel: ObservableObject {
             documentDiffPresentation = result?.presentation
             documentPathChanges = result?.pathChanges ?? []
             loadsDocumentDiff = false
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             // `.task(id:)` immediately starts a replacement for a changed
             // identity. Let that task remain the owner of loading state.
         } catch {
             guard !Task.isCancelled,
                   diffGeneration == generation else { return }
-            documentDiffError = error.localizedDescription
+            documentDiffError = error.actionMessage
             loadsDocumentDiff = false
         }
     }
@@ -108,7 +108,7 @@ final class DocumentEditorModel: ObservableObject {
             do {
                 try await self.draftStore.flushDocumentSave(item)
             } catch {
-                self.workspaceFeedback.errorMessage = error.localizedDescription
+                self.workspaceFeedback.errorMessage = error.actionMessage
             }
         }
     }

@@ -40,6 +40,11 @@ final class WorkspaceFeedback: ObservableObject {
         presentedSyncRetryErrorKey = nil
     }
 
+    func presentBackgroundError(_ error: Error, source: WorkspaceBackgroundErrorSource) {
+        guard let message = error.backgroundMessage else { return }
+        presentBackgroundError(message, source: source)
+    }
+
     func presentBackgroundError(
         _ message: String,
         source: WorkspaceBackgroundErrorSource

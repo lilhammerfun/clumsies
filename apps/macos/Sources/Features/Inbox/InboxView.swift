@@ -32,50 +32,36 @@ struct InboxView: View {
         store.items.filter { item in
             (messageType == nil || item.type == messageType)
                 && (filter == .archived ? item.isArchived : !item.isArchived)
-                && (filter != .unread || !item.isRead || selection == [item.id])
+                && (filter != .unread || !item.isRead || selection.contains(item.id))
                 && (query.isEmpty || "\(item.title) \(item.summary)".localizedStandardContains(query))
         }
     }
 
     private var selectedItems: [InboxItem] { visibleItems.filter { selection.contains($0.id) } }
-    private var isBusy: Bool { openingId != nil || !store.updatingIds.isEmpty }
+    private var isBusy: Bool { openingId != nil }
     private var readAction: InboxReceiptAction { selectedItems.contains { !$0.isRead } ? .read : .unread }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if store.isShowingSavedContent {
-                Text("Showing saved notifications. Connect to refresh or update read status.")
-                    .font(.callout).foregroundStyle(.secondary).padding(.horizontal, 12)
+        NavigationStack { inboxContent }
+    }
+
+    private var inboxContent: some View {
+        notificationList
+        .pageFeedback(actionError ?? store.receiptError, dismiss: { actionError = nil; store.dismissReceiptError() })
+        .navigationDestination(isPresented: Binding(
+            get: { message != nil }, set: { if !$0 { message = nil } }
+        )) {
+            if let item = message {
+                InboxMessageView(item: item, projectId: store.welcomeProjectId, open: open)
+                    .task { markRead(item) }
             }
-            if let error = actionError ?? store.receiptError ?? store.errorMessage {
-                HStack(alignment: .top) {
-                    Text(error).font(.callout).textSelection(.enabled)
-                    Spacer()
-                    Button("Refresh") {
-                        actionError = nil
-                        Task { await store.refresh() }
-                    }
-                    .disabled(store.isLoading || isBusy)
-                }
-                .padding(12)
-            }
-            notificationList
-        }
-        .sheet(item: $message) { item in
-            InboxMessageView(item: item, projectId: store.welcomeProjectId, receiptError: store.receiptError, open: open)
-                .task { await store.acknowledge(item, action: .read) }
         }
         .onChange(of: store.items.map(\.id)) { _, ids in
             if let message, !ids.contains(message.id) { self.message = nil }
         }
         .navigationTitle("Inbox")
-        .toolbar { toolbarContent }
+        .toolbar { if message == nil { toolbarContent } }
         .onChange(of: visibleItems.map(\.id)) { _, ids in selection.formIntersection(ids) }
-        .onChange(of: selection) { _, ids in
-            if ids.count == 1, let item = visibleItems.first(where: { ids.contains($0.id) }) {
-                markRead(item)
-            }
-        }
         .onChange(of: searchFocusToken) { _, _ in searchFocusRequest += 1 }
         .task { await store.refresh() }
         .onDisappear { actionTask?.cancel() }
@@ -84,8 +70,25 @@ struct InboxView: View {
     private var notificationList: some View {
         List(selection: $selection) {
             ForEach(visibleItems) { item in
-                InboxRow(item: item, isOpening: openingId == item.id, isActionDisabled: openingId != nil) { activate(item) }
-                    .tag(item.id)
+                HStack(alignment: .top, spacing: 10) {
+                    Toggle("Select notification", isOn: Binding(
+                        get: { selection.contains(item.id) },
+                        set: { if $0 { selection.insert(item.id) } else { selection.remove(item.id) } }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .padding(.top, 8)
+                    .accessibilityLabel(Text("Select notification: \(item.title)"))
+                    .accessibilityIdentifier("inbox-select-\(item.id)")
+                    InboxRow(item: item, isOpening: openingId == item.id, isActionDisabled: openingId != nil) { activate(item) }
+                        .simultaneousGesture(TapGesture(count: 2).exclusively(before: TapGesture()).onEnded { tap in
+                            switch tap {
+                            case .first: activate(item)
+                            case .second: markRead(item)
+                            }
+                        })
+                }
+                .tag(item.id)
             }
         }
         .listStyle(.inset)
@@ -100,6 +103,14 @@ struct InboxView: View {
             if visibleItems.isEmpty {
                 if store.isLoading && !store.hasLoaded {
                     ProgressView("Loading Inbox")
+                } else if let error = store.errorMessage {
+                    ContentUnavailableView {
+                        Label("Notifications Unavailable", systemImage: "tray")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("Retry") { Task { await store.refresh() } }
+                    }
                 } else {
                     ContentUnavailableView(
                         query.isEmpty ? "No Notifications" : "No Results",
@@ -112,7 +123,7 @@ struct InboxView: View {
     }
 
     private func markRead(_ item: InboxItem) {
-        guard !item.isRead else { return }
+        guard store.items.first(where: { $0.id == item.id })?.isRead == false else { return }
         Task { await store.acknowledge(item, action: .read) }
     }
 
@@ -128,8 +139,8 @@ struct InboxView: View {
             defer { openingId = nil }
             do {
                 try await store.activate(item, open: open)
-            } catch is CancellationError { }
-            catch { if !Task.isCancelled { actionError = error.localizedDescription } }
+            } catch where error.isUserCancellation { }
+            catch { if !Task.isCancelled { actionError = error.userFacingMessage } }
         }
     }
 
@@ -249,36 +260,31 @@ struct InboxRow: View {
     let activate: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle().fill(item.isRead ? Color.clear : Color.accentColor)
-                .frame(width: 7, height: 7).padding(.top, 6)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(item.title).fontWeight(item.isRead ? .regular : .semibold)
-                        .lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 12)
-                    Text(item.occurredAt.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption).foregroundStyle(.secondary).fixedSize()
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(item.summary).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 12)
-                    if let title = item.actionTitle {
-                        Button(action: activate) {
-                            HStack(spacing: 5) {
-                                if isOpening { ProgressView().controlSize(.mini) }
-                                Text(title)
-                            }
-                        }
-                        .buttonStyle(.borderless)
-                        .fixedSize()
-                        .disabled(isOpening || isActionDisabled)
-                        .accessibilityIdentifier("inbox-open-\(item.id)")
-                    }
-                }
-                .font(.callout)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(item.title).fontWeight(item.isRead ? .regular : .semibold)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 12)
+                Text(item.occurredAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize()
             }
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(item.summary).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 12)
+                if let title = item.actionTitle {
+                    Button(action: activate) {
+                        HStack(spacing: 5) {
+                            if isOpening { ProgressView().controlSize(.mini) }
+                            Text(title)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .disabled(isOpening || isActionDisabled)
+                    .accessibilityIdentifier("inbox-open-\(item.id)")
+                }
+            }
+            .font(.callout)
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
@@ -290,10 +296,8 @@ struct InboxRow: View {
 }
 
 struct InboxMessageView: View {
-    @Environment(\.dismiss) private var dismiss
     let item: InboxItem
     let projectId: String?
-    var receiptError: String?
     let open: @MainActor (InboxDestination) async throws -> Void
     @State private var error: String?
     @State private var isOpening = false
@@ -309,28 +313,25 @@ struct InboxMessageView: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(24)
             Divider()
             MarkdownPreview(source: item.body ?? "")
-            if let error = error ?? receiptError {
-                Text(error).foregroundStyle(.red).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 24).padding(.vertical, 12)
-            }
-            SheetActionBar(
-                confirmationTitle: projectId == nil ? Text("Close") : Text("Open Memory"),
-                cancellationTitle: "Close", progressTitle: "Opening…", isWorking: isOpening,
-                allowsCancellationWhileWorking: true,
-                cancel: projectId == nil ? nil : { dismiss() }, confirm: {
-                    guard let projectId else { dismiss(); return }
-                    isOpening = true
-                    openTask = Task {
-                        defer { isOpening = false }
-                        do { try await open(.project(projectId)); dismiss() }
-                        catch is CancellationError { dismiss() }
-                        catch { self.error = error.localizedDescription }
-                    }
-                }
-            )
         }
-        .frame(width: 640, height: 600)
+        .pageFeedback(error)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("inbox-message")
+        .navigationTitle(item.title)
+        .toolbar {
+            if let projectId {
+                ToolbarItem(placement: .trailingPinned) {
+                    Button("Open Memory") {
+                        isOpening = true
+                        openTask = Task {
+                            defer { isOpening = false }
+                            do { try await open(.project(projectId)) }
+                            catch { self.error = error.actionMessage }
+                        }
+                    }.disabled(isOpening)
+                }
+            }
+        }
         .onDisappear { openTask?.cancel() }
     }
 }

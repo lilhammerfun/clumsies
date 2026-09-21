@@ -61,13 +61,13 @@ final class ReviewRequestModel: ObservableObject {
                 reconciliationCandidates = candidates
                 resolvedStatesByCandidateId = [:]
                 conflictIndex = 0
-            } catch is CancellationError {
+            } catch where error.isUserCancellation {
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = error.actionMessage
             }
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
         return false
     }
@@ -83,9 +83,9 @@ final class ReviewRequestModel: ObservableObject {
         do {
             try await onSubmit(normalizedTitle, normalizedDescription, reconciliations)
             return true
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
         return false
     }

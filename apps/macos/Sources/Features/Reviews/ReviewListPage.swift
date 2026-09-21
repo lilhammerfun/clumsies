@@ -99,9 +99,9 @@ struct ReviewListPage: View {
                         }
                     }
                     .listStyle(.inset)
-                    .safeAreaInset(edge: .bottom) {
-                        ReviewCollectionStatusBanner()
-                    }
+                    .pageFeedback(!reviewModel.reviews.isEmpty ? reviewModel.reviewLoadState.failureMessage : nil, isStatus: true) {
+                    Task { await workspaceActions.reload() }
+                }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -203,37 +203,6 @@ enum ReviewListContentState: Equatable {
     }
 }
 
-private struct ReviewCollectionStatusBanner: View {
-    @Environment(\.workspaceActions) private var workspaceActions
-    @EnvironmentObject private var reviewModel: ReviewsModel
-
-    @ViewBuilder
-    var body: some View {
-        switch reviewModel.reviewLoadState {
-        case .loading:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Refreshing Reviews…")
-                    .font(.caption)
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
-        case .failed:
-            Button("Review refresh failed — Try Again") {
-                Task { await workspaceActions.reload() }
-            }
-            .buttonStyle(.plain)
-            .font(.caption)
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
-        case .loaded:
-            EmptyView()
-        }
-    }
-}
 
 struct ReviewQueueStatePresentation: Equatable {
     enum Tone: Equatable {

@@ -403,7 +403,7 @@ struct WorkspaceLoader: Sendable {
                     hostBinaryPath: setting.adapter == .codex ? codexHostPath : nil
                 ))
             } catch {
-                warnings.append("\(setting.adapter.title): \(error.localizedDescription)")
+                warnings.append("\(setting.adapter.title): \(error.userFacingMessage)")
             }
         }
         return .init(conflicts: [], inspectionWarning: warnings.isEmpty ? nil : warnings.joined(separator: "\n"))
@@ -430,7 +430,7 @@ struct WorkspaceLoader: Sendable {
            payload.code == "project_agent_adapter_invalid_runtime" {
             return String(localized: "The resident daemon rejected the bundled Agent runtime. Archived integration inspection was skipped. Reinstall and restart Clumsies so the App and daemon use the same build. To replace the resident Debug installation, run just install-macos; distributed Release builds must use an accepted release signature.")
         }
-        return String(localized: "Clumsies updated its managed integrations, but could not inspect the archived Zig CLI integration store. Review any old global or repository MCP and hook entries manually. \(error.localizedDescription)")
+        return String(localized: "Clumsies updated its managed integrations, but could not inspect the archived Zig CLI integration store. Review any old global or repository MCP and hook entries manually. \(error.userFacingMessage)")
     }
 
     static func loadAuthenticatedWorkspaceIdentity(

@@ -47,9 +47,10 @@ final class DashboardTests: XCTestCase {
         await model.load(key: "p") { (self.snapshot(), true) }
         await model.load(key: "p") { throw URLError(.timedOut) }
         XCTAssertEqual(model.snapshot?.projectID, "p")
-        XCTAssertNotNil(model.errorMessage)
+        XCTAssertNil(model.errorMessage, "Retained content must not repeat a connection error.")
         await model.load(key: "other") { throw URLError(.timedOut) }
         XCTAssertNil(model.snapshot)
+        XCTAssertEqual(model.errorMessage, ClientFailure.connection.message)
         XCTAssertFalse(model.isDemo)
     }
 

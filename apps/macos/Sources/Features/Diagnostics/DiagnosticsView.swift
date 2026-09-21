@@ -52,6 +52,7 @@ struct NativeRetrievalDiagnosticsView: View {
             projectName: workspaceContext.activeProject?.name,
             projectId: workspaceContext.activeProjectId
         )
+        .feedbackHost()
         .task(id: workspaceContext.activeProjectId) {
             await retrieval.load(projectId: workspaceContext.activeProjectId)
         }
@@ -176,23 +177,7 @@ struct RetrievalRunDetailView: View {
             showsEvidenceReview = false
             exportError = nil
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if (model.detail != nil || model.selectedRunId == nil),
-               let message = model.errorMessage ?? exportError {
-                VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                        Text(message)
-                            .textSelection(.enabled)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    Divider()
-                }
-            }
-        }
+        .pageFeedback(exportError ?? ((!model.runs.isEmpty && (model.detail != nil || model.selectedRunId == nil)) ? model.errorMessage : nil))
     }
 
     private var canExportEvaluationSet: Bool {
@@ -215,7 +200,7 @@ struct RetrievalRunDetailView: View {
             guard await panel.selectionResponse == .OK, let url = panel.url else { return }
             try exported.fixtureJson.write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            exportError = error.localizedDescription
+            exportError = error.actionMessage
         }
     }
 }
@@ -297,6 +282,14 @@ private struct RetrievalRunList: View {
             if model.isLoading && model.runs.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.runs.isEmpty, let error = model.errorMessage {
+                ContentUnavailableView {
+                    Label("Retrieval History Unavailable", systemImage: "text.magnifyingglass")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Retry", action: onRefresh)
+                }
             } else if model.runs.isEmpty {
                 ContentUnavailableView(
                     "No Retrieval Runs",
@@ -328,6 +321,7 @@ private struct RetrievalRunList: View {
                 Task { await model.select(runId: runId) }
             }
         }
+        .pageFeedback(model.pageError) { Task { await model.loadMore() } }
         .onChange(of: model.selectedRunId) { _, runId in
             guard selectedRunId != runId else { return }
             selectedRunId = runId

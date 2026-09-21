@@ -3072,6 +3072,38 @@
         }
       }
     },
+    "Clumsies can't access this location. Choose a folder you have permission to use.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies can't access this location. Choose a folder you have permission to use."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies 无法访问此位置。请选择你有访问权限的文件夹。"
+          }
+        }
+      }
+    },
+    "Clumsies can't connect to the server right now.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies can't connect to the server right now."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies 暂时无法连接服务器。"
+          }
+        }
+      }
+    },
     "Clumsies could not restart": {
       "localizations": {
         "en": {
@@ -3100,6 +3132,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Clumsies 无法启动本地守护进程"
+          }
+        }
+      }
+    },
+    "Clumsies couldn't load this information. Try again or check for an app update.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies couldn't load this information. Try again or check for an app update."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies 无法加载这些信息。请重试，或检查应用更新。"
+          }
+        }
+      }
+    },
+    "Clumsies couldn’t start its local service. Reopen the app, or use Settings to open the logs.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies couldn’t start its local service. Reopen the app, or use Settings to open the logs."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies 无法启动本地服务。请重新打开应用，或在设置中查看日志。"
+          }
+        }
+      }
+    },
+    "Clumsies couldn’t start sign-in. Close other sign-in windows and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies couldn’t start sign-in. Close other sign-in windows and try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clumsies 无法启动登录。请关闭其他登录窗口后重试。"
           }
         }
       }
@@ -3837,6 +3917,22 @@
         }
       }
     },
+    "Couldn't Export Diagnostics": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't Export Diagnostics"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法导出诊断信息"
+          }
+        }
+      }
+    },
     "Couldn't check this Mac. %@": {
       "localizations": {
         "en": {
@@ -3885,6 +3981,22 @@
         }
       }
     },
+    "Couldn't refresh. Previously loaded content is still shown.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't refresh. Previously loaded content is still shown."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刷新失败，当前仍显示之前加载的内容。"
+          }
+        }
+      }
+    },
     "Couldn't save notification preferences. %@": {
       "localizations": {
         "en": {
@@ -3897,6 +4009,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "无法保存通知偏好。%1$@"
+          }
+        }
+      }
+    },
+    "Couldn't update this notification. Refresh Inbox and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't update this notification. Refresh Inbox and try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未能更新这条通知。请刷新收件箱后重试。"
           }
         }
       }
@@ -3929,6 +4057,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "无法检查组织的记忆指南。请重试。"
+          }
+        }
+      }
+    },
+    "Couldn’t create the ZIP archive. Choose another location and try exporting again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t create the ZIP archive. Choose another location and try exporting again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法创建 ZIP 压缩包。请选择其他位置后重新导出。"
           }
         }
       }
@@ -8954,6 +9098,38 @@
         }
       }
     },
+    "Notification changes couldn't be saved on this Mac. Try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification changes couldn't be saved on this Mac. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知状态未能保存在这台 Mac 上，请重试。"
+          }
+        }
+      }
+    },
+    "Notifications Unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications Unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载通知"
+          }
+        }
+      }
+    },
     "Notifications about your Memory and Reviews appear here.": {
       "localizations": {
         "en": {
@@ -10435,6 +10611,22 @@
         }
       }
     },
+    "Refresh to check your access to this project.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh to check your access to this project."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请刷新，检查你是否仍有此项目的访问权限。"
+          }
+        }
+      }
+    },
     "Refresh to edit organization details.": {
       "localizations": {
         "en": {
@@ -11631,6 +11823,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "“结果”说明入选片段如何交给 Agent，或候选片段为何没有入选。"
+          }
+        }
+      }
+    },
+    "Retrieval History Unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retrieval History Unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载检索历史"
           }
         }
       }
@@ -12963,6 +13171,18 @@
         }
       }
     },
+    "Select notification": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Select notification" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "选择通知" } }
+      }
+    },
+    "Select notification: %@": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Select notification: %@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "选择通知：%@" } }
+      }
+    },
     "Select Project": {
       "localizations": {
         "en": {
@@ -13627,6 +13847,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "登录失败"
+          }
+        }
+      }
+    },
+    "Sign-in wasn’t completed. Try again with your organization account.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in wasn’t completed. Try again with your organization account."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录未完成。请使用你的组织账号重试。"
           }
         }
       }
@@ -14527,6 +14763,22 @@
         }
       }
     },
+    "The local service is unavailable. Reopen Clumsies to reconnect.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local service is unavailable. Reopen Clumsies to reconnect."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本地服务不可用。请重新打开 Clumsies 以恢复连接。"
+          }
+        }
+      }
+    },
     "The memory body no longer matches the requested remote version.": {
       "localizations": {
         "en": {
@@ -14555,6 +14807,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "无法安全导出此记忆路径：%1$@"
+          }
+        }
+      }
+    },
+    "The operation was cancelled.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The operation was cancelled."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "操作已取消。"
           }
         }
       }
@@ -14767,6 +15035,22 @@
         }
       }
     },
+    "The request couldn't be accepted. Check the information you entered before trying again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The request couldn't be accepted. Check the information you entered before trying again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求未被接受。请检查填写的信息后重试。"
+          }
+        }
+      }
+    },
     "The resident daemon rejected the bundled Agent runtime. Archived integration inspection was skipped. Reinstall and restart Clumsies so the App and daemon use the same build. To replace the resident Debug installation, run just install-macos; distributed Release builds must use an accepted release signature.": {
       "localizations": {
         "en": {
@@ -14863,6 +15147,54 @@
         }
       }
     },
+    "The server is busy. Wait a moment before trying again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server is busy. Wait a moment before trying again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器繁忙，请稍后重试。"
+          }
+        }
+      }
+    },
+    "The server is temporarily unavailable. Try again later.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server is temporarily unavailable. Try again later."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器暂时不可用，请稍后重试。"
+          }
+        }
+      }
+    },
+    "The service didn't respond in time. Try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The service didn't respond in time. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务未能及时响应，请重试。"
+          }
+        }
+      }
+    },
     "The signed-in account has no accessible project.": {
       "localizations": {
         "en": {
@@ -14895,6 +15227,22 @@
         }
       }
     },
+    "The storage move failed. Check the current storage location before trying again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The storage move failed. Check the current storage location before trying again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存储迁移失败。请检查当前存储位置后重试。"
+          }
+        }
+      }
+    },
     "The suggested evidence did not match": {
       "localizations": {
         "en": {
@@ -14923,6 +15271,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "没有可导出的记忆文件。"
+          }
+        }
+      }
+    },
+    "There isn't enough space to save your changes. Free up space on this Mac and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There isn't enough space to save your changes. Free up space on this Mac and try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "空间不足，无法保存更改。请释放这台 Mac 的存储空间后重试。"
           }
         }
       }
@@ -15151,6 +15515,38 @@
         }
       }
     },
+    "This item changed since you opened it. Check the latest version before trying again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item changed since you opened it. Check the latest version before trying again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此内容在打开后已发生变化。请查看最新版本后重试。"
+          }
+        }
+      }
+    },
+    "This item is no longer available. It may have been removed or your access may have changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is no longer available. It may have been removed or your access may have changed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此内容已不可用，可能已被删除，或你的访问权限发生了变化。"
+          }
+        }
+      }
+    },
     "This memory is no longer available to rename.": {
       "localizations": {
         "en": {
@@ -15163,6 +15559,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "此记忆已不可用，无法重命名。"
+          }
+        }
+      }
+    },
+    "This operation couldn't be completed. Try again. If it keeps failing, use Settings to open the logs.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This operation couldn't be completed. Try again. If it keeps failing, use Settings to open the logs."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "操作未能完成，请重试。如果仍然失败，可在设置中查看日志。"
           }
         }
       }
@@ -16834,6 +17246,22 @@
         }
       }
     },
+    "You no longer have permission to perform this action. Refresh to check your access.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You no longer have permission to perform this action. Refresh to check your access."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你已无权执行此操作。请刷新，检查当前访问权限。"
+          }
+        }
+      }
+    },
     "You're up to date.": {
       "localizations": {
         "en": {
@@ -17007,6 +17435,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "组织已在 %1$@ 配置了记忆指南。可在此项目中使用。"
+          }
+        }
+      }
+    },
+    "Your session has expired. Sign in again to continue.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session has expired. Sign in again to continue."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录已失效，请重新登录后继续。"
           }
         }
       }

@@ -27,17 +27,12 @@ struct NativeServerAccessView: View {
                     if model.showsSetup {
                         setupFields
                     }
+                    FormErrorMessage(message: model.errorMessage).frame(maxWidth: 410)
                     primaryAction
+                } else {
+                    FormErrorMessage(message: model.errorMessage).frame(maxWidth: 410)
                 }
 
-                if let message = model.errorMessage {
-                    Text(message)
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: 410)
-                }
             }
             .padding(36)
             .frame(maxWidth: .infinity)
@@ -196,14 +191,9 @@ private struct NativeAdministratorRecoveryPanel: View {
                 NativeRecoveryTokensSection(state: state)
             }
 
-            if let errorMessage = state.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-            }
         }
         .frame(maxWidth: 430, alignment: .leading)
+        .pageFeedback(state.errorMessage)
         .task { await state.load() }
     }
 }

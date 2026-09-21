@@ -257,8 +257,21 @@ struct DaemonXPCClient: Sendable {
         payload: Payload,
         timeout: TimeInterval = 30
     ) async throws -> Response {
-        try await ClientDiagnostics.operation(layer: "xpc", method: method) {
-            try await performCall(method: method, payload: payload, timeout: timeout)
+        let route = "daemon:" + method
+        let token = await ClientServiceStatus.shared.begin(route)
+        do {
+            let response: Response = try await ClientDiagnostics.operation(layer: "xpc", method: method) {
+                try await performCall(method: method, payload: payload, timeout: timeout)
+            }
+            try Task.checkCancellation()
+            await ClientServiceStatus.shared.finish(route, token: token, failure: nil)
+            return response
+        } catch {
+            let failure = ClientFailure(error)
+            // Server proxy failures belong to ServerClient; don't duplicate them here.
+            await ClientServiceStatus.shared.finish(route, token: token,
+                failure: method == "server_request" && failure != .localService && failure != .cancelled ? nil : failure)
+            throw error
         }
     }
 

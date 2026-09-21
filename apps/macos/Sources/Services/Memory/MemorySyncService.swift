@@ -102,7 +102,7 @@ final class MemorySyncService: ObservableObject {
             }
             catalog.documentsChanged.send()
             feedback.resolveBackgroundError(.organizationResources)
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == workspaceGeneration,
@@ -114,8 +114,7 @@ final class MemorySyncService: ObservableObject {
                 return
             }
             feedback.presentBackgroundError(
-                "Couldn’t refresh Organization Memory. Existing content is still available. "
-                    + error.localizedDescription,
+                error,
                 source: .organizationResources
             )
         }
@@ -237,7 +236,7 @@ final class MemorySyncService: ObservableObject {
                 )
             }
             feedback.resolveBackgroundError(errorSource)
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard context.workspaceReloadGeneration == workspaceGeneration,
@@ -248,8 +247,7 @@ final class MemorySyncService: ObservableObject {
                 return
             }
             feedback.presentBackgroundError(
-                "Couldn’t update from the remote version. Existing content is unchanged. "
-                    + error.localizedDescription,
+                error,
                 source: errorSource
             )
         }

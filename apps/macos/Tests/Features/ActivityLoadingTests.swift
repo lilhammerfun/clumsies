@@ -56,7 +56,7 @@ final class ActivityLoadingTests: XCTestCase {
         await model.load()
         await model.load()
         XCTAssertEqual(model.sessions.map(\.id), [row.id])
-        XCTAssertNotNil(model.errorMessage)
+        XCTAssertNil(model.errorMessage, "Retained content must not duplicate connection feedback.")
         XCTAssertFalse(model.isLoading)
         await model.load()
         XCTAssertNil(model.errorMessage)
@@ -208,7 +208,7 @@ final class ActivityLoadingTests: XCTestCase {
         XCTAssertEqual(detailCalls, 4)
         XCTAssertEqual(model.selectedSession?.tasks.map(\.id), ["one", "two"])
         await model.loadSelectedSession()
-        XCTAssertNotNil(model.detailError)
+        XCTAssertNil(model.detailError, "Retained content must not duplicate connection feedback.")
         XCTAssertEqual(model.selectedSession?.tasks.map(\.id), ["one", "two"])
     }
 

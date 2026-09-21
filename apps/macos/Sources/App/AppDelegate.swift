@@ -98,11 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return try restartController.finishTermination(allowed: allowed)
         } catch {
             ClientDiagnostics.record("app_restart_failed", ClientDiagnostics.failureFields(error))
-            let alert = NSAlert()
-            alert.messageText = String(localized: "Clumsies could not restart")
-            alert.informativeText = String(localized: "Your language choice is saved. Try restarting again, or quit and open Clumsies manually.")
-            alert.addButton(withTitle: String(localized: "OK"))
-            alert.runModal()
+            store.feedback.errorMessage = String(localized: "Clumsies could not restart") + ". "
+                + String(localized: "Your language choice is saved. Try restarting again, or quit and open Clumsies manually.")
             return false
         }
     }
@@ -325,7 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentAuthenticationContent<Content: View>(_ content: Content) {
-        startupWindowController.show(content)
+        startupWindowController.show(content.feedbackHost(showsService: false))
     }
 
     private func presentSettingsWindow() {
@@ -337,7 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func exportDiagnostics(_ sender: Any?) {
-        DiagnosticsExport.present()
+        DiagnosticsExport.present { [weak self] in self?.store.feedback.errorMessage = $0 }
     }
 
     private func showLogsInFinder() {

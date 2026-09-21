@@ -16,6 +16,7 @@ struct SettingsIcon: View {
 }
 
 struct SettingsWindowView: View {
+    @EnvironmentObject private var workspaceFeedback: WorkspaceFeedback
     @EnvironmentObject private var agentIntegration: AgentIntegrationService
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
@@ -79,6 +80,7 @@ struct SettingsWindowView: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
+        .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
         .toolbar(removing: .sidebarToggle)
         .font(.system(size: 13))
         .toggleStyle(.switch)

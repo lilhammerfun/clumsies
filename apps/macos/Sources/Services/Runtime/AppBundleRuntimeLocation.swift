@@ -1,6 +1,6 @@
 import Foundation
 
-enum AppBundleRuntimeLocationError: LocalizedError, Sendable {
+enum AppBundleRuntimeLocationError: UserFacingError, Sendable {
     case translocated
 
     var errorDescription: String? {

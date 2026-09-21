@@ -171,6 +171,28 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
         XCTAssertFalse(model.isLoading)
     }
 
+    func testHistoryFailureKeepsContentAndDoesNotAttachOldDetailToANewSelection() async throws {
+        let first = try retrievalDetail(runId: "first"), second = try retrievalDetail(runId: "second")
+        var attempt = 0
+        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(serviceName: "unused"), fetchRuns: { _ in
+            attempt += 1
+            if attempt == 2 { throw URLError(.notConnectedToInternet) }
+            return .init(items: [attempt == 1 ? first.run : second.run], nextCursor: nil)
+        }, fetchRun: { id in
+            if id == "second" { throw ServerClientError.response(status: 404, message: "SECRET") }
+            return first
+        })
+        await model.load(projectId: "project")
+        await model.load(projectId: "project")
+        XCTAssertEqual(model.runs.map(\.runId), ["first"])
+        XCTAssertEqual(model.detail?.run.runId, "first")
+        XCTAssertNil(model.errorMessage)
+        await model.load(projectId: "project")
+        XCTAssertEqual(model.selectedRunId, "second")
+        XCTAssertNil(model.detail, "A deleted new selection must not display another run's detail.")
+        XCTAssertEqual(model.errorMessage, ClientFailure.missing.message)
+    }
+
     private func retrievalDetail(
         runId: String,
         selected: Bool = true,

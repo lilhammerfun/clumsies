@@ -38,6 +38,10 @@ dev-macos-reviews:
 dev-macos-status:
     sh dev/dev-instance.sh status
 
+# Fail only this worktree's local HTTP server, then restore it automatically.
+dev-macos-fault mode="offline":
+    python3 dev/error-feedback.py "{{mode}}"
+
 # Show logs for the current worktree Dev Instance.
 dev-macos-logs:
     sh dev/dev-instance.sh logs

@@ -126,7 +126,7 @@ final class ReviewsModel: ObservableObject {
             guard context.workspaceReloadGeneration == generation,
                   context.activeProjectId == projectId,
                   navigation.selectedSection == section, !Task.isCancelled else { return }
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
         }
     }
 
@@ -183,7 +183,7 @@ final class ReviewsModel: ObservableObject {
                readiness.matches(currentReview) {
                 reviewDecisionReadiness = readiness
             }
-            feedback.errorMessage = error.localizedDescription
+            feedback.errorMessage = error.actionMessage
         }
     }
 
@@ -502,11 +502,11 @@ final class ReviewsModel: ObservableObject {
                    !self.reviews.contains(where: { $0.id == selectedReviewId }) {
                     self.selectedReviewId = nil
                 }
-            } catch is CancellationError {
+            } catch where error.isUserCancellation {
                 return
             } catch {
                 guard let self, context.workspaceReloadGeneration == generation else { return }
-                reviewLoadState = .failed(error.localizedDescription)
+                reviewLoadState = .failed(error.userFacingMessage)
             }
         }
     }

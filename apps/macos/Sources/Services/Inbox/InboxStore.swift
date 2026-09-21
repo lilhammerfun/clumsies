@@ -8,6 +8,13 @@ private struct LocalInboxReceipt: Codable {
     var archivedRevision: String?
 }
 
+private struct PendingInboxReceipt: Codable, Identifiable {
+    let id: UUID
+    let notificationId: String
+    let version: Int
+    let action: InboxReceiptAction
+}
+
 @MainActor
 final class InboxStore: ObservableObject {
     @Published private(set) var items: [InboxItem] = []
@@ -27,6 +34,7 @@ final class InboxStore: ObservableObject {
     private var remoteItems: [InboxItem] = []
     private var localItems: [InboxItem] = []
     private var localReceipts: [String: LocalInboxReceipt] = [:]
+    private var pendingReceipts: [PendingInboxReceipt] = []
     private var preferenceKey: String?
     private var generation = UUID()
     private var receiptGeneration = UUID()
@@ -80,6 +88,10 @@ final class InboxStore: ObservableObject {
            let receipts = try? JSONDecoder().decode([String: LocalInboxReceipt].self, from: data) {
             localReceipts = receipts
         }
+        if let data = defaults.data(forKey: key + ".pending"),
+           let pending = try? JSONDecoder().decode([PendingInboxReceipt].self, from: data) {
+            pendingReceipts = pending
+        }
     }
 
     func reset() {
@@ -89,6 +101,7 @@ final class InboxStore: ObservableObject {
         localItems = []
         items = []
         localReceipts = [:]
+        pendingReceipts = []
         isLoading = false
         hasLoaded = false
         errorMessage = nil
@@ -102,6 +115,12 @@ final class InboxStore: ObservableObject {
         isLoading = true
         let requestGeneration = generation
         let authority = context.authorityGeneration
+        // Retry only on the existing refresh cadence; a failure stops this pass.
+        for pending in pendingReceipts where !updatingIds.contains(pending.notificationId) {
+            _ = await sendPendingReceipt(pending)
+            guard generation == requestGeneration else { return }
+            if pendingReceipts.contains(where: { $0.id == pending.id }) { break }
+        }
         let initialReceipts = receiptGeneration
         defer { if generation == requestGeneration { isLoading = false; hasLoaded = true } }
         var errors: [String] = []
@@ -131,26 +150,22 @@ final class InboxStore: ObservableObject {
                 return previous
             }
             isShowingSavedContent = saved
-        } catch is CancellationError { return }
+        } catch where error.isUserCancellation { return }
         catch {
             guard context.authorityGeneration == authority, generation == requestGeneration else { return }
-            errors.append(String(localized: "Couldn't refresh team notifications. \(error.localizedDescription)"))
+            if remoteItems.isEmpty { errors.append(error.userFacingMessage) }
+            isShowingSavedContent = !remoteItems.isEmpty
         }
         do {
             let snapshot = try await fetchLocal()
             try context.ensureAuthority(authority)
             guard generation == requestGeneration else { return }
             installLocal(Self.localNotifications(snapshot) + localSharedNotifications())
-        } catch is CancellationError { return }
+        } catch where error.isUserCancellation { return }
         catch {
             guard context.authorityGeneration == authority, generation == requestGeneration else { return }
-            errors.append(String(localized: "Couldn't check this Mac. \(error.localizedDescription)"))
-            installLocal(localItems.filter { $0.id != "local:unavailable" } + [.init(
-                id: "local:unavailable", type: .syncErrors, projectId: nil, projectName: String(localized: "This Mac"),
-                title: String(localized: "Sync status couldn't be checked"), message: String(localized: "Reconnect to the local service, then refresh Inbox."),
-                occurredAt: .distantPast, needsAction: true, revision: "unavailable",
-                isRead: false, isArchived: false, destination: .retrySync
-            )])
+            // A failed status probe is not a new business notification. Keep known sync state.
+            if items.isEmpty && errors.isEmpty { errors.append(error.userFacingMessage) }
         }
         guard generation == requestGeneration, context.authorityGeneration == authority else { return }
         errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
@@ -179,28 +194,25 @@ final class InboxStore: ObservableObject {
 
     @discardableResult
     func acknowledge(_ item: InboxItem, action: InboxReceiptAction) async -> Bool {
-        guard !updatingIds.contains(item.id), preferenceKey != nil,
+        guard preferenceKey != nil,
               items.contains(where: { $0.id == item.id && $0.revision == item.revision }) else { return false }
-        let requestGeneration = generation
-        let authority = context.authorityGeneration
         receiptError = nil
-        updatingIds.insert(item.id)
-        defer { if generation == requestGeneration { updatingIds.remove(item.id) } }
         if let version = item.serverVersion {
-            do {
-                try await updateReceipt(item.id, .init(version: version, action: action))
-                try context.ensureAuthority(authority)
-                guard generation == requestGeneration else { return false }
-                receiptGeneration = UUID()
-                if let index = remoteItems.firstIndex(where: { $0.id == item.id && $0.revision == item.revision }) {
-                    Self.apply(action, to: &remoteItems[index])
-                }
-            } catch is CancellationError { return false }
-            catch {
-                guard context.authorityGeneration == authority, generation == requestGeneration else { return false }
-                receiptError = String(localized: "Couldn't update this notification. \(error.localizedDescription)")
-                return false
+            let pending = PendingInboxReceipt(id: UUID(), notificationId: item.id, version: version, action: action)
+            let prior = pendingReceipts
+            let isReadAction = action == .read || action == .unread
+            pendingReceipts.removeAll {
+                $0.notificationId == item.id && $0.version == version
+                    && (($0.action == .read || $0.action == .unread) == isReadAction)
             }
+            pendingReceipts.append(pending)
+            guard savePendingReceipts() else { pendingReceipts = prior; return false }
+            publishItems()
+            if let failure = ClientServiceStatus.shared.failure,
+               [.connection, .localService, .authentication].contains(failure) {
+                return true
+            }
+            return await sendPendingReceipt(pending)
         } else if var receipt = localReceipts[item.id], receipt.revision == item.revision {
             switch action {
             case .read: receipt.readRevision = item.revision
@@ -214,6 +226,55 @@ final class InboxStore: ObservableObject {
             }
             saveReceipts()
         }
+        publishItems()
+        return true
+    }
+
+    func dismissReceiptError() { receiptError = nil }
+
+    private func savePendingReceipts() -> Bool {
+        guard let preferenceKey else { return false }
+        do {
+            defaults.set(try JSONEncoder().encode(pendingReceipts), forKey: preferenceKey + ".pending")
+            return true
+        } catch {
+            receiptError = String(localized: "Notification changes couldn't be saved on this Mac. Try again.")
+            return false
+        }
+    }
+
+    private func sendPendingReceipt(_ pending: PendingInboxReceipt) async -> Bool {
+        guard pendingReceipts.contains(where: { $0.id == pending.id }), !updatingIds.contains(pending.notificationId) else { return true }
+        let requestGeneration = generation
+        let authority = context.authorityGeneration
+        updatingIds.insert(pending.notificationId)
+        defer { if generation == requestGeneration { updatingIds.remove(pending.notificationId) } }
+        do {
+            try await updateReceipt(pending.notificationId, .init(version: pending.version, action: pending.action))
+            try context.ensureAuthority(authority)
+            guard generation == requestGeneration else { return false }
+            receiptGeneration = UUID()
+            if let index = remoteItems.firstIndex(where: {
+                $0.id == pending.notificationId && $0.serverVersion == pending.version
+            }) { Self.apply(pending.action, to: &remoteItems[index]) }
+        } catch {
+            guard generation == requestGeneration, context.authorityGeneration == authority else { return false }
+            let failure = ClientFailure(error)
+            if failure.canRetryReceipt || failure == .authentication || failure == .cancelled {
+                // The persisted intent remains visible and survives relaunch until acknowledged.
+                return true
+            }
+            pendingReceipts.removeAll { $0.id == pending.id }
+            _ = savePendingReceipts()
+            publishItems()
+            receiptError = failure == .invalidInput
+                ? String(localized: "Couldn't update this notification. Refresh Inbox and try again.")
+                : error.actionMessage
+            return false
+        }
+        pendingReceipts.removeAll { $0.id == pending.id }
+        _ = savePendingReceipts()
+        receiptError = nil
         publishItems()
         return true
     }
@@ -271,7 +332,7 @@ final class InboxStore: ObservableObject {
     private func saveReceipts() {
         guard let preferenceKey else { return }
         do { defaults.set(try JSONEncoder().encode(localReceipts), forKey: preferenceKey) }
-        catch { receiptError = String(localized: "Couldn't save notification preferences. \(error.localizedDescription)") }
+        catch { receiptError = String(localized: "Couldn't save notification preferences. \(error.userFacingMessage)") }
     }
 
     private func retainProjects(_ accessible: Set<String>) {
@@ -283,7 +344,14 @@ final class InboxStore: ObservableObject {
 
     private func publishItems(accessibleProjects: Set<String>? = nil) {
         let accessible = accessibleProjects ?? Set(context.projects.map(\.id))
-        items = (remoteItems + localItems).map { item in
+        let displayedRemote = remoteItems.map { item in
+            var item = item
+            for pending in pendingReceipts where pending.notificationId == item.id && pending.version == item.serverVersion {
+                Self.apply(pending.action, to: &item)
+            }
+            return item
+        }
+        items = (displayedRemote + localItems).map { item in
             var item = item
             if case .project(let projectId) = item.destination,
                !accessible.contains(projectId) {
@@ -316,8 +384,7 @@ final class InboxStore: ObservableObject {
         if sync.failedOperationCount > 0 || [sync.draftSync.state, sync.commitSync.state].contains(where: { ["failed", "degraded"].contains($0) }) {
             notices.append(.init(id: "local:sync", type: .syncErrors, projectId: nil, projectName: String(localized: "This Mac"),
                 title: String(localized: "Changes couldn't sync"),
-                message: sync.draftSync.lastError?.message ?? sync.commitSync.lastError?.message
-                    ?? String(localized: "Some changes haven't reached the server. Retry when connected."),
+                message: String(localized: "Some changes haven't reached the server. Retry when connected."),
                 occurredAt: .distantPast, needsAction: true, revision: "sync-failed", isRead: false, isArchived: false,
                 destination: .retrySync))
         }

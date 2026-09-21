@@ -7,7 +7,7 @@ struct DaemonBootstrapState: Equatable, Sendable {
     let error: String?
 }
 
-enum DaemonBootstrapError: LocalizedError, Sendable {
+enum DaemonBootstrapError: UserFacingError, Sendable {
     case daemonBinaryMissing
     case daemonCommand(String)
     case invalidDevelopmentConfiguration([String])
@@ -17,8 +17,8 @@ enum DaemonBootstrapError: LocalizedError, Sendable {
         switch self {
         case .daemonBinaryMissing:
             return String(localized: "The Clumsies daemon is missing from the application bundle.")
-        case .daemonCommand(let message):
-            return message
+        case .daemonCommand:
+            return String(localized: "Clumsies couldn’t start its local service. Reopen the app, or use Settings to open the logs.")
         case .invalidDevelopmentConfiguration(let missing):
             return String(localized: "The Clumsies Dev App is missing required instance settings: \(missing.joined(separator: ", ")).")
         case .invalidStatus:
@@ -62,7 +62,7 @@ struct DaemonBootstrapController: Sendable {
                 installed: launchAgentPlistExists(),
                 running: false,
                 pid: nil,
-                error: error.localizedDescription
+                error: error.userFacingMessage
             )
         }
     }
@@ -78,7 +78,7 @@ struct DaemonBootstrapController: Sendable {
             installed: status.installed,
             running: status.runtime.running,
             pid: status.runtime.pid.map(Int.init),
-            error: status.runtime.lastError
+            error: status.runtime.lastError == nil ? nil : ClientFailure.localService.message
         )
     }
 

@@ -44,13 +44,12 @@ final class MemoryGuidelinesModel: ObservableObject {
             guard generation == requestGeneration, workspaceContext.activeProjectId == projectId else { return }
             setup = result
             isLoading = false
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             guard generation == requestGeneration, workspaceContext.authorityGeneration == authority, workspaceContext.activeProjectId == projectId, !Task.isCancelled else { return }
-            error = String(localized: "The project changed while checking memory guidelines. Try again.")
             isLoading = false
         } catch {
             guard generation == requestGeneration, workspaceContext.authorityGeneration == authority, workspaceContext.activeProjectId == projectId, !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            self.error = error.actionMessage
             isLoading = false
         }
     }
@@ -67,11 +66,11 @@ final class MemoryGuidelinesModel: ObservableObject {
             guard generation == requestGeneration, workspaceContext.activeProjectId == setup.projectId else { return }
             destinationChanged = !result.hasSameDestination(as: setup)
             self.setup = result
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
             guard generation == requestGeneration, workspaceContext.authorityGeneration == authority, workspaceContext.activeProjectId == setup.projectId else { return }
-            self.error = error.localizedDescription
+            self.error = error.actionMessage
         }
     }
 

@@ -5,6 +5,20 @@ import XCTest
 
 @MainActor
 final class SettingsWindowLayoutTests: XCTestCase {
+    func testConnectionFailuresDoNotChangeSettingsSidebarIcons() {
+        let status = ClientServiceStatus.shared
+        status.reset()
+        defer { status.reset() }
+        for failure: ClientFailure? in [nil, .connection, .authentication] {
+            status.finish("server:settings", token: status.begin("server:settings"), failure: failure)
+            for pane in SettingsPane.allCases {
+                let icon = NSHostingView(rootView: SettingsIcon(symbol: pane.systemImage, color: pane.color))
+                XCTAssertEqual(icon.fittingSize, NSSize(width: 20, height: 20),
+                    "A connection indication belongs to the window, never inside a sidebar icon.")
+            }
+        }
+    }
+
     func testNormalizeRepairsCollapsedWindowAndPreservesAUserSize() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),

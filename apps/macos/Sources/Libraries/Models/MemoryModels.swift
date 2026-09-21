@@ -270,7 +270,7 @@ struct WorkbenchTab: Identifiable, Hashable, Sendable {
     }
 }
 
-enum ReviewRequestError: LocalizedError, Sendable {
+enum ReviewRequestError: UserFacingError, Sendable {
     case draftNotSynchronized
     case legacyProjectDraftCannotBePublished
     case reconciliationRequired
@@ -293,7 +293,7 @@ enum ReviewRequestError: LocalizedError, Sendable {
     }
 }
 
-enum DocumentSyncError: LocalizedError, Equatable, Sendable {
+enum DocumentSyncError: UserFacingError, Equatable, Sendable {
     case checkoutNoLongerCurrent
     case draftUploadFailed(String?)
     case draftUploadTimedOut
@@ -313,7 +313,7 @@ enum DocumentSyncError: LocalizedError, Equatable, Sendable {
     }
 }
 
-enum ProjectSetupError: LocalizedError, Sendable {
+enum ProjectSetupError: UserFacingError, Sendable {
     case bundledAgentRuntimeMissing
     case codexHostMissing
     case bundleNotFound
@@ -333,7 +333,7 @@ enum ProjectSetupError: LocalizedError, Sendable {
     }
 }
 
-enum ProjectMemorySelectionError: LocalizedError, Sendable {
+enum ProjectMemorySelectionError: UserFacingError, Sendable {
     case activeDrafts
     case invalidOrgResources
     case projectUnavailable

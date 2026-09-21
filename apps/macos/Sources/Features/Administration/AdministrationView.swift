@@ -9,14 +9,13 @@ struct AdministrationView: View {
     private var state: AdministrationPageState { administration.state(for: section) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if state.isLoaded, state.isStale {
-                AdministrationStaleBanner()
-            }
-            if let errorMessage = state.errorMessage {
-                AdministrationErrorBanner(message: errorMessage)
-            }
-            content
+        content
+        .pageFeedback(state.isLoaded && state.isStale
+            ? String(localized: "Changes on this page are disabled until a live refresh succeeds.") : nil, isStatus: true) {
+            Task { await administration.load(section: section, force: true) }
+        }
+        .pageFeedback(state.isLoaded ? state.errorMessage : nil, isStatus: true) {
+            Task { await administration.load(section: section, force: true) }
         }
         .font(.system(size: 13))
         .task(id: section) {
@@ -56,52 +55,14 @@ struct AdministrationView: View {
             ContentUnavailableView(
                 "\(section.title) Unavailable",
                 systemImage: "building.2.crop.circle",
-                description: Text(workspaceContext.canAdministerOrganization
-                    ? "Refresh to try again." : "Organization administrator access is required.")
+                description: Text(state.errorMessage ?? (workspaceContext.canAdministerOrganization
+                    ? String(localized: "Refresh to try again.") : String(localized: "Organization administrator access is required.")))
             )
         }
     }
 }
 
-private struct AdministrationStaleBanner: View {
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Cached data")
-                    .fontWeight(.semibold)
-                Text("Changes on this page are disabled until a live refresh succeeds.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(12)
-        .background(Color.orange.opacity(0.12))
-        .overlay(alignment: .bottom) { Divider() }
-        .accessibilityElement(children: .combine)
-    }
-}
 
-private struct AdministrationErrorBanner: View {
-    let message: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(.red)
-            Text(message)
-                .font(.system(size: 13))
-                .textSelection(.enabled)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.red.opacity(0.08))
-        .overlay(alignment: .bottom) { Divider() }
-    }
-}
 
 struct OrganizationNameSection: View {
     @EnvironmentObject private var workspaceContext: WorkspaceContext
@@ -127,23 +88,8 @@ struct OrganizationNameSection: View {
             } else if state.isLoading {
                 ProgressView("Loading organization…")
             }
-            if let errorMessage = state.errorMessage {
-                AdministrationInlineError(message: errorMessage)
-            }
-            if state.isStale || state.errorMessage != nil || (!state.isLoaded && !state.isLoading) {
-                HStack {
-                    if state.errorMessage == nil {
-                        Text(state.isStale ? "Refresh to edit organization details." : "Organization details are unavailable.")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Refresh") {
-                        Task { await administration.load(section: .organization, force: true) }
-                    }
-                    .disabled(state.isLoading || workspaceContext.isMutatingAdministration || !workspaceContext.canAdministerOrganization)
-                }
-            }
         }
+        .pageFeedback(state.errorMessage) { Task { await administration.load(section: .organization, force: true) } }
     }
 
     private var state: AdministrationPageState { administration.state(for: .organization) }
@@ -184,12 +130,14 @@ private struct OrganizationEditSheet: View {
                 } header: {
                     Text(editsDomains ? "Allowed email domains" : "Organization name")
                 } footer: {
-                    if editsDomains {
-                        Text("Enter one domain per line. Leave empty to allow any domain; people must still be added as members. Changes apply the next time a member signs in.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        if editsDomains {
+                            Text("Enter one domain per line. Leave empty to allow any domain; people must still be added as members. Changes apply the next time a member signs in.")
+                        }
+                        FormErrorMessage(message: errorMessage)
                     }
                 }
                 .disabled(workspaceContext.isMutatingAdministration)
-                if let errorMessage { AdministrationInlineError(message: errorMessage) }
             }
             .formStyle(.grouped)
             SheetActionBar(
@@ -228,7 +176,7 @@ private struct OrganizationEditSheet: View {
                 )
                 dismiss()
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = error.actionMessage
             }
         }
     }
@@ -318,9 +266,12 @@ private struct AdministrationMembersView: View {
                 Button("Add Member…") { showsAddMember = true }
                     .disabled(!allowsMutation)
             }
-            if let errorMessage { AdministrationInlineError(message: errorMessage) }
         }
         .formStyle(.grouped)
+        .pageFeedback(state.errorMessage, isStatus: true) {
+            Task { await administration.load(section: .members, force: true, query: query) }
+        }
+        .pageFeedback(errorMessage)
         .onChange(of: query) { _, _ in
             completedQuery = nil
             errorMessage = nil
@@ -385,7 +336,7 @@ private struct AdministrationMembersView: View {
             do {
                 try await operation()
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = error.actionMessage
             }
         }
     }
@@ -414,12 +365,12 @@ private struct AdministrationAddMemberSheet: View {
                 } header: {
                     Text("Add member")
                 } footer: {
-                    Text("This person can sign in with this email using your organization's single sign-on. No invitation email is sent.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("This person can sign in with this email using your organization's single sign-on. No invitation email is sent.")
+                        FormErrorMessage(message: errorMessage)
+                    }
                 }
                 .disabled(workspaceContext.isMutatingAdministration)
-                if let errorMessage {
-                    AdministrationInlineError(message: errorMessage)
-                }
             }
             .formStyle(.grouped)
 
@@ -460,7 +411,7 @@ private struct AdministrationAddMemberSheet: View {
                 )
                 dismiss()
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = error.actionMessage
             }
         }
     }
@@ -547,6 +498,9 @@ private struct AdministrationAuditView: View {
             }
         }
         .formStyle(.grouped)
+        .pageFeedback(state.errorMessage, isStatus: true) {
+            Task { await administration.load(section: .audit, force: true, query: query) }
+        }
         .onChange(of: query) { _, _ in completedQuery = nil }
         .task(id: query) {
             let requestedQuery = query
@@ -603,28 +557,19 @@ private struct AdministrationLoadMore: View {
 
     var body: some View {
         let state = administration.state(for: section)
-        if state.nextCursor != nil {
-            HStack {
-                Button("Show More") {
-                    Task { await administration.load(section: section, loadMore: true, query: query) }
+        Group {
+            if state.nextCursor != nil {
+                HStack {
+                    Button("Show More") {
+                        Task { await administration.load(section: section, loadMore: true, query: query) }
+                    }
+                    .disabled(state.isLoading)
+                    if state.isLoading { ProgressView().controlSize(.small) }
+                    Spacer()
                 }
-                .disabled(state.isLoading)
-                if state.isLoading { ProgressView().controlSize(.small) }
-                Spacer()
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
-    }
-}
 
-struct AdministrationInlineError: View {
-    let message: String
-
-    var body: some View {
-        Label(message, systemImage: "exclamationmark.circle")
-            .font(.system(size: 13))
-            .foregroundStyle(.red)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }

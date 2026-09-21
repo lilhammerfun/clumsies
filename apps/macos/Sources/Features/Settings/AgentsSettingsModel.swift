@@ -38,10 +38,10 @@ final class AgentsSettingsModel: ObservableObject {
             hasLoaded = true
             errorMessage = nil
             codexStatus = try await agentIntegration.codexPluginStatus()
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
             return
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 
@@ -59,7 +59,7 @@ final class AgentsSettingsModel: ObservableObject {
                 settings = actual
                 selected = Set(actual.filter(\.enabled).map(\.adapter))
             }
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
         }
     }
 
@@ -76,7 +76,7 @@ final class AgentsSettingsModel: ObservableObject {
             if refreshStatus { codexStatus = try await agentIntegration.codexPluginStatus() }
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.actionMessage
             return false
         }
     }

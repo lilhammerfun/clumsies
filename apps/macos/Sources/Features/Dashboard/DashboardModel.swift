@@ -32,10 +32,10 @@ final class DashboardModel: ObservableObject {
             guard generation == request else { return }
             snapshot = value
             isDemo = demo
-        } catch is CancellationError {
+        } catch where error.isUserCancellation {
         } catch {
             guard generation == request, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = snapshot == nil ? error.actionMessage : error.backgroundMessage
         }
     }
 
