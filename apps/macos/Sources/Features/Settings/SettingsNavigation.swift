@@ -85,7 +85,7 @@ enum SettingsDestination: Hashable, Identifiable {
 
     private var keywords: String {
         switch self {
-        case .pane(.general): String(localized: "about automatic download software update version language English Chinese") + " about automatic download software update version language English Chinese"
+        case .pane(.general): String(localized: "about automatic download software update version language English Chinese") + " about automatic download software update updates version language English Chinese follow system 语言 中文 简体中文 跟随系统"
         case .pane(.agent): String(localized: "plugin repair mcp integration repository") + " plugin repair mcp integration repository"
         case .pane(.organization): String(localized: "team administration name rename") + " team administration name rename"
         case .pane(.advanced): String(localized: "diagnostics logs help troubleshooting") + " diagnostics logs help troubleshooting"

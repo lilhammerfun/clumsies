@@ -30,4 +30,6 @@ test_language() {
 }
 
 test_language en
-test_language zh-Hans -only-testing:ClumsiesTests/LocalizationTests
+test_language zh-Hans -only-testing:ClumsiesTests/LocalizationTests \
+    -only-testing:ClumsiesTests/AppLanguageTests \
+    -only-testing:ClumsiesTests/SettingsWindowLayoutTests
