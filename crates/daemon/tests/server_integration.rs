@@ -1137,6 +1137,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
             .await
             .is_err()
     );
+    // Identity preflight failed before any upload; the saved operation remains queued.
     let retrying = service.get_draft(&local_draft.draft_id).await.unwrap();
     assert_eq!(
         retrying.draft.base_commit_id.as_deref(),
@@ -1144,7 +1145,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     );
     assert_eq!(
         retrying.operations[0].sync_status,
-        DraftOperationSyncStatus::Retrying
+        DraftOperationSyncStatus::Queued
     );
 
     let remote_draft = server::app::draft::create_draft(
@@ -1318,7 +1319,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
             })
             .unwrap()
             .sync_status,
-        DraftOperationSyncStatus::Retrying
+        DraftOperationSyncStatus::Queued
     );
 
     service

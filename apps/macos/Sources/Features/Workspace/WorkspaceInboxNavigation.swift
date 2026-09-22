@@ -55,6 +55,8 @@ extension WorkspaceCoordinator {
             guard navigation.selectedSection == .inbox else { throw CancellationError() }
             navigation.searchQuery = ""
             navigation.selectedSection = .memory
+        case .manageLocalProjects:
+            navigation.showsLocalProjectRecovery = true
         case .retrySync:
             let result = await refresh.retrySync(allProjects: true, reportFailure: false)
             try context.ensureAuthority(authority)

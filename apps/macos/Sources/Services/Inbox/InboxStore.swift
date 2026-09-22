@@ -17,6 +17,7 @@ private struct PendingInboxReceipt: Codable, Identifiable {
 
 @MainActor
 final class InboxStore: ObservableObject {
+    @Published private(set) var unavailableProjects: [DaemonUnavailableProject] = []
     @Published private(set) var items: [InboxItem] = []
     @Published private(set) var isLoading = false
     @Published private(set) var hasLoaded = false
@@ -99,6 +100,7 @@ final class InboxStore: ObservableObject {
         preferenceKey = nil
         remoteItems = []
         localItems = []
+        unavailableProjects = []
         items = []
         localReceipts = [:]
         pendingReceipts = []
@@ -160,6 +162,7 @@ final class InboxStore: ObservableObject {
             let snapshot = try await fetchLocal()
             try context.ensureAuthority(authority)
             guard generation == requestGeneration else { return }
+            unavailableProjects = snapshot.unavailableProjects
             installLocal(Self.localNotifications(snapshot) + localSharedNotifications())
         } catch where error.isUserCancellation { return }
         catch {
@@ -379,8 +382,50 @@ final class InboxStore: ObservableObject {
         }
     }
 
+    /// Remove only the selected local association; drafts and repository files remain.
+    func removeUnavailableBinding(_ binding: DaemonProjectBinding) async throws {
+        let authority = context.authorityGeneration
+        let adapters = try await context.daemon.projectAgentAdapters(binding.projectId)
+        try context.ensureAuthority(authority)
+        for adapter in adapters where adapter.workspaceRoot == binding.workspaceRoot {
+            _ = try await context.daemon.removeProjectAgentAdapter(.init(
+                workspaceRoot: binding.workspaceRoot, adapter: adapter.adapter, expectedRevision: adapter.revision))
+            try context.ensureAuthority(authority)
+        }
+        _ = try await context.daemon.removeProjectBinding(.init(
+            workspaceRoot: binding.workspaceRoot, expectedRevision: binding.revision))
+        try context.ensureAuthority(authority)
+        await refresh()
+    }
+
+    /// Export complete local operation history without requiring remote project access.
+    func exportUnavailableDrafts(_ projectId: String, to destination: URL) async throws {
+        let authority = context.authorityGeneration
+        let daemon = context.daemon
+        let summaries = try await WorkspaceLoader.listAllDraftSummaries { query in
+            try await daemon.listDrafts(query)
+        }
+        try context.ensureAuthority(authority)
+        var drafts: [DaemonDraftDetail] = []
+        for summary in summaries where summary.projectId == projectId && [.open, .submitted].contains(summary.status) {
+            drafts.append(try await context.daemon.draft(summary.draftId))
+            try context.ensureAuthority(authority)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(drafts).write(to: destination, options: .atomic)
+    }
+
     static func localNotifications(_ sync: DaemonSyncStatus) -> [InboxItem] {
-        var notices: [InboxItem] = []
+        var notices: [InboxItem] = sync.unavailableProjects.map { project in
+            .init(id: "local:project:\(project.projectId)", type: .accessChanges,
+                projectId: nil, projectName: project.name,
+                title: String(localized: "Project sync paused"),
+                message: String(localized: "This project was deleted or is no longer accessible. Drafts on this Mac are retained."),
+                occurredAt: .distantPast, needsAction: true,
+                revision: "unavailable:\(project.draftCount)", isRead: false, isArchived: false,
+                destination: .manageLocalProjects)
+        }
         if sync.failedOperationCount > 0 || [sync.draftSync.state, sync.commitSync.state].contains(where: { ["failed", "degraded"].contains($0) }) {
             notices.append(.init(id: "local:sync", type: .syncErrors, projectId: nil, projectName: String(localized: "This Mac"),
                 title: String(localized: "Changes couldn't sync"),

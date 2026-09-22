@@ -206,6 +206,30 @@ target set is the union of durable directory bindings, active Draft Projects,
 and the Project currently selected by Desktop. Desktop selection is UI state
 and cannot redirect an MCP process in another directory.
 
+Each sync cycle first reads the live, complete `/api/v1/me` membership list.
+The target set is intersected with that list before sending Draft operations or
+fetching Project commits. Failed or malformed identity reads abort the cycle;
+the daemon never substitutes an empty list or stale HTTP cache. Membership is
+scoped to the current sign-in session. The Organization Ref uses the identity's
+Organization ID and continues syncing even when no Projects remain.
+
+Locally bound Projects and active Draft Projects absent from membership are
+reported as `sync_status.unavailable_projects` (`project_id`, `bindings`,
+`draft_count`). Their operations are retained, excluded from active queue/error
+counts, and resume automatically if access returns. An unavailable Desktop
+selection is cleared; directory bindings, Draft history, and cached files are
+preserved. Draft events from unavailable Projects are deferred without blocking
+the author feed. A durable marker causes one feed replay after membership
+returns, so advancing the cursor never loses those events across a restart.
+MCP binding resolution reports `project_binding_unresolved` after
+availability has been checked. Desktop Inbox offers local binding removal and
+JSON export of retained Drafts independently of the remote project directory.
+
+A Project's HTTP 404 alone does not establish deletion: authorization may also
+hide it. Commit-state handling checks HTTP success before requiring ETag, so
+HTTP errors retain their real status; a successful response without ETag remains
+a protocol error.
+
 ```text
 Server commit-state + ETag
   -> validate Ref identity

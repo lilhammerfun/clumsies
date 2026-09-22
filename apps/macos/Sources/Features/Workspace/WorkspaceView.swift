@@ -105,6 +105,9 @@ struct WorkspaceView: View {
             }
         }
         .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
+        .sheet(isPresented: $workspaceNavigation.showsLocalProjectRecovery) {
+            LocalProjectRecoveryView(store: inbox, retry: { await store.refresh.retrySync(allProjects: true, reportFailure: false) })
+        }
         .sheet(isPresented: $workspaceNavigation.showsProjectCreation) {
             ProjectCreationSheet(model: ProjectCreationModel(projects: store.projects))
         }

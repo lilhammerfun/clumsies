@@ -340,7 +340,19 @@ struct DaemonLocalDatabaseStatus: Codable, Equatable, Sendable {
     let schemaVersion: Int
 }
 
+struct DaemonUnavailableProject: Codable, Equatable, Identifiable, Sendable {
+    var id: String { projectId }
+    let projectId: String
+    let bindings: [DaemonProjectBinding]
+    let draftCount: Int
+
+    var name: String {
+        bindings.first.map { URL(fileURLWithPath: $0.workspaceRoot).lastPathComponent } ?? projectId
+    }
+}
+
 struct DaemonSyncStatus: Codable, Equatable, Sendable {
+    var unavailableProjects: [DaemonUnavailableProject] = []
     let draftSync: DaemonSyncChannelStatus
     let commitSync: DaemonSyncChannelStatus
     let pendingOperationCount: Int
