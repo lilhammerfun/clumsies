@@ -507,6 +507,106 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(reopened.unreadCount, 1, "Receipt scope includes the server.")
     }
 
+    func testUnavailableLocalProjectsRemainManageableAndResolveWithoutRetryErrors() async throws {
+        let context = context(), defaults = try preferences()
+        let binding = DaemonProjectBinding(serverUrl: "https://example.com", workspaceRoot: "/repos/removed",
+            projectId: "removed", revision: 1, createdAt: "", updatedAt: "")
+        var local = snapshot()
+        local.unavailableProjects = [.init(projectId: "removed", bindings: [binding], draftCount: 2)]
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(DaemonSyncStatus.self, from: encoder.encode(local))
+        XCTAssertEqual(decoded.unavailableProjects, local.unavailableProjects)
+        let store = InboxStore(context: context, defaults: defaults,
+            fetchPage: { _ in (.init(items: [], nextCursor: nil), false) }, fetchLocal: { local })
+        store.prepare(serverURL: "https://example.com")
+        await store.refresh()
+        let notice = try XCTUnwrap(store.items.first)
+        XCTAssertEqual(store.items.count, 1)
+        XCTAssertEqual(notice.id, "local:project:removed")
+        XCTAssertEqual(notice.projectName, "removed")
+        XCTAssertEqual(notice.destination, .manageLocalProjects)
+        XCTAssertEqual(notice.actionTitle, "Manage Unavailable Projects")
+        XCTAssertFalse(store.items.contains { $0.id == "local:sync" })
+        let view = NSHostingView(rootView: LocalProjectRecoveryView(store: store, retry: { .completed }))
+        XCTAssertEqual(view.fittingSize.height, 420)
+        context.projects = []
+        await Task.yield()
+        XCTAssertEqual(store.items.count, 1, "Recovery must stay reachable without remote project access.")
+        await store.acknowledge(notice, action: .archive)
+        await store.refresh()
+        XCTAssertTrue(try XCTUnwrap(store.items.first).isArchived, "Periodic retries must not create new notices.")
+        local.unavailableProjects = []
+        await store.refresh()
+        XCTAssertTrue(store.items.isEmpty)
+        XCTAssertTrue(store.unavailableProjects.isEmpty)
+        local.unavailableProjects = [.init(projectId: "removed", bindings: [binding], draftCount: 2)]
+        await store.refresh()
+        XCTAssertEqual(store.unreadCount, 1, "A later loss of access is actionable again.")
+        context.authorityGeneration = UUID()
+        XCTAssertTrue(store.unavailableProjects.isEmpty)
+    }
+
+    func testLocalProjectRecoveryActionsStayAtTheBottomWhenTheListEmpties() async throws {
+        let context = context(), responses = Responses()
+        responses.unavailable = true
+        let store = InboxStore(context: context, defaults: try preferences(),
+            fetchPage: { _ in (.init(items: [], nextCursor: nil), false) }, fetchLocal: {
+                var local = self.snapshot()
+                if responses.unavailable {
+                    local.unavailableProjects = [.init(projectId: "removed", bindings: [], draftCount: 1)]
+                }
+                return local
+            })
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        let retried = expectation(description: "Retry displays an error")
+        let controller = NSHostingController(rootView: LocalProjectRecoveryView(store: store, retry: {
+            retried.fulfill()
+            return .failed("The server is unavailable. Try again when connected.")
+        })
+            .background(Color(nsColor: .windowBackgroundColor))
+            .environment(\.controlActiveState, .inactive))
+        let host = controller.view
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
+            styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        func footerSnapshot(_ name: String) async throws -> Data {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let image = try XCTUnwrap(bitmap.cgImage)
+            let height = CGFloat(image.height) * 56 / host.bounds.height
+            let footer = try XCTUnwrap(image.cropping(to: CGRect(x: 0, y: CGFloat(image.height) - height,
+                width: CGFloat(image.width), height: height)))
+            return try XCTUnwrap(NSBitmapImageRep(cgImage: footer).representation(using: .png, properties: [:]))
+        }
+        let before = try await footerSnapshot("Unavailable Projects - With projects")
+        responses.unavailable = false
+        await store.refresh()
+        let after = try await footerSnapshot("Unavailable Projects - Empty")
+        XCTAssertTrue(before == after, "Clearing the last unavailable project must not move or redraw the footer buttons.")
+        let enter = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        XCTAssertTrue(window.performKeyEquivalent(with: enter))
+        await fulfillment(of: [retried], timeout: 1)
+        let failed = try await footerSnapshot("Unavailable Projects - Retry failed")
+        XCTAssertTrue(after == failed, "Showing a retry error must not move the footer buttons.")
+    }
+
     func testServerPaginationAndDelayedReceiptsCannotHideNewerEvents() async throws {
         let context = context(), defaults = try preferences()
         let responses = Responses()

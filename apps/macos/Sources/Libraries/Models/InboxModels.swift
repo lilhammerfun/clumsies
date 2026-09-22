@@ -39,6 +39,7 @@ enum InboxDestination: Hashable, Sendable {
     case sharedChanges(projectId: String)
     case project(String)
     case retrySync
+    case manageLocalProjects
 }
 
 enum InboxMessageType: String, CaseIterable, Identifiable, Sendable {
@@ -88,6 +89,7 @@ struct InboxItem: Identifiable, Sendable {
         case .review: String(localized: "Open Review")
         case .sharedChanges: String(localized: "Open Memory")
         case .retrySync: String(localized: "Retry Sync")
+        case .manageLocalProjects: String(localized: "Manage Unavailable Projects")
         case .project: String(localized: "Open Project")
         }
     }

@@ -17779,6 +17779,166 @@
           }
         }
       }
+    },
+    "Manage Unavailable Projects": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage Unavailable Projects"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "管理不可用项目"
+          }
+        }
+      }
+    },
+    "Project sync paused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project sync paused"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目同步已暂停"
+          }
+        }
+      }
+    },
+    "This project was deleted or is no longer accessible. Drafts on this Mac are retained.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This project was deleted or is no longer accessible. Drafts on this Mac are retained."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此项目已被删除或无法再访问。此 Mac 上的草稿已保留。"
+          }
+        }
+      }
+    },
+    "Unavailable Projects": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable Projects"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不可用项目"
+          }
+        }
+      }
+    },
+    "Unavailable projects are paused. Removing a binding keeps the repository and local drafts.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable projects are paused. Removing a binding keeps the repository and local drafts."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不可访问的项目已暂停同步。解除绑定会保留本地目录和草稿。"
+          }
+        }
+      }
+    },
+    "All local projects are available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All local projects are available."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本机关联的项目均可访问。"
+          }
+        }
+      }
+    },
+    "Remove Binding": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove Binding"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "解除绑定"
+          }
+        }
+      }
+    },
+    "%lld local drafts retained": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld local drafts retained"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已保留 %lld 份本机草稿"
+          }
+        }
+      }
+    },
+    "Export Drafts…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export Drafts…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导出草稿…"
+          }
+        }
+      }
+    },
+    "Check Again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新检查"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

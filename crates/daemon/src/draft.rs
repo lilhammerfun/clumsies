@@ -29,6 +29,39 @@ use crate::{commit_sync, delete_server_json, get_server_json, load_meta_value, p
 
 const MAX_CONCURRENT_DRAFT_PROJECTION_REQUESTS: usize = 8;
 
+/// Marks event streams to replay when a project's membership returns.
+const DEFERRED_EVENTS_PREFIX: &str = "draft_events_deferred:";
+
+/// Resume events skipped while their project was inaccessible, including after restart.
+///
+/// # Errors
+/// Propagates metadata failures without advancing the event cursor.
+pub(crate) async fn resume_deferred_events(
+    state: &DaemonState,
+    project_ids: &BTreeSet<String>,
+) -> Result<(), DaemonError> {
+    let keys: Vec<String> = project_ids
+        .iter()
+        .map(|id| format!("{DEFERRED_EVENTS_PREFIX}{id}"))
+        .collect();
+    let mut tx = state.inner.pool.begin().await?;
+    let resumed =
+        sqlx::query("DELETE FROM daemon_meta WHERE key IN (SELECT value FROM json_each($1))")
+            .bind(serde_json::to_string(&keys)?)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if resumed > 0 {
+        // ponytail: replay the author's feed once on restored access; add per-project cursors if large histories make recovery slow.
+        sqlx::query("DELETE FROM daemon_meta WHERE key = $1")
+            .bind(META_DRAFT_EVENTS_CURSOR)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct DraftListCursor {
     updated_at: String,
@@ -446,14 +479,22 @@ async fn load_sync_status_scoped(
     project_id: Option<&str>,
 ) -> Result<DaemonSyncStatus, DaemonError> {
     let pool = &state.inner.pool;
+    let accessible = crate::project_access::project_ids_json(state);
+    let unavailable_projects = crate::project_access::unavailable(state)
+        .await?
+        .into_iter()
+        .filter(|project| project_id.is_none_or(|id| project.project_id == id))
+        .collect();
     let pending_operation_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM local_draft_operations AS o
          JOIN local_drafts AS d ON d.draft_id = o.draft_id
          WHERE o.sync_status IN ('queued', 'syncing', 'retrying')
-           AND ($1 IS NULL OR d.project_id = $1)",
+           AND ($1 IS NULL OR d.project_id = $1)
+           AND ($2 IS NULL OR d.project_id IN (SELECT value FROM json_each($2)))",
     )
     .bind(project_id)
+    .bind(&accessible)
     .fetch_one(pool)
     .await?;
     let failed_operation_count: i64 = sqlx::query_scalar(
@@ -461,9 +502,11 @@ async fn load_sync_status_scoped(
          FROM local_draft_operations AS o
          JOIN local_drafts AS d ON d.draft_id = o.draft_id
          WHERE o.sync_status = 'failed'
-           AND ($1 IS NULL OR d.project_id = $1)",
+           AND ($1 IS NULL OR d.project_id = $1)
+           AND ($2 IS NULL OR d.project_id IN (SELECT value FROM json_each($2)))",
     )
     .bind(project_id)
+    .bind(&accessible)
     .fetch_one(pool)
     .await?;
     let retrying_operation_count: i64 = sqlx::query_scalar(
@@ -471,23 +514,29 @@ async fn load_sync_status_scoped(
          FROM local_draft_operations AS o
          JOIN local_drafts AS d ON d.draft_id = o.draft_id
          WHERE o.sync_status = 'retrying'
-           AND ($1 IS NULL OR d.project_id = $1)",
+           AND ($1 IS NULL OR d.project_id = $1)
+           AND ($2 IS NULL OR d.project_id IN (SELECT value FROM json_each($2)))",
     )
     .bind(project_id)
+    .bind(&accessible)
     .fetch_one(pool)
     .await?;
     let behind_draft_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM local_drafts
-         WHERE freshness = 'behind' AND ($1 IS NULL OR project_id = $1)",
+         WHERE freshness = 'behind' AND ($1 IS NULL OR project_id = $1)
+           AND ($2 IS NULL OR project_id IN (SELECT value FROM json_each($2)))",
     )
     .bind(project_id)
+    .bind(&accessible)
     .fetch_one(pool)
     .await?;
     let reconciliation_conflict_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM local_drafts
-         WHERE reconciliation = 'conflicts' AND ($1 IS NULL OR project_id = $1)",
+         WHERE reconciliation = 'conflicts' AND ($1 IS NULL OR project_id = $1)
+           AND ($2 IS NULL OR project_id IN (SELECT value FROM json_each($2)))",
     )
     .bind(project_id)
+    .bind(&accessible)
     .fetch_one(pool)
     .await?;
     let server_cursor = load_meta_value(pool, META_DRAFT_EVENTS_CURSOR).await?;
@@ -501,16 +550,15 @@ async fn load_sync_status_scoped(
          JOIN local_drafts AS d ON d.draft_id = o.draft_id
          WHERE o.sync_status IN ('retrying', 'failed') AND o.last_error IS NOT NULL
            AND ($1 IS NULL OR d.project_id = $1)
+           AND ($2 IS NULL OR d.project_id IN (SELECT value FROM json_each($2)))
          ORDER BY o.updated_at DESC
          LIMIT 1",
     )
     .bind(project_id)
+    .bind(&accessible)
     .fetch_optional(pool)
     .await?;
-    let readiness = match project_id {
-        Some(_) => state.project_config().server_readiness(),
-        None => state.project_config().readiness(),
-    };
+    let readiness = state.project_config().server_readiness();
     let config_error = (!readiness.ready
         && state.inner.config.sync.enabled
         && pending_operation_count > 0)
@@ -546,6 +594,7 @@ async fn load_sync_status_scoped(
     };
 
     Ok(DaemonSyncStatus {
+        unavailable_projects,
         draft_sync: SyncChannelStatus {
             state: draft_state,
             server_cursor,
@@ -584,12 +633,16 @@ pub(crate) async fn drain_draft_queue(
     state: &DaemonState,
     project_id: Option<&str>,
 ) -> Result<bool, DaemonError> {
+    let accessible = crate::project_access::project_ids_json(state);
     let mut queue_converged = true;
     loop {
-        let Some(operation) = load_next_queued_operation(&state.inner.pool, project_id).await?
+        let Some(operation) =
+            load_next_queued_operation(&state.inner.pool, project_id, accessible.as_deref())
+                .await?
         else {
             break;
         };
+        crate::project_access::require_current(state)?;
         mark_operation_syncing(&state.inner.pool, &operation.local_operation_id).await?;
         if let Err(error) = sync_one_draft_operation(state, operation).await {
             queue_converged = false;
@@ -615,9 +668,11 @@ pub(crate) async fn drain_draft_queue(
          FROM local_draft_operations AS o
          JOIN local_drafts AS d ON d.draft_id = o.draft_id
          WHERE o.sync_status != 'synced'
-           AND ($1 IS NULL OR d.project_id = $1)",
+           AND ($1 IS NULL OR d.project_id = $1)
+           AND ($2 IS NULL OR d.project_id IN (SELECT value FROM json_each($2)))",
     )
     .bind(project_id)
+    .bind(&accessible)
     .fetch_one(&state.inner.pool)
     .await?;
     Ok(queue_converged && unsynced_operation_count == 0)
@@ -721,6 +776,7 @@ pub(crate) async fn sync_one_draft_operation(
 pub(crate) async fn load_next_queued_operation(
     pool: &SqlitePool,
     project_id: Option<&str>,
+    accessible: Option<&str>,
 ) -> Result<Option<QueuedDraftOperation>, DaemonError> {
     let Some(row) = sqlx::query(
         "SELECT
@@ -731,6 +787,7 @@ pub(crate) async fn load_next_queued_operation(
          JOIN local_drafts d ON d.draft_id = o.draft_id
          WHERE o.sync_status = 'queued'
            AND ($1 IS NULL OR d.project_id = $1)
+           AND ($2 IS NULL OR d.project_id IN (SELECT value FROM json_each($2)))
            AND NOT EXISTS (
                SELECT 1
                FROM local_draft_operations AS prior
@@ -742,6 +799,7 @@ pub(crate) async fn load_next_queued_operation(
          LIMIT 1",
     )
     .bind(project_id)
+    .bind(accessible)
     .fetch_optional(pool)
     .await?
     else {
@@ -1079,6 +1137,7 @@ pub(crate) fn draft_title(operation: &QueuedDraftOperation) -> String {
 }
 
 pub(crate) async fn pull_draft_events(state: &DaemonState) -> Result<(), DaemonError> {
+    let access = crate::project_access::require_current(state)?;
     let mut cursor = load_meta_value(&state.inner.pool, META_DRAFT_EVENTS_CURSOR).await?;
 
     loop {
@@ -1107,7 +1166,11 @@ pub(crate) async fn pull_draft_events(state: &DaemonState) -> Result<(), DaemonE
 
         // The Server projection is canonical even for events produced by this installation.
         // Re-projecting them refreshes coordination fields that an upload response cannot carry.
-        let remote_events = response.events.iter().collect::<Vec<_>>();
+        let remote_events = response
+            .events
+            .iter()
+            .filter(|event| access.project_ids.contains(&event.project_id))
+            .collect::<Vec<_>>();
         let affected_projects = remote_events
             .iter()
             .map(|event| event.project_id.clone())
@@ -1174,7 +1237,20 @@ pub(crate) async fn pull_draft_events(state: &DaemonState) -> Result<(), DaemonE
             commit_sync::ensure_commit_cached(state, &base_commit_id).await?;
         }
 
+        crate::project_access::require_current(state)?;
         let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+        for event in response
+            .events
+            .iter()
+            .filter(|event| !access.project_ids.contains(&event.project_id))
+        {
+            sqlx::query(
+                "INSERT INTO daemon_meta(key, value) VALUES ($1, '1') ON CONFLICT(key) DO NOTHING",
+            )
+            .bind(format!("{DEFERRED_EVENTS_PREFIX}{}", event.project_id))
+            .execute(&mut *tx)
+            .await?;
+        }
         for detail in drafts.values() {
             project_server_draft(&mut tx, detail).await?;
         }

@@ -308,6 +308,22 @@ async fn run_scoped(state: &DaemonState, project_id: Option<&str>) -> Result<(),
     result
 }
 
+/// Record a failed identity preflight without treating it as an empty project list.
+///
+/// # Errors
+/// Propagates failures to persist the synchronization diagnostic.
+pub(crate) async fn record_sync_error(
+    state: &DaemonState,
+    project_id: Option<&str>,
+    error: &DaemonError,
+) -> Result<(), DaemonError> {
+    let key = commit_sync_meta_key(META_COMMIT_SYNC_LAST_ERROR, project_id);
+    let mut tx = state.inner.pool.begin().await?;
+    upsert_meta_value(&mut tx, &key, Some(&error.to_string())).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub(super) async fn status(state: &DaemonState) -> Result<SyncChannelStatus, DaemonError> {
     status_scoped(state, None).await
 }
@@ -364,7 +380,10 @@ async fn status_scoped(
         SyncState::Degraded
     } else if last_error.is_some() {
         SyncState::Failed
-    } else if readiness.ready && !ref_installed {
+    } else if readiness.ready
+        && !ref_installed
+        && !(project_id.is_none() && last_success_at.is_some())
+    {
         SyncState::Queued
     } else {
         SyncState::Idle
@@ -627,8 +646,17 @@ pub(super) async fn project_checkout(
 async fn sync_refs(state: &DaemonState, project_ids: BTreeSet<String>) -> CommitSyncOutcome {
     let attempted_project_ids = project_ids.clone();
     let mut errors = BTreeMap::new();
+    let access = match crate::project_access::require_current(state) {
+        Ok(access) => access,
+        Err(error) => {
+            return CommitSyncOutcome::from_shared_error(attempted_project_ids, errors, error);
+        }
+    };
     let mut ready_project_ids = Vec::new();
     for project_id in project_ids {
+        if !access.project_ids.contains(&project_id) {
+            continue;
+        }
         if let Err(error) = validate_cache_component("project_id", &project_id) {
             errors.insert(project_id, error);
             continue;
@@ -683,11 +711,7 @@ async fn sync_refs(state: &DaemonState, project_ids: BTreeSet<String>) -> Commit
             }
         }
     }
-    let Some((_, (first_project_state, _))) = projects.first_key_value() else {
-        return CommitSyncOutcome::from_project_errors(attempted_project_ids, errors);
-    };
-
-    let expected_org_id = first_project_state.reference.org_id.clone();
+    let expected_org_id = access.org_id.clone();
     let local_org_commit =
         match load_ref_commit(&state.inner.pool, &org_ref_key(&expected_org_id)).await {
             Ok(commit_id) => commit_id,
@@ -733,6 +757,16 @@ async fn sync_refs(state: &DaemonState, project_ids: BTreeSet<String>) -> Commit
             ),
         );
     }
+    if crate::project_access::current(state).is_none() {
+        return CommitSyncOutcome::from_shared_error(
+            attempted_project_ids,
+            errors,
+            DaemonError::State {
+                code: "sync_session_changed",
+                message: "The Server session changed during synchronization.".to_owned(),
+            },
+        );
+    }
     if let Err(error) = install_ref(state, &org_state, &org_etag, None).await {
         return CommitSyncOutcome::from_shared_error_after_project_errors(
             attempted_project_ids,
@@ -757,7 +791,7 @@ async fn sync_refs(state: &DaemonState, project_ids: BTreeSet<String>) -> Commit
     CommitSyncOutcome::from_project_errors(attempted_project_ids, errors)
 }
 
-async fn sync_project_ids(state: &DaemonState) -> Result<BTreeSet<String>, DaemonError> {
+pub(crate) async fn sync_project_ids(state: &DaemonState) -> Result<BTreeSet<String>, DaemonError> {
     let config = state.project_config();
     let server_url = canonical_server_url(&config.server_url)?;
     let mut project_ids = BTreeSet::new();
@@ -847,6 +881,7 @@ async fn fetch_commit_state(
         None,
     )
     .await?;
+    let response = ensure_server_success(response).await?;
     let etag = response
         .headers()
         .get(ETAG)

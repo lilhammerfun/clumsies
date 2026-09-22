@@ -166,6 +166,8 @@ pub(crate) struct DaemonInner {
     pub(crate) daemon_installation_id: String,
     pub(crate) sync_notify: Notify,
     pub(crate) sync_lock: Mutex<()>,
+    /// Last live membership snapshot, scoped to a login session.
+    pub(crate) project_access: RwLock<Option<project_access::ProjectAccess>>,
     pub(crate) commit_sync_run_scope: RwLock<commit_sync::CommitSyncRunScope>,
     pub(crate) token_refresh: Mutex<()>,
     server_response_cache: std::sync::Mutex<ServerResponseCacheState>,
@@ -295,6 +297,7 @@ impl DaemonState {
                 daemon_installation_id,
                 sync_notify: Notify::new(),
                 sync_lock: Mutex::new(()),
+                project_access: RwLock::new(None),
                 commit_sync_run_scope: RwLock::new(commit_sync::CommitSyncRunScope::Idle),
                 token_refresh: Mutex::new(()),
                 server_response_cache: std::sync::Mutex::new(ServerResponseCacheState::default()),
@@ -466,6 +469,28 @@ impl DaemonState {
         Ok(true)
     }
 
+    /// Clear a selection removed from the current live membership list.
+    ///
+    /// # Errors
+    /// Propagates metadata persistence errors, leaving local bindings and drafts intact.
+    pub(crate) async fn reconcile_project_selection(&self) -> Result<(), DaemonError> {
+        let _mutation = self.inner.project_config_mutation.lock().await;
+        let Some(access) = project_access::current(self) else {
+            return Ok(());
+        };
+        let mut config = self.project_config();
+        if config
+            .project_id
+            .as_ref()
+            .is_some_and(|id| !access.project_ids.contains(id))
+        {
+            config.project_id = None;
+            save_project_metadata(&self.inner.pool, &config.metadata()).await?;
+            self.publish_project_config(config);
+        }
+        Ok(())
+    }
+
     pub async fn select_project(
         &self,
         request: DaemonProjectSelectionRequest,
@@ -540,6 +565,7 @@ impl DaemonState {
                     workspace_path.display()
                 ),
             })?;
+        project_access::ensure_available(self, &binding.project_id)?;
         if let Some(required) = required_adapter {
             agent_adapter::require_runtime_delivery(self, &binding, required).await?;
         }
@@ -684,15 +710,22 @@ impl DaemonState {
         &self,
         request: DaemonProjectBindingRemoveRequest,
     ) -> Result<DaemonProjectBindingRemoveResponse, DaemonError> {
-        let workspace_root = canonical_workspace_directory(&request.workspace_root)?;
+        if !std::path::Path::new(&request.workspace_root).is_absolute() {
+            return Err(DaemonError::InvalidRequest(
+                "workspace path must be absolute".to_owned(),
+            ));
+        }
+        let workspace_root = canonical_binding_root(&request.workspace_root);
         let server_url = canonical_server_url(&self.project_config().server_url)?;
         let _guard = self.inner.local_setup_lock.lock().await;
-        agent_adapter::recover_pending_fs_ops_for_workspace(
-            &self.inner.pool,
-            &server_url,
-            &workspace_root,
-        )
-        .await?;
+        if workspace_root.is_dir() {
+            agent_adapter::recover_pending_fs_ops_for_workspace(
+                &self.inner.pool,
+                &server_url,
+                &workspace_root,
+            )
+            .await?;
+        }
         let workspace_root = workspace_root.display().to_string();
         let adapter_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
@@ -727,6 +760,7 @@ impl DaemonState {
                 ),
             });
         }
+        self.request_sync();
         Ok(DaemonProjectBindingRemoveResponse {
             workspace_root,
             removed: true,
@@ -1832,6 +1866,13 @@ impl DaemonState {
         async {
             if !self.project_config().server_readiness().ready {
                 return Ok(());
+            }
+            if let Err(error) = project_access::refresh(self).await {
+                commit_sync::record_sync_error(self, project_id, &error).await?;
+                return Err(error);
+            }
+            if let Some(project_id) = project_id {
+                project_access::ensure_available(self, project_id)?;
             }
             let mut first_error = None;
             if sync_drafts {

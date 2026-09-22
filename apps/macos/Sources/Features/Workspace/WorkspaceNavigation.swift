@@ -39,6 +39,7 @@ final class WorkspaceNavigation: ObservableObject {
         self.sessions = sessions
     }
 
+    @Published var showsLocalProjectRecovery = false
     @Published var selectedSection: WorkspaceSection = .memory
     @Published var selectedKind: MemoryKind = .context
     @Published var selectedItemId: String?
@@ -482,6 +483,7 @@ final class WorkspaceNavigation: ObservableObject {
     }
 
     func resetAuthority() {
+        showsLocalProjectRecovery = false
         selectedSection = .memory
         selectedItemId = nil
         tabs.removeAll()

@@ -3033,6 +3033,530 @@ async fn selecting_a_project_preserves_credentials_and_persists_the_active_proje
     assert!(error.to_string().contains("project_id must not be empty"));
 }
 
+fn identity_response(org_id: &str, projects: &[&str]) -> Json<serde_json::Value> {
+    Json(
+        json!({"org": {"org_id": org_id}, "projects": projects.iter().map(|id| json!({"project_id": id})).collect::<Vec<_>>() }),
+    )
+}
+
+async fn bindings_identity() -> Json<serde_json::Value> {
+    identity_response(
+        "org_bindings",
+        &[
+            "prj_a",
+            "prj_b",
+            "prj_bound_first",
+            "prj_bound_second",
+            "prj_desktop_selection",
+        ],
+    )
+}
+
+async fn fake_identity() -> Json<serde_json::Value> {
+    identity_response(
+        "org_test",
+        &[
+            "prj_test",
+            "prj_recovery",
+            "prj_late",
+            "prj_retrying",
+            "prj_retry_lock",
+            "prj_terminal",
+            "prj_conflict",
+        ],
+    )
+}
+
+async fn atomic_identity() -> Json<serde_json::Value> {
+    identity_response("org_atomic", &["prj_atomic"])
+}
+
+#[derive(Clone, Default)]
+struct ProjectLifecycleProbe {
+    membership: Arc<AtomicUsize>,
+    commit_status: Arc<AtomicUsize>,
+    project_requests: Arc<Mutex<Vec<String>>>,
+    org_requests: Arc<AtomicUsize>,
+    uploads: Arc<AtomicUsize>,
+    send_events: Arc<AtomicBool>,
+    projections: Arc<AtomicUsize>,
+}
+
+async fn lifecycle_events(
+    axum::extract::State(probe): axum::extract::State<ProjectLifecycleProbe>,
+    axum::extract::Query(query): axum::extract::Query<BTreeMap<String, String>>,
+) -> Json<serde_json::Value> {
+    if !probe.send_events.load(Ordering::SeqCst) || query.contains_key("after_cursor") {
+        return empty_draft_events().await;
+    }
+    Json(json!({"events": [{
+        "event_id": "evt_retained", "draft_id": "drf_remote", "project_id": "prj_recovery",
+        "event_type": "discarded", "version": 1, "daemon_installation_id": null,
+        "created_at": "2026-09-22T00:00:00Z"
+    }], "next_cursor": "1", "has_more": false}))
+}
+
+async fn lifecycle_projection(
+    axum::extract::State(probe): axum::extract::State<ProjectLifecycleProbe>,
+) -> Json<serde_json::Value> {
+    probe.projections.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(
+        probe.membership.load(Ordering::SeqCst),
+        1,
+        "Inaccessible Drafts must not be fetched"
+    );
+    Json(json!({"draft": {
+        "draft_id": "drf_remote", "project_id": "prj_recovery", "base_commit_id": null,
+        "resource": {"scope": "org", "id": null, "path": "context/remote.md"},
+        "coordination": {"current_commit_id": null, "freshness": "current",
+            "has_upstream_resource_changes": false, "reconciliation": "unknown", "candidate_id": null},
+        "status": "discarded", "version": 1, "created_at": "2026-09-22T00:00:00Z", "updated_at": "2026-09-22T00:00:00Z"
+    }, "operations": []}))
+}
+
+async fn lifecycle_identity(
+    axum::extract::State(probe): axum::extract::State<ProjectLifecycleProbe>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match probe.membership.load(Ordering::SeqCst) {
+        0 => identity_response("org_test", &["prj_test"]).into_response(),
+        1 => identity_response("org_test", &["prj_test", "prj_recovery"]).into_response(),
+        2 => identity_response("org_test", &[]).into_response(),
+        3 => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "identity unavailable",
+        )
+            .into_response(),
+        4 => Json(json!({"org": {"org_id": "org_test"}})).into_response(),
+        _ => (axum::http::StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+    }
+}
+
+async fn lifecycle_project_commit(
+    axum::extract::State(probe): axum::extract::State<ProjectLifecycleProbe>,
+    axum::extract::Path(project_id): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    probe
+        .project_requests
+        .lock()
+        .unwrap()
+        .push(project_id.clone());
+    match probe.commit_status.load(Ordering::SeqCst) {
+        0 => fake_project_commit_state(axum::extract::Path(project_id))
+            .await
+            .into_response(),
+        200 => Json(json!({})).into_response(), // Successful protocol response really lacks ETag.
+        code => (
+            axum::http::StatusCode::from_u16(code as u16).unwrap(),
+            "project unavailable",
+        )
+            .into_response(),
+    }
+}
+
+async fn lifecycle_org_commit(
+    axum::extract::State(probe): axum::extract::State<ProjectLifecycleProbe>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    probe.org_requests.fetch_add(1, Ordering::SeqCst);
+    fake_org_commit_state().await.into_response()
+}
+
+async fn lifecycle_upload(
+    axum::extract::State(probe): axum::extract::State<ProjectLifecycleProbe>,
+) -> Json<serde_json::Value> {
+    probe.uploads.fetch_add(1, Ordering::SeqCst);
+    Json(json!({"draft": {"draft_id": "drf_restored", "version": 1}}))
+}
+
+async fn lifecycle_server(probe: ProjectLifecycleProbe) -> String {
+    let app = Router::new()
+        .route("/api/v1/me", get(lifecycle_identity))
+        .route("/api/v1/projects/{project_id}", get(accessible_project))
+        .route(
+            "/api/v1/projects/{project_id}/commit-state",
+            get(lifecycle_project_commit),
+        )
+        .route("/api/v1/org/commit-state", get(lifecycle_org_commit))
+        .route("/api/v1/draft-events", get(lifecycle_events))
+        .route("/api/v1/drafts", post(lifecycle_upload))
+        .route("/api/v1/drafts/{draft_id}", get(lifecycle_projection))
+        .with_state(probe);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{address}")
+}
+
+#[tokio::test]
+async fn unavailable_projects_pause_without_losing_local_work_and_resume_after_access_returns() {
+    let probe = ProjectLifecycleProbe::default();
+    probe.send_events.store(true, Ordering::SeqCst);
+    let root = tempfile::tempdir().unwrap();
+    let workspaces = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = lifecycle_server(probe.clone()).await;
+    config.project.project_id = Some("prj_recovery".to_owned());
+    let (state, credentials) =
+        common::initialize_authenticated_daemon(config.clone(), "test-token", None).await;
+    for id in ["prj_test", "prj_recovery"] {
+        let path = workspaces.path().join(id);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("user-file.txt"), "keep me").unwrap();
+        state
+            .replace_project_binding(DaemonProjectBindingReplaceRequest {
+                workspace_root: path.display().to_string(),
+                project_id: id.to_owned(),
+                expected_revision: None,
+            })
+            .await
+            .unwrap();
+    }
+    let stored = state
+        .store_draft_operation(DaemonDraftOperationRequest {
+            draft_id: None,
+            base_commit_id: None,
+            project_id: "prj_recovery".to_owned(),
+            scope: DaemonDraftScope::Org,
+            resource: DaemonDraftResourceKind::Memory,
+            op: DaemonDraftOperation {
+                create: Some(DaemonCreateDraftOperation {
+                    path: "context/retained.md".to_owned(),
+                    content: context_content("Retain this proposal"),
+                    description: None,
+                }),
+                update: None,
+                rename: None,
+                delete: None,
+                discard: None,
+            },
+            source: None,
+        })
+        .await
+        .unwrap();
+    // Seed exactly the diagnostic left by old clients; a successful cycle must retire it.
+    let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO daemon_meta(key,value) VALUES ('commit_sync_last_error','Commit state response is missing ETag')").execute(&pool).await.unwrap();
+    pool.close().await;
+    for _ in 0..2 {
+        state
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::All,
+            })
+            .await
+            .unwrap();
+        let status = state.sync_status().await.unwrap();
+        assert_eq!(status.pending_operation_count, 0);
+        assert_eq!(status.failed_operation_count, 0);
+        assert_eq!(status.commit_sync.state, SyncState::Idle);
+        assert!(status.commit_sync.last_error.is_none());
+        assert_eq!(status.unavailable_projects.len(), 1);
+        assert_eq!(status.unavailable_projects[0].project_id, "prj_recovery");
+        assert_eq!(status.unavailable_projects[0].draft_count, 1);
+        assert_eq!(status.unavailable_projects[0].bindings.len(), 1);
+        let draft = state.get_draft(&stored.draft_id).await.unwrap();
+        assert_eq!(
+            draft.operations[0].sync_status,
+            DraftOperationSyncStatus::Queued
+        );
+        assert_eq!(
+            draft.operations[0]
+                .operation
+                .create
+                .as_ref()
+                .unwrap()
+                .content,
+            context_content("Retain this proposal")
+        );
+    }
+    assert_eq!(probe.uploads.load(Ordering::SeqCst), 0);
+    assert_eq!(probe.projections.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        state
+            .sync_status()
+            .await
+            .unwrap()
+            .draft_sync
+            .server_cursor
+            .as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        *probe.project_requests.lock().unwrap(),
+        ["prj_test", "prj_test"]
+    );
+    assert_eq!(state.project_config_status().project_id, None);
+    let request = || DaemonProjectBindingResolveRequest {
+        workspace_path: workspaces.path().join("prj_recovery").display().to_string(),
+        required_adapter: None,
+    };
+    assert!(matches!(
+        state.resolve_project_binding(request()).await.unwrap_err(),
+        DaemonError::State {
+            code: "project_binding_unresolved",
+            ..
+        }
+    ));
+    drop(state);
+    let state = common::initialize_daemon(config, credentials).await;
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::All,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        state.sync_status().await.unwrap().unavailable_projects[0].draft_count,
+        1
+    );
+    probe.membership.store(1, Ordering::SeqCst);
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::All,
+        })
+        .await
+        .unwrap();
+    assert!(
+        state
+            .sync_status()
+            .await
+            .unwrap()
+            .unavailable_projects
+            .is_empty()
+    );
+    assert_eq!(probe.uploads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        probe.projections.load(Ordering::SeqCst),
+        1,
+        "Deferred events must replay after restored access and restart"
+    );
+    assert_eq!(
+        state.get_draft(&stored.draft_id).await.unwrap().operations[0].sync_status,
+        DraftOperationSyncStatus::Synced
+    );
+    assert_eq!(
+        state
+            .resolve_project_binding(request())
+            .await
+            .unwrap()
+            .project_id,
+        "prj_recovery"
+    );
+
+    // Removing the final projects still syncs the organization ref.
+    probe.membership.store(2, Ordering::SeqCst);
+    let before_projects = probe.project_requests.lock().unwrap().len();
+    let before_org = probe.org_requests.load(Ordering::SeqCst);
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::All,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        probe.project_requests.lock().unwrap().len(),
+        before_projects
+    );
+    assert_eq!(probe.org_requests.load(Ordering::SeqCst), before_org + 1);
+    let unavailable = state.sync_status().await.unwrap().unavailable_projects;
+    assert_eq!(unavailable.len(), 2);
+    let binding = &unavailable
+        .iter()
+        .find(|p| p.project_id == "prj_test")
+        .unwrap()
+        .bindings[0];
+    let moved = workspaces.path().join("moved-test");
+    std::fs::rename(&binding.workspace_root, &moved).unwrap();
+    assert!(
+        state
+            .remove_project_binding(DaemonProjectBindingRemoveRequest {
+                workspace_root: binding.workspace_root.clone(),
+                expected_revision: binding.revision + 1,
+            })
+            .await
+            .is_err()
+    );
+    state
+        .remove_project_binding(DaemonProjectBindingRemoveRequest {
+            workspace_root: binding.workspace_root.clone(),
+            expected_revision: binding.revision,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(moved.join("user-file.txt")).unwrap(),
+        "keep me"
+    );
+    assert_eq!(
+        state
+            .sync_status()
+            .await
+            .unwrap()
+            .unavailable_projects
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn failed_membership_reads_preserve_bindings_and_http_errors_precede_etag_validation() {
+    let probe = ProjectLifecycleProbe::default();
+    let root = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = lifecycle_server(probe.clone()).await;
+    config.project.project_id = Some("prj_test".to_owned());
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    state
+        .replace_project_binding(DaemonProjectBindingReplaceRequest {
+            workspace_root: workspace.path().display().to_string(),
+            project_id: "prj_test".to_owned(),
+            expected_revision: None,
+        })
+        .await
+        .unwrap();
+    for code in [404, 401, 403, 500, 200, 0] {
+        probe.commit_status.store(code, Ordering::SeqCst);
+        let result = state
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::Commits,
+            })
+            .await;
+        if code == 0 {
+            result.unwrap();
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert_eq!(
+                error.contains("missing ETag"),
+                code == 200,
+                "{code}: {error}"
+            );
+            if code != 200 {
+                assert!(error.contains(&code.to_string()), "{error}");
+            }
+        }
+        // A per-project 404 is insufficient to discard a binding or stop future syncs.
+        assert!(
+            state
+                .sync_status()
+                .await
+                .unwrap()
+                .unavailable_projects
+                .is_empty()
+        );
+    }
+    let before = probe.project_requests.lock().unwrap().len();
+    for membership in [3, 4, 5] {
+        probe.membership.store(membership, Ordering::SeqCst);
+        assert!(
+            state
+                .retry_sync(DaemonSyncRetryRequest {
+                    channel: SyncRetryChannel::All
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            state.project_config_status().project_id.as_deref(),
+            Some("prj_test")
+        );
+        assert!(
+            state
+                .sync_status()
+                .await
+                .unwrap()
+                .unavailable_projects
+                .is_empty()
+        );
+        assert_eq!(probe.project_requests.lock().unwrap().len(), before);
+    }
+    assert_eq!(
+        state
+            .list_project_bindings(DaemonProjectBindingListRequest {
+                project_id: "prj_test".to_owned()
+            })
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn membership_from_a_previous_session_cannot_clear_the_new_selection() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let app = Router::new().route(
+        "/api/v1/me",
+        get({
+            let started = started.clone();
+            let release = release.clone();
+            move || {
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    started.notify_one();
+                    release.notified().await;
+                    identity_response("org_test", &[])
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    config.project.project_id = Some("prj_test".to_owned());
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    let pending_state = state.clone();
+    let pending = tokio::spawn(async move {
+        pending_state
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::All,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    state
+        .replace_project_config(DaemonProjectConfigUpdateRequest {
+            server_url: format!("http://{address}"),
+            project_id: Some("prj_new_session".to_owned()),
+            memory_guidelines_path: None,
+            access_token: Some("replacement-token".to_owned()),
+            refresh_token: None,
+        })
+        .await
+        .unwrap();
+    release.notify_one();
+    assert!(matches!(
+        pending.await.unwrap().unwrap_err(),
+        DaemonError::State {
+            code: "sync_session_changed",
+            ..
+        }
+    ));
+    assert_eq!(
+        state.project_config_status().project_id.as_deref(),
+        Some("prj_new_session")
+    );
+    assert!(
+        state
+            .sync_status()
+            .await
+            .unwrap()
+            .unavailable_projects
+            .is_empty()
+    );
+}
+
 async fn accessible_project() -> Json<serde_json::Value> {
     Json(json!({
         "project_id": "accessible",
@@ -3090,7 +3614,6 @@ async fn failing_a_empty_b_project_commit_state(
     if project_id == "prj_a" {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            [(axum::http::header::ETAG, "\"failure\"")],
             Json(json!({ "error": "injected project A failure" })),
         )
             .into_response();
@@ -4014,6 +4537,7 @@ async fn commit_sync_installs_every_bound_project_independently_of_desktop_selec
             "/api/v1/projects/{project_id}/commit-state",
             get(probed_empty_project_commit_state),
         )
+        .route("/api/v1/me", get(bindings_identity))
         .route(
             "/api/v1/org/commit-state",
             get(probed_empty_org_commit_state),
@@ -4105,6 +4629,7 @@ async fn global_commit_sync_records_failure_and_success_per_project() {
             "/api/v1/projects/{project_id}/commit-state",
             get(failing_a_empty_b_project_commit_state),
         )
+        .route("/api/v1/me", get(bindings_identity))
         .route("/api/v1/org/commit-state", get(empty_org_commit_state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -4197,6 +4722,7 @@ async fn project_commit_sync_status_and_retry_are_isolated() {
             "/api/v1/projects/{project_id}/commit-state",
             get(blocking_scoped_project_commit_state),
         )
+        .route("/api/v1/me", get(bindings_identity))
         .route("/api/v1/org/commit-state", get(empty_org_commit_state))
         .with_state(probe.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4564,6 +5090,7 @@ async fn concurrent_explicit_sync_retries_wait_for_the_inflight_sync() {
         request_count: Arc::new(AtomicUsize::new(0)),
     };
     let app = Router::new()
+        .route("/api/v1/me", get(fake_identity))
         .route("/api/v1/draft-events", get(blocking_draft_events))
         .with_state(blocking_state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4588,7 +5115,9 @@ async fn concurrent_explicit_sync_retries_wait_for_the_inflight_sync() {
             .await
             .unwrap();
     });
-    blocking_state.started.notified().await;
+    tokio::time::timeout(Duration::from_secs(5), blocking_state.started.notified())
+        .await
+        .unwrap();
 
     let second_service = service.clone();
     let second = tokio::spawn(async move {
@@ -4617,6 +5146,7 @@ async fn terminal_draft_projection_fetches_are_bounded_and_skip_base_commits() {
         max_in_flight: Arc::new(AtomicUsize::new(0)),
     };
     let app = Router::new()
+        .route("/api/v1/me", get(fake_identity))
         .route("/api/v1/draft-events", get(terminal_draft_events))
         .route("/api/v1/drafts/{draft_id}", get(terminal_draft_projection))
         .with_state(projection_state.clone());
@@ -4658,6 +5188,7 @@ async fn terminal_draft_projection_fetches_are_bounded_and_skip_base_commits() {
 #[tokio::test]
 async fn failed_remote_projection_does_not_advance_the_event_cursor() {
     let app = Router::new()
+        .route("/api/v1/me", get(fake_identity))
         .route("/api/v1/draft-events", get(fake_list_draft_events))
         .route("/api/v1/drafts/{draft_id}", get(fake_stale_draft));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4714,6 +5245,7 @@ async fn server_reconciliation_projection_keeps_lifecycle_separate_from_coordina
         resolved: Arc::new(AtomicUsize::new(0)),
     };
     let app = Router::new()
+        .route("/api/v1/me", get(fake_identity))
         .route("/api/v1/draft-events", get(fake_conflicted_draft_events))
         .route("/api/v1/drafts/{draft_id}", get(fake_conflicted_draft))
         .with_state(conflict_state.clone());
@@ -4954,6 +5486,7 @@ async fn transient_server_failure_is_retried_automatically() {
     let app = Router::new()
         .route("/api/v1/drafts", post(recovering_create_draft))
         .route("/api/v1/draft-events", get(empty_draft_events))
+        .route("/api/v1/me", get(fake_identity))
         .route("/api/v1/org/commit-state", get(fake_org_commit_state))
         .route(
             "/api/v1/projects/{project_id}/commit-state",
@@ -5036,6 +5569,7 @@ async fn successful_new_draft_does_not_hide_an_existing_retrying_operation() {
     let app = Router::new()
         .route("/api/v1/drafts", post(recovering_create_draft))
         .route("/api/v1/draft-events", get(empty_draft_events))
+        .route("/api/v1/me", get(fake_identity))
         .route("/api/v1/org/commit-state", get(fake_org_commit_state))
         .route(
             "/api/v1/projects/{project_id}/commit-state",
@@ -6224,6 +6758,7 @@ impl AtomicCommitServer {
     async fn start() -> Self {
         let revision = Arc::new(AtomicUsize::new(0));
         let app = Router::new()
+            .route("/api/v1/me", get(atomic_identity))
             .route("/api/v1/org/commit-state", get(atomic_org_commit_state))
             .route(
                 "/api/v1/projects/{project_id}/commit-state",
@@ -6419,6 +6954,7 @@ impl FakeServer {
                 "/api/v1/draft-events",
                 get(fake_list_draft_events_after_create),
             )
+            .route("/api/v1/me", get(fake_identity))
             .route("/api/v1/org/commit-state", get(fake_org_commit_state))
             .route(
                 "/api/v1/projects/{project_id}/commit-state",

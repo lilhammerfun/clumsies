@@ -44,3 +44,18 @@ See [Local runtime](/runtime) for filenames, rotation, and request correlation. 
 Project generations and search indexes are rebuildable. Central SQLite also holds Drafts and operations that may not have been uploaded. Use the product's Project cache management after confirming that the failure belongs to that layer. Deleting `local.db` can lose unsynchronized edits.
 
 Administrators can continue with [Deployment](/guides/deploy-for-an-org) and [Authentication](/reference/auth) for OIDC, database, and service health. Developers can use the [Codebase map](/repos) to find the implementation for the affected layer.
+
+## Project sync paused after project removal
+
+An older client may report “Commit state response is missing ETag” when a
+removed or inaccessible Project actually returns HTTP 404. Update the macOS App
+and its embedded daemon together. No Server migration is required for this fix.
+
+The updated client pauses unavailable Projects after checking current membership;
+other Projects and Organization memory continue syncing. Open **Inbox → Project
+sync paused → Manage Unavailable Projects** to remove an obsolete directory binding or
+export retained local Drafts as JSON. Removing a binding preserves the repository
+and Drafts. Managed agent integrations must be removed successfully before the
+binding is removed; if their directory is unavailable, restore its location first.
+Use **Check Again** after access is restored. A network or sign-in failure is
+reported separately and does not remove local bindings.

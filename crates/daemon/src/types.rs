@@ -306,6 +306,8 @@ pub struct LocalDbStatus {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DaemonSyncStatus {
+    /// Retained local work excluded from sync by the current server membership.
+    pub unavailable_projects: Vec<crate::UnavailableProject>,
     pub draft_sync: SyncChannelStatus,
     pub commit_sync: SyncChannelStatus,
     pub pending_operation_count: i64,
