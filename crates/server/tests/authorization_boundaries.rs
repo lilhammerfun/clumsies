@@ -338,10 +338,31 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p["project_id"] == *project_id && p["role"] == "admin")
+            .any(|p| p["project_id"] == *project_id && p["role"] == "owner")
     );
 
     // A project creator can use both project editing routes, but gains no authority over other projects.
+    // Ownership cannot be lost through the membership API, including self-removal.
+    let creator_path = format!("/api/v1/admin/projects/{project_id}/members/{member_id}");
+    for (method, body) in [
+        ("DELETE", None),
+        ("PATCH", Some(serde_json::json!({"role":"member"}))),
+        ("PATCH", Some(serde_json::json!({"role":"admin"}))),
+    ] {
+        let (status, _) = project_request(&member_app, method, &creator_path, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let (status, owners) = project_request(
+        &member_app,
+        "GET",
+        &format!("/api/v1/admin/projects/{project_id}/members?role=owner"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owners["items"].as_array().unwrap().len(), 1);
+    assert_eq!(owners["items"][0]["user"]["user_id"], member_id);
+
     for prefix in ["/api/v1/projects", "/api/v1/admin/projects"] {
         let (status, _) = project_request(
             &member_app,

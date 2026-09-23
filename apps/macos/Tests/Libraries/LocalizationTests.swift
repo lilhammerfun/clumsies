@@ -21,6 +21,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(String(localized: "Bundle", bundle: chinese), "Bundle")
         XCTAssertEqual(String(localized: "No Bundle", bundle: chinese), "不使用 Bundle")
         XCTAssertEqual(String(localized: "Create Project", bundle: chinese), "创建项目")
+        XCTAssertEqual(String(localized: "Maintainer", bundle: chinese), "维护者")
         XCTAssertEqual(String(localized: "Language", bundle: chinese), "语言")
         XCTAssertEqual(String(localized: "App language", bundle: chinese), "应用语言")
         XCTAssertEqual(String(localized: "Follow System", bundle: chinese), "跟随系统")

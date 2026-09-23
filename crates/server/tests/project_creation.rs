@@ -92,7 +92,7 @@ async fn public_project_creation_is_atomic_and_idempotent() {
     .fetch_one(&postgres.pool)
     .await
     .unwrap();
-    assert_eq!(member_role, "admin");
+    assert_eq!(member_role, "owner");
 
     let project_count =
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE lower(name) = 'product'")

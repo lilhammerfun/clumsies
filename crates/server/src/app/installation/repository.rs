@@ -241,7 +241,7 @@ pub(super) async fn initialize_with_oidc(
         .await?;
     sqlx::query(
         "INSERT INTO project_members (project_id, user_id, role)
-         VALUES ($1, $2, 'admin')",
+         VALUES ($1, $2, 'owner')",
     )
     .bind(&project_id)
     .bind(&user_id)

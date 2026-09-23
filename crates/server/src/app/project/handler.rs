@@ -229,6 +229,7 @@ pub(super) async fn delete_admin_project_member(
 /// Rejects a nonempty role filter that is not a supported project role.
 fn parse_admin_project_role(role: Option<&str>) -> Result<Option<ProjectRole>, HttpError> {
     match role {
+        Some("owner") => Ok(Some(ProjectRole::Owner)),
         Some("member") => Ok(Some(ProjectRole::Member)),
         Some("admin") => Ok(Some(ProjectRole::Admin)),
         Some(_) => {

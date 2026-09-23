@@ -553,7 +553,32 @@ final class AdministrationModel: ObservableObject {
         return member
     }
 
+    func updateAdminProjectMember(projectId: String, userId: String, role: ProjectMemberRole) async throws {
+        guard role != .owner, projectMembers[projectId]?.first(where: { $0.id == userId })?.role != .owner else {
+            throw ServerClientError.forbidden(String(localized: "The project owner cannot be removed or demoted."))
+        }
+        let generation = try beginAdministrationMutation(.projects, projectId: projectId)
+        defer { context.finishAdministrationMutation(generation) }
+        let _: ProjectMemberRecord = try await server.send(
+            method: "PATCH",
+            path: "/api/v1/admin/projects/\(projectId)/members/\(userId)",
+            body: UpdateProjectMemberRequest(role: role)
+        )
+        try context.ensureCurrentAdministrationMutation(generation)
+        try await refreshAfterAdministrationMutation(
+            generation: generation,
+            section: .projects,
+            invalidating: [.audit],
+            refreshesWorkspace: userId == context.account?.userId,
+            refreshesPage: false
+        )
+        try await refreshAdminProjectAfterMemberMutation(projectId: projectId, generation: generation)
+    }
+
     func deleteAdminProjectMember(projectId: String, userId: String) async throws {
+        guard projectMembers[projectId]?.first(where: { $0.id == userId })?.role != .owner else {
+            throw ServerClientError.forbidden(String(localized: "The project owner cannot be removed or demoted."))
+        }
         let generation = try beginAdministrationMutation(.projects, projectId: projectId)
         defer { context.finishAdministrationMutation(generation) }
         let _: DeleteResult = try await server.send(

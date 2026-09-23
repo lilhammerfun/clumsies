@@ -16,7 +16,7 @@ This page connects your local `clumsies-demo` repository to **Payments**. When C
 
 Complete [Connect to your organization](/quickstart/connect) and sign in to the App. Payments is the example Project name; follow along in an organization you are authorized to use.
 
-In the current version, ordinary organization members can create Projects. The creator becomes a **Project admin**, able to manage Project membership and select organization Memory. Publishing organization content still requires an organization owner/admin.
+Ordinary organization members can create Projects. The creator becomes the **Owner**. Project Settings shows each member's role: **Owner**, **Maintainer**, or **Member**. Owners and Maintainers can manage membership and select organization Memory; the Owner cannot be removed or demoted through member actions. Publishing organization content still requires an organization owner/admin.
 
 If your team has prepared a Project for you, select it and skip to “Bind an existing Project” below.
 

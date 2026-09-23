@@ -50,7 +50,7 @@ pub(crate) async fn ensure_project_admin(
     let member =
         repository::load_project_member(pool, &principal.org_id, project_id, &principal.user_id)
             .await?;
-    if member.role == ProjectRole::Admin {
+    if matches!(member.role, ProjectRole::Owner | ProjectRole::Admin) {
         Ok(())
     } else {
         Err(ServerError::Forbidden(
@@ -156,7 +156,7 @@ pub async fn create_admin_project(
         .await?;
     repository::insert_main_ref(&mut tx, &principal.org_id, &project_id).await?;
     repository::insert_selection_state(&mut tx, &project_id).await?;
-    repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "admin").await?;
+    repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "owner").await?;
     audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
@@ -301,7 +301,12 @@ pub async fn create_admin_project_member(
     ensure_project_admin(pool, principal, project_id).await?;
 
     let mut tx = pool.begin().await?;
-    ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
+    ensure_project_admin_tx(&mut tx, principal, project_id).await?;
+    if request.role == ProjectRole::Owner {
+        return Err(ServerError::InvalidRequest(
+            "project ownership cannot be assigned through member changes".to_owned(),
+        ));
+    }
     let status = organization::load_user_status(&mut tx, &request.user_id).await?;
     if status == "disabled" {
         return Err(ServerError::InvalidRequest(
@@ -360,8 +365,13 @@ pub async fn update_admin_project_member(
     ensure_project_admin(pool, principal, project_id).await?;
 
     let mut tx = pool.begin().await?;
-    ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
+    ensure_project_admin_tx(&mut tx, principal, project_id).await?;
     let previous_role = repository::lock_project_member_role(&mut tx, project_id, user_id).await?;
+    if previous_role == "owner" || request.role == ProjectRole::Owner {
+        return Err(ServerError::InvalidRequest(
+            "project ownership cannot be changed through member changes".to_owned(),
+        ));
+    }
     if !repository::update_project_member(&mut tx, project_id, user_id, request.role.as_str())
         .await?
     {
@@ -407,8 +417,13 @@ pub async fn delete_admin_project_member(
     ensure_project_admin(pool, principal, project_id).await?;
 
     let mut tx = pool.begin().await?;
-    ensure_project_in_org_tx(&mut tx, &principal.org_id, project_id).await?;
+    ensure_project_admin_tx(&mut tx, principal, project_id).await?;
     let previous_role = repository::lock_project_member_role(&mut tx, project_id, user_id).await?;
+    if previous_role == "owner" {
+        return Err(ServerError::InvalidRequest(
+            "the project owner cannot be removed".to_owned(),
+        ));
+    }
     if !repository::delete_project_member(&mut tx, project_id, user_id).await? {
         return Err(ServerError::not_found(
             "project_member",
@@ -464,7 +479,7 @@ pub async fn create_project(
     repository::insert_project(&mut tx, &project_id, org_id, &name, &description).await?;
     repository::insert_main_ref(&mut tx, org_id, &project_id).await?;
     repository::insert_selection_state(&mut tx, &project_id).await?;
-    repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "admin").await?;
+    repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "owner").await?;
     tx.commit().await?;
     Ok(project_id)
 }
@@ -518,7 +533,7 @@ pub async fn create_project_from_request(
         .await?;
     repository::insert_main_ref(&mut tx, &principal.org_id, &project_id).await?;
     repository::insert_selection_state(&mut tx, &project_id).await?;
-    repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "admin").await?;
+    repository::insert_project_member(&mut tx, &project_id, &principal.user_id, "owner").await?;
     audit_event::insert_audit_event(
         &mut tx,
         &principal.org_id,
@@ -650,23 +665,28 @@ async fn ensure_project_in_org(
     }
 }
 
-/// Check project ownership using the caller's transaction before modifying memberships.
+/// Serialize membership changes and recheck the actor's role inside the transaction.
 ///
 /// Uses the caller's transaction without committing it.
 ///
 /// # Errors
 /// Propagates missing required state, invalid stored values, and persistence failures from the
 /// participating resource operations.
-async fn ensure_project_in_org_tx(
+async fn ensure_project_admin_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    org_id: &str,
+    principal: &AuthPrincipal,
     project_id: &str,
 ) -> Result<(), ServerError> {
-    if repository::project_in_org_tx(tx, org_id, project_id).await? {
-        Ok(())
-    } else {
-        Err(ServerError::not_found("project", project_id))
+    repository::lock_admin_project_revision(tx, &principal.org_id, project_id).await?;
+    if !matches!(principal.role.as_str(), "owner" | "admin") {
+        let role = repository::lock_project_member_role(tx, project_id, &principal.user_id).await?;
+        if !matches!(role.as_str(), "owner" | "admin") {
+            return Err(ServerError::Forbidden(
+                "project administrator role required".to_owned(),
+            ));
+        }
     }
+    Ok(())
 }
 
 /// Trim a project name and enforce its nonempty, bounded public contract.

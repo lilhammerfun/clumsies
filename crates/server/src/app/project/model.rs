@@ -39,6 +39,7 @@ pub(crate) struct ProjectUpdateState {
 /// Rejects unsupported persisted values instead of assigning a default state or privilege.
 pub(crate) fn project_role(value: &str) -> Result<ProjectRole, ServerError> {
     match value {
+        "owner" => Ok(ProjectRole::Owner),
         "admin" => Ok(ProjectRole::Admin),
         "member" => Ok(ProjectRole::Member),
         other => Err(ServerError::InvalidRequest(format!(

@@ -153,6 +153,7 @@ final class ProjectManagementTests: XCTestCase {
     }
 
     func testProjectManagementUsesProjectRoleWithoutGrantingOrganizationAuthority() {
+        XCTAssertTrue(WorkspaceContext.projectManagementAllowed(capabilities: [], role: .owner))
         XCTAssertTrue(WorkspaceContext.projectManagementAllowed(capabilities: [], role: .admin))
         XCTAssertFalse(WorkspaceContext.projectManagementAllowed(capabilities: ["project:create"], role: .member))
         XCTAssertFalse(WorkspaceContext.projectManagementAllowed(capabilities: ["project:create"], role: nil))
@@ -163,10 +164,12 @@ final class ProjectManagementTests: XCTestCase {
     }
 
     func testProjectReferenceDecodesMembershipRole() throws {
-        let reference = try JSONCoding.decoder().decode(ProjectReference.self, from: Data(
-            #"{"project_id":"project-1","name":"My project","role":"admin"}"#.utf8
-        ))
-        XCTAssertEqual(reference.role, .admin)
+        for role in ProjectMemberRole.allCases {
+            let reference = try JSONCoding.decoder().decode(ProjectReference.self, from: Data(
+                #"{"project_id":"project-1","name":"My project","role":"\#(role.rawValue)"}"#.utf8
+            ))
+            XCTAssertEqual(reference.role, role)
+        }
     }
 
     func testProjectCreationKeepsLocalSetupOutOfTheServerRequest() throws {

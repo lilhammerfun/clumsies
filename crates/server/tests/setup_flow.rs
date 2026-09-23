@@ -179,7 +179,7 @@ async fn setup_claim_creates_one_oidc_bound_installation_and_locks_it() {
          FROM projects p
          JOIN refs r ON r.project_id = p.project_id
          JOIN project_members m ON m.project_id = p.project_id
-         WHERE p.org_id = $1 AND r.ref_name = 'refs/heads/main' AND m.role = 'admin'",
+         WHERE p.org_id = $1 AND r.ref_name = 'refs/heads/main' AND m.role = 'owner'",
     )
     .bind(&org_id)
     .fetch_one(&postgres.pool)

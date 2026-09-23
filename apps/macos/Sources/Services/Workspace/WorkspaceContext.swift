@@ -63,7 +63,7 @@ final class WorkspaceContext: ObservableObject {
     nonisolated static func projectManagementAllowed(
         capabilities: Set<String>, role: ProjectMemberRole?
     ) -> Bool {
-        capabilities.contains("admin:write") || role == .admin
+        capabilities.contains("admin:write") || role == .owner || role == .admin
     }
 
     func canAccessProjectSettings(_ projectId: String) -> Bool {

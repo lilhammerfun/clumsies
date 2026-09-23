@@ -322,8 +322,27 @@ private struct ProjectConfigurationSections: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            if self.workspaceContext.canManageProject(self.project.id) {
+                            Text(member.role.title + (member.id == workspaceContext.account?.userId
+                                ? String(localized: " · You") : ""))
+                                .foregroundStyle(.secondary)
+                                .fixedSize()
+                            if self.workspaceContext.canManageProject(self.project.id), member.role != .owner {
                                 Menu {
+                                    Picker("Role", selection: Binding(
+                                        get: { member.role },
+                                        set: { role in
+                                            mutate {
+                                                try await administration.updateAdminProjectMember(
+                                                    projectId: project.id, userId: member.id, role: role
+                                                )
+                                            }
+                                        }
+                                    )) {
+                                        Text(ProjectMemberRole.admin.title).tag(ProjectMemberRole.admin)
+                                        Text(ProjectMemberRole.member.title).tag(ProjectMemberRole.member)
+                                    }
+                                    .disabled(!self.allowsMemberMutation)
+                                    Divider()
                                     Button("Remove Member…", role: .destructive) { self.pendingMemberRemoval = member }
                                         .disabled(!self.allowsMemberMutation)
                                 } label: {
@@ -505,6 +524,12 @@ private struct ProjectMemberSheet: View {
     private var memberContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add project member").font(.headline)
+            Picker("Role", selection: $model.role) {
+                Text(ProjectMemberRole.member.title).tag(ProjectMemberRole.member)
+                Text(ProjectMemberRole.admin.title).tag(ProjectMemberRole.admin)
+            }
+            .accessibilityIdentifier("project-member-role")
+            .disabled(workspaceContext.isMutatingAdministration)
             ClassicSearchField(text: self.$model.query, prompt: String(localized: "Search members"), width: 392,
                 accessibilityIdentifier: "project-member-search")
                 .frame(height: 24)

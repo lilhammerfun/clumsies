@@ -231,7 +231,7 @@ paths:
     post:
       operationId: createProject
       summary: Create a project.
-      description: Any authenticated organization member can create a project. The creator becomes its project admin.
+      description: Any authenticated organization member can create a project. The creator becomes its protected project owner.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -2250,7 +2250,8 @@ components:
           format: date-time
     ProjectRole:
       type: string
-      enum: [member, admin]
+      description: Owner is assigned at project creation and cannot be removed or changed through member mutations. Admin is the protocol value for Maintainer.
+      enum: [owner, admin, member]
     DeleteResult:
       type: object
       required: [deleted, id]
