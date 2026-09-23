@@ -503,7 +503,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         )
 
         XCTAssertTrue(workspaceSource.contains(
-            "reconciler.reconciliationCandidates(for: pendingProjectReviewDrafts)"
+            "reconciler.reconciliationCandidates(for: request.drafts)"
         ))
         XCTAssertTrue(reviewSource.contains("Text(\"Update and Request Review\")"))
         XCTAssertTrue(reviewSource.contains("resolvedStatesByCandidateId[candidate.candidateId]"))
@@ -1210,24 +1210,36 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertTrue(MemorySyncPlan.staleResourcePlansMatch(first, second))
     }
 
-    func testReviewContributionRequiresAnExplicitSelectionAndKeepsItsTarget() async {
+    func testReviewContributionToggleIncludesAllEligibleChangesAndPreservesOrgIdentity() async {
         let draft = localDraft(id: "project-draft", targetId: nil)
+        var adaptation = localDraft(id: "adaptation", targetId: "project-memory")
+        adaptation.orgSource = .init(resourceId: "org-source", commitId: "org-base")
+        var deletion = localDraft(id: "deletion", targetId: "deleted-memory")
+        deletion.isDeletion = true
+        var empty = localDraft(id: "empty", targetId: "unchanged-memory")
+        empty.hasChanges = false
+        let pending = localDraft(id: "pending", targetId: "pending-memory", status: .submitted)
         var submitted: [OrgContributionEntry] = []
-        let model = ReviewRequestModel(initialTitle: "Publish", drafts: [draft], loadCandidates: { [] }) { _, _, _, entries in submitted = entries }
+        let model = ReviewRequestModel(initialTitle: "Publish", drafts: [draft, adaptation, deletion, empty, pending],
+            loadCandidates: { [] }) { _, _, _, entries in submitted = entries }
         XCTAssertTrue(model.contributionEntries.isEmpty)
+        XCTAssertTrue(model.canContribute)
         model.contributesToOrg = true
-        let emptySelection = await model.submit()
-        XCTAssertFalse(emptySelection)
-        XCTAssertTrue(submitted.isEmpty)
-        model.contributionDraftIds = [draft.id]
-        model.contributionTargets[draft.id] = "org-target"
-        model.contributionPaths[draft.id] = "unused-new-path.md"
         let saved = await model.submit()
         XCTAssertTrue(saved)
-        XCTAssertEqual(submitted.count, 1)
-        XCTAssertEqual(submitted.first?.draftId, draft.id)
-        XCTAssertEqual(submitted.first?.targetId, "org-target")
-        XCTAssertNil(submitted.first?.path)
+        XCTAssertEqual(submitted, [
+            .init(draftId: draft.id, targetId: nil, path: draft.document.path),
+            .init(draftId: adaptation.id, targetId: "org-source", path: nil)
+        ])
+        model.contributesToOrg = false
+        let withoutContribution = await model.submit()
+        XCTAssertTrue(withoutContribution)
+        XCTAssertTrue(submitted.isEmpty)
+        let unavailable = ReviewRequestModel(initialTitle: "Remove", drafts: [deletion, empty, pending],
+            loadCandidates: { [] }) { _, _, _, _ in }
+        XCTAssertFalse(unavailable.canContribute)
+        unavailable.contributesToOrg = true
+        XCTAssertTrue(unavailable.contributionEntries.isEmpty)
     }
 
     func testPublishedUpdatesInstallAutomaticallyWhileDraftsKeepTheirBaseline() {

@@ -159,11 +159,13 @@ final class LiveWorkspaceIntegrationTests: XCTestCase {
 
             let selected = try [local("identical"), local("clean"), local("conflict")]
             let form = ReviewRequestModel(initialTitle: "并发修改后的提交",
+                drafts: selected,
                 loadCandidates: { try await store.reconciliation.reconciliationCandidates(for: selected) },
                 onSubmit: { title, description, choices, contributions in
                     try await store.reviews.requestReview(for: selected, title: title, description: description,
                         reconciliations: choices, contributions: contributions)
                 })
+            form.contributesToOrg = true
             let initiallySubmitted = await form.submit()
             XCTAssertFalse(initiallySubmitted)
             XCTAssertNil(form.errorMessage)
@@ -178,6 +180,8 @@ final class LiveWorkspaceIntegrationTests: XCTestCase {
             let detail: ReviewDetail = try await store.context.server.get("/api/v1/reviews/\(review.id)")
             XCTAssertEqual(detail.drafts?.count, 2)
             XCTAssertEqual(detail.review.coordination.freshness, .current)
+            XCTAssertEqual(Set(detail.review.orgContribution?.entries.map(\.draftId) ?? []),
+                Set([fixture.drafts["clean"]!, fixture.drafts["conflict"]!]))
         } catch {
             if let project = original.projectId { _ = try? await store.context.daemon.selectProject(project) }
             throw error
