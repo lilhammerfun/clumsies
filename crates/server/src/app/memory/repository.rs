@@ -64,109 +64,6 @@ pub(crate) async fn lock_org_draft_selection_coordination(
     Ok(())
 }
 
-/// Reject removal of selected resources still targeted by active proposals in the project.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
-/// or resource selections.
-pub(crate) async fn ensure_removed_org_resources_have_no_active_drafts(
-    tx: &mut Transaction<'_, Postgres>,
-    project_id: &str,
-    retained_resource_ids: &[String],
-) -> Result<(), ServerError> {
-    let blocked = sqlx::query(
-        "WITH removed AS (
-            SELECT selection.resource_id, resource.org_id
-            FROM project_org_resource_selections AS selection
-            JOIN resources AS resource
-              ON resource.resource_id = selection.resource_id
-            WHERE selection.project_id = $1
-              AND NOT (selection.resource_id = ANY($2))
-         ), active_drafts AS (
-            SELECT draft.draft_id, draft.base_commit_id, draft.created_at,
-                   draft.target_id, draft.path
-            FROM drafts AS draft
-            WHERE draft.project_id = $1
-              AND draft.resource_scope = 'org'
-              AND draft.status IN ('open', 'submitted')
-              AND NOT COALESCE((
-                    SELECT operation.action = 'create'
-                    FROM draft_operations AS operation
-                    WHERE operation.draft_id = draft.draft_id
-                    ORDER BY operation.ordinal
-                    LIMIT 1
-              ), FALSE)
-         ), targets AS (
-            SELECT draft_id, base_commit_id, created_at, target_id, path
-            FROM active_drafts
-            UNION ALL
-            SELECT draft.draft_id, draft.base_commit_id, draft.created_at,
-                   operation.target_id, operation.path
-            FROM active_drafts AS draft
-            JOIN draft_operations AS operation
-              ON operation.draft_id = draft.draft_id
-            WHERE operation.resource_scope = 'org'
-              AND operation.action <> 'create'
-         )
-         SELECT removed.resource_id, target.draft_id
-         FROM removed
-         JOIN targets AS target
-           ON COALESCE(
-                target.target_id,
-                (
-                    SELECT base_entry.item_id
-                    FROM commits AS base_commit
-                    JOIN tree_entries AS base_entry
-                      ON base_entry.tree_id = base_commit.tree_id
-                    WHERE base_commit.commit_id = target.base_commit_id
-                      AND base_commit.org_id = removed.org_id
-                      AND base_commit.scope = 'org'
-                      AND base_entry.scope = 'org'
-                      AND base_entry.resource_kind = 'memory'
-                      AND base_entry.path = target.path
-                ),
-                (
-                    SELECT resource.resource_id
-                    FROM resources AS resource
-                    WHERE resource.org_id = removed.org_id
-                      AND resource.scope = 'org'
-                      AND resource.status = 'active'
-                      AND resource.path = target.path
-                ),
-                (
-                    SELECT CASE
-                        WHEN COUNT(DISTINCT historical_entry.item_id) = 1
-                        THEN MIN(historical_entry.item_id)
-                    END
-                    FROM commits AS historical_commit
-                    JOIN tree_entries AS historical_entry
-                      ON historical_entry.tree_id = historical_commit.tree_id
-                    WHERE historical_commit.org_id = removed.org_id
-                      AND historical_commit.scope = 'org'
-                      AND historical_entry.scope = 'org'
-                      AND historical_entry.resource_kind = 'memory'
-                      AND historical_entry.path = target.path
-                )
-              ) = removed.resource_id
-         ORDER BY removed.resource_id, target.created_at, target.draft_id
-         LIMIT 1",
-    )
-    .bind(project_id)
-    .bind(retained_resource_ids)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some(blocked) = blocked else {
-        return Ok(());
-    };
-    let resource_id: String = blocked.try_get("resource_id")?;
-    let draft_id: String = blocked.try_get("draft_id")?;
-    Err(ServerError::InvalidRequest(format!(
-        "cannot remove Organization Memory {resource_id} from this Project while active Organization Draft {draft_id} targets it; discard or finish the Draft first"
-    )))
-}
-
 /// Increment a project's selected-resource concurrency revision.
 ///
 /// Uses the caller's transaction without committing it.
@@ -257,7 +154,7 @@ pub(crate) async fn list_resource_rows(
     let rows = if let Some(project_id) = project_id {
         sqlx::query(
             "SELECT
-                resource_id, scope, project_id, path, name, description, status,
+                resource_id, scope, project_id, path, name, description, status, org_source,
                 content_hash, updated_at
              FROM resources
              WHERE scope = $1 AND project_id = $2 AND status = 'active'
@@ -270,7 +167,7 @@ pub(crate) async fn list_resource_rows(
     } else if let Some(org_id) = org_id {
         sqlx::query(
             "SELECT
-                resource_id, scope, project_id, path, name, description, status,
+                resource_id, scope, project_id, path, name, description, status, org_source,
                 content_hash, updated_at
              FROM resources
              WHERE scope = $1 AND org_id = $2 AND status = 'active'
@@ -305,7 +202,7 @@ pub(crate) async fn load_resource_detail_row(
     let row = if let Some(project_id) = project_id {
         sqlx::query(
             "SELECT
-                resource_id, scope, project_id, path, name, description, status,
+                resource_id, scope, project_id, path, name, description, status, org_source,
                 revision, content_hash, body, updated_at
              FROM resources
              WHERE resource_id = $1
@@ -321,7 +218,7 @@ pub(crate) async fn load_resource_detail_row(
     } else if let Some(org_id) = org_id {
         sqlx::query(
             "SELECT
-                resource_id, scope, project_id, path, name, description, status,
+                resource_id, scope, project_id, path, name, description, status, org_source,
                 revision, content_hash, body, updated_at
              FROM resources
              WHERE resource_id = $1
@@ -348,6 +245,11 @@ pub(crate) async fn load_resource_detail_row(
 /// Propagates database access and row-decoding failures.
 pub(crate) fn memory_meta_from_row(row: &sqlx::postgres::PgRow) -> Result<MemoryMeta, ServerError> {
     Ok(MemoryMeta {
+        org_source: row
+            .try_get::<Option<sqlx::types::Json<crate::app::memory::dto::OrgMemorySource>>, _>(
+                "org_source",
+            )?
+            .map(|source| source.0),
         memory_id: row.try_get("resource_id")?,
         scope: resource_scope(row.try_get::<String, _>("scope")?.as_str())?,
         project_id: row.try_get("project_id")?,
@@ -382,7 +284,7 @@ pub(crate) async fn load_project_org_selection(
 
     let rows = sqlx::query(
         "SELECT
-            r.resource_id, r.scope, r.project_id, r.path, r.name, r.description,
+            r.resource_id, r.scope, r.project_id, r.path, r.name, r.description, r.org_source,
             r.status, r.content_hash, r.updated_at
          FROM project_org_resource_selections s
          JOIN resources r ON r.resource_id = s.resource_id
@@ -615,7 +517,7 @@ pub(crate) async fn export_memory_state(
     org_id: &str,
 ) -> Result<MemoryExport, ServerError> {
     let memories = sqlx::query(
-        "SELECT resource_id, scope, project_id, path, name, description, status,
+        "SELECT resource_id, scope, project_id, path, name, description, status, org_source,
                 content_hash, body, updated_at
          FROM resources
          WHERE org_id = $1 AND status = 'active'
@@ -628,6 +530,11 @@ pub(crate) async fn export_memory_state(
         .iter()
         .map(|row| {
             Ok(MemoryExportItem {
+                org_source: row
+                    .try_get::<Option<sqlx::types::Json<super::dto::OrgMemorySource>>, _>(
+                        "org_source",
+                    )?
+                    .map(|source| source.0),
                 memory_id: row.try_get("resource_id")?,
                 scope: row.try_get("scope")?,
                 project_id: row.try_get("project_id")?,
@@ -811,9 +718,9 @@ pub(super) async fn insert_memory(
     sqlx::query(
         "INSERT INTO resources (
                     resource_id, org_id, project_id, scope, resource_kind, path, name,
-                    status, revision, content_hash, body
+                    status, revision, content_hash, body, org_source
                  )
-                 VALUES ($1, $2, $3, $4, 'memory', $5, $6, 'active', 1, $7, $8)",
+                 VALUES ($1, $2, $3, $4, 'memory', $5, $6, 'active', 1, $7, $8, $9)",
     )
     .bind(input.resource_id)
     .bind(input.org_id)
@@ -823,6 +730,7 @@ pub(super) async fn insert_memory(
     .bind(input.name)
     .bind(input.content_hash)
     .bind(input.body)
+    .bind(input.org_source.map(sqlx::types::Json))
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -1021,6 +929,9 @@ pub(super) async fn list_effective_paths(
              (r.scope = 'project' AND r.project_id = $1)
              OR (
                r.scope = 'org' AND r.org_id = $2
+               AND NOT EXISTS (SELECT 1 FROM resources a WHERE a.project_id = $1
+                 AND a.scope = 'project' AND a.status = 'active'
+                 AND a.org_source->>'resource_id' = r.resource_id)
                AND EXISTS(
                  SELECT 1
                  FROM project_org_resource_selections s
@@ -1064,7 +975,7 @@ pub(crate) async fn list_bundle_memories(
 ) -> Result<Vec<MemoryMeta>, ServerError> {
     let rows = sqlx::query(
         "SELECT
-            r.resource_id, r.scope, r.project_id, r.path, r.name, r.description,
+            r.resource_id, r.scope, r.project_id, r.path, r.name, r.description, r.org_source,
             r.status, r.content_hash, r.updated_at
          FROM personal_bundle_items i
          JOIN resources r ON r.resource_id = i.resource_id
@@ -1085,6 +996,8 @@ pub(crate) async fn list_bundle_memories(
 
 /// Validated resource ownership, identity, path, and content for authoritative persistence.
 pub(super) struct NewMemory<'a> {
+    /// Optional immutable source of a Project adaptation.
+    pub(super) org_source: Option<&'a super::dto::OrgMemorySource>,
     /// Stable identity of the persisted resource.
     pub(super) resource_id: &'a str,
     /// Organization boundary to which the resource or identity belongs.
@@ -1101,4 +1014,32 @@ pub(super) struct NewMemory<'a> {
     pub(super) content_hash: String,
     /// Stored text content, including Markdown where the resource contract permits it.
     pub(super) body: &'a str,
+}
+
+/// Bind an adaptation to an Organization entry in this project's immutable snapshot.
+///
+/// # Errors
+/// Rejects forged sources, snapshots from another project, and missing entries.
+pub(crate) async fn validate_org_source(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: &str,
+    source: &crate::app::memory::dto::OrgMemorySource,
+) -> Result<(), ServerError> {
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM commits c JOIN tree_entries e ON e.tree_id = c.tree_id
+         WHERE c.commit_id = $1 AND c.scope = 'project' AND c.project_id = $2
+           AND e.item_id = $3 AND e.scope = 'org' AND e.resource_kind = 'memory')",
+    )
+    .bind(&source.commit_id)
+    .bind(project_id)
+    .bind(&source.resource_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !valid {
+        return Err(ServerError::InvalidRequest(
+            "adaptation source must be selected Organization Memory in this Project snapshot"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }

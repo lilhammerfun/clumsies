@@ -65,7 +65,9 @@ enum MemorySyncPlan {
         let selectedOrgResourceIds = Set(checkout.selectedOrgResourceIds)
         let checkoutOrgResources = checkout.resources.filter { $0.scope == .org }
         let checkoutOrgResourceIds = Set(checkoutOrgResources.map(\.resourceId))
-        guard checkoutOrgResourceIds == selectedOrgResourceIds else { return nil }
+        let adaptedSourceIds = Set(checkout.resources.compactMap { $0.content.orgSource?.resourceId })
+        let directOrgResourceIds = selectedOrgResourceIds.subtracting(adaptedSourceIds)
+        guard checkoutOrgResourceIds == directOrgResourceIds else { return nil }
 
         // A Project checkout proves which Org blobs were materialized for that
         // Project, but absence from the checkout can mean either an Org delete
@@ -100,7 +102,7 @@ enum MemorySyncPlan {
             checkoutOrgResources.map { ($0.resourceId, $0) },
             uniquingKeysWith: { _, latest in latest }
         )
-        for resourceId in selectedOrgResourceIds {
+        for resourceId in directOrgResourceIds {
             guard let checkoutResource = checkoutOrgById[resourceId],
                   let authority = authoritativeOrgById[resourceId],
                   authority.kind == .init(checkoutResource.resourceKind),
@@ -118,7 +120,7 @@ enum MemorySyncPlan {
         let deletedSelectedOrgResourceIds = observedSelectedOrgResourceIds
             .subtracting(selectedOrgResourceIds)
             .filter { authoritativeOrgById[$0] == nil }
-        let relevantOrgResourceIds = selectedOrgResourceIds
+        let relevantOrgResourceIds = directOrgResourceIds
             .union(deletedSelectedOrgResourceIds)
         let localOrgResources = displayedResources.filter {
             $0.scope == .org
@@ -151,13 +153,14 @@ enum MemorySyncPlan {
                                 .deletingPathExtension().lastPathComponent,
                             path: resource.path,
                             body: resource.content.content
-                        )
+                        ),
+                        orgSource: resource.content.orgSource
                     )
                 )
             },
             uniquingKeysWith: { _, latest in latest }
         )
-        for resourceId in selectedOrgResourceIds {
+        for resourceId in directOrgResourceIds {
             guard let checkoutResource = checkoutOrgById[resourceId],
                   let authority = authoritativeOrgById[resourceId] else {
                 return nil
@@ -182,7 +185,7 @@ enum MemorySyncPlan {
         let projectRemoteIds = Set(checkoutResources.map(\.resourceId))
         let ids = Set(localResources.map(\.id))
             .union(projectRemoteIds)
-            .union(selectedOrgResourceIds)
+            .union(directOrgResourceIds)
         var result: [String: StaleResourceSyncSnapshot] = [:]
         for id in ids {
             let local = localById[id]

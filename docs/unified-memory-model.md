@@ -2,6 +2,10 @@
 
 This page explains the constraints and tradeoffs behind the [core data model](/data-model). Read it when implementing or reviewing a feature. It describes current code behavior; see [Project authority cutover](/project-authority-migration) for migration history.
 
+::: warning Historical Org-only design
+The 2026-09-23 [Project and Organization Memory ownership decision](/project-org-memory-ownership) replaces the Organization-only target below. Project and Organization each own published Memory, with one target per Review and independent Organization contributions. This page preserves the historical Org-only design; use the ownership decision for current publication behavior.
+:::
+
 ## Why there is one Memory type
 
 Deployment rollback checklists, coding constraints, and architecture notes are all Markdown Memory with stable IDs. A path under `rules/` or `workflow/` does not grant a different type, permission, or execution capability.

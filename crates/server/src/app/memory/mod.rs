@@ -24,3 +24,5 @@ pub(crate) use service::{
     pending_resource_entry, refresh_projects_for_org_resource_changes, resolve_org_resource_impact,
     select_created_org_resources_for_project, validate_project_effective_memory,
 };
+
+pub(crate) use repository::validate_org_source;

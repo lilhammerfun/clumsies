@@ -223,3 +223,18 @@ pub(super) async fn create_draft_operation_batch(
         service::create_draft_operation_batch(&state.pool, &principal, request).await?,
     ))
 }
+
+/// Automatically save clean updates while preserving conflicts for the authenticated author.
+///
+/// # Errors
+/// Rejects unauthorized or stale proposals and maps persistence failures to HTTP errors.
+pub(super) async fn auto_rebase_draft(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Path(draft_id): Path<String>,
+    Json(request): Json<dto::CreateDraftReconciliationCandidateRequest>,
+) -> Result<Json<dto::DraftDetail>, HttpError> {
+    Ok(Json(
+        service::auto_rebase_draft(&state.pool, &principal, &draft_id, request).await?,
+    ))
+}

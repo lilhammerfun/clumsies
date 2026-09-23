@@ -218,9 +218,10 @@ Update 不接受完整的新正文。先 `load` 资源，再把返回的完整�
 成功结果包含本地 operation ID、Draft ID、队列状态和同步状态。它只表示变更已在本机持久化并排队同步：
 
 - Draft 由当前绑定 Project 携带；
-- Draft 的权威目标是 Organization；
+- 新 Draft 默认归 Project 所有；修改 Org 引用会创建独立项目适配并记录来源版本；
 - merge 前只影响该 Project 的 Effective Memory；
-- `store` 不能审批 Review、merge 或前移 Organization Ref。
+- 项目 PR 由项目 owner/admin 处理；修改 Org 原文需要另一个由 Org owner/admin 处理的 PR；
+- `store` 不能审批 Review、merge 或前移任何已发布 Ref。
 
 例如，已排队的本地写入可以返回：
 

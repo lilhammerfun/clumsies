@@ -6,11 +6,15 @@ final class MemorySyncService: ObservableObject {
     private let catalog: MemoryCatalog
     private let context: WorkspaceContext
     private let feedback: WorkspaceFeedback
+    private let edits: DraftStore
+    private let sessions: DocumentSessions
 
-    init(catalog: MemoryCatalog, context: WorkspaceContext, feedback: WorkspaceFeedback) {
+    init(catalog: MemoryCatalog, context: WorkspaceContext, feedback: WorkspaceFeedback, edits: DraftStore, sessions: DocumentSessions) {
         self.catalog = catalog
         self.context = context
         self.feedback = feedback
+        self.edits = edits
+        self.sessions = sessions
     }
 
     func refreshOrgResourcesIfNeeded(isActive: () -> Bool) async {
@@ -216,6 +220,7 @@ final class MemorySyncService: ObservableObject {
                 snapshot.projectId == projectId
             }
             if !plan.isEmpty, MemorySyncPlan.staleResourcePlansMatch(plan, installedPlan) {
+                applyUneditedUpdates(projectId: projectId)
                 feedback.resolveBackgroundError(errorSource)
                 return
             }
@@ -226,6 +231,7 @@ final class MemorySyncService: ObservableObject {
                 return
             }
             catalog.installStaleResourcePlan(hydratedPlan, for: projectId)
+            applyUneditedUpdates(projectId: projectId)
             if hydratedPlan.isEmpty {
                 catalog.advanceProjectRefIfPlanCompleted(
                     projectId: projectId,
@@ -251,6 +257,24 @@ final class MemorySyncService: ObservableObject {
                 source: errorSource
             )
         }
+    }
+
+    /// Install verified published changes while preserving edits and conflict baselines.
+    func applyUneditedUpdates(projectId: String) {
+        for (id, snapshot) in catalog.staleResourceSnapshots where snapshot.projectId == projectId {
+            let key = MemoryDocumentSessionKey(projectId: projectId, itemId: id)
+            guard edits.pendingDocumentSaves[key] == nil,
+                  !sessions.synchronizingDocumentSessions.contains(key),
+                  !edits.drafts.contains(where: {
+                    $0.projectId == projectId && $0.status != .merged && $0.status != .discarded
+                        && ($0.targetId == id || $0.id == id || $0.orgSource?.resourceId == id)
+                  }) else { continue }
+            catalog.resources.removeAll { $0.id == id }
+            if let remote = snapshot.remote { catalog.resources.append(remote) }
+            catalog.adoptCurrentStaleResource(id)
+            catalog.bumpDocumentContentGeneration(for: id)
+        }
+        catalog.documentsChanged.send()
     }
 
     private func hydrateStaleResourcePlan(

@@ -9,13 +9,13 @@ This page follows a deployment rollback checklist through the system. On a first
 | Object | Question it answers | Example |
 |---|---|---|
 | Organization | Who publishes this shared knowledge? | The Acme team |
-| Project | Which knowledge does this project use, and where are changes proposed? | Payments |
+| Project | Which knowledge does this project own or select, and where are changes proposed? | Payments |
 | Memory | Which piece of knowledge is this? | `operations/deployment-rollback.md` |
 | Draft | What change is being proposed? | Add rollback steps to the checklist |
 | Review | Which changes will people consider and publish together? | Checklist and alerting Drafts |
 | Commit / Ref | What did a complete version contain, and which version is current? | Immutable snapshot C2 and a pointer to C2 |
 
-Organization is the only Memory publication authority. Projects select Organization Memory and hold versioned snapshots of that selection. Selecting a Memory preserves its identity: two Projects can select the same `memory_id`.
+Organization and each Project own published Memory. Projects can additionally select Organization Memory as read dependencies; their snapshots combine both sources. Selecting a Memory preserves its identity: two Projects can select the same `memory_id`.
 
 ```text
 Organization
@@ -23,7 +23,7 @@ Organization
   └─ Organization Ref → Commit          │
                                          ↓ select by Memory ID
 Project → Org Selection → Project Ref → Project Commit
-  └─ Draft → Review → merge ────────────→ new Organization version
+  └─ Draft → Review → merge ────────────→ new Project version
 
 Content available locally = installed Project Commit + this Project's Draft changes
 ```
@@ -37,13 +37,13 @@ The IDs and versions below are illustrative. `C1` and `P1` are readable labels; 
 1. **Published baseline.** Organization has Memory `mem_example_rollback`, at `operations/deployment-rollback.md`, containing a deployment rollback checklist. Its Ref points to Commit `C1`.
 2. **Project selection.** Payments adds `mem_example_rollback` to its Org Selection. Server creates Project Commit `P1`. Its Tree entry still has ID `mem_example_rollback`, with `source: selected_org`. The Project Ref points to `P1`.
 3. **Local installation.** The daemon downloads and installs `P1`. An Agent finds relevant passages through `memory.activate` and reads content through `memory.load`.
-4. **Proposed change.** The Agent uses `memory.store` to add a rollback check. The daemon persists a Draft and its operations before syncing them. The Draft's `project_id` is Payments, its publication target `resource.scope` is `org`, and its `base_commit_id` is Organization Commit `C1`. Project snapshot `P1` and Draft base `C1` are different Commits.
+4. **Proposed change.** The Agent uses `memory.store` to add a rollback check. The daemon persists a Draft and its operations before syncing them. The Draft's `project_id` is Payments, its publication target `resource.scope` is `project`, and its `base_commit_id` is Project Commit `P1`. Editing this Org reference creates a separately identified Project adaptation with `org_source` recording the source ID and the Project snapshot containing that exact version.
 5. **Use within this Project.** While the Draft is `open` or `submitted`, its changes overlay Payments' local Effective Memory. Other Projects do not receive this unpublished proposal.
 6. **Review submission.** The author submits this Draft, or an ordered group of Drafts, to a Review. Server validates authorship, Project, Draft versions, upstream state, and targets.
-7. **Publication.** An authorized Organization owner/admin merges the Review. One transaction applies all changes, creates Organization Commit `C2`, advances the Organization Ref, and refreshes affected Project projections. A failed publication check does not publish only part of the group.
+7. **Publication.** A Project owner/admin merges the Review. One transaction applies all changes, creates Project Commit `P2`, advances its Ref, and notifies members. The Org version stays unchanged. An optional Org contribution creates another Review from this fixed Project commit and requires independent Org owner/admin approval. A failed publication check does not publish only part of the group.
 8. **New snapshot installation.** The daemon installs the updated Project Commit. Merged Drafts stop contributing unpublished overlays; Agents read the new published content.
 
-**For a new Memory:** before merge, it uses a provisional Draft identity. At merge, Server allocates a `mem_…` resource ID and automatically selects it for the originating Project. A create Draft's ID is not the final Memory ID.
+**For a new Memory:** before merge, it uses a provisional Draft identity. At merge, Server allocates a `mem_…` resource ID owned by the Project. Explicit Org creations remain Org-owned. A create Draft's ID is not the final Memory ID.
 
 **For a rename:** `operations/deployment-rollback.md` can become `runbooks/deployment-rollback.md` while `mem_example_rollback` remains unchanged. Selections continue to reference that ID.
 
@@ -55,9 +55,10 @@ The domain calls it Memory; the database table is still `resources`. An HTTP det
 |---|---|---|
 | `memory_id` / `resource_id` | HTTP / database, string | The same stable identity. New resources use `mem_`; historical IDs remain valid. |
 | `org_id` | Database, string | Owning Organization; the org HTTP route derives it from the authenticated context. |
-| `scope` | Both, string | Published Memory is currently `org`. `project` remains for historical reads and cleanup. |
-| `project_id` | Both, string or null | Null for Organization resources. Projects that select it are represented in a separate relation. |
-| `path` | Both, string | Relative path, unique among active resources in an Organization. It can change; it is neither identity nor a guaranteed local file location. |
+| `scope` | Both, string | `org` or `project`; every Review publishes to exactly one owner. |
+| `org_source` | Both, object or null | Adaptation provenance: source Org resource ID and exact Project snapshot containing that version; immutable after creation. |
+| `project_id` | Both, string or null | The owning Project for Project Memory; null for Org Memory. Org selections use a separate relation. |
+| `path` | Both, string | Relative path, unique among active resources of its owner. It can change; it is neither identity nor a guaranteed local file location. |
 | `name` | Both, string | Server derives it from the final path component, such as `deployment-rollback.md`. |
 | `description` | Both, string | Semantic summary. Non-null in SQL, but may be empty; merge does not yet reliably preserve Draft summaries. See [implementation boundaries](/unified-memory-model#current-implementation-boundaries). |
 | `content` / `body` | Outer HTTP field / database, string | Markdown content. There is no separate `content_format` field. |
@@ -82,15 +83,15 @@ A selection replacement request uses `resource_ids: [...]`. Reads return `memori
 
 ## Draft: a baseline and ordered changes
 
-A Draft records the published version a proposal started from, its target, and its changes. Its Project carries the proposal and local view; its Organization scope identifies the publication target.
+A Draft records the published version a proposal started from, its target, and its changes. Its Project carries the proposal and local view; its `org` or `project` scope identifies the publication owner.
 
 | Field | Meaning |
 |---|---|
 | `draft_id` | Draft identity. The daemon may also store a corresponding remote Draft ID for synchronization. |
 | `project_id` | Required Project carrying the proposal. |
-| `resource.scope` | Must be `org` for a currently publishable proposal. |
+| `resource.scope` | `project` or `org`; all Drafts in one Review must use the same scope. |
 | `resource.id` / `resource.path` | Resource locator. Use stable identity for an existing Memory; a create needs a path before its final ID exists. DTO nullability does not waive action-specific validation. |
-| `base_commit_id` | Organization snapshot used as the baseline; nullable when no initial snapshot exists. |
+| `base_commit_id` | Snapshot of the publication owner used as the baseline; nullable when no initial snapshot exists. |
 | `operations` | Ordered create/update/rename/delete operations. Server persists ordering in `draft_operations.ordinal`. |
 | `version` | Draft concurrency version. Writers supply their expected version. |
 | `status` | `open`, `submitted`, `merged`, or `discarded`. |
@@ -98,7 +99,7 @@ A Draft records the published version a proposal started from, its target, and i
 
 Create/update operations carry `content: { content: "Markdown…", description?: "Summary" }`; rename uses `new_path`; delete identifies a target to remove. Server stores the resulting content for an update. The daemon can accept text replacements and turn them into synchronized operations. A create followed by update/rename is materialized into the final new resource at publication.
 
-`behind` means the Base Commit differs from the current Organization Ref. Someone publishing an unrelated document can make a Draft behind without creating a content conflict. Server compares **Base**, **Current**, and **Draft Result** to produce a reconciliation candidate. Applying a confirmed candidate through rebase updates the Draft baseline; it does not publish content.
+`behind` means the Base Commit differs from the current publication owner's Ref. Someone publishing an unrelated document can make a Draft behind without creating a content conflict. Server compares **Base**, **Current**, and **Draft Result** to produce a reconciliation candidate. Synchronization automatically applies a clean candidate; conflicts preserve the Draft baseline and notify the author. Rebase updates the Draft baseline; it does not publish content.
 
 ## Review: the publication boundary
 
@@ -158,6 +159,7 @@ Server transactions maintain these tables. Integrations should use APIs instead 
 | Draft and synchronization events | `drafts`, `draft_operations`, `draft_events` | Ordered operations belong to a Draft; event sequences support incremental sync. |
 | Upstream coordination | `draft_reconciliation_candidates`, `draft_revisions`, `draft_rebases` | Candidate bound to Draft version and Base/Current; rebase retains a previous revision. |
 | Review | `reviews`, `review_drafts`, `review_comments`, `review_merges` | Ordered Draft group, versioned comments, and final merge record. |
+| Org contribution | `review_org_contributions` | Explicit selection, fixed source Project Commit, independently created Org Review, and retry error. |
 | Published snapshots | `blobs`, `trees`, `tree_entries`, `commits`, `refs` | Ref → Commit → Tree → entry → Blob. |
 
 ### Local daemon: SQLite and files
@@ -179,7 +181,7 @@ Project Local Storage moves only managed generations and retrieval data. Central
 
 - [Organization Memory](/artifact): publication authority and Bundles.
 - [Project](/workspace): selection, directory binding, and local views.
-- [Unified Memory design](/unified-memory-model): invariants, transactions, and implementation boundaries.
+- [Project and Organization ownership](/project-org-memory-ownership): ownership, publication, and contribution invariants.
 - [Memory API types](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/dto.rs) and [change API types](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/draft/dto.rs), [Review DTO](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/review/dto.rs): actual JSON fields, nullable values, and enums.
 - [Database migrations](https://github.com/lilhammerfun/clumsies/tree/main/crates/server/migrations): read in order; the original schema contains subsequently removed fields.
 - [Snapshot/resource persistence](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/repository.rs), [Commit persistence](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/commit/repository.rs), [Review transactions](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/review/repository.rs), [Draft overlay](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/overlay.rs), and [index schema](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/index.rs): behavior at each layer.

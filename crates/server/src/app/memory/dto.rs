@@ -29,6 +29,9 @@ pub struct MemoryExport {
 /// Authoritative resource content and identity preserved in a Memory export.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryExportItem {
+    /// Immutable origin of a Project adaptation, preserved across export.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_source: Option<OrgMemorySource>,
     /// Stable identifier of a Memory resource.
     pub memory_id: String,
     /// Ownership boundary determining which reference and resource set apply.
@@ -87,13 +90,23 @@ pub struct MemoryExportSelection {
     pub revision: i64,
 }
 
+/// Immutable Organization resource version from which a Project adaptation was made.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OrgMemorySource {
+    /// Organization-owned resource identity; independent of its path.
+    pub resource_id: String,
+    /// Project snapshot containing the selected source at the version used for adaptation.
+    pub commit_id: String,
+}
+
 /// Ownership scope determining the authoritative resource and reference.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceScope {
     /// Authoritative organization Memory selectable by projects.
     Org,
-    /// Legacy project-owned Memory retained for existing snapshots and explicit maintenance.
+    /// Authoritative project Memory shared with that project’s members.
     Project,
 }
 
@@ -151,6 +164,9 @@ pub struct MemoryDetail {
 /// Public Memory identity, ownership, path, and content-change metadata.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryMeta {
+    /// Explicit immutable origin of a Project adaptation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_source: Option<OrgMemorySource>,
     /// Stable identifier of a Memory resource.
     pub memory_id: String,
     /// Ownership boundary determining which reference and resource set apply.

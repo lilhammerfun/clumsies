@@ -776,11 +776,13 @@ async fn memory_export_contains_verifiable_full_state() {
     // This export fixture intentionally represents a pre-cutover database.
     // The production migration installs these guards as NOT VALID around
     // existing legacy rows, so remove them before seeding that old state.
-    sqlx::query("ALTER TABLE resources DROP CONSTRAINT resources_no_active_project_authority")
-        .execute(&postgres.pool)
-        .await
-        .unwrap();
-    sqlx::query("ALTER TABLE drafts DROP CONSTRAINT drafts_no_active_project_authority")
+    sqlx::query(
+        "ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_no_active_project_authority",
+    )
+    .execute(&postgres.pool)
+    .await
+    .unwrap();
+    sqlx::query("ALTER TABLE drafts DROP CONSTRAINT IF EXISTS drafts_no_active_project_authority")
         .execute(&postgres.pool)
         .await
         .unwrap();

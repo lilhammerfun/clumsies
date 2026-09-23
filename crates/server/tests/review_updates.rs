@@ -105,6 +105,7 @@ async fn review(app: &Router, drafts: &[DraftDetail]) -> ReviewDetail {
         app,
         "/api/v1/reviews",
         CreateReviewRequest {
+            org_contribution: None,
             drafts: drafts
                 .iter()
                 .map(|d| ReviewDraftRequest {

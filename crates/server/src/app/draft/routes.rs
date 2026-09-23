@@ -25,6 +25,9 @@ define_routes!(protected_routes, PROTECTED_OPERATIONS, {
     "/api/v1/drafts/{draft_id}/reconciliation-candidates/{candidate_id}" => {
         get: handler::get_draft_reconciliation_candidate,
     };
+    "/api/v1/drafts/{draft_id}/auto-rebases" => {
+        post: handler::auto_rebase_draft,
+    };
     "/api/v1/drafts/{draft_id}/rebases" => {
         post: handler::create_draft_rebase,
     };

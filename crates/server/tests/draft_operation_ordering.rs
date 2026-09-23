@@ -18,6 +18,7 @@ mod common;
 
 fn memory_content(content: &str) -> Option<DraftResourceContent> {
     Some(DraftResourceContent {
+        org_source: None,
         description: None,
         content: content.to_owned(),
     })
@@ -91,6 +92,7 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
         &common::principal(&pool, &bootstrap.user_id).await,
         head.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: drafts[0].draft.draft_id.clone(),
                 expected_draft_version: drafts[0].draft.version,
@@ -120,6 +122,7 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
         &common::principal(&pool, &bootstrap.user_id).await,
         head.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![
                 ReviewDraftRequest {
                     draft_id: rejected.drafts[0].draft.draft_id.clone(),
@@ -343,6 +346,7 @@ async fn multi_draft_review_reconciles_atomically() {
         &common::principal(&pool, &bootstrap.user_id).await,
         current_head.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![
                 ReviewDraftRequest {
                     draft_id: drafts[0].draft.draft_id.clone(),
@@ -386,6 +390,7 @@ async fn multi_draft_review_reconciles_atomically() {
         &common::principal(&pool, &bootstrap.user_id).await,
         current_head.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![
                 ReviewDraftRequest {
                     draft_id: drafts[0].draft.draft_id.clone(),
@@ -436,6 +441,7 @@ async fn approve_and_merge(
         &common::principal(pool, user_id).await,
         expected_ref,
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: draft_id.to_owned(),
                 expected_draft_version,

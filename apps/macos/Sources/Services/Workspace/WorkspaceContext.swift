@@ -74,12 +74,12 @@ final class WorkspaceContext: ObservableObject {
         capabilities.contains("admin:write")
     }
 
-    var canMergeReviews: Bool {
-        capabilities.contains("review:merge")
+    func canMergeReview(_ review: ReviewRecord) -> Bool {
+        review.scope == .project ? canManageProject(review.projectId) : capabilities.contains("review:merge")
     }
 
-    var canDecideReviews: Bool {
-        capabilities.contains("review:decide")
+    func canDecideReview(_ review: ReviewRecord) -> Bool {
+        review.scope == .project ? canManageProject(review.projectId) : capabilities.contains("review:decide")
     }
 
     func isReviewAuthor(_ review: ReviewRecord) -> Bool {

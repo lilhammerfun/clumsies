@@ -89,6 +89,7 @@ async fn wait_for_storage_move(
 
 fn context_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
+        org_source: None,
         description: None,
         content: content.to_owned(),
     }
@@ -96,6 +97,7 @@ fn context_content(content: &str) -> DaemonDraftContent {
 
 fn rule_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
+        org_source: None,
         description: None,
         content: content.to_owned(),
     }
@@ -103,6 +105,7 @@ fn rule_content(content: &str) -> DaemonDraftContent {
 
 fn workflow_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
+        org_source: None,
         description: None,
         content: content.to_owned(),
     }
@@ -123,6 +126,7 @@ async fn approve_and_merge(
         &common::principal(pool, &detail.draft.author.user_id).await,
         expected_ref,
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: draft_id.to_owned(),
                 expected_draft_version,
@@ -560,6 +564,7 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     assert_eq!(
         draft.operations[0].input.content,
         Some(DraftResourceContent {
+            org_source: None,
             description: None,
             content: "# Synced\n\nCreated through the local daemon.".to_owned(),
         })
@@ -570,6 +575,7 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
         &common::principal(&pool, &bootstrap.user_id).await,
         None,
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: draft.draft.draft_id.clone(),
                 expected_draft_version: draft.draft.version,
@@ -652,6 +658,7 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
         &common::principal(&pool, &bootstrap.user_id).await,
         rejected.draft.coordination.current_commit_id.as_deref(),
         CreateReviewSubmissionRequest {
+            org_contribution: None,
             expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: rejected.draft.draft_id.clone(),
@@ -711,6 +718,7 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
                     path: Some("context/original.md".to_owned()),
                 },
                 content: Some(DraftResourceContent {
+                    org_source: None,
                     description: None,
                     content: "# Original\n\nBefore local editing.".to_owned(),
                 }),
@@ -1036,6 +1044,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
                     path: Some("context/base.md".to_owned()),
                 },
                 content: Some(DraftResourceContent {
+                    org_source: None,
                     description: None,
                     content: "# Base\n\nThe offline Draft starts from this Commit.".to_owned(),
                 }),
@@ -1170,6 +1179,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
                     path: Some("context/remote-change.md".to_owned()),
                 },
                 content: Some(DraftResourceContent {
+                    org_source: None,
                     description: None,
                     content: "# Remote change\n\nThis advances the Project Ref.".to_owned(),
                 }),
@@ -1396,6 +1406,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         &common::principal(&pool, &bootstrap.user_id).await,
         Some(&current_commit_id),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: server_behind.draft.draft_id.clone(),
                 expected_draft_version: server_behind.draft.version,
@@ -1509,6 +1520,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         &common::principal(&pool, &bootstrap.user_id).await,
         Some(&current_commit_id),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: rebased.draft.draft.draft_id.clone(),
                 expected_draft_version: rebased.draft.draft.version,
@@ -1747,7 +1759,7 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
             "# Memory review discipline\n\nApply when publishing durable memory.\n\nReview the change and its materialized result before merge.\n\nTags: memory, review, verification",
         ),
         "rules/memory-review-policy",
-        DaemonDraftOperationSource::McpStore,
+        DaemonDraftOperationSource::Desktop,
     )
     .await;
     let rule_update_org_commit = sync_local_draft_and_merge(
@@ -2010,7 +2022,7 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         workflow_content(&format!(
             "# Shared publication\n\nPublish organization memory safely.\n\n1. Apply rule `{rule_id}`.\n2. Confirm the effective project memory."
         )),
-        DaemonDraftOperationSource::McpStore,
+        DaemonDraftOperationSource::Desktop,
     )
     .await;
     let org_workflow_commit =
@@ -2130,7 +2142,7 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
             "# Shared publication\n\nPublish and verify organization memory.\n\n1. Confirm the effective project memory.\n2. Apply rule `{rule_id}`."
         )),
         "workflow/shared-publish",
-        DaemonDraftOperationSource::McpStore,
+        DaemonDraftOperationSource::Desktop,
     )
     .await;
     let org_workflow_update_commit = sync_local_draft_and_merge(
@@ -2659,6 +2671,7 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
                     path: Some("context/commit-sync.md".to_owned()),
                 },
                 content: Some(DraftResourceContent {
+                    org_source: None,
                     description: None,
                     content: "# Commit sync\n\nInstalled from an immutable Commit.".to_owned(),
                 }),
@@ -2673,6 +2686,7 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
         &common::principal(&pool, &bootstrap.user_id).await,
         Some(&initial_org_commit_id),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: draft.draft.draft_id,
                 expected_draft_version: draft.draft.version,

@@ -8,11 +8,11 @@
 
 ## Project
 
-Server 签发身份的项目对象，管理成员、Organization Memory 选择，并承载待发布 Draft。本机目录可以绑定到 Project，但目录不是 Project 身份。`Workspace` 是旧称，当前接口使用 `project_id`。
+Server 签发身份的项目对象，管理成员、项目自有正式 Memory、Organization Memory 选择，并承载待发布 Draft。本机目录可以绑定到 Project，但目录不是 Project 身份。`Workspace` 是旧称，当前接口使用 `project_id`。
 
 ## Memory
 
-一份具有稳定 ID 的 Markdown 知识。数据库称为 `resources`，HTTP 使用 `memory_id`。当前活跃发布资源只属于 Organization；规则、流程和背景都使用同一种 Memory。
+一份具有稳定 ID 的 Markdown 知识。数据库称为 `resources`，HTTP 使用 `memory_id`。正式资源属于某个 Project 或 Organization；规则、流程和背景都使用同一种 Memory。
 
 ID 标识“哪一份知识”，path 表示“目前放在哪个路径”，revision 表示“资源的哪次修订”。重命名不换 ID。`name` 来自文件名；daemon 展示标题来自 Markdown 标题或文件名。详细字段见[数据模型](/zh/data-model)。
 
@@ -26,7 +26,7 @@ Project 明确选择的 Organization Memory ID 集合。它决定 Project 发布
 
 ## Projection（投影）
 
-从已有权威数据按用途生成的视图。Project Commit 是 Organization 内容按 Org Selection 生成的版本化投影；它便于本机同步，但不是另一个发布源。
+从已有权威数据按用途生成的视图。Project Commit 组合项目自有 Memory 和选用的 Organization 内容。选用部分是读取投影，项目自有内容则有独立发布历史。
 
 ## Effective Memory（有效内容）
 
@@ -34,7 +34,7 @@ daemon 将已安装的 Project 投影与该 Project 当前 `open` / `submitted` 
 
 ## Draft
 
-待发布提案：由 Project 携带，以 Organization 为目标，保存 Base Commit、版本及有序 create/update/rename/delete 操作。状态为 `open`、`submitted`、`merged`、`discarded`。本地 Draft 可能尚未同步，不能当作可清理缓存。
+待发布提案：由 Project 携带，以该 Project 或 Organization 为目标，保存 Base Commit、版本及有序 create/update/rename/delete 操作。状态为 `open`、`submitted`、`merged`、`discarded`。本地 Draft 可能尚未同步，不能当作可清理缓存。
 
 ## Base / Current / Draft Result
 
@@ -57,7 +57,7 @@ Server 中用于协调和发布一组 Draft 的对象。Draft 集合有顺序，
 - **Blob：** 不可变正文，同样的内容可被不同快照引用。
 - **Tree：** 一个版本里的条目集合，将 Memory ID、路径和来源连接到 Blob。
 - **Commit：** 指向 Tree、记录父版本的不可变完整快照；不是代码仓库的 Git commit。
-- **Ref：** 指向当前 Commit 的可移动指针。Organization Ref 代表发布，Project Ref 代表选择投影。
+- **Ref：** 指向当前 Commit 的可移动指针。Organization Ref 代表发布，Project Ref 指向组合项目自有内容和选择结果的快照。
 
 ## Revision / Version / ETag / CAS
 

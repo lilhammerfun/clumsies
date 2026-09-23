@@ -297,7 +297,7 @@ struct WorkspaceView: View {
                                         }
                                         .disabled(documentSessions.isSynchronizingDocument(item.id))
                                     }
-                                    if canProposeOrganizationDeletion(item),
+                                    if canProposeMemoryDeletion(item),
                                        let sessionKey = documentSessions.documentSessionKey(for: item) {
                                         Button(
                                             "Delete…",
@@ -371,15 +371,17 @@ struct WorkspaceView: View {
         .sheet(isPresented: $showsProjectReviewRequest) {
             ReviewRequestSheet(
                 initialTitle: String(localized: "Update \(workspaceContext.activeProject?.name ?? "project") memory"),
+                drafts: pendingProjectReviewDrafts,
                 loadCandidates: {
                     try await reconciler.reconciliationCandidates(for: pendingProjectReviewDrafts)
                 }
-            ) { title, description, reconciliations in
+            ) { title, description, reconciliations, contributions in
                 try await reviewModel.requestReview(
                     for: pendingProjectReviewDrafts,
                     title: title,
                     description: description,
-                    reconciliations: reconciliations
+                    reconciliations: reconciliations,
+                    contributions: contributions
                 )
             }
         }
@@ -513,8 +515,8 @@ struct WorkspaceView: View {
         return .resolve(
             surface: reviewNavigationPath.isEmpty ? .list : .detail,
             review: review,
-            canDecideReviews: workspaceContext.canDecideReviews,
-            canMergeReviews: workspaceContext.canMergeReviews,
+            canDecideReviews: review.map(workspaceContext.canDecideReview) ?? false,
+            canMergeReviews: review.map(workspaceContext.canMergeReview) ?? false,
             isAuthor: review.map(workspaceContext.isReviewAuthor) ?? false
         )
     }
@@ -841,9 +843,9 @@ struct WorkspaceView: View {
             && ReviewsModel.canRequestReview(draft)
     }
 
-    private func canProposeOrganizationDeletion(_ item: MemoryListItem) -> Bool {
+    private func canProposeMemoryDeletion(_ item: MemoryListItem) -> Bool {
         draftStore.canEditMemory(item)
-            && MemoryFileTreeMenu.canProposeOrganizationDeletion(
+            && MemoryFileTreeMenu.canProposeMemoryDeletion(
                 item,
                 inOrgView: workspaceContext.activeProjectId == nil
             )
@@ -856,7 +858,7 @@ struct WorkspaceView: View {
     private func hasDocumentActions(_ item: MemoryListItem) -> Bool {
         canRequestDocumentReview(item)
             || canDiscardDocumentDraft(item)
-            || canProposeOrganizationDeletion(item)
+            || canProposeMemoryDeletion(item)
     }
 
     private var activeProjectReviewDrafts: [LocalDraft] {

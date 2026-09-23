@@ -160,15 +160,12 @@ final class MemoryModel: ObservableObject {
         kind: MemoryKind,
         scope: MemoryScope
     ) async throws -> String? {
-        guard scope == .org, edits.canCreateMemory(kind: kind, scope: scope),
+        guard scope == .project, edits.canCreateMemory(kind: kind, scope: scope),
               let projectId = context.activeProjectId else { return nil }
         let generation = context.workspaceReloadGeneration
-        guard let authority = try await catalog.loadStableOrgAuthoritySnapshot(
-            allowingEmptyHead: true
-        ) else {
-            throw ActionFailure(
-                String(localized: "A fresh Organization Memory snapshot is required to create a Draft.")
-            )
+        let checkout = try await context.daemon.projectCheckout(projectId)
+        guard checkout.ready else {
+            throw ActionFailure(String(localized: "Sync Project Memory before creating a Draft."))
         }
         guard context.workspaceReloadGeneration == generation else { return nil }
         return try await edits.withDraftMutation {
@@ -180,16 +177,16 @@ final class MemoryModel: ObservableObject {
             let path = self.uniqueDefaultPath(
                 for: kind,
                 scope: scope,
-                authoritativeOrgResources: authority.resources,
+                authoritativeOrgResources: self.catalog.resources,
                 projectId: projectId
             )
             let document = Self.defaultDocument(kind: kind, path: path)
             let response = try await self.context.daemon.store(
                 .init(
                     draftId: nil,
-                    baseCommitId: authority.commitId,
+                    baseCommitId: checkout.commitId,
                     projectId: projectId,
-                    scope: .org,
+                    scope: .project,
                     resource: kind.daemonKind,
                     op: .create(
                         path: document.path,
@@ -213,6 +210,41 @@ final class MemoryModel: ObservableObject {
             self.navigation.selectedItemId = response.draftId
             return response.draftId
         }
+    }
+
+    /// Open an explicitly Org-owned proposal without changing a Project adaptation.
+    func proposeOrganizationChange(_ item: MemoryListItem) async {
+        guard let projectId = context.activeProjectId,
+              let resource = item.resource, resource.scope == .org else { return }
+        let generation = context.workspaceReloadGeneration
+        do {
+            try await edits.withDraftMutation {
+                if let draft = self.edits.drafts.first(where: {
+                    $0.projectId == projectId && $0.scope == .org && $0.targetId == resource.id
+                        && $0.status != .merged && $0.status != .discarded
+                }) {
+                    self.navigation.open(MemoryListItem(id: draft.id, resource: nil, draft: draft, inherited: false, projectContextId: projectId))
+                    return
+                }
+                guard let snapshot = try await self.catalog.loadStableOrgAuthoritySnapshot(),
+                      let current = snapshot.resources.first(where: { $0.id == resource.id }) else {
+                    throw ActionFailure(String(localized: "Refresh Organization Memory and try again."))
+                }
+                let loaded = try await self.context.loader.loadContent(for: current)
+                guard self.context.workspaceReloadGeneration == generation,
+                      self.context.activeProjectId == projectId else { return }
+                let response = try await self.context.daemon.store(.init(
+                    draftId: nil, baseCommitId: snapshot.commitId, projectId: projectId,
+                    scope: .org, resource: current.kind.daemonKind,
+                    op: .update(id: current.id, content: self.edits.daemonContent(kind: current.kind, document: loaded.document), description: nil),
+                    source: .desktop
+                ))
+                try await self.edits.refreshDraft(response.draftId)
+                guard self.context.workspaceReloadGeneration == generation,
+                      let draft = self.edits.drafts.first(where: { $0.id == response.draftId }) else { return }
+                self.navigation.open(MemoryListItem(id: draft.id, resource: nil, draft: draft, inherited: false, projectContextId: projectId))
+            }
+        } catch { feedback.errorMessage = error.actionMessage }
     }
 
     /// Use loaded metadata for presentation; adoption revalidates shared authority before writing.
@@ -291,7 +323,7 @@ final class MemoryModel: ObservableObject {
         return try await edits.withDraftMutation {
             guard generation == self.context.workspaceReloadGeneration,
                   self.context.activeProjectId == setup.projectId,
-                  self.edits.canCreateMemory(kind: .context, scope: .org) else { throw CancellationError() }
+                  self.edits.canCreateMemory(kind: .context, scope: .project) else { throw CancellationError() }
             let occupiedPaths = setup.occupiedPaths.union(
                 MemoryTreeProjection.memoryTreeDrafts(self.edits.drafts, activeProjectId: setup.projectId).map(\.document.path)
             )
@@ -299,7 +331,7 @@ final class MemoryModel: ObservableObject {
             for document in documents { try self.edits.validate(kind: .context, document: document) }
             let responses = try await self.context.daemon.createMemoryDrafts(.init(
                 projectId: setup.projectId,
-                baseCommitId: setup.organizationCommitId,
+                baseCommitId: self.context.projects.first { $0.id == setup.projectId }?.refCommitId,
                 operations: documents.map {
                     .create(path: $0.path, content: self.edits.daemonContent(kind: .context, document: $0), description: nil)
                 }

@@ -165,6 +165,7 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
                     action: DraftOperationAction::Create,
                     resource: owner_draft.draft.resource.clone(),
                     content: Some(DraftResourceContent {
+                        org_source: None,
                         description: None,
                         content: "# Private".to_owned(),
                     }),
@@ -289,7 +290,7 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
         )
         .await
         .unwrap();
-    assert_eq!(unselected_org_draft.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(unselected_org_draft.status(), StatusCode::OK);
 
     let create_project = member_app
         .clone()

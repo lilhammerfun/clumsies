@@ -10,8 +10,8 @@ This page retains the historical `/workspace` URL. Current APIs use `project_id`
 |---|---|---|
 | Name, description, members | Server | Project identity and access |
 | Org Selection | Server | Select published Organization Memory for this Project |
-| Project Ref / Commit | Server, synchronized to daemon | Version the selection as an installable snapshot |
-| Project-carried Drafts | Persisted locally, then synchronized to Server | Proposals targeting Organization publication |
+| Project Ref / Commit | Server, synchronized to daemon | Version Project-owned and selected Org content as an installable snapshot |
+| Project-carried Drafts | Persisted locally, then synchronized to Server | Proposals targeting Project publication by default, or explicit Organization publication |
 | Local directory bindings | Daemon | Resolve a working directory to `project_id` |
 | Installed generations and search index | Daemon-managed files / SQLite | Local Agent reads and retrieval |
 
@@ -19,7 +19,7 @@ Membership authorization and content selection are separate concerns. Selecting 
 
 ## Create and configure in Memory
 
-Use **New Project…** in the Memory project selector. Organization members can create projects; the creator becomes a project administrator and can edit its details, add or remove existing organization members, select Memory, and delete the project. These permissions do not grant organization administration or publication authority.
+Use **New Project…** in the Memory project selector. Organization members can create projects; the creator becomes the project owner and can edit its details, add or remove existing organization members, select Memory, and delete the project. These permissions do not grant organization administration or publication authority.
 
 Open **Project Settings** beside the selector to configure the current project. **Repositories on This Mac** and cache settings apply locally; other members bind their own directories. The selector ends with **New Project…** for both members and organization administrators.
 
@@ -28,7 +28,7 @@ Organization administrators can open **Settings → Organization → Projects** 
 ## From selection to readable content
 
 ```text
-Current Organization Memory + Project Org Selection
+Project-owned Memory + selected Organization Memory
   → Server generates Project Commit / Ref
   → daemon installs the snapshot
   + this Project's open/submitted Draft changes
@@ -37,9 +37,9 @@ Current Organization Memory + Project Org Selection
 
 For example, Payments selects the deployment rollback checklist. All work directories bound to Payments refer to the same Server Project. An edit creates a Draft carried by Payments. After synchronization, another installation can present that Project's proposal too. It is not an independently published file in one directory, nor another Project's unpublished change.
 
-Unpublished changes overlay only the carrying Project. After merge, Organization content changes and Projects selecting affected resources receive refreshed projections. Newly created Memory is also automatically selected for the originating Project.
+Unpublished changes overlay only the carrying Project. A Project merge publishes only Project-owned content and notifies members. An optional Org contribution becomes an independently approved Org Review. Org updates refresh selecting Projects while preserving their Project adaptations.
 
-`GET /api/v1/projects/{project_id}/memories` reads historical Project-authority data. It includes neither current selection projections nor local Draft overlays and cannot replace Effective Memory.
+`GET /api/v1/projects/{project_id}/memories` reads published Project-owned Memory. It includes neither current selection projections nor local Draft overlays and cannot replace Effective Memory.
 
 ## Directory binding
 

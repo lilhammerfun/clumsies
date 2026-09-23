@@ -30,7 +30,7 @@ final class ReviewsModel: ObservableObject {
     @discardableResult
     func beginUpdate(_ review: ReviewRecord) -> ReviewUpdateModel? {
         if let existing = updates[review.id] { return existing }
-        guard context.isReviewAuthor(review) || context.canMergeReviews, review.freshness == .behind,
+        guard context.isReviewAuthor(review) || context.canMergeReview(review), review.freshness == .behind,
               ["open", "approved", "rejected"].contains(review.status) else { return nil }
         if reviewDecisionReadiness?.reviewId == review.id { reviewDecisionReadiness = nil }
         let update = ReviewUpdateModel(review: review, canResolveConflicts: context.isReviewAuthor(review), prepare: { [weak self] in
@@ -146,8 +146,8 @@ final class ReviewsModel: ObservableObject {
         }
         return action.isAvailable(
             for: review,
-            canDecideReviews: context.canDecideReviews,
-            canMergeReviews: context.canMergeReviews,
+            canDecideReviews: context.canDecideReview(review),
+            canMergeReviews: context.canMergeReview(review),
             isAuthor: context.isReviewAuthor(review)
         )
     }
@@ -192,14 +192,12 @@ final class ReviewsModel: ObservableObject {
         title: String,
         description: String,
         candidate: DraftReconciliationCandidate? = nil,
-        resolvedState: ReconciliationResourceState? = nil
+        resolvedState: ReconciliationResourceState? = nil,
+        contributions: [OrgContributionEntry] = []
     ) async throws {
         let authority = context.authorityGeneration
         if sessions.synchronizationItemId(for: draft) != nil {
             throw DocumentSyncError.mutationWhileSynchronizing
-        }
-        guard Self.canRequestReview(draft) else {
-            throw ReviewRequestError.legacyProjectDraftCannotBePublished
         }
         guard let serverId = draft.serverId else {
             throw ReviewRequestError.draftNotSynchronized
@@ -212,6 +210,7 @@ final class ReviewsModel: ObservableObject {
             path: "/api/v1/reviews",
             headers: ["If-Match": DraftReconciliationService.refETag(candidate?.currentCommitId ?? draft.currentCommitId)],
             body: CreateReviewRequest(
+                orgContribution: try Self.contributionRequest(contributions, drafts: [draft]),
                 drafts: [ReviewDraftRequest(
                     draftId: serverId,
                     expectedDraftVersion: candidate?.draftVersion ?? draft.serverVersion,
@@ -233,7 +232,8 @@ final class ReviewsModel: ObservableObject {
         for drafts: [LocalDraft],
         title: String,
         description: String,
-        reconciliations: [ReviewDraftReconciliation] = []
+        reconciliations: [ReviewDraftReconciliation] = [],
+        contributions: [OrgContributionEntry] = []
     ) async throws {
         let authority = context.authorityGeneration
         let selectedDrafts = drafts.sorted {
@@ -243,8 +243,8 @@ final class ReviewsModel: ObservableObject {
         guard selectedDrafts.allSatisfy({ $0.projectId == selectedPrimary.projectId }) else {
             throw ReviewRequestError.mixedProjects
         }
-        guard selectedDrafts.allSatisfy(Self.canRequestReview) else {
-            throw ReviewRequestError.legacyProjectDraftCannotBePublished
+        guard selectedDrafts.allSatisfy({ $0.scope == selectedPrimary.scope }) else {
+            throw ReviewRequestError.mixedScopes
         }
         guard selectedDrafts.allSatisfy({ self.sessions.synchronizationItemId(for: $0) == nil }) else {
             throw DocumentSyncError.mutationWhileSynchronizing
@@ -287,6 +287,7 @@ final class ReviewsModel: ObservableObject {
                 )
             ],
             body: CreateReviewRequest(
+                orgContribution: try Self.contributionRequest(contributions, drafts: drafts),
                 drafts: drafts.map { draft in
                     let reconciliation = reconciliationByDraftId[draft.serverId!]
                     return ReviewDraftRequest(
@@ -308,6 +309,23 @@ final class ReviewsModel: ObservableObject {
         navigation.selectedSection = .reviews
     }
 
+    private static func contributionRequest(_ entries: [OrgContributionEntry], drafts: [LocalDraft]) throws -> [OrgContributionEntry]? {
+        guard !entries.isEmpty else { return nil }
+        return try entries.map { entry in
+            guard let draft = drafts.first(where: { $0.id == entry.draftId }), draft.scope == .project,
+                  let serverId = draft.serverId else { throw ReviewRequestError.draftNotSynchronized }
+            return .init(draftId: serverId, targetId: entry.targetId, path: entry.path)
+        }
+    }
+
+    func retryOrgContribution(_ review: ReviewRecord) async throws {
+        let authority = context.authorityGeneration
+        let detail: ReviewDetail = try await context.server.send(method: "POST",
+            path: "/api/v1/reviews/\(review.id)/org-contribution", body: [String: String]())
+        try context.ensureAuthority(authority)
+        replaceReview(with: WorkspaceLoader.mapReview(detail))
+    }
+
     func resubmit(
         _ review: ReviewRecord,
         detail: ReviewDetail,
@@ -315,9 +333,6 @@ final class ReviewsModel: ObservableObject {
         resolvedState: ReconciliationResourceState? = nil
     ) async throws {
         let authority = context.authorityGeneration
-        guard Self.isOrganizationDraft(detail.draft) else {
-            throw ReviewRequestError.legacyProjectDraftCannotBePublished
-        }
         guard context.isReviewAuthor(review) else {
             throw ServerClientError.forbidden(String(localized: "Only the draft author can resubmit this Review."))
         }
@@ -401,21 +416,17 @@ final class ReviewsModel: ObservableObject {
 
     func merge(_ review: ReviewRecord) async throws {
         let authority = context.authorityGeneration
-        guard context.canMergeReviews else {
+        guard context.canMergeReview(review) else {
             throw ServerClientError.forbidden(String(localized: "Your account cannot merge Reviews."))
         }
-        // A Review belongs to its carrying Project, while its Draft targets
-        // Organization authority. The coordination commit is the exact Org Ref
-        // generation; the carrying Project's projection ETag is not that base.
+        // The coordination commit belongs to the Review's publication owner.
+        // Org proposals use the Org Ref; Project proposals use the Project Ref.
         let detail = try await reviewDetail(review.id)
         try context.ensureAuthority(authority)
         let currentReview = WorkspaceLoader.mapReview(detail)
         replaceReview(with: currentReview)
         guard ReviewDecisionReadiness(review: review).matches(currentReview) else {
             throw ReviewRequestError.reviewChanged
-        }
-        guard Self.isOrganizationDraft(detail.draft) else {
-            throw ReviewRequestError.legacyProjectDraftCannotBePublished
         }
         let _: ReviewMergeResponse = try await context.server.send(
             method: "POST",
@@ -428,7 +439,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     nonisolated static func canRequestReview(_ draft: LocalDraft) -> Bool {
-        draft.scope == .org
+        draft.status == .open
     }
 
     nonisolated static func reviewableProjectDrafts(
@@ -438,12 +449,8 @@ final class ReviewsModel: ObservableObject {
         MemoryTreeProjection.preferredMemoryTreeDrafts(
             MemoryTreeProjection.memoryTreeDrafts(drafts, activeProjectId: projectId)
         ).filter {
-            $0.status == .open && self.canRequestReview($0)
+            $0.scope == .project && $0.status == .open && self.canRequestReview($0)
         }
-    }
-
-    private nonisolated static func isOrganizationDraft(_ draft: ServerDraft) -> Bool {
-        draft.resource.scope == MemoryScope.org.rawValue
     }
 
     private func refreshReview(_ reviewId: String) async throws {

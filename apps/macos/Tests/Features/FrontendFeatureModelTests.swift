@@ -121,7 +121,7 @@ final class FrontendFeatureModelTests: XCTestCase {
         let model = ReviewRequestModel(initialTitle: "  Review title  ", loadCandidates: {
             preflights += 1
             return []
-        }, onSubmit: { title, description, reconciliations in
+        }, onSubmit: { title, description, reconciliations, _ in
             submissions += 1
             XCTAssertEqual(title, "Review title")
             XCTAssertEqual(description, "Description")

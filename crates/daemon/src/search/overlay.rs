@@ -47,6 +47,8 @@ pub(super) struct CachedTree {
 
 #[derive(Deserialize)]
 pub(super) struct CachedTreeEntry {
+    #[serde(default)]
+    pub(super) org_source: Option<crate::types::OrgMemorySource>,
     pub(super) id: String,
     #[serde(rename = "type")]
     pub(super) kind: CachedMemoryKind,
@@ -268,6 +270,9 @@ pub(super) fn apply_draft_overlay(
     }
     for (_, _, operation) in &draft.operations {
         if let Some(create) = &operation.create {
+            if let Some(source) = &create.content.org_source {
+                resources.remove(&source.resource_id);
+            }
             let resource_id = created_resource_id.clone();
             let resource = draft_content_resource(
                 project_id,

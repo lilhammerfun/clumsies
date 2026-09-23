@@ -134,7 +134,7 @@ final class ClientFailureTests: XCTestCase {
 
     func testFailedReviewSubmissionRetainsInputAndDoesNotRetryWrites() async {
         var attempts = 0
-        let model = ReviewRequestModel(initialTitle: "My review", loadCandidates: { [] }, onSubmit: { _, _, _ in
+        let model = ReviewRequestModel(initialTitle: "My review", loadCandidates: { [] }, onSubmit: { _, _, _, _ in
             attempts += 1
             throw ServerClientError.response(status: 500, message: "SECRET")
         })

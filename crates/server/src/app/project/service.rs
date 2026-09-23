@@ -672,7 +672,7 @@ async fn ensure_project_in_org(
 /// # Errors
 /// Propagates missing required state, invalid stored values, and persistence failures from the
 /// participating resource operations.
-async fn ensure_project_admin_tx(
+pub(crate) async fn ensure_project_admin_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     principal: &AuthPrincipal,
     project_id: &str,

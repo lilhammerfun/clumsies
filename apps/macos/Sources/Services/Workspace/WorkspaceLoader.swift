@@ -278,7 +278,8 @@ struct WorkspaceLoader: Sendable {
                 updatedAt: checkout.commitCreatedAt ?? "",
                 refCommitId: checkout.commitId,
                 contentLoaded: true,
-                document: document
+                document: document,
+                orgSource: resource.content.orgSource
             )
         }
         return (
@@ -598,7 +599,8 @@ struct WorkspaceLoader: Sendable {
                     title: metadata.name,
                     path: metadata.path,
                     body: ""
-                )
+                ),
+                orgSource: metadata.orgSource
             )
         }, metadata.hasStaleServerResponse)
     }
@@ -692,7 +694,10 @@ struct WorkspaceLoader: Sendable {
             currentCommitId: metadata.coordination.currentCommitId,
             updatedAt: metadata.updatedAt,
             draftIds: metadata.draftIds ?? [metadata.draftId],
-            autoRebased: metadata.coordination.autoRebased == true
+            autoRebased: metadata.coordination.autoRebased == true,
+            scope: metadata.scope ?? .org,
+            orgContribution: metadata.orgContribution,
+            projectSource: metadata.projectSource
         )
     }
 
@@ -713,9 +718,11 @@ struct WorkspaceLoader: Sendable {
             body: ""
         )
         var deletion = false
+        var orgSource = base?.orgSource
         for operation in detail.operations {
             switch operation.operation {
             case .create(let path, let content, _):
+                orgSource = content.orgSource ?? orgSource
                 document.path = path
                 document = apply(content: content, to: document)
                 deletion = false
@@ -753,7 +760,8 @@ struct WorkspaceLoader: Sendable {
             isDeletion: deletion,
             documentBaselineAvailable: base != nil
                 || summary.targetId == nil
-                || hasSelfContainedContent
+                || hasSelfContainedContent,
+            orgSource: orgSource
         )
     }
 

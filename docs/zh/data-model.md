@@ -15,7 +15,7 @@ Clumsies 保存的是团队知识及其变更历史。理解数据模型时，�
 | Review | 哪些修改一起交给人确认并发布？ | 包含清单和告警说明两个 Draft |
 | Commit / Ref | 某次发布的完整内容是什么，当前使用哪一版？ | 不可变快照 C2、指向 C2 的当前指针 |
 
-Organization 是唯一的 Memory 发布源。Project 选择 Organization 中的 Memory，并持有选择结果的版本快照。选择不复制 Memory 的身份；两个 Project 可以选中同一个 `memory_id`。
+Organization 和各个 Project 分别拥有已发布 Memory。Project 还可以选择 Organization Memory 作为只读依赖，项目快照组合两者。选择不复制 Memory 的身份；两个 Project 可以选中同一个 `memory_id`。
 
 ```text
 Organization
@@ -23,7 +23,7 @@ Organization
   └─ Organization Ref → Commit    │
                                   ↓ 按 Memory ID 选择
 Project → Org Selection → Project Ref → Project Commit
-  └─ Draft → Review → merge ──────→ Organization 的新版本
+  └─ Draft → Review → merge ──────→ Project 的新版本
 
 本机当前可读内容 = 已安装的 Project Commit + 当前 Project 的 Draft 修改
 ```
@@ -37,13 +37,13 @@ Project → Org Selection → Project Ref → Project Commit
 1. **发布基线。** Organization 已有 Memory `mem_example_rollback`，路径为 `operations/deployment-rollback.md`，正文是部署回滚检查单。Organization Ref 指向包含它的 Commit `C1`。
 2. **Project 选择。** Payments 把 `mem_example_rollback` 加入 Org Selection。Server 生成 Project Commit `P1`，其中 Tree entry 的 `id` 仍是 `mem_example_rollback`，`source` 为 `selected_org`。Project Ref 指向 `P1`。
 3. **本机安装。** daemon 下载 `P1` 并保存快照。Agent 通过 `memory.activate` 找到相关片段，通过 `memory.load` 读取正文。
-4. **提出修改。** Agent 使用 `memory.store` 加入“发布前确认回滚方案”。daemon 先保存 Draft 和操作，再同步到 Server。这个 Draft 的 `project_id` 是 Payments，发布目标 `resource.scope` 是 `org`，`base_commit_id` 是 Organization 的 `C1`。Project 快照 `P1` 与 Draft 基线 `C1` 是两个不同的 Commit。
+4. **提出修改。** Agent 使用 `memory.store` 加入“发布前确认回滚方案”。daemon 先保存 Draft 和操作，再同步到 Server。这个 Draft 的 `project_id` 是 Payments，发布目标 `resource.scope` 是 `project`，`base_commit_id` 是 Project 的 `P1`。修改 Org 引用会创建独立项目适配，`org_source` 记录来源 ID 和包含该版本的固定 Project 快照。
 5. **提前在当前项目使用。** Draft 处于 `open` 或 `submitted` 时，修改会叠加到 Payments 的本地 Effective Memory。别的 Project 不会因此读到这份未发布提案。
 6. **提交 Review。** 作者把这个 Draft，或一组有顺序的 Draft，提交到 Review。Server 校验作者、Project、Draft version、上游版本和修改目标。
-7. **发布。** 有权限的 Organization owner/admin 合并 Review。Server 在一个事务中应用整组修改、生成 Organization Commit `C2`、推进 Organization Ref，并刷新受影响 Project 的投影。若有任何发布校验失败，这组内容不会部分发布。
+7. **发布。** Project owner/admin 合并 Review。Server 在一个事务中应用整组修改、生成 Project Commit `P2`、推进项目 Ref 并通知成员。Org 原文保持不变；可选的 Org 贡献基于此固定项目快照创建另一个 PR，由 Org owner/admin 独立审阅。若有任何发布校验失败，这组内容不会部分发布。
 8. **同步新版本。** daemon 安装新的 Project Commit。已合并 Draft 不再作为未发布修改叠加，Agent 读到新发布的正文。
 
-**如果步骤 4 是新建 Memory：** 合并前使用 Draft 的临时身份；合并时 Server 分配新的 `mem_…` 资源 ID，并自动加入发起 Project 的选择集合。不要把新建 Draft 的 ID 当成最终 Memory ID。
+**如果步骤 4 是新建 Memory：** 合并前使用 Draft 的临时身份；合并时 Server 分配新的 `mem_…` 资源 ID，并归 Project 所有。显式 Org 提案创建的资源仍归 Org 所有。不要把新建 Draft 的 ID 当成最终 Memory ID。
 
 **如果只是重命名：** `operations/deployment-rollback.md` 可以改成 `runbooks/deployment-rollback.md`，`mem_example_rollback` 保持不变。已有选择关系仍通过 ID 指向它。
 
@@ -55,9 +55,9 @@ Project → Org Selection → Project Ref → Project Commit
 |---|---|---|
 | `memory_id` / `resource_id` | HTTP / 数据库，string | 同一稳定资源身份。新资源使用 `mem_` 前缀；历史 ID 保留。 |
 | `org_id` | 数据库，string | 所属 Organization；组织 HTTP 路由通过登录上下文确定它。 |
-| `scope` | 两者，string | 当前发布 Memory 为 `org`。`project` 只保留历史读取和清理兼容。 |
+| `scope` | 两者，string | `org` 或 `project`；一个 Review 只发布到一个所有者。 |
 | `project_id` | 两者，string 或 null | Organization 资源为 null；这不表示没有 Project 选中它。选择关系在独立表中。 |
-| `path` | 两者，string | Organization 内的相对路径；活跃资源之间唯一，可重命名。不是 ID，也不保证等于本机文件位置。 |
+| `path` | 两者，string | 所属 Organization 或 Project 内的相对路径；同一所有者的活跃资源之间唯一，可重命名。不是 ID，也不保证等于本机文件位置。 |
 | `name` | 两者，string | Server 从路径最后一段生成，例如 `deployment-rollback.md`。 |
 | `description` | 两者，string | 语义摘要。数据库非 null，但允许空字符串；当前 merge 尚未可靠保留 Draft 的摘要，见[实现边界](/zh/unified-memory-model#当前实现边界)。 |
 | `content` / `body` | HTTP 外层 / 数据库，string | Markdown 正文。当前没有独立 `content_format` 字段。 |
@@ -82,15 +82,15 @@ Selection 替换请求使用 `resource_ids: [...]`，读取结果则包含 `memo
 
 ## Draft：基线加有序修改
 
-Draft 保存“基于哪个已发布版本、对哪个资源、做了什么”。它同时关联 Project 和 Organization：前者承载提案及本地视图，后者是发布目标。
+Draft 保存“基于哪个已发布版本、对哪个资源、做了什么”。它同时关联 Project 和 Organization：Project 承载提案及本地视图，`resource.scope` 指明 Project 或 Org 发布目标。
 
 | 字段 | 含义 |
 |---|---|
 | `draft_id` | Draft 身份。daemon 还可能记录对应的远端 Draft ID，用于同步本地提案。 |
 | `project_id` | 承载提案的 Project，必填。 |
-| `resource.scope` | 当前可发布提案必须为 `org`。 |
+| `resource.scope` | `project` 或 `org`，同一 Review 内必须一致。 |
 | `resource.id` / `resource.path` | 资源定位。已有 Memory 优先使用稳定 ID；新建时尚无正式 ID，需要路径。字段在 DTO 中可为 null，但动作仍有具体校验要求。 |
-| `base_commit_id` | 修改的 Organization 快照基线；没有初始快照时可为 null。 |
+| `base_commit_id` | 发布所有者的快照基线；没有初始快照时可为 null。 |
 | `operations` | 按明确顺序应用的 create / update / rename / delete。Server 以 `draft_operations.ordinal` 保存顺序。 |
 | `version` | Draft 并发版本；写入携带预期版本，防止覆盖别人刚改过的提案。 |
 | `status` | `open`、`submitted`、`merged`、`discarded`。 |
@@ -98,7 +98,7 @@ Draft 保存“基于哪个已发布版本、对哪个资源、做了什么”�
 
 操作中，create/update 的 `content` 是 `{ content: "Markdown…", description?: "摘要" }`；rename 使用 `new_path`；delete 表示删除目标。Server 保存的 update 是正文结果，daemon 可以接受局部文本替换并转换成同步操作。一个 Draft 中先 create 再 update/rename，发布时会物化成最终的新资源。
 
-`behind` 只表示 Base Commit 与当前 Organization Ref 不同。例如别人发布了另一份无关文档，当前清单的 Draft 也可能变成 behind，但不一定有内容冲突。Server 比较 **Base（旧基线）、Current（当前发布状态）、Draft Result（提案结果）**，形成 reconciliation candidate；确认后的 rebase 更新 Draft 基线，不发布内容。
+`behind` 只表示 Base Commit 与发布目标的当前 Ref 不同。例如别人发布了另一份无关文档，当前清单的 Draft 也可能变成 behind，但不一定有内容冲突。Server 比较 **Base（旧基线）、Current（当前发布状态）、Draft Result（提案结果）**，形成 reconciliation candidate；干净结果可自动 rebase；冲突保留基线并通知作者。rebase 不发布内容。
 
 ## Review：一组修改的发布边界
 
@@ -158,6 +158,7 @@ Project Tree 中，所选 Memory 使用 `type: memory`、`source: selected_org`�
 | Draft 与同步事件 | `drafts`、`draft_operations`、`draft_events` | operation 归属于 Draft；事件序号供增量同步。 |
 | 上游协调历史 | `draft_reconciliation_candidates`、`draft_revisions`、`draft_rebases` | 候选绑定 Draft version 与 Base/Current；rebase 保留此前 revision。 |
 | Review | `reviews`、`review_drafts`、`review_comments`、`review_merges` | 有序 Draft 集合、版本化评论、最终 merge 记录。 |
+| Org 贡献 | `review_org_contributions` | 显式选择、固定来源 Project Commit、独立 Org Review 与重试错误。 |
 | 发布快照 | `blobs`、`trees`、`tree_entries`、`commits`、`refs` | Ref → Commit → Tree → entry → Blob。 |
 
 ### 本机 daemon：SQLite 与文件
@@ -179,7 +180,7 @@ Project Local Storage 只允许移动受管理的 generation 和检索数据。�
 
 - [Organization Memory](/zh/artifact)：发布源、共享内容与 Bundle。
 - [Project](/zh/workspace)：选择、目录绑定与本地视图。
-- [统一 Memory 设计](/zh/unified-memory-model)：不变量、事务与当前实现边界。
+- [Project 与 Organization 归属](/zh/project-org-memory-ownership)：归属、发布与贡献的不变量。
 - [Server 数据结构](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/dto.rs)与[变更数据结构](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/draft/dto.rs), [Review DTO](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/review/dto.rs)：实际 JSON 字段、可空值和枚举。
 - [数据库迁移](https://github.com/lilhammerfun/clumsies/tree/main/crates/server/migrations)：需要依次阅读，初始 schema 包含后来移除的字段。
 - [快照与资源持久化](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/repository.rs)、[Commit 持久化](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/commit/repository.rs)、[Review 事务](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/review/repository.rs)、[Draft overlay](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/overlay.rs)、[索引 schema](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/index.rs)：各层行为的实现依据。

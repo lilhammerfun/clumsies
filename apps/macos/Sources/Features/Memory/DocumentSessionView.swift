@@ -49,8 +49,9 @@ struct DocumentSessionView: View {
         .sheet(item: $reviewDraft) { draft in
             ReviewRequestSheet(
                 initialTitle: self.model.document.title,
+                drafts: [draft],
                 loadCandidates: { [try await self.model.loadReviewCandidate(draft, item: self.item)] }
-            ) { title, description, reconciliations in
+            ) { title, description, reconciliations, contributions in
                 let reconciliation = reconciliations.first
                 try await self.model.submitReview(
                     draft,
@@ -58,7 +59,8 @@ struct DocumentSessionView: View {
                     title: title,
                     description: description,
                     candidate: reconciliation?.candidate,
-                    resolvedState: reconciliation?.resolvedState
+                    resolvedState: reconciliation?.resolvedState,
+                    contributions: contributions
                 )
             }
         }
@@ -68,7 +70,7 @@ struct DocumentSessionView: View {
                 self.model.moveToTrash(item: self.item)
             }
         } message: {
-            Text(MemoryFileTreeAlert.organizationDeletion(items: [item]).message)
+            Text(MemoryFileTreeAlert.memoryDeletion(items: [item]).message)
         }
     }
 
@@ -236,7 +238,7 @@ struct DocumentSessionView: View {
             model.discard(draft, item: item)
         case .moveToTrash:
             guard draftStore.canEditMemory(item),
-                  MemoryFileTreeMenu.canProposeOrganizationDeletion(
+                  MemoryFileTreeMenu.canProposeMemoryDeletion(
                       item,
                       inOrgView: workspaceContext.activeProjectId == nil
                   ) else {

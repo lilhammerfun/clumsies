@@ -1,6 +1,6 @@
 //! SQL queries and persistence for draft resources.
 
-use super::model::{content_for_kind, draft_event_type, draft_operation_action, draft_status};
+use super::model::{draft_event_type, draft_operation_action, draft_status};
 use crate::app::auth::AuthPrincipal;
 use crate::app::draft::dto::{
     Draft, DraftCoordination, DraftEvent, DraftEventListResponse, DraftEventType, DraftFreshness,
@@ -122,65 +122,31 @@ pub(crate) async fn resolve_org_draft_target_id(
     }
 }
 
-/// Require the target to be active organization Memory selected by the carrying project.
-///
-/// Uses the caller's transaction without committing it.
+/// Validate Organization identity independently from Project read selections.
 ///
 /// # Errors
-/// Propagates database access and row-decoding failures and rejects inconsistent persisted state
-/// or resource selections.
-pub(crate) async fn validate_org_draft_target_is_selected(
+/// Rejects missing, inactive, or foreign Organization targets and propagates database errors.
+pub(crate) async fn validate_org_draft_target(
     tx: &mut Transaction<'_, Postgres>,
-    project_id: &str,
     org_id: &str,
     resource: &DraftResourceRef,
 ) -> Result<(), ServerError> {
-    let selected = if let Some(resource_id) = resource.id.as_deref() {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (
-                SELECT 1
-                FROM project_org_resource_selections s
-                JOIN resources r ON r.resource_id = s.resource_id
-                WHERE s.project_id = $1
-                  AND r.resource_id = $2
-                  AND r.org_id = $3
-                  AND r.scope = 'org'
-                  AND r.status = 'active'
-             )",
-        )
-        .bind(project_id)
-        .bind(resource_id)
-        .bind(org_id)
-        .fetch_one(&mut **tx)
-        .await?
-    } else if let Some(path) = resource.path.as_deref() {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (
-                SELECT 1
-                FROM project_org_resource_selections s
-                JOIN resources r ON r.resource_id = s.resource_id
-                WHERE s.project_id = $1
-                  AND r.org_id = $2
-                  AND r.scope = 'org'
-                  AND r.path = $3
-                  AND r.status = 'active'
-             )",
-        )
-        .bind(project_id)
-        .bind(org_id)
-        .bind(path)
-        .fetch_one(&mut **tx)
-        .await?
-    } else {
-        false
-    };
-    if selected {
-        return Ok(());
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM resources
+        WHERE org_id = $1 AND scope = 'org' AND status = 'active'
+          AND (($2::text IS NOT NULL AND resource_id = $2) OR ($2 IS NULL AND path = $3)))",
+    )
+    .bind(org_id)
+    .bind(resource.id.as_deref())
+    .bind(resource.path.as_deref())
+    .fetch_one(&mut **tx)
+    .await?;
+    if !valid {
+        return Err(ServerError::InvalidRequest(
+            "Organization proposal target must be active Memory in this Organization".to_owned(),
+        ));
     }
-    Err(ServerError::InvalidRequest(
-        "an Organization Memory Draft may target only Memory currently selected by its carrying Project"
-            .to_owned(),
-    ))
+    Ok(())
 }
 
 /// Lock the proposal and allocate its next dense operation ordinal before inserting the mutation.
@@ -347,10 +313,10 @@ pub(crate) async fn resource_state_at_commit(
         });
     };
     let row = sqlx::query(
-        "SELECT e.item_id, e.path, e.blob_id, b.content
+        "SELECT e.item_id, e.path, e.blob_id, e.org_source, b.content
          FROM commits c
          LEFT JOIN LATERAL (
-             SELECT item_id, path, blob_id
+             SELECT item_id, path, blob_id, org_source
              FROM tree_entries
              WHERE tree_id = c.tree_id
                AND resource_kind = 'memory'
@@ -394,7 +360,15 @@ pub(crate) async fn resource_state_at_commit(
             id: Some(id),
             path: row.try_get("path")?,
         },
-        content: Some(content_for_kind("memory", content, None)),
+        content: Some(crate::app::draft::dto::DraftResourceContent {
+            org_source: row
+                .try_get::<Option<sqlx::types::Json<crate::app::memory::dto::OrgMemorySource>>, _>(
+                    "org_source",
+                )?
+                .map(|source| source.0),
+            description: None,
+            content,
+        }),
     })
 }
 

@@ -12,12 +12,11 @@ Memory 工作区不是直接编辑共享权威的文件管理器。界面分为�
 | 上下文 | 当前展示 | 可执行操作 |
 | --- | --- | --- |
 | Organization | Organization Memory 权威目录 | 浏览、预览、把权威资源加入 Project；不创建或修改 Draft |
-| Project | 当前 Project 选中的 Organization Memory、Project 携带的 Draft，以及兼容期的旧 Project 权威 | 通过 Project 绑定的 Draft 提议创建、编辑、改名或删除；移除 Project 选择；提交 Review |
+| Project | 当前 Project 选中的 Organization Memory、Project 携带的 Draft，以及项目自有的已发布 Memory | 通过 Project 绑定的 Draft 提议创建、编辑、改名或删除；移除 Project 选择；提交 Review |
 
 Organization 视图没有明确的 Draft carrier，因此保持只读。Project 视图中的编辑也不会
 原位修改 Organization 权威：选中的 Organization 资源与该 Project 的 LocalDraft 叠加后
-形成可编辑文档。旧 Project-scoped authority 仍可见，但只作为兼容层展示，打开文档后显示只读说明；
-它不能通过当前发布链继续修改或提交。
+形成可编辑文档。Project 与 Org 分别拥有已发布 Memory。项目内编辑默认产生 Project Draft，编辑 Org 引用会生成带来源版本的独立项目适配；菜单中的 **Propose Organization Change…** 用于显式 Org 提案。一个 Review 只发布到一个所有者。
 
 界面仍以 Context、Rule、Workflow 等 kind 和路径约定组织创建入口，但这些只是统一
 Memory 资源在线路模型上的分类与 UI 约定，不是彼此独立的存储系统。
@@ -191,3 +190,7 @@ Discard 和 deletion proposal 仍按各自 Draft 生命周期处理。Review 详
 | 用户通知 | `apps/macos/Sources/Features/Inbox/InboxView.swift`、`Services/Inbox/InboxStore.swift` |
 | tab 标题与布局 | `apps/macos/Sources/Features/Memory/DocumentTabStrip.swift` |
 | 交互测试 | `apps/macos/Tests/Features/FileTreeSelectionTests.swift`、`MemoryFileTreeMenuTests.swift`、`WorkspaceNavigationTests.swift` |
+
+## 项目发布与独立 Org 贡献
+
+项目 PR 由项目 owner/admin 合并，成员自动同步已验证的已发布快照，未保存编辑和草稿基线受到保护。干净草稿自动合并；冲突保留原稿并通知作者。提交项目 PR 时可以选择在合并后贡献到 Org。系统从固定项目版本创建独立 Org PR，显示关联或可重试的创建失败，由 Org owner/admin 独立处理。Org 拒绝不会撤销项目发布。

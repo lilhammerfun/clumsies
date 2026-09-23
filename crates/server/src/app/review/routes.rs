@@ -24,6 +24,9 @@ define_routes!(protected_routes, PROTECTED_OPERATIONS, {
     "/api/v1/reviews/{review_id}/submissions" => {
         post: handler::create_review_submission,
     };
+    "/api/v1/reviews/{review_id}/org-contribution" => {
+        post: handler::retry_org_contribution,
+    };
     "/api/v1/reviews/{review_id}/merges" => {
         post: handler::create_review_merge,
     };

@@ -251,6 +251,7 @@ struct ListResponse<Item: Decodable & Sendable>: Decodable, Sendable {
 }
 
 struct MemoryMetadata: Codable, Identifiable, Hashable, Sendable {
+    var orgSource: OrgMemorySource? = nil
     var id: String { memoryId }
 
     let memoryId: String
@@ -380,6 +381,9 @@ struct CommitBlob: Codable, Sendable {
 }
 
 struct ReviewMetadata: Codable, Identifiable, Hashable, Sendable {
+    var scope: MemoryScope? = nil
+    var orgContribution: OrgContribution? = nil
+    var projectSource: ProjectReviewSource? = nil
     var id: String { reviewId }
 
     let reviewId: String
@@ -536,7 +540,26 @@ struct ServerDraftSyncState: Codable, Sendable {
     let daemonInstallationId: String?
 }
 
+struct OrgContributionEntry: Codable, Hashable, Sendable {
+    let draftId: String
+    let targetId: String?
+    let path: String?
+}
+
+struct OrgContribution: Codable, Hashable, Sendable {
+    let entries: [OrgContributionEntry]
+    let sourceCommitId: String?
+    let orgReviewId: String?
+    let lastError: String?
+}
+
+struct ProjectReviewSource: Codable, Hashable, Sendable {
+    let reviewId: String
+    let commitId: String
+}
+
 struct CreateReviewRequest: Codable, Sendable {
+    var orgContribution: [OrgContributionEntry]? = nil
     let drafts: [ReviewDraftRequest]
     let title: String
     let description: String

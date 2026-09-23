@@ -7,11 +7,10 @@ Server is the deployable service responsible for shared Clumsies state and publi
 Server owns:
 
 - organization membership, project membership, roles, and token sessions
-- Organization Memory authority and Project Memory selections/projections
+- Organization and Project Memory publication, selections, and combined snapshots
 - personal Bundles (`resource_ids`)
 - drafts, draft operation history, reviews, decisions, comments, and merges
-- immutable Commit history, Trees, Blobs, the Organization authority Ref, and
-  Project projection Refs
+- immutable Commit history, Trees, Blobs, Organization and Project Refs
 - admin configuration, token revocation, audit events, and health reporting
 
 Desktop and MCP write local drafts through the daemon. The daemon synchronizes
@@ -31,14 +30,14 @@ Ref -> Commit -> Tree -> entries -> Blob
 Draft(base_commit_id)
 ```
 
-Each Organization has an authority Ref; each Project has a separately versioned
-Ref for its selected-memory projection. A merge locks the Organization Ref,
-checks `If-Match`, verifies that the Draft is based on that Commit, creates a new
-immutable Organization Commit, and advances the authority Ref. Project Refs are
-rebuilt when their selection or selected Organization authority changes.
+Organization and each Project have independently versioned Refs. A merge locks
+the publication owner’s Ref, checks `If-Match` and Draft baselines, creates an
+immutable Commit, and advances that Ref. Project snapshots combine Project-owned
+Memory with selected Org content; selection and upstream Org changes also refresh
+these snapshots while preserving Project adaptations.
 Project metadata revision is separate from both histories.
 
-Published Organization Memory is read through `GET /api/v1/org/memories` and its `{memory_id}` detail route. The old `/api/v1/projects/{project_id}/memories` routes read legacy Project-scope rows; they do not return the current selection projection or Effective Memory. Use Project org-selections and commit-state for the projection, and local MCP for Effective Memory. An org-admin `GET /api/v1/admin/memory-export`
+Published Organization Memory is read through `GET /api/v1/org/memories` and its `{memory_id}` detail route. The `/api/v1/projects/{project_id}/memories` routes read published Project-owned resources; they do not return the current selection projection or Effective Memory. Use Project org-selections and commit-state for the projection, and local MCP for Effective Memory. An org-admin `GET /api/v1/admin/memory-export`
 emits every Memory (including `issues/` paths), all Drafts with their raw
 operations, Project org selections, and personal bundles as the repeatable,
 verifiable migration export.
@@ -47,15 +46,17 @@ Draft lifecycle (`open`, `submitted`, `merged`, `discarded`) is independent from
 freshness (`current`, `behind`) and reconciliation (`unknown`, `clean`,
 `conflicts`). When a Ref advances, Server keeps the Draft Base and operations
 unchanged. It computes a canonical Base/Current/Draft candidate only when asked,
-and applies it only after explicit confirmation. Rebase saves an immutable Draft
+and applies clean candidates through the author-scoped auto-rebase endpoint.
+Conflicts keep the baseline and operations intact and notify the author. Rebase saves an immutable Draft
 revision before atomically changing `base_commit_id` and operations.
 Applying a clean candidate always uses the Server's canonical proposed result;
 only a conflicts candidate accepts a complete user-resolved state.
 
 Creating or resubmitting a Review and approving it for publication are
 coordination boundaries. A Project member may propose, submit, inspect, and
-comment; only an Organization owner or administrator may approve or reject an
-Org publication Review. Desktop Approve calls the merge endpoint, recording the decision and advancing the target Ref in one transaction. That endpoint accepts Open or Approved Reviews. A standalone HTTP `approved` decision only records approval; it does not publish. Review creation/submission
+comment. Project owners/admins publish Project Reviews; Organization
+owners/admins publish Org Reviews. Optional Org contributions are independent
+Reviews created from the fixed merged Project commit. Desktop Approve calls the merge endpoint, recording the decision and advancing the target Ref in one transaction. That endpoint accepts Open or Approved Reviews. A standalone HTTP `approved` decision only records approval; it does not publish. Review creation/submission
 can apply each Draft's confirmed candidate in the same Ref-locked transaction.
 Publication never performs the first stale check as a normal workflow; it retains
 `If-Match`/CAS as the final concurrency guard.

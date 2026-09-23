@@ -14,12 +14,15 @@ enum MemoryTreeProjection {
         let activeDrafts = MemoryTreeProjection.preferredMemoryTreeDrafts(
             MemoryTreeProjection.memoryTreeDrafts(drafts, activeProjectId: activeProjectId)
         )
-        let draftByTarget = Dictionary(
-            activeDrafts.compactMap { draft in draft.targetId.map { ($0, draft) } },
-            uniquingKeysWith: { current, candidate in
-                candidate.updatedAt > current.updatedAt ? candidate : current
+        var draftByTarget: [String: LocalDraft] = [:]
+        for draft in activeDrafts {
+            guard let target = draft.targetId ?? draft.orgSource?.resourceId else { continue }
+            if let current = draftByTarget[target] {
+                if current.scope == .project && draft.scope == .org { continue }
+                if current.scope == draft.scope && current.updatedAt >= draft.updatedAt { continue }
             }
-        )
+            draftByTarget[target] = draft
+        }
         var items = authoritative.map { resource in
             MemoryListItem(
                 id: resource.id,
@@ -32,12 +35,10 @@ enum MemoryTreeProjection {
             )
         }
         let authoritativeIds = Set(authoritative.map(\.id))
-        items.append(contentsOf: MemoryTreeProjection.unrepresentedDrafts(
-            activeDrafts,
-            authoritativeResourceIds: authoritativeIds
-        ).map {
+        let representedDraftIds = Set(items.compactMap { $0.draft?.id })
+        items.append(contentsOf: activeDrafts.filter { !representedDraftIds.contains($0.id) }.map {
             MemoryListItem(
-                id: $0.targetId ?? $0.id,
+                id: $0.targetId.flatMap { authoritativeIds.contains($0) ? nil : $0 } ?? $0.id,
                 resource: nil,
                 draft: $0,
                 inherited: false,
@@ -61,9 +62,8 @@ enum MemoryTreeProjection {
     }
 
     /// The Project tree is the Project's effective Memory surface: selected
-    /// Org authority plus its local Draft overlay. Existing project-scope
-    /// authority remains visible as a compatibility layer until that legacy
-    /// publication path is migrated separately.
+    /// Org references, published Project Memory, and local Drafts.
+    /// Explicit adaptations take precedence over their Org source.
     nonisolated static func memoryTreeResources(
         _ resources: [MemoryResource],
         activeProjectId: String?,
@@ -72,10 +72,11 @@ enum MemoryTreeProjection {
         guard let activeProjectId else {
             return resources.filter { $0.scope == .org }
         }
+        let adapted = Set(resources.filter { $0.scope == .project && $0.projectId == activeProjectId }.compactMap { $0.orgSource?.resourceId })
         return resources.filter { resource in
             switch resource.scope {
             case .org:
-                selectedOrgResourceIds.contains(resource.id)
+                selectedOrgResourceIds.contains(resource.id) && !adapted.contains(resource.id)
             case .project:
                 resource.projectId == activeProjectId
             }
@@ -102,7 +103,8 @@ enum MemoryTreeProjection {
     ) -> [LocalDraft] {
         var preferred: [String: LocalDraft] = [:]
         for draft in drafts {
-            let key = draft.targetId ?? "draft:\(draft.id)"
+            let target = draft.targetId ?? draft.orgSource?.resourceId ?? "draft:\(draft.id)"
+            let key = "\(draft.scope.rawValue):\(target)"
             if let current = preferred[key], current.updatedAt >= draft.updatedAt {
                 continue
             }
@@ -134,12 +136,14 @@ enum MemoryTreeProjection {
     ) -> LocalDraft? {
         guard let projectId else { return nil }
         let matchingDrafts = drafts.filter { draft in
-            (draft.id == itemId || draft.targetId == itemId)
+            (draft.id == itemId || draft.targetId == itemId || draft.orgSource?.resourceId == itemId)
                 && draft.projectId == projectId
                 && draft.status != .discarded
                 && draft.status != .merged
         }
-        return preferredMemoryTreeDrafts(matchingDrafts).first
+        return matchingDrafts.first { $0.id == itemId }
+            ?? preferredMemoryTreeDrafts(matchingDrafts).first { $0.scope == .project }
+            ?? preferredMemoryTreeDrafts(matchingDrafts).first
     }
 
     nonisolated static func unrepresentedDrafts(
@@ -147,7 +151,7 @@ enum MemoryTreeProjection {
         authoritativeResourceIds: Set<String>
     ) -> [LocalDraft] {
         activeDrafts.filter { draft in
-            guard let targetId = draft.targetId else { return true }
+            guard let targetId = draft.targetId ?? draft.orgSource?.resourceId else { return true }
             return !authoritativeResourceIds.contains(targetId)
         }
     }

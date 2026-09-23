@@ -42,12 +42,12 @@ final class DraftStore: ObservableObject {
     private var documentSaveTasks: [MemoryDocumentSessionKey: Task<Void, Never>] = [:]
 
     func canCreateMemory(kind: MemoryKind, scope: MemoryScope) -> Bool {
-        !context.isSwitchingMemoryContext && context.activeProjectId != nil && scope == .org
+        !context.isSwitchingMemoryContext && context.activeProjectId != nil && scope == .project
     }
 
     /// Authority is never edited in place: a Project member edits selected
-    /// Organization Memory through a Project-bound LocalDraft. Legacy
-    /// Project-scoped authority remains visible but read-only.
+    /// Organization Memory through a Project-bound LocalDraft.
+    /// Project resources are editable; Org references become Project adaptations.
     func canEditMemory(_ item: MemoryListItem) -> Bool {
         guard context.phase == .ready else { return false }
         let projectContextId = item.projectContextId
@@ -59,7 +59,7 @@ final class DraftStore: ObservableObject {
         if sessions.projectOrgSelectionMutatingIds.contains(projectContextId) {
             return false
         }
-        guard item.scope == .org else { return false }
+        if item.scope == .project { return true }
         if let draft = item.draft, draft.targetId == nil { return true }
         return item.inherited
     }
@@ -200,9 +200,9 @@ final class DraftStore: ObservableObject {
             }
             let draftId = draft?.id
             let projectRefCommitId = self.context.projects.first { $0.id == projectId }?.refCommitId
+            let publicationScope = draft?.scope ?? .project
             let baseCommitId = draft?.baseCommitId
-                ?? resource?.refCommitId
-                ?? (item.scope == .org ? self.catalog.orgRefCommitId : projectRefCommitId)
+                ?? (publicationScope == .org ? self.catalog.orgRefCommitId : projectRefCommitId)
             var response: DaemonDraftOperationResponse?
 
             if let resource, document.path != (draft?.document.path ?? resource.document.path) {
@@ -211,7 +211,7 @@ final class DraftStore: ObservableObject {
                         draftId: draftId,
                         baseCommitId: baseCommitId,
                         projectId: projectId,
-                        scope: item.scope == .org ? .org : .project,
+                        scope: (draft?.scope ?? .project) == .org ? .org : .project,
                         resource: item.kind.daemonKind,
                         op: .rename(id: resource.id, newPath: document.path, description: nil),
                         source: .desktop
@@ -239,7 +239,7 @@ final class DraftStore: ObservableObject {
                     draftId: response?.draftId ?? draftId,
                     baseCommitId: baseCommitId,
                     projectId: projectId,
-                    scope: item.scope == .org ? .org : .project,
+                    scope: (draft?.scope ?? .project) == .org ? .org : .project,
                     resource: item.kind.daemonKind,
                     op: operation,
                     source: .desktop
@@ -314,10 +314,9 @@ final class DraftStore: ObservableObject {
                 .init(
                     draftId: draft?.id,
                     baseCommitId: draft?.baseCommitId
-                        ?? resource?.refCommitId
-                        ?? (item.scope == .org ? self.catalog.orgRefCommitId : projectRefCommitId),
+                        ?? (draft?.scope == .org ? self.catalog.orgRefCommitId : projectRefCommitId),
                     projectId: projectId,
-                    scope: item.scope == .org ? .org : .project,
+                    scope: (draft?.scope ?? .project) == .org ? .org : .project,
                     resource: item.kind.daemonKind,
                     op: .rename(id: plan.targetId, newPath: plan.newPath, description: nil),
                     source: .desktop
@@ -401,7 +400,7 @@ final class DraftStore: ObservableObject {
                         draftId: draft?.id,
                         baseCommitId: draft?.baseCommitId ?? item.resource?.refCommitId,
                         projectId: projectId,
-                        scope: item.scope == .org ? .org : .project,
+                        scope: (draft?.scope ?? .project) == .org ? .org : .project,
                         resource: item.kind.daemonKind,
                         op: .delete(id: targetId, description: nil),
                         source: .desktop
@@ -472,7 +471,7 @@ final class DraftStore: ObservableObject {
             ?? (item.scope == .project ? item.projectId : nil)
         guard let projectContext else { return nil }
         return drafts.first { draft in
-            draft.targetId == resourceId
+            (draft.targetId == resourceId || draft.orgSource?.resourceId == resourceId)
                 && draft.status != .discarded
                 && draft.status != .merged
                 && draft.projectId == projectContext

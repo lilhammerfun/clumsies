@@ -56,6 +56,7 @@ async fn draft_created_resource_must_be_discarded_instead_of_deleted() {
         action: DraftOperationAction::Create,
         resource: resource.clone(),
         content: Some(DraftResourceContent {
+            org_source: None,
             description: None,
             content: "# New rule".to_owned(),
         }),
@@ -135,178 +136,6 @@ async fn draft_created_resource_must_be_discarded_instead_of_deleted() {
     .await
     .unwrap();
     assert_eq!(discarded.draft.status, DraftStatus::Discarded);
-    postgres.shutdown().await;
-}
-
-#[tokio::test]
-async fn project_authority_drafts_are_rejected_at_creation() {
-    let postgres = common::migrated_postgres().await;
-    let pool = postgres.pool.clone();
-    let bootstrap = common::initialize_installation(
-        postgres.pool.clone(),
-        "Acme Memory",
-        "owner@example.com",
-        "Owner",
-        "oidc-subject-owner",
-        "Legacy Project Memory",
-    )
-    .await;
-    let legacy_resource = DraftResourceRef {
-        scope: ResourceScope::Project,
-        id: None,
-        path: Some("context/legacy.md".to_owned()),
-    };
-    let error = server::app::draft::create_draft(
-        &pool,
-        &common::principal(&pool, &bootstrap.user_id).await,
-        CreateDraftRequest {
-            daemon_installation_id: "daemon_legacy".to_owned(),
-            project_id: bootstrap.project_id.clone(),
-            base_commit_id: None,
-            title: "Legacy Project draft".to_owned(),
-            description: None,
-            resource: legacy_resource,
-            operations: Vec::new(),
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("Project is a Draft carrier, not a Memory authority scope")
-    );
-    let draft_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM drafts")
-        .fetch_one(&postgres.pool)
-        .await
-        .unwrap();
-    assert_eq!(draft_count, 0);
-    postgres.shutdown().await;
-}
-
-#[tokio::test]
-async fn legacy_project_drafts_cannot_enter_or_complete_publication() {
-    let postgres = common::migrated_postgres().await;
-    let pool = postgres.pool.clone();
-    let bootstrap = common::initialize_installation(
-        postgres.pool.clone(),
-        "External Memory",
-        "owner@example.com",
-        "Owner",
-        "oidc-subject-owner",
-        "Migration Project",
-    )
-    .await;
-    sqlx::query("ALTER TABLE drafts DROP CONSTRAINT drafts_no_active_project_authority")
-        .execute(&postgres.pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO drafts (
-            draft_id, project_id, author_user_id, title, description,
-            resource_scope, resource_kind, path, status, version,
-            daemon_installation_id
-         ) VALUES
-            ('drf_legacy_open', $1, $2, 'Legacy open', '',
-             'project', 'memory', 'context/legacy-open.md', 'open', 1, 'daemon_legacy'),
-            ('drf_legacy_submitted', $1, $2, 'Legacy submitted', '',
-             'project', 'memory', 'context/legacy-submitted.md', 'submitted', 1,
-             'daemon_legacy')",
-    )
-    .bind(&bootstrap.project_id)
-    .bind(&bootstrap.user_id)
-    .execute(&postgres.pool)
-    .await
-    .unwrap();
-
-    let create_error = server::app::review::create_review(
-        &pool,
-        &common::principal(&pool, &bootstrap.user_id).await,
-        None,
-        CreateReviewRequest {
-            drafts: vec![ReviewDraftRequest {
-                draft_id: "drf_legacy_open".to_owned(),
-                expected_draft_version: 1,
-                candidate_id: None,
-                resolved_state: None,
-            }],
-            title: None,
-            description: None,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        create_error
-            .to_string()
-            .contains("Project is not a Memory authority scope")
-    );
-
-    sqlx::query(
-        "INSERT INTO reviews (
-            review_id, draft_id, project_id, author_user_id,
-            title, description, status, version
-         ) VALUES
-            ('rev_legacy_rejected', 'drf_legacy_open', $1, $2,
-             'Legacy rejected', '', 'rejected', 1),
-            ('rev_legacy_approved', 'drf_legacy_submitted', $1, $2,
-             'Legacy approved', '', 'approved', 1)",
-    )
-    .bind(&bootstrap.project_id)
-    .bind(&bootstrap.user_id)
-    .execute(&postgres.pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO review_drafts (review_id, draft_id, ordinal) VALUES
-            ('rev_legacy_rejected', 'drf_legacy_open', 0),
-            ('rev_legacy_approved', 'drf_legacy_submitted', 0)",
-    )
-    .execute(&postgres.pool)
-    .await
-    .unwrap();
-
-    let resubmit_error = server::app::review::create_review_submission(
-        &pool,
-        "rev_legacy_rejected",
-        &common::principal(&pool, &bootstrap.user_id).await,
-        None,
-        CreateReviewSubmissionRequest {
-            expected_review_version: 1,
-            drafts: vec![ReviewDraftRequest {
-                draft_id: "drf_legacy_open".to_owned(),
-                expected_draft_version: 1,
-                candidate_id: None,
-                resolved_state: None,
-            }],
-            title: None,
-            description: None,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        resubmit_error
-            .to_string()
-            .contains("Project is not a Memory authority scope")
-    );
-
-    let merge_error = server::app::review::create_review_merge(
-        &pool,
-        "rev_legacy_approved",
-        &common::principal(&pool, &bootstrap.user_id).await,
-        None,
-        CreateReviewMergeRequest {
-            expected_review_version: 1,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        merge_error
-            .to_string()
-            .contains("Project is not a Memory authority scope")
-    );
     postgres.shutdown().await;
 }
 
@@ -1480,10 +1309,12 @@ async fn invalid_org_projection_rolls_back_authority_and_every_ref() {
     // Compatibility fixture: releases before Org-only authority could leave
     // Project-owned rows behind. They remain readable but no Review may
     // create or mutate them after this cutover.
-    sqlx::query("ALTER TABLE resources DROP CONSTRAINT resources_no_active_project_authority")
-        .execute(&postgres.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_no_active_project_authority",
+    )
+    .execute(&postgres.pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO resources (
             resource_id, org_id, project_id, scope, resource_kind, path, name,
@@ -1553,6 +1384,7 @@ async fn invalid_org_projection_rolls_back_authority_and_every_ref() {
         &common::principal(&pool, &bootstrap.user_id).await,
         org_head_before.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: org_draft.draft.draft_id,
                 expected_draft_version: org_draft.draft.version,
@@ -1851,6 +1683,7 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
         &submission_ref_etag,
         &CreateReviewSubmissionRequest {
+            org_contribution: None,
             expected_review_version: 1,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
@@ -1870,6 +1703,7 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
         &submission_ref_etag,
         &CreateReviewSubmissionRequest {
+            org_contribution: None,
             expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
@@ -1889,6 +1723,7 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
         &submission_ref_etag,
         &CreateReviewSubmissionRequest {
+            org_contribution: None,
             expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
@@ -1917,6 +1752,7 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
         &submission_ref_etag,
         &CreateReviewSubmissionRequest {
+            org_contribution: None,
             expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
@@ -1968,6 +1804,7 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
         &submission_ref_etag,
         &CreateReviewSubmissionRequest {
+            org_contribution: None,
             expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
@@ -2010,6 +1847,7 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         ),
         &submission_ref_etag,
         &CreateReviewSubmissionRequest {
+            org_contribution: None,
             expected_review_version: resubmitted.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: resubmitted.draft.draft_id.clone(),
@@ -2466,6 +2304,7 @@ async fn reconciliation_handles_overlapping_updates_and_editable_behind_drafts()
         &common::principal(&pool, &bootstrap.user_id).await,
         None,
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: seed.draft.draft_id,
                 expected_draft_version: seed.draft.version,
@@ -2549,6 +2388,7 @@ async fn reconciliation_handles_overlapping_updates_and_editable_behind_drafts()
         &common::principal(&pool, &bootstrap.user_id).await,
         Some(&base_commit_id),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: local_update.draft.draft_id.clone(),
                 expected_draft_version: local_update.draft.version,
@@ -2620,6 +2460,7 @@ async fn reconciliation_handles_overlapping_updates_and_editable_behind_drafts()
         &common::principal(&pool, &bootstrap.user_id).await,
         Some(&base_commit_id),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: remote.draft.draft_id,
                 expected_draft_version: remote.draft.version,
@@ -2852,10 +2693,12 @@ async fn project_org_selection_rejects_foreign_and_colliding_resources_atomicall
     )
     .await
     .unwrap();
-    sqlx::query("ALTER TABLE resources DROP CONSTRAINT resources_no_active_project_authority")
-        .execute(&postgres.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_no_active_project_authority",
+    )
+    .execute(&postgres.pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO resources (
             resource_id, org_id, project_id, scope, resource_kind, path, name,
@@ -2969,7 +2812,7 @@ async fn project_org_selection_rejects_foreign_and_colliding_resources_atomicall
 }
 
 #[tokio::test]
-async fn project_org_selection_preserves_every_active_org_draft_target() {
+async fn project_selection_changes_preserve_independent_org_drafts() {
     let postgres = common::migrated_postgres().await;
     let pool = postgres.pool.clone();
     let bootstrap = common::initialize_installation(
@@ -3164,7 +3007,7 @@ async fn project_org_selection_preserves_every_active_org_draft_target() {
         (&submitted_id, &submitted_draft.draft.draft_id),
         (&operation_id, &operation_draft.draft.draft_id),
     ] {
-        let error = server::app::memory::replace_project_org_selection(
+        selection = server::app::memory::replace_project_org_selection(
             &pool,
             &common::owner_principal(&pool).await,
             &bootstrap.project_id,
@@ -3178,11 +3021,21 @@ async fn project_org_selection_preserves_every_active_org_draft_target() {
             },
         )
         .await
-        .unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains(blocked_id));
-        assert!(message.contains(draft_id));
-        assert!(message.contains("active Organization Draft"));
+        .unwrap();
+        assert!(
+            selection
+                .memories
+                .iter()
+                .all(|memory| &memory.memory_id != blocked_id)
+        );
+        let preserved =
+            server::app::draft::get_draft(&pool, &common::owner_principal(&pool).await, draft_id)
+                .await
+                .unwrap();
+        assert!(matches!(
+            preserved.draft.status,
+            DraftStatus::Open | DraftStatus::Submitted
+        ));
     }
 
     let without_discarded = with_addition
@@ -3385,6 +3238,7 @@ async fn project_org_selection_resolves_legacy_path_only_draft_after_authority_r
         &common::principal(&pool, &bootstrap.user_id).await,
         base_commit_id.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: rename_draft.draft.draft_id,
                 expected_draft_version: rename_draft.draft.version,
@@ -3473,7 +3327,7 @@ async fn project_org_selection_resolves_legacy_path_only_draft_after_authority_r
         DraftOperationAction::Create
     );
 
-    let error = server::app::memory::replace_project_org_selection(
+    let deselected = server::app::memory::replace_project_org_selection(
         &pool,
         &common::owner_principal(&pool).await,
         &bootstrap.project_id,
@@ -3483,11 +3337,8 @@ async fn project_org_selection_resolves_legacy_path_only_draft_after_authority_r
         },
     )
     .await
-    .unwrap_err();
-    let message = error.to_string();
-    assert!(message.contains(&resource_id));
-    assert!(message.contains(&path_draft.draft.draft_id));
-    assert!(message.contains("active Organization Draft"));
+    .unwrap();
+    assert!(deselected.memories.is_empty());
 
     let replacement_resource_id = server::app::memory::create_org_context(
         &pool,
@@ -3636,8 +3487,8 @@ async fn org_draft_target_validation_serializes_with_project_selection_changes()
     wait_for_advisory_lock_waiter(&pool, &mut selection_tx).await;
     assert!(!create_task.is_finished());
     selection_tx.commit().await.unwrap();
-    let create_error = create_task.await.unwrap().unwrap_err();
-    assert!(create_error.to_string().contains("currently selected"));
+    let created = create_task.await.unwrap().unwrap();
+    assert_eq!(created.draft.resource.scope, ResourceScope::Org);
 
     let carrier = server::app::draft::create_draft(
         &pool,
@@ -3703,8 +3554,8 @@ async fn org_draft_target_validation_serializes_with_project_selection_changes()
     wait_for_advisory_lock_waiter(&pool, &mut append_selection_tx).await;
     assert!(!append_task.is_finished());
     append_selection_tx.commit().await.unwrap();
-    let append_error = append_task.await.unwrap().unwrap_err();
-    assert!(append_error.to_string().contains("currently selected"));
+    let appended = append_task.await.unwrap().unwrap();
+    assert_eq!(appended.operations.len(), 1);
     postgres.shutdown().await;
 }
 
@@ -3799,6 +3650,7 @@ async fn created_org_draft_materializes_local_identity_updates_and_renames() {
         &common::principal(&pool, &bootstrap.user_id).await,
         current_head.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: draft.draft.draft_id,
                 expected_draft_version: draft.draft.version,
@@ -3964,6 +3816,7 @@ async fn org_delete_merge_advances_authority_past_other_projects_active_drafts()
         &common::principal(&pool, &bootstrap.user_id).await,
         current_head.as_deref(),
         CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: deletion_draft.draft.draft_id,
                 expected_draft_version: deletion_draft.draft.version,
@@ -4069,6 +3922,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
                 path: Some("workflows/valid".to_owned()),
             },
             content: Some(DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: "# Valid Workflow".to_owned(),
             }),
@@ -4103,6 +3957,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
                 path: Some("memories/empty".to_owned()),
             },
             content: Some(DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: "   ".to_owned(),
             }),
@@ -4135,6 +3990,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
                 path: Some("rules/empty".to_owned()),
             },
             content: Some(DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: "  ".to_owned(),
             }),
@@ -4167,6 +4023,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
                 path: Some("context//invalid.md".to_owned()),
             },
             content: Some(DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: "# Invalid".to_owned(),
             }),
@@ -4228,7 +4085,7 @@ async fn markdown_rule_and_workflow_survive_draft_review_and_commit_round_trip()
                     id: None,
                     path: Some("rules/coding".to_owned()),
                 },
-                content: Some(DraftResourceContent { description: None,
+                content: Some(DraftResourceContent { org_source: None, description: None,
                     content: "# Coding discipline\n\nApply while changing production code.\n\nRun the focused tests before committing.\n\nTags: coding, quality"
                         .to_owned(),
                 }),
@@ -4306,7 +4163,7 @@ async fn markdown_rule_and_workflow_survive_draft_review_and_commit_round_trip()
                     id: None,
                     path: Some("workflow/coding".to_owned()),
                 },
-                content: Some(DraftResourceContent { description: None,
+                content: Some(DraftResourceContent { org_source: None, description: None,
                     content: format!(
                         "# Coding workflow\n\nPrepare a production change.\n\n- Apply rule `{rule_id}`.\n- Summarize verification evidence."
                     ),
@@ -4376,6 +4233,7 @@ async fn markdown_rule_and_workflow_survive_draft_review_and_commit_round_trip()
 
 fn context_draft_content(content: &str) -> Option<DraftResourceContent> {
     Some(DraftResourceContent {
+        org_source: None,
         description: None,
         content: content.to_owned(),
     })
@@ -4398,6 +4256,7 @@ async fn create_review_for_draft(app: axum::Router, draft: &DraftDetail) -> Revi
         "/api/v1/reviews",
         &ref_etag,
         &CreateReviewRequest {
+            org_contribution: None,
             drafts: vec![ReviewDraftRequest {
                 draft_id: draft.draft.draft_id.clone(),
                 expected_draft_version: draft.draft.version,

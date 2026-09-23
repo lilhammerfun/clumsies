@@ -83,7 +83,7 @@ struct ReviewListPage: View {
                             let state = ReviewQueueStatePresentation.resolve(
                                 review: review,
                                 isAuthor: workspaceContext.isReviewAuthor(review),
-                                canMerge: workspaceContext.canMergeReviews
+                                canMerge: workspaceContext.canMergeReview(review)
                             )
                             NavigationLink(value: route) {
                                 ReviewRow(

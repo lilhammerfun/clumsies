@@ -66,7 +66,7 @@ class Playground:
             # API error envelopes contain no credential headers or request bodies.
             raise RuntimeError(f"{method} {path}: {error.code}: {error.read().decode()}") from None
 
-    def login(self):
+    def login(self, account="owner"):
         verifier = secrets.token_urlsafe(48)
         state = secrets.token_urlsafe(24)
         callback = "http://127.0.0.1/callback"
@@ -74,7 +74,11 @@ class Playground:
             "code_challenge": base64.urlsafe_b64encode(
                 hashlib.sha256(verifier.encode()).digest()).decode().rstrip("="),
             "code_challenge_method": "S256"}
+        if account not in ("owner", "project-admin", "member-a", "member-b"):
+            raise ValueError("Unknown local test account")
         if self.call("GET", "/api/v1/setup")["state"] == "setup_required":
+            if account != "owner":
+                raise RuntimeError("Initialize this Dev Instance with owner before logging in members.")
             settings = dict(line.split("=", 1) for line in
                 (self.root / "compose.env").read_text().splitlines() if "=" in line)
             session = self.call("POST", "/api/v1/setup/sessions",
@@ -102,17 +106,45 @@ class Playground:
                 self.refresh_token = token["refresh_token"]
                 me = self.call("GET", "/api/v1/me")
                 self.project = me["default_project_id"]
+                self.me = me
                 return
             if parsed.scheme != "http" or parsed.netloc not in allowed:
                 raise RuntimeError("OIDC tried to leave this local Dev Instance.")
             try:
-                self.http.open(url, timeout=30).close()
+                request = url
+                if parsed.netloc == urllib.parse.urlsplit(self.issuer).netloc and parsed.path == "/clumsies/authorize":
+                    # v4 fake OIDC supports form login even with interactiveLogin disabled.
+                    # Each session still completes the server's PKCE/state/token exchange.
+                    claims = {"sub": "local-" + account, "email": account + "@clumsies.local",
+                              "email_verified": True, "name": "Local " + account.title()}
+                    request = urllib.request.Request(url, data=urllib.parse.urlencode({
+                        "username": claims["sub"], "claims": json.dumps(claims)}).encode(),
+                        headers={"Content-Type": "application/x-www-form-urlencoded"})
+                self.http.open(request, timeout=30).close()
                 raise RuntimeError("Expected the local fake OIDC provider to redirect.")
             except urllib.error.HTTPError as response:
                 if response.code not in (301, 302, 303, 307, 308):
                     raise RuntimeError(f"Local OIDC failed: HTTP {response.code}") from None
                 url = urllib.parse.urljoin(url, response.headers["Location"])
         raise RuntimeError("Too many local OIDC redirects.")
+
+    def ensure_test_accounts(self):
+        """Invite test identities and grant roles using the ordinary owner APIs."""
+        members = {item["email"]: item["user_id"]
+                   for item in self.call("GET", "/api/v1/admin/members")["items"]}
+        project_members = {item["user"]["user_id"]: item["role"] for item in
+            self.call("GET", f"/api/v1/admin/projects/{self.project}/members")["items"]}
+        for account in ("project-admin", "member-a", "member-b"):
+            email = account + "@clumsies.local"
+            user_id = members.get(email)
+            if user_id is None:
+                member = self.call("POST", "/api/v1/admin/members", {"email": email, "role": "member"})
+                user_id = member["user_id"]
+            role = "admin" if account == "project-admin" else "member"
+            if user_id not in project_members:
+                self.call("POST", f"/api/v1/admin/projects/{self.project}/members", {"user_id": user_id, "role": role})
+            elif project_members[user_id] != role:
+                self.call("PATCH", f"/api/v1/admin/projects/{self.project}/members/{user_id}", {"role": role})
 
     def prepare_app(self):
         # Use the same daemon bootstrap and credential installation as native login.
@@ -413,12 +445,20 @@ def main():
                         help="Initialize and sign in the local Dev App without seeding Reviews.")
     modes.add_argument("--verify", action="store_true",
                        help="Check all initial fixture states before interactive testing changes them.")
+    parser.add_argument("--account", choices=("owner", "project-admin", "member-a", "member-b"),
+                        default="owner", help="Local fake-OIDC identity for --login-only.")
     args = parser.parse_args()
+    if args.account != "owner" and not args.login_only:
+        parser.error("Member identities require --login-only")
     os.umask(0o077)
     lab = Playground()
     if lab.manifest_path.exists() and not (args.advance_remote or args.prepare_app or args.verify or args.login_only):
         raise SystemExit("This instance already has a playground. Its data was left unchanged.")
-    lab.login()
+    if args.account != "owner":
+        owner = Playground()
+        owner.login()
+        owner.ensure_test_accounts()
+    lab.login(args.account)
     if args.login_only:
         lab.prepare_app()
         return

@@ -5,14 +5,14 @@ enum MemoryFileTreeAlert: Identifiable {
     enum ID: Hashable {
         case itemRename(String)
         case directoryRename(String)
-        case organizationDeletion
+        case memoryDeletion
         case directoryDiscard
         case directoryDeletion
     }
 
     case itemRename(item: MemoryListItem)
     case directoryRename(id: String, items: [MemoryListItem])
-    case organizationDeletion(items: [MemoryListItem])
+    case memoryDeletion(items: [MemoryListItem])
     case directoryDiscard(name: String, drafts: [LocalDraft])
     case directoryDeletion(name: String, plan: MemoryDirectoryDeletionPlan)
 
@@ -22,8 +22,8 @@ enum MemoryFileTreeAlert: Identifiable {
             .itemRename(item.id)
         case .directoryRename(let id, _):
             .directoryRename(id)
-        case .organizationDeletion:
-            .organizationDeletion
+        case .memoryDeletion:
+            .memoryDeletion
         case .directoryDiscard:
             .directoryDiscard
         case .directoryDeletion:
@@ -37,7 +37,7 @@ enum MemoryFileTreeAlert: Identifiable {
             String(localized: "Rename \(item.document.path.split(separator: "/").last.map(String.init) ?? String(localized: "File"))")
         case .directoryRename:
             String(localized: "Rename Folder")
-        case .organizationDeletion(let items):
+        case .memoryDeletion(let items):
             items.count == 1
                 ? String(localized: "Delete File?")
                 : String(localized: "Delete \(items.count) Files?")
@@ -54,7 +54,7 @@ enum MemoryFileTreeAlert: Identifiable {
         switch self {
         case .itemRename, .directoryRename:
             String(localized: "Rename")
-        case .organizationDeletion:
+        case .memoryDeletion:
             String(localized: "Delete")
         case .directoryDiscard:
             String(localized: "Discard Drafts")
@@ -69,7 +69,7 @@ enum MemoryFileTreeAlert: Identifiable {
             if item.resource == nil {
                 return String(localized: "This changes the path in the current Project-carried Draft.")
             }
-            return String(localized: "The rename is saved as a draft. After review and merge, the file will be renamed in every project that includes it.")
+            return String(localized: "The rename is saved as a Project draft and takes effect for project members after review and merge.")
         case .directoryRename(_, let items):
             let sharedCount = items.filter { $0.resource != nil }.count
             let draftCount = items.count - sharedCount
@@ -77,14 +77,14 @@ enum MemoryFileTreeAlert: Identifiable {
                 return String(localized: "This preserves every relative file path in the current Project-carried Drafts. Remote Organization Memory is unchanged.")
             }
             if draftCount > 0 {
-                return String(localized: "This preserves every relative file path, renames \(draftCount) unpublished Drafts, and creates \(sharedCount) rename proposals. Remote Organization Memory changes only after review and merge.")
+                return String(localized: "This preserves every relative file path, renames \(draftCount) unpublished Drafts, and creates \(sharedCount) rename proposals. Shared Memory changes only after review and merge.")
             }
-            return String(localized: "This preserves every relative file path and creates Project-carried rename Drafts. Organization Memory changes only after review and merge.")
-        case .organizationDeletion(let items):
+            return String(localized: "This preserves every relative file path and creates Project-carried rename Drafts. Shared Memory changes only after review and merge.")
+        case .memoryDeletion(let items):
             if items.count == 1 {
-                return String(localized: "The deletion is saved as a draft. After review and merge, this file will be deleted from every project that includes it.")
+                return String(localized: "The deletion is saved as a draft. After review and merge, this file will be deleted from its publication owner.")
             }
-            return String(localized: "The deletion is saved as a draft. After review and merge, these \(items.count) files will be deleted from every project that includes them.")
+            return String(localized: "The deletion is saved as a draft. After review and merge, these \(items.count) files will be deleted from their publication owner.")
         case .directoryDiscard:
             return String(localized: "This removes the Project-carried Drafts in this folder. Remote Organization Memory is unchanged.")
         case .directoryDeletion(let name, let plan):
@@ -149,15 +149,17 @@ struct FileTreeView: View {
         .sheet(item: $pendingDirectoryReview) { request in
             ReviewRequestSheet(
                 initialTitle: request.initialTitle,
+                drafts: request.drafts,
                 loadCandidates: {
                     try await self.reconciler.reconciliationCandidates(for: request.drafts)
                 }
-            ) { title, description, reconciliations in
+            ) { title, description, reconciliations, contributions in
                 try await self.reviewModel.requestReview(
                     for: request.drafts,
                     title: title,
                     description: description,
-                    reconciliations: reconciliations
+                    reconciliations: reconciliations,
+                    contributions: contributions
                 )
             }
         }
@@ -225,7 +227,7 @@ struct FileTreeView: View {
                     .disabled(
                         self.operations.directoryOperationProgress != nil || !self.isValidProposedDirectoryName
                     )
-            case .organizationDeletion, .directoryDiscard, .directoryDeletion:
+            case .memoryDeletion, .directoryDiscard, .directoryDeletion:
                 Button("Cancel", role: .cancel) { self.dismissAlert() }
                 Button(alert.confirmationTitle, role: .destructive) {
                     self.confirm(alert)
@@ -517,21 +519,27 @@ struct FileTreeView: View {
             if singleItem.supportsMarkdownPreview {
                 Button("Open Source") { self.workspaceNavigation.open(singleItem, mode: .source) }
             }
+            if !isOrgView, singleItem.resource?.scope == .org {
+                Button("Propose Organization Change…") {
+                    Task { await self.memoryModel.proposeOrganizationChange(singleItem) }
+                }
+                .disabled(singleSynchronizing)
+            }
             if singleRenameable {
                 Button("Rename…") { self.beginRenaming(singleItem) }
                     .disabled(operations.directoryOperationProgress != nil || singleSynchronizing)
             }
             if singleTrashable {
                 Button("Delete…", role: .destructive) {
-                    self.proposeOrganizationDeletion([singleItem])
+                    self.proposeMemoryDeletion([singleItem])
                 }
                 .disabled(operations.directoryOperationProgress != nil || singleSynchronizing)
             }
         } else if !targetItems.isEmpty {
             Button("Open") { targetItems.forEach { self.workspaceNavigation.open($0) } }
             if !trashableItems.isEmpty {
-                Button(organizationDeletionTitle(count: trashableItems.count), role: .destructive) {
-                    self.proposeOrganizationDeletion(trashableItems)
+                Button(memoryDeletionTitle(count: trashableItems.count), role: .destructive) {
+                    self.proposeMemoryDeletion(trashableItems)
                 }
                 .disabled(
                     operations.directoryOperationProgress != nil
@@ -689,7 +697,7 @@ struct FileTreeView: View {
 
         if targetItems.isEmpty {
             if let scope = MemoryFileTreeMenu.creationScope(inOrgView: isOrgView) {
-                Button("Propose New Organization Memory") {
+                Button("Propose New Project Memory") {
                     guard self.operations.directoryOperationProgress == nil else { return }
                     Task {
                         await self.memoryModel.createMemory(kind: self.workspaceNavigation.selectedKind, scope: scope)
@@ -713,7 +721,7 @@ struct FileTreeView: View {
         selectionAnchorId = itemId
     }
 
-    private func organizationDeletionTitle(count: Int) -> String {
+    private func memoryDeletionTitle(count: Int) -> String {
         count == 1 ? String(localized: "Delete…") : String(localized: "Delete \(count) Files…")
     }
 
@@ -731,9 +739,9 @@ struct FileTreeView: View {
         return draftCount == 1 ? String(localized: "Update memory") : String(localized: "Update \(draftCount) memories")
     }
 
-    private func proposeOrganizationDeletion(_ items: [MemoryListItem]) {
+    private func proposeMemoryDeletion(_ items: [MemoryListItem]) {
         guard !items.isEmpty else { return }
-        pendingAlert = .organizationDeletion(items: items)
+        pendingAlert = .memoryDeletion(items: items)
     }
 
     private func confirm(_ alert: MemoryFileTreeAlert) {
@@ -741,7 +749,7 @@ struct FileTreeView: View {
         switch alert {
         case .itemRename, .directoryRename:
             return
-        case .organizationDeletion(let items):
+        case .memoryDeletion(let items):
             Task { await self.operations.deleteItems(items) }
         case .directoryDiscard(_, let drafts):
             Task { await self.operations.discardDrafts(drafts) }

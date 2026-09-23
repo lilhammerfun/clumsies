@@ -331,7 +331,8 @@ final class MemoryCatalog: ObservableObject {
                 updatedAt: resource.updatedAt,
                 refCommitId: authoritativeCommitId,
                 contentLoaded: resource.contentLoaded,
-                document: resource.document
+                document: resource.document,
+                orgSource: resource.orgSource
             )
         }
     }
