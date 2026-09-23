@@ -7,6 +7,66 @@ import XCTest
 final class ReviewUpdateTests: XCTestCase {
     enum Failure: Error { case offline }
 
+    func testRequestSubmitsIdenticalRemoteAndDraftWithoutOpeningReconciliation() async {
+        let clean = fixture().candidates[0]
+        let identical = DraftReconciliationCandidate(candidateId: "identical", draftId: "draft-identical",
+            draftVersion: 2, baseCommitId: "base", currentCommitId: "shared", status: .clean,
+            baseState: clean.baseState, currentState: clean.draftState, draftState: clean.draftState,
+            proposedState: clean.draftState, conflicts: [], resultHash: nil, valid: true,
+            createdAt: clean.createdAt, invalidatedAt: nil)
+        for candidates in [[identical], [identical, clean]] {
+            var submissions = 0
+            let model = ReviewRequestModel(initialTitle: "Shared changes", loadCandidates: { candidates },
+                onSubmit: { _, _, reconciliations, _ in
+                    submissions += 1
+                    if submissions == 1 { throw ReviewRequestError.reconciliationRequired }
+                    XCTAssertEqual(reconciliations.map(\.candidate.candidateId), candidates.map(\.candidateId))
+                    XCTAssertTrue(reconciliations.allSatisfy { $0.resolvedState == nil })
+                })
+            let submitted = await model.submit()
+            XCTAssertTrue(submitted, "a clean comparison must not ask the user to resolve a conflict")
+            XCTAssertEqual(submissions, 2)
+            XCTAssertTrue(model.reconciliationCandidates.isEmpty)
+        }
+    }
+
+    func testRequestReportsNoChangesAndKeepsRealConflictChoicesAfterFailure() async {
+        let empty = ReviewRequestModel(initialTitle: "Already published", loadCandidates: {
+            XCTFail("unchanged drafts must not open the conflict flow")
+            return []
+        }, onSubmit: { _, _, _, _ in throw ReviewRequestError.noChanges })
+        let submitted = await empty.submit()
+        XCTAssertFalse(submitted)
+        XCTAssertNotNil(empty.noticeMessage)
+        XCTAssertNil(empty.errorMessage)
+        XCTAssertTrue(empty.reconciliationCandidates.isEmpty)
+
+        let candidates = fixture().candidates
+        var acceptsRemote = false
+        let form = ReviewRequestModel(initialTitle: "Keep this title", loadCandidates: { candidates },
+            onSubmit: { _, _, choices, _ in
+                if choices.isEmpty { throw ReviewRequestError.reconciliationRequired }
+                if acceptsRemote { throw ReviewRequestError.noChanges }
+                throw Failure.offline
+            })
+        form.description = "Keep this explanation"
+        let requested = await form.submit()
+        XCTAssertFalse(requested)
+        XCTAssertEqual(form.activeConflictCandidate?.candidateId, "conflict")
+        form.resolvedStatesByCandidateId["conflict"] = candidates[1].draftState
+        let saved = await form.submitBatch()
+        XCTAssertFalse(saved)
+        XCTAssertEqual(form.resolvedStatesByCandidateId["conflict"], candidates[1].draftState)
+        XCTAssertEqual(form.description, "Keep this explanation")
+        XCTAssertNotNil(form.errorMessage)
+        acceptsRemote = true
+        let unchanged = await form.submitBatch()
+        XCTAssertFalse(unchanged)
+        XCTAssertTrue(form.reconciliationCandidates.isEmpty)
+        XCTAssertNotNil(form.noticeMessage)
+        XCTAssertNil(form.errorMessage)
+    }
+
     func testWholeReviewApplyRequiresResolutionAndRetainsEditsAfterFailure() async {
         let plan = fixture()
         var requests: [CreateReviewUpdateRequest] = []
@@ -185,7 +245,7 @@ final class ReviewUpdateTests: XCTestCase {
         XCTAssertEqual(model.resolutions["clean"]?.state, plan.candidates[0].proposedState)
         let result = await model.submit()
         XCTAssertEqual(result?.review.reviewId, plan.detail.review.reviewId)
-        model.resetResolution(for: candidate)
+        model.setResolution(DraftResolution(candidate: candidate), for: candidate.candidateId)
         XCTAssertFalse(model.canApply)
         XCTAssertFalse(model.hasEdits)
         XCTAssertEqual(model.resolutions[candidate.candidateId]?.sections.count, 1)

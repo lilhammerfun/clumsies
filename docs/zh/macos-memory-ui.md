@@ -134,25 +134,27 @@ tab 的 Project 身份为空。因此打开相同 resource ID 的 Org 视图与 
 编辑保存进入本机 Draft/outbox，再由 daemon 与 Server 同步。资源 stale 或 Draft behind
 时，菜单提供 Update from Remote Version 或 Review Remote Changes。Memory 的冲突处理使用独立原生窗口，带关闭、最小化、
 缩放及全屏控件；主窗口保持可用，关闭原文档 tab 也不丢失解决进度。窗口记住尺寸与位置，
-比较区和结果区分别滚动，并可拖动分隔线调整空间。
+与 Review 详情共用冲突选择和结果 diff 组件。
 Remote 与 Draft 的冲突片段并排显示，各自用 unified diff 展示相对共同原文的增删，选择按钮
-与各自标题同行。逐处选择后可编辑下方合并结果；路径和删除冲突也需
-明确选择。Save to Draft 只保存草稿，不批准或发布。尚有未处理冲突时禁用保存，整份覆盖
-位于次要菜单并需要确认。取消、红色关闭按钮及 Command-W 都确认未保存编辑；保存期间
+与各自标题同行。逐处选择保留自动合并的改动，完成后显示结果 diff，可从菜单重置选择。
+路径和删除冲突也需明确选择；即使正文相同，路径被占用时也会解释原因。
+Save to Draft 只保存草稿，不批准或发布。尚有未处理冲突时禁用保存。
+取消、红色关闭按钮及 Command-W 都确认未保存编辑；保存期间
 阻止关闭。退出登录或退出应用也检查冲突窗口的未保存编辑。
 正在同步的文档会锁住会改变路径、选择关系或 Draft 的操作。
 
 ## 7. Review 集成
 
-Project-carried、open 且已同步到 Server 的 Organization Draft 可以进入 Review 提交
+open 且已同步到 Server 的 Project 或 Organization Draft 可以进入各自的 Review 提交
 面板；freshness 为 behind 或存在冲突不会禁用入口。选中目录或多个文件时，客户端收集
 所有符合条件的 Draft，用
 `localizedStandardCompare(path)` 排序，并用一次请求创建一个有序多 Draft Review；
-未变化文件和旧 Project 权威不会加入。该比较器没有额外 tie-breaker，因此不应把
+同一 Review 只包含同一发布范围的 Draft，未变化文件不会加入。该比较器没有额外 tie-breaker，因此不应把
 当前顺序当成跨 locale 的规范化顺序。
 
-如果任一 Draft behind，提交面板加载协调候选，有冲突的文件由用户逐项确认解决结果，
-再在同一事务中协调全部草稿并创建 Review，不创建只覆盖部分文件的 Review。未同步、
+behind Draft 无冲突时自动对齐，只有真正的冲突需要用户选择。与已发布版本一致的 Draft
+保留但不加入 Review；全部一致时提示没有需要提交的更改。有冲突的文件由用户逐项确认后，
+在同一事务中保存解决结果并创建 Review。未同步、
 缺少 Server ID、目录操作或文档同步进行中时，入口仍禁用。
 Discard 和 deletion proposal 仍按各自 Draft 生命周期处理。Review 详情、评论和合并行为
 由 [《macOS Reviews 当前设计》](./reviews-ui-design.md) 定义。

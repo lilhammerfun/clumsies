@@ -838,9 +838,7 @@ struct WorkspaceView: View {
               let draft = item.draft else {
             return false
         }
-        return draft.status == .open
-            && draft.scope == .org
-            && ReviewsModel.canRequestReview(draft)
+        return ReviewsModel.canRequestReview(draft)
     }
 
     private func canProposeMemoryDeletion(_ item: MemoryListItem) -> Bool {

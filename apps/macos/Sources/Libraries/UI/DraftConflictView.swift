@@ -17,6 +17,10 @@ struct DraftConflictView: View {
                 }
             }
             if hasPathConflict {
+                Text(candidate.conflicts.contains { $0.kind == "path_occupied" }
+                    ? "Another file already uses this path. Choose a different path, even if the text is identical."
+                    : "Both versions renamed this file. Choose the final path.")
+                    .font(.callout).foregroundStyle(.secondary)
                 HStack(alignment: .top, spacing: 12) {
                     choice(String(localized: "Remote"), text: candidate.currentState.resource.path ?? String(localized: "(No path)"),
                            actionTitle: String(localized: "Use Remote Path")) {

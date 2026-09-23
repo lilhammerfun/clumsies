@@ -1714,8 +1714,7 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertTrue(editors(host).first === originalEditor, "the document must stay mounted")
         XCTAssertEqual(originalEditor.string, draft.document.body)
         XCTAssertEqual(window.frame.size, originalFrame.size)
-        let resolutionEditor = try XCTUnwrap(editors(content).first)
-        XCTAssertGreaterThan(try XCTUnwrap(resolutionEditor.enclosingScrollView).bounds.height, 80)
+        XCTAssertTrue(editors(content).isEmpty, "document reconciliation uses the same choices and diff as Review")
         let tab = tab(itemId: item.id, projectId: "project")
         workspace.navigation.tabs = [tab]
         workspace.navigation.closeTab(tab)
@@ -1726,6 +1725,7 @@ final class WorkspaceNavigationTests: XCTestCase {
 
         var resolution = DraftResolution(candidate: candidate)
         resolution.chooseFile(candidate.draftState)
+        XCTAssertTrue(resolution.canSave)
         workspace.sessions.documentReconciliationResolutions[key] = resolution
         controller.confirmDiscard = { false }
         mergeWindow.performClose(nil)

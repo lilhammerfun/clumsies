@@ -45,7 +45,7 @@ The new sentence means “After rollback, verify health checks and key business 
 5. Enter `Add post-rollback verification` in **Title**. In **Description**, explain why health checks and key business requests need verification.
 6. Click **Request**. On success, the App switches to **Reviews** and opens the Review.
 
-If shared changes or conflicts appear, inspect how already-published changes combine with your Draft and confirm the intended result before continuing.
+Non-conflicting shared changes merge automatically. If a conflict appears, choose the intended changes and inspect the resulting diff before continuing. If your Draft already matches the published version, the App explains that there are no changes to review.
 
 ## Have a person review and publish
 

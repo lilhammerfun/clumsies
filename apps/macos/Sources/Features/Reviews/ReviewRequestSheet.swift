@@ -23,14 +23,16 @@ struct ReviewRequestSheet: View {
                     candidate: candidate,
                     updateButtonTitle: String(localized: "Save and Request Review"),
                     onCancel: self.model.resetReconciliation,
-                    onApplied: { self.dismiss() }
+                    onApplied: { if model.noticeMessage == nil { self.dismiss() } }
                 ) { resolvedState in
-                    try await self.model.onSubmit(
-                        self.model.normalizedTitle,
-                        self.model.normalizedDescription,
-                        [.init(candidate: candidate, resolvedState: resolvedState)],
-                        self.model.contributionEntries
-                    )
+                    do {
+                        try await self.model.onSubmit(
+                            self.model.normalizedTitle,
+                            self.model.normalizedDescription,
+                            [.init(candidate: candidate, resolvedState: resolvedState)],
+                            self.model.contributionEntries
+                        )
+                    } catch ReviewRequestError.noChanges { model.reportNoChanges() }
                 }
                 .frame(minWidth: 780, idealWidth: 980, minHeight: 560, idealHeight: 680)
             } else if let candidate = model.activeConflictCandidate {
@@ -66,6 +68,7 @@ struct ReviewRequestSheet: View {
                     Text("Review")
                 } footer: {
                     FormErrorMessage(message: model.errorMessage)
+                    if let notice = model.noticeMessage { Text(notice).foregroundStyle(.secondary) }
                 }
                 if model.canContribute {
                     Section {

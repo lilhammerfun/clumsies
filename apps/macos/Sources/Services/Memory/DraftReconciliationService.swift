@@ -130,6 +130,7 @@ final class DraftReconciliationService: ObservableObject {
     func reconciliationCandidates(
         for drafts: [LocalDraft]
     ) async throws -> [DraftReconciliationCandidate] {
+        let authority = context.authorityGeneration
         guard !context.isSwitchingMemoryContext else {
             throw DocumentSyncError.mutationWhileSynchronizing
         }
@@ -142,8 +143,15 @@ final class DraftReconciliationService: ObservableObject {
                 itemId: draft.targetId ?? draft.id,
                 draft: draft
             )
-            if synchronized.freshness == .behind {
-                candidates.append(try await requestReconciliationCandidate(for: synchronized))
+            try context.ensureAuthority(authority)
+            guard let serverId = synchronized.serverId else { throw ReviewRequestError.draftNotSynchronized }
+            let remote: ServerDraftDetail = try await context.server.get("/api/v1/drafts/\(serverId)")
+            try context.ensureAuthority(authority)
+            if remote.draft.coordination.freshness == .behind {
+                candidates.append(try await context.server.send(method: "POST",
+                    path: "/api/v1/drafts/\(serverId)/reconciliation-candidates",
+                    body: CreateDraftReconciliationCandidateRequest(expectedDraftVersion: remote.draft.version)))
+                try context.ensureAuthority(authority)
             }
         }
         return candidates

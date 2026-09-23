@@ -65,12 +65,6 @@ final class ReviewUpdateModel: ObservableObject {
     func setResolution(_ state: DraftResolution, for candidateId: String) {
         guard canResolveConflicts, !isApplying else { return }
         resolutions[candidateId] = state
-        hasEdits = true
-    }
-
-    func resetResolution(for candidate: DraftReconciliationCandidate) {
-        guard canResolveConflicts, !isApplying else { return }
-        resolutions[candidate.candidateId] = DraftResolution(candidate: candidate)
         hasEdits = resolutions.values.contains(where: \.hasEdits)
     }
 
