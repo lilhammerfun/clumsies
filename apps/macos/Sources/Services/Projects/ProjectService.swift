@@ -49,7 +49,7 @@ final class ProjectService: ObservableObject {
             )
         )
         try context.ensureCurrentAdministrationMutation(generation)
-        context.projectRoles[created.id] = .admin
+        context.projectRoles[created.id] = .owner
         let initialSelection = try await initializeProjectMemory(
             projectId: created.id,
             bundleId: bundleId,

@@ -116,8 +116,11 @@ struct InboxItem: Identifiable, Sendable {
         case "shared_update": .sharedUpdates
         default: .reviewResults
         }
-        let previousRole = notice.previousRole.flatMap(AdminOrganizationRole.init(rawValue:))?.title ?? ""
-        let newRole = notice.newRole.flatMap(AdminOrganizationRole.init(rawValue:))?.title ?? ""
+        let roleTitle: (String) -> String? = notice.kind == "org_role_changed"
+            ? { AdminOrganizationRole(rawValue: $0)?.title }
+            : { ProjectMemberRole(rawValue: $0)?.title }
+        let previousRole = notice.previousRole.flatMap(roleTitle) ?? ""
+        let newRole = notice.newRole.flatMap(roleTitle) ?? ""
         let actor = notice.actorName ?? String(localized: "An administrator")
         let reason: String = switch notice.kind {
         case "welcome": String(localized: "Get started with projects, Memory, and your team.")

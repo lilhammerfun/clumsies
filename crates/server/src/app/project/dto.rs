@@ -59,9 +59,11 @@ pub struct AdminProjectListResponse {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectRole {
+    /// Protected project ownership, assigned when the project is created.
+    Owner,
     /// Project participation without project-administration privileges.
     Member,
-    /// Project-local administration granted independently of organization role.
+    /// Project maintenance; retains the existing `admin` protocol value.
     Admin,
 }
 
@@ -70,6 +72,7 @@ impl ProjectRole {
     /// contract.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Owner => "owner",
             Self::Member => "member",
             Self::Admin => "admin",
         }

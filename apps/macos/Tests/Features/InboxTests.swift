@@ -74,7 +74,7 @@ final class InboxTests: XCTestCase {
             XCTAssertNil(inaccessible.actionTitle)
         }
         let changed = InboxItem.server(accountNotification("project_role_changed"))
-        XCTAssertTrue(changed.message.contains("Member → Admin"))
+        XCTAssertTrue(changed.message.contains("Member → Maintainer"))
         let detail = NSHostingView(rootView: InboxMessageView(item: welcome, projectId: nil, open: { _ in
             XCTFail("A welcome without projects must not attempt navigation.")
         }).frame(width: 800, height: 700))

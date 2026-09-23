@@ -247,26 +247,6 @@ pub(crate) async fn project_in_org(
     .await?)
 }
 
-/// Check project ownership using the caller's transaction.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(crate) async fn project_in_org_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    org_id: &str,
-    project_id: &str,
-) -> Result<bool, ServerError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM projects WHERE project_id = $1 AND org_id = $2)",
-    )
-    .bind(project_id)
-    .bind(org_id)
-    .fetch_one(&mut **tx)
-    .await?)
-}
-
 /// Read joined member identities and project roles with filtering before pagination.
 ///
 /// # Errors

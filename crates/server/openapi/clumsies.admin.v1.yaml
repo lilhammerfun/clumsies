@@ -1085,7 +1085,8 @@ components:
       enum: [invited, active, disabled]
     ProjectRole:
       type: string
-      enum: [member, admin]
+      description: Owner is assigned at project creation and cannot be removed or changed through member mutations. Admin is the protocol value for Maintainer.
+      enum: [owner, admin, member]
     UserRef:
       type: object
       required: [user_id, email, display_name, avatar_url, role]

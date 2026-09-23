@@ -57,13 +57,15 @@ struct PageInfo: Codable, Sendable {
 }
 
 enum ProjectMemberRole: String, Codable, CaseIterable, Sendable {
+    case owner
     case member
     case admin
 
     var title: String {
         switch self {
+        case .owner: String(localized: "Owner")
         case .member: String(localized: "Member")
-        case .admin: String(localized: "Admin")
+        case .admin: String(localized: "Maintainer")
         }
     }
 }
@@ -79,6 +81,10 @@ struct ProjectMemberRecord: Codable, Identifiable, Hashable, Sendable {
 
 struct CreateProjectMemberRequest: Codable, Sendable {
     let userId: String
+    let role: ProjectMemberRole
+}
+
+struct UpdateProjectMemberRequest: Codable, Sendable {
     let role: ProjectMemberRole
 }
 

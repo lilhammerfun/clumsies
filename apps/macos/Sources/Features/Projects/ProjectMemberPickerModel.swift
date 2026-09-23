@@ -26,6 +26,7 @@ final class ProjectMemberPickerModel: ObservableObject {
     }
     @Published private(set) var members: [UserReference] = []
     @Published var selectedId: String?
+    @Published var role: ProjectMemberRole = .member
     @Published private(set) var nextCursor: String?
     @Published private(set) var isLoading = true
     @Published private(set) var errorMessage: String?
@@ -42,6 +43,7 @@ final class ProjectMemberPickerModel: ObservableObject {
         return administration.canMutateProject(projectId) && detail?.isStale != true && detail?.isLoading != true
             && !administration.loadingProjectIds.contains(projectId)
             && administration.projectMembers[projectId] != nil
+            && role != .owner
             && availableMembers.contains { $0.id == self.selectedId }
     }
 
@@ -108,7 +110,7 @@ final class ProjectMemberPickerModel: ObservableObject {
         errorMessage = nil
         loadFailed = false
         do {
-            try await administration.addAdminProjectMember(projectId: projectId, userId: selectedId, role: .member)
+            try await administration.addAdminProjectMember(projectId: projectId, userId: selectedId, role: role)
             return true
         } catch {
             errorMessage = error.actionMessage

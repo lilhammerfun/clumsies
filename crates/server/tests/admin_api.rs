@@ -594,7 +594,7 @@ async fn admin_lists_reject_invalid_pagination() {
         "/api/v1/admin/projects?limit=not-a-number",
         "/api/v1/admin/projects?cursor=not-a-cursor",
         "/api/v1/admin/projects?cursor=-1",
-        "/api/v1/admin/projects/prj_unknown/members?role=owner",
+        "/api/v1/admin/projects/prj_unknown/members?role=unknown",
     ] {
         let response = app
             .clone()

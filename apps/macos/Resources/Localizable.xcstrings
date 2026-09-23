@@ -17939,6 +17939,38 @@
           }
         }
       }
+    },
+    "Maintainer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maintainer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "维护者"
+          }
+        }
+      }
+    },
+    "The project owner cannot be removed or demoted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The project owner cannot be removed or demoted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不能移除项目所有者或降低其角色。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
