@@ -771,6 +771,29 @@ mod tests {
     }
 
     #[test]
+    fn identical_content_is_clean_but_different_renames_still_conflict() {
+        let base = context_state(true, "guide.md", Some("# Guide\n\nTimeout: 30\n"));
+        let current = context_state(true, "guide.md", Some("# Guide\n\nTimeout: 60\n"));
+        let mut draft = current.clone();
+        assert_eq!(assert_clean(&base, &current, &draft), current);
+        draft.content.as_mut().unwrap().description = Some("Proposal summary".to_owned());
+        assert_eq!(
+            assert_clean(&base, &current, &draft)
+                .content
+                .unwrap()
+                .content,
+            current.content.as_ref().unwrap().content
+        );
+
+        let mut renamed = current.clone();
+        renamed.resource.path = Some("remote-guide.md".to_owned());
+        draft.resource.path = Some("draft-guide.md".to_owned());
+        let (_, conflicts) = merge_resource_states(&base, &renamed, &draft);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].field, "path");
+    }
+
+    #[test]
     fn reconciliation_covers_create_rename_and_delete_boundaries() {
         let absent = context_state(false, "context/new.md", None);
         let created = context_state(true, "context/new.md", Some("# Local\n"));

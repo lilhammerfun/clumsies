@@ -25,7 +25,7 @@ File menus use **Rename…** and **Delete…**. Their confirmations explain the 
 
 Directory and multi-selection Review requests include open Drafts with one publication owner. The Project-wide request collects Project Drafts. Org proposals are submitted independently. Every Draft must be synced and have a Server ID; directory operations and document synchronization also block the entry point.
 
-Behind Drafts, including those with conflicts, can open the request sheet. The sheet loads reconciliation candidates and asks the user to resolve conflicting files before updating the Drafts and creating one Review in the same transaction. The entry point does not require freshness to be current.
+Behind Drafts, including those with conflicts, can open the request sheet. Clean changes reconcile automatically; only real conflicts require choices. Drafts already matching the published version are kept but excluded from the Review. If no changes remain, the sheet explains that there is nothing to review. Conflict resolutions and the resulting Review are submitted together. The entry point does not require freshness to be current.
 
 The request sheet can record selected Project entries for an independent Org contribution after Project merge. The Project Review shows the linked Org PR, or a retryable creation failure. Org rejection never reverses Project publication.
 
@@ -49,13 +49,14 @@ SwiftUI lives under `apps/macos/`; Draft persistence, synchronization, and autho
 
 The Memory conflict action opens a separate native window with standard close,
 minimize, and zoom/full-screen controls. The main workspace remains usable; closing
-the source tab does not discard the resolution. The window remembers its frame,
-and a draggable divider separates the independently scrolling comparison and result.
+the source tab does not discard the resolution. The window remembers its frame
+and uses the same conflict choices and result diff as Review details.
 Remote and Draft conflict sections appear side by side as unified diffs against
 their common original, with the choice button in each side's header. Each choice updates the merged result
-without dropping automatically merged changes. After choosing the content changes,
-the result remains editable. Path and deletion conflicts require explicit choices.
+without dropping automatically merged changes. Completed choices show the resulting
+diff, with Reset File Choices in its menu. Path and deletion conflicts require explicit choices;
+a path collision is explained even when the file bodies are identical.
 Save to Draft stays disabled until all choices are complete; it does not approve or
-publish. Whole-file replacement is a secondary menu action with confirmation.
+publish.
 Cancel, the close button, and Command-W confirm edited input; saving blocks closing.
 Signing out or quitting also checks these windows before discarding unsaved edits.

@@ -134,10 +134,10 @@ final class DocumentEditorModel: ObservableObject {
         )
     }
 
-    func loadReviewCandidate(_ draft: LocalDraft, item: MemoryListItem) async throws -> DraftReconciliationCandidate {
+    func loadReviewCandidates(_ draft: LocalDraft, item: MemoryListItem) async throws -> [DraftReconciliationCandidate] {
         try await draftStore.flushDocumentSave(item)
         let latest = draftStore.drafts.first { $0.id == draft.id } ?? draft
-        return try await reconciler.reconciliationCandidate(for: latest)
+        return try await reconciler.reconciliationCandidates(for: [latest])
     }
 
     func discard(_ draft: LocalDraft, item: MemoryListItem) {

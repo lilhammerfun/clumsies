@@ -195,37 +195,9 @@ final class ReviewsModel: ObservableObject {
         resolvedState: ReconciliationResourceState? = nil,
         contributions: [OrgContributionEntry] = []
     ) async throws {
-        let authority = context.authorityGeneration
-        if sessions.synchronizationItemId(for: draft) != nil {
-            throw DocumentSyncError.mutationWhileSynchronizing
-        }
-        guard let serverId = draft.serverId else {
-            throw ReviewRequestError.draftNotSynchronized
-        }
-        guard draft.freshness == .current || candidate != nil else {
-            throw ReviewRequestError.reconciliationRequired
-        }
-        let detail: ReviewDetail = try await context.server.send(
-            method: "POST",
-            path: "/api/v1/reviews",
-            headers: ["If-Match": DraftReconciliationService.refETag(candidate?.currentCommitId ?? draft.currentCommitId)],
-            body: CreateReviewRequest(
-                orgContribution: try Self.contributionRequest(contributions, drafts: [draft]),
-                drafts: [ReviewDraftRequest(
-                    draftId: serverId,
-                    expectedDraftVersion: candidate?.draftVersion ?? draft.serverVersion,
-                    candidateId: candidate?.candidateId,
-                    resolvedState: resolvedState
-                )],
-                title: title,
-                description: description
-            )
-        )
-        try context.ensureAuthority(authority)
-        let record = WorkspaceLoader.mapReview(detail)
-        reviews.insert(record, at: 0)
-        selectedReviewId = record.id
-        navigation.selectedSection = .reviews
+        try await requestReview(for: [draft], title: title, description: description,
+            reconciliations: candidate.map { [.init(candidate: $0, resolvedState: resolvedState)] } ?? [],
+            contributions: contributions)
     }
 
     func requestReview(
@@ -260,40 +232,67 @@ final class ReviewsModel: ObservableObject {
             )
         }
         try context.ensureAuthority(authority)
-        guard let primary = drafts.first else { return }
-        guard drafts.allSatisfy({ $0.serverId != nil }) else {
-            throw ReviewRequestError.draftNotSynchronized
-        }
         let reconciliationByDraftId = Dictionary(
             reconciliations.map { ($0.candidate.draftId, $0) },
             uniquingKeysWith: { _, latest in latest }
         )
-        guard drafts.allSatisfy({ draft in
-            draft.freshness == .current
-                || draft.serverId.flatMap { reconciliationByDraftId[$0] } != nil
-        }) else {
-            throw ReviewRequestError.reconciliationRequired
-        }
         let selectedDraftIds = Set(drafts.compactMap(\.serverId))
         guard reconciliationByDraftId.keys.allSatisfy(selectedDraftIds.contains) else {
             throw ReviewRequestError.reconciliationRequired
         }
+        var prepared = [ServerDraft]()
+        for draft in drafts {
+            guard let serverId = draft.serverId else { throw ReviewRequestError.draftNotSynchronized }
+            var remote: ServerDraftDetail = try await context.server.get("/api/v1/drafts/\(serverId)")
+            try context.ensureAuthority(authority)
+            if let choice = reconciliationByDraftId[serverId],
+               (choice.resolvedState ?? choice.candidate.proposedState) == choice.candidate.currentState {
+                // An already-published result has no Review diff. Keep the rebase history,
+                // but do not submit an empty proposal or discard the author's Draft.
+                let rebased: DraftRebaseResult = try await context.server.send(method: "POST",
+                    path: "/api/v1/drafts/\(serverId)/rebases",
+                    headers: ["If-Match": DraftReconciliationService.refETag(choice.candidate.currentCommitId)],
+                    body: CreateDraftRebaseRequest(candidateId: choice.candidate.candidateId,
+                        expectedDraftVersion: choice.candidate.draftVersion, resolvedState: choice.resolvedState))
+                remote = rebased.draft
+                try context.ensureAuthority(authority)
+            }
+            if remote.draft.coordination.freshness == .behind,
+               reconciliationByDraftId[serverId] == nil {
+                // Use the same canonical clean rebase as background sync. Only real conflicts
+                // require author choices; an older snapshot alone must not open that UI.
+                remote = try await context.server.send(method: "POST", path: "/api/v1/drafts/\(serverId)/auto-rebases",
+                    body: CreateDraftReconciliationCandidateRequest(expectedDraftVersion: remote.draft.version))
+                try context.ensureAuthority(authority)
+            }
+            if remote.operations.isEmpty {
+                if contributions.contains(where: { $0.draftId == draft.id }) {
+                    throw ReviewRequestError.unchangedContribution
+                }
+                continue
+            }
+            guard remote.draft.coordination.freshness == .current || reconciliationByDraftId[serverId] != nil else {
+                throw ReviewRequestError.reconciliationRequired
+            }
+            prepared.append(remote.draft)
+        }
+        guard let primary = prepared.first else { throw ReviewRequestError.noChanges }
         let detail: ReviewDetail = try await context.server.send(
             method: "POST",
             path: "/api/v1/reviews",
             headers: [
                 "If-Match": DraftReconciliationService.refETag(
-                    reconciliations.first?.candidate.currentCommitId ?? primary.currentCommitId
+                    reconciliations.first?.candidate.currentCommitId ?? primary.coordination.currentCommitId
                 )
             ],
             body: CreateReviewRequest(
                 orgContribution: try Self.contributionRequest(contributions, drafts: drafts),
-                drafts: drafts.map { draft in
-                    let reconciliation = reconciliationByDraftId[draft.serverId!]
+                drafts: prepared.map { draft in
+                    let reconciliation = reconciliationByDraftId[draft.draftId]
                     return ReviewDraftRequest(
-                        draftId: draft.serverId!,
+                        draftId: draft.draftId,
                         expectedDraftVersion: reconciliation?.candidate.draftVersion
-                            ?? draft.serverVersion,
+                            ?? draft.version,
                         candidateId: reconciliation?.candidate.candidateId,
                         resolvedState: reconciliation?.resolvedState
                     )

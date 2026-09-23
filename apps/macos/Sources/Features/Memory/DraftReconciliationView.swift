@@ -14,7 +14,6 @@ struct DraftReconciliationView: View {
     @State private var isApplying = false
     @State private var errorMessage: String?
     @State private var confirmsDiscard = false
-    @State private var replacement: ReconciliationResourceState?
 
     init(candidate: DraftReconciliationCandidate,
          usesContextualUpdateAction: Bool = false,
@@ -36,11 +35,16 @@ struct DraftReconciliationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if candidate.status == .conflicts {
-                conflictResolution
-            } else {
-                cleanDiff
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(candidate.draftState.resource.path ?? candidate.currentState.resource.path ?? "")
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                    DraftResolutionContent(candidate: candidate, resolution: $resolution)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .disabled(isApplying)
             if let message = errorMessage ?? (candidate.valid ? nil : String(localized: "The remote version changed. Close this window and check the latest version again.")) {
                 FormErrorMessage(message: message).padding(.horizontal, 24).padding(.vertical, 12)
             }
@@ -62,141 +66,6 @@ struct DraftReconciliationView: View {
             Button("Discard Edits", role: .destructive, action: onCancel)
             Button("Keep Editing", role: .cancel) {}
         }
-        .confirmationDialog("Replace the entire result?", isPresented: Binding(
-            get: { replacement != nil }, set: { if !$0 { replacement = nil } }
-        ), presenting: replacement) { version in
-            Button("Replace Entire Result", role: .destructive) { resolution.chooseFile(version) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("This replaces all merged changes and edits with the selected file version.")
-        }
-    }
-
-    private var conflictResolution: some View {
-        VSplitView {
-            if hasExistenceConflict || hasPathConflict || !resolution.sections.isEmpty
-                || resolution.unresolvedFields.contains("content") {
-                ScrollView {
-                    DraftConflictView(candidate: candidate, resolution: $resolution).padding(16)
-                }
-                .frame(minHeight: 120, idealHeight: 240, maxHeight: .infinity)
-                .disabled(isApplying)
-            }
-            resultEditor
-                .frame(minHeight: 180, maxHeight: .infinity)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var resultEditor: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Merged Result").font(.headline)
-                    Text(resolution.canSave
-                         ? "You can edit this result before saving it to the draft."
-                         : "Choose a version for each change above to continue.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Menu {
-                    Button("Replace Entire File with Remote…") { replacement = candidate.currentState }
-                    Button("Replace Entire File with Draft…") { replacement = candidate.draftState }
-                } label: { Image(systemName: "ellipsis") }
-                .menuStyle(.borderlessButton).fixedSize()
-                .help("Replace the entire result with one file version")
-                .accessibilityLabel("Whole-file alternatives")
-                .disabled(isApplying)
-            }.padding(.horizontal, 16).padding(.vertical, 10)
-            if hasPathConflict, resolution.state.exists {
-                TextField("Final path", text: Binding(get: { resolution.path }, set: { resolution.choosePath($0) }))
-                    .textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
-                    .disabled(isApplying)
-            }
-            Divider()
-            if resolution.state.exists {
-                TextEditor(text: Binding(
-                    get: { resolution.canEditContent ? resolution.text : resolution.previewText },
-                    set: { resolution.editContent($0) }
-                ))
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .background(Color(nsColor: .textBackgroundColor))
-                .disabled(isApplying || !resolution.canEditContent)
-                .accessibilityLabel("Merged result")
-                .frame(minHeight: 120)
-            } else {
-                ContentUnavailableView("File Will Be Deleted", systemImage: "trash",
-                    description: Text("Saving this result keeps the file deleted in the draft."))
-            }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var hasExistenceConflict: Bool { candidate.conflicts.contains { $0.field == "exists" } }
-    private var hasPathConflict: Bool { candidate.conflicts.contains { $0.field == "path" || $0.field == "path_occupied" } }
-
-    @ViewBuilder
-    private var cleanDiff: some View {
-        let states = candidate.postSyncDiffStates
-        if states.base != states.draft {
-            reconciliationDiff(from: states.base, to: states.draft, title: String(localized: "Remote Version → Updated Draft"))
-        } else {
-            ContentUnavailableView("No Draft Changes", systemImage: "doc.text",
-                description: Text("Saving brings this draft up to date without leaving changes to publish."))
-        }
-    }
-
-    private func reconciliationDiff(
-        from originalState: ReconciliationResourceState,
-        to modifiedState: ReconciliationResourceState,
-        title: String
-    ) -> some View {
-        let originalPath = path(in: originalState)
-        let modifiedPath = path(in: modifiedState)
-        return GeometryReader { geometry in
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.caption.weight(.medium))
-                        if originalPath != modifiedPath {
-                            Text("\(originalPath ?? "/dev/null") → \(modifiedPath ?? "/dev/null")")
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: originalPath == modifiedPath ? 28 : 42,
-                        alignment: .leading
-                    )
-                    .background(Color.accentColor.opacity(0.06))
-
-                    UnifiedDiffView(
-                        presentation: UnifiedDiffPresentation(
-                            model: SplitDiffModel.make(
-                                original: text(in: originalState),
-                                modified: text(in: modifiedState)
-                            )
-                        )
-                    )
-                }
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: geometry.size.height,
-                    alignment: .topLeading
-                )
-            }
-        }
-    }
-
-    private func text(in state: ReconciliationResourceState) -> String {
-        state.exists ? state.content?.primaryText ?? "" : ""
-    }
-
-    private func path(in state: ReconciliationResourceState) -> String? {
-        state.exists ? state.resource.path : nil
     }
 
     private func apply() {

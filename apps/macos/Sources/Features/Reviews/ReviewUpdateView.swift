@@ -13,27 +13,11 @@ struct ReviewUpdateView<Content: View>: View {
                 ProgressView("Checking the latest remote version…")
             } else if let candidate = model.candidates.first(where: { $0.draftId == draftId }),
                       let resolution = model.resolutions[candidate.candidateId] {
-                if resolution.canSave {
-                    fileDiff(from: candidate.currentState, to: resolution.state)
-                        .overlay(alignment: .topTrailing) {
-                            if resolution.hasEdits {
-                                Menu {
-                                    Button("Reset File Choices") { model.resetResolution(for: candidate) }
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                }
-                                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(6)
-                                .help("File Actions")
-                                .accessibilityLabel("File Actions")
-                            }
-                        }
-                } else {
-                    DraftConflictView(candidate: candidate, resolution: Binding(
-                        get: { model.resolutions[candidate.candidateId] ?? resolution },
-                        set: { model.setResolution($0, for: candidate.candidateId) }
-                    ))
-                    .disabled(!model.canResolveConflicts)
-                }
+                DraftResolutionContent(candidate: candidate, resolution: Binding(
+                    get: { model.resolutions[candidate.candidateId] ?? resolution },
+                    set: { model.setResolution($0, for: candidate.candidateId) }
+                ))
+                .disabled(!model.canResolveConflicts)
             } else if model.plan != nil {
                 currentFile()
             }
@@ -50,21 +34,6 @@ struct ReviewUpdateView<Content: View>: View {
             }
             Button("Keep Editing", role: .cancel) {}
         }
-    }
-
-    @ViewBuilder
-    private func fileDiff(from remote: ReconciliationResourceState, to draft: ReconciliationResourceState) -> some View {
-        if !draft.exists {
-            Label("This file will be deleted.", systemImage: "trash")
-                .font(.callout).foregroundStyle(.secondary)
-        } else if remote.resource.path != draft.resource.path {
-            Text("\(remote.resource.path ?? "/dev/null") → \(draft.resource.path ?? "/dev/null")")
-                .font(.caption.monospaced()).textSelection(.enabled)
-        }
-        UnifiedDiffView(presentation: UnifiedDiffPresentation(model: .make(
-            original: remote.exists ? remote.content?.primaryText ?? "" : "",
-            modified: draft.exists ? draft.content?.primaryText ?? "" : ""
-        )))
     }
 }
 

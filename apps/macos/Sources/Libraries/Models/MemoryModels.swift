@@ -277,6 +277,8 @@ struct WorkbenchTab: Identifiable, Hashable, Sendable {
 
 enum ReviewRequestError: UserFacingError, Sendable {
     case draftNotSynchronized
+    case noChanges
+    case unchangedContribution
     case mixedScopes
     case reconciliationRequired
     case mixedProjects
@@ -284,6 +286,10 @@ enum ReviewRequestError: UserFacingError, Sendable {
 
     var errorDescription: String? {
         switch self {
+        case .noChanges:
+            String(localized: "These drafts already match the published version. There are no changes to review.")
+        case .unchangedContribution:
+            String(localized: "An unchanged draft cannot accompany a Project contribution. Propose that Organization change separately.")
         case .draftNotSynchronized:
             String(localized: "Wait for this draft to finish syncing before requesting a review.")
         case .mixedScopes:

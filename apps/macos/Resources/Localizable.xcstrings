@@ -18343,6 +18343,70 @@
           }
         }
       }
+    },
+    "These drafts already match the published version. There are no changes to review.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These drafts already match the published version. There are no changes to review."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "草稿与已发布版本一致，没有需要审阅的改动。"
+          }
+        }
+      }
+    },
+    "An unchanged draft cannot accompany a Project contribution. Propose that Organization change separately.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An unchanged draft cannot accompany a Project contribution. Propose that Organization change separately."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有改动的草稿不能随项目 PR 贡献到组织。请单独发起组织记忆提案。"
+          }
+        }
+      }
+    },
+    "Another file already uses this path. Choose a different path, even if the text is identical.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another file already uses this path. Choose a different path, even if the text is identical."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个路径已被另一份文件占用。即使正文相同，也需要选择其他路径。"
+          }
+        }
+      }
+    },
+    "Both versions renamed this file. Choose the final path.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Both versions renamed this file. Choose the final path."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "双方都重命名了这份文件，请选择最终路径。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -1624,40 +1624,6 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(draft.status, .submitted)
     }
 
-    @MainActor
-    func testRequestReviewRejectsBehindDraftBeforeCallingTheServer() async {
-        let store = WorkspaceCoordinator()
-        let draft = LocalDraft(
-            id: "draft-behind",
-            projectId: "project-1",
-            serverId: "server-draft-1",
-            serverVersion: 7,
-            baseCommitId: "commit-base",
-            currentCommitId: "commit-current",
-            freshness: .behind,
-            hasUpstreamResourceChanges: true,
-            reconciliation: .clean,
-            reconciliationCandidateId: "candidate-1",
-            scope: .org,
-            kind: .context,
-            targetId: "context-1",
-            status: .open,
-            origin: .desktop,
-            syncStatus: .synced,
-            updatedAt: timestamp,
-            document: .init(title: "Guide", path: "context/guide.md", body: "Draft body"),
-            isDeletion: false
-        )
-
-        do {
-            try await store.reviews.requestReview(for: draft, title: "Guide", description: "")
-            XCTFail("behind Draft must be reconciled before Review creation")
-        } catch ReviewRequestError.reconciliationRequired {
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
-    }
-
     func testReviewRequestUsesRequiredDraftArray() throws {
         let request = CreateReviewRequest(
             drafts: [

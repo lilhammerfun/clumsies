@@ -50,7 +50,7 @@ struct DocumentSessionView: View {
             ReviewRequestSheet(
                 initialTitle: self.model.document.title,
                 drafts: [draft],
-                loadCandidates: { [try await self.model.loadReviewCandidate(draft, item: self.item)] }
+                loadCandidates: { try await self.model.loadReviewCandidates(draft, item: self.item) }
             ) { title, description, reconciliations, contributions in
                 let reconciliation = reconciliations.first
                 try await self.model.submitReview(
