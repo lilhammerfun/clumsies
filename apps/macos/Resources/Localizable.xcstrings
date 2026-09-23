@@ -17992,38 +17992,6 @@
         }
       }
     },
-    "After Project merge, propose an Organization contribution": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "After Project merge, propose an Organization contribution"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "项目 PR 合并后，创建组织贡献提案"
-          }
-        }
-      }
-    },
-    "New Organization Memory": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New Organization Memory"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新建组织记忆"
-          }
-        }
-      }
-    },
     "Open Organization contribution": {
       "localizations": {
         "en": {
@@ -18052,38 +18020,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "组织贡献 PR 等待创建。"
-          }
-        }
-      }
-    },
-    "Organization destination": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Organization destination"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "组织内的目标"
-          }
-        }
-      }
-    },
-    "Organization path": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Organization path"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "组织记忆路径"
           }
         }
       }
@@ -18184,38 +18120,6 @@
         }
       }
     },
-    "Select at least one document to contribute.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Select at least one document to contribute."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请至少选择一份要贡献的文档。"
-          }
-        }
-      }
-    },
-    "Selected documents will be proposed to the Organization after Project merge.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected documents will be proposed to the Organization after Project merge."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "项目 PR 合并后，将为选中文档创建组织贡献提案。"
-          }
-        }
-      }
-    },
     "Sync Project Memory before creating a Draft.": {
       "localizations": {
         "en": {
@@ -18228,22 +18132,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "请先同步项目记忆，再创建草稿。"
-          }
-        }
-      }
-    },
-    "The Organization proposal is reviewed separately. Project publication does not depend on its approval.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Organization proposal is reviewed separately. Project publication does not depend on its approval."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "组织提案独立审阅，不影响项目记忆的发布。"
           }
         }
       }
@@ -18360,22 +18248,6 @@
         }
       }
     },
-    "An unchanged draft cannot accompany a Project contribution. Propose that Organization change separately.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "An unchanged draft cannot accompany a Project contribution. Propose that Organization change separately."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "没有改动的草稿不能随项目 PR 贡献到组织。请单独发起组织记忆提案。"
-          }
-        }
-      }
-    },
     "Another file already uses this path. Choose a different path, even if the text is identical.": {
       "localizations": {
         "en": {
@@ -18404,6 +18276,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "双方都重命名了这份文件，请选择最终路径。"
+          }
+        }
+      }
+    },
+    "Contribute to Organization": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contribute to Organization"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "贡献给组织"
+          }
+        }
+      }
+    },
+    "After Project merge, all added or updated files in this Review are proposed to the Organization for separate review. Project deletions do not delete Organization Memory.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After Project merge, all added or updated files in this Review are proposed to the Organization for separate review. Project deletions do not delete Organization Memory."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目合并后，本次 PR 中所有新增或更新的文件将提交组织单独审核。项目中的删除不会删除组织记忆。"
           }
         }
       }

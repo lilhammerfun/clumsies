@@ -8,20 +8,17 @@ final class ReviewRequestModel: ObservableObject {
 
     let drafts: [LocalDraft]
     @Published var contributesToOrg = false
-    @Published var contributionDraftIds = Set<String>()
-    @Published var contributionTargets = [String: String]()
-    @Published var contributionPaths = [String: String]()
-
     var contributionEntries: [OrgContributionEntry] {
-        guard contributesToOrg else { return [] }
-        return contributableDrafts.filter { contributionDraftIds.contains($0.id) }.map { draft in
-            let target = contributionTargets[draft.id] ?? ""
-            return .init(draftId: draft.id, targetId: target.isEmpty ? nil : target,
-                         path: target.isEmpty ? contributionPaths[draft.id] ?? draft.document.path : nil)
+        guard contributesToOrg, canContribute else { return [] }
+        return contributableDrafts.map { draft in
+            .init(draftId: draft.id, targetId: draft.orgSource?.resourceId,
+                  path: draft.orgSource == nil ? draft.document.path : nil)
         }
     }
 
-    var contributableDrafts: [LocalDraft] { drafts.filter { $0.scope == .project && !$0.isDeletion } }
+    private var contributableDrafts: [LocalDraft] {
+        drafts.filter { $0.scope == .project && !$0.isDeletion && ReviewsModel.canRequestReview($0) }
+    }
 
     var canContribute: Bool {
         !contributableDrafts.isEmpty && drafts.allSatisfy { $0.scope == .project }
@@ -73,10 +70,6 @@ final class ReviewRequestModel: ObservableObject {
 
     func submit() async -> Bool {
         guard !isSubmitting, !normalizedTitle.isEmpty else { return false }
-        if contributesToOrg && contributionEntries.isEmpty {
-            errorMessage = String(localized: "Select at least one document to contribute.")
-            return false
-        }
         isSubmitting = true
         errorMessage = nil
         noticeMessage = nil

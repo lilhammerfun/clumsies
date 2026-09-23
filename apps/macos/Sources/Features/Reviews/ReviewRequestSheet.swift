@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ReviewRequestSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var catalog: MemoryCatalog
 
     @StateObject private var model: ReviewRequestModel
 
@@ -72,37 +71,9 @@ struct ReviewRequestSheet: View {
                 }
                 if model.canContribute {
                     Section {
-                        Toggle("After Project merge, propose an Organization contribution", isOn: $model.contributesToOrg)
-                        if model.contributesToOrg {
-                            ForEach(model.contributableDrafts) { draft in
-                                Toggle(draft.document.path, isOn: Binding(
-                                    get: { model.contributionDraftIds.contains(draft.id) },
-                                    set: { selected in
-                                        if selected { model.contributionDraftIds.insert(draft.id) }
-                                        else { model.contributionDraftIds.remove(draft.id) }
-                                    }
-                                ))
-                                if model.contributionDraftIds.contains(draft.id) {
-                                    Picker("Organization destination", selection: Binding(
-                                        get: { model.contributionTargets[draft.id] ?? "" },
-                                        set: { model.contributionTargets[draft.id] = $0 }
-                                    )) {
-                                        Text("New Organization Memory").tag("")
-                                        ForEach(catalog.resources.filter { $0.scope == .org }) { resource in
-                                            Text(resource.document.path).tag(resource.id)
-                                        }
-                                    }
-                                    if (model.contributionTargets[draft.id] ?? "").isEmpty {
-                                        TextField("Organization path", text: Binding(
-                                            get: { model.contributionPaths[draft.id] ?? draft.document.path },
-                                            set: { model.contributionPaths[draft.id] = $0 }
-                                        ))
-                                    }
-                                }
-                            }
-                            Text("The Organization proposal is reviewed separately. Project publication does not depend on its approval.")
-                                .foregroundStyle(.secondary)
-                        }
+                        Toggle("Contribute to Organization", isOn: $model.contributesToOrg)
+                    } footer: {
+                        Text("After Project merge, all added or updated files in this Review are proposed to the Organization for separate review. Project deletions do not delete Organization Memory.")
                     }
                 }
             }
@@ -117,7 +88,7 @@ struct ReviewRequestSheet: View {
                 }
             )
         }
-        .frame(width: 520, height: model.canContribute ? (model.contributesToOrg ? 560 : 340) : 270)
+        .frame(width: 520, height: model.canContribute ? 400 : 270)
     }
 
     private var batchConfirmation: some View {

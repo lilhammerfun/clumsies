@@ -54,8 +54,13 @@ struct WorkspaceView: View {
     @State private var reviewSearchFocusRequest = 0
     @State private var reviewFilters = ReviewListFilters()
     @State private var pendingReviewToolbarAction: ReviewMenuAction?
-    @State private var pendingProjectReviewDrafts: [LocalDraft] = []
-    @State private var showsProjectReviewRequest = false
+    private struct ProjectReviewRequest: Identifiable {
+        let id = UUID()
+        let drafts: [LocalDraft]
+        let title: String
+    }
+
+    @State private var pendingProjectReview: ProjectReviewRequest?
 
     init(
         store: WorkspaceCoordinator,
@@ -313,8 +318,10 @@ struct WorkspaceView: View {
                                 }
 
                                 Button("Request Review for All Project Changes…") {
-                                    pendingProjectReviewDrafts = activeProjectReviewDrafts
-                                    showsProjectReviewRequest = true
+                                    pendingProjectReview = ProjectReviewRequest(
+                                        drafts: activeProjectReviewDrafts,
+                                        title: String(localized: "Update \(workspaceContext.activeProject?.name ?? "project") memory")
+                                    )
                                 }
                                 .disabled(activeProjectReviewDrafts.isEmpty)
                             } label: {
@@ -368,16 +375,16 @@ struct WorkspaceView: View {
                 splitVisibility = target
             }
         }
-        .sheet(isPresented: $showsProjectReviewRequest) {
+        .sheet(item: $pendingProjectReview) { request in
             ReviewRequestSheet(
-                initialTitle: String(localized: "Update \(workspaceContext.activeProject?.name ?? "project") memory"),
-                drafts: pendingProjectReviewDrafts,
+                initialTitle: request.title,
+                drafts: request.drafts,
                 loadCandidates: {
-                    try await reconciler.reconciliationCandidates(for: pendingProjectReviewDrafts)
+                    try await reconciler.reconciliationCandidates(for: request.drafts)
                 }
             ) { title, description, reconciliations, contributions in
                 try await reviewModel.requestReview(
-                    for: pendingProjectReviewDrafts,
+                    for: request.drafts,
                     title: title,
                     description: description,
                     reconciliations: reconciliations,

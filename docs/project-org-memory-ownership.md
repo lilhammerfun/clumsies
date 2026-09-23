@@ -48,7 +48,7 @@ Returning an adaptation to a direct reference is an explicit Project change. Org
 
 ## Optional Organization contribution
 
-The Project Review UI may offer **“After Project merge, also propose an Organization contribution.”** The author chooses the entries and intended Organization targets. This is one submission interaction backed by two separately reviewed changes:
+The Project Review UI offers one **“Contribute to Organization”** switch, off by default. Enabling it includes every added or updated file in this Review, without a second file selection or target configuration. Project deletions and Drafts that reconcile to no changes are excluded. Adaptations propose an update to their recorded Organization source; other files propose new Organization Memory at their Project path. Matching filenames never imply matching resource identity. This is one submission interaction backed by two separately reviewed changes:
 
 ```mermaid
 flowchart LR

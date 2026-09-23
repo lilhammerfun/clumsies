@@ -240,6 +240,7 @@ final class ReviewsModel: ObservableObject {
         guard reconciliationByDraftId.keys.allSatisfy(selectedDraftIds.contains) else {
             throw ReviewRequestError.reconciliationRequired
         }
+        var contributions = try Self.contributionRequest(contributions, drafts: drafts)
         var prepared = [ServerDraft]()
         for draft in drafts {
             guard let serverId = draft.serverId else { throw ReviewRequestError.draftNotSynchronized }
@@ -266,9 +267,7 @@ final class ReviewsModel: ObservableObject {
                 try context.ensureAuthority(authority)
             }
             if remote.operations.isEmpty {
-                if contributions.contains(where: { $0.draftId == draft.id }) {
-                    throw ReviewRequestError.unchangedContribution
-                }
+                contributions?.removeAll { $0.draftId == serverId }
                 continue
             }
             guard remote.draft.coordination.freshness == .current || reconciliationByDraftId[serverId] != nil else {
@@ -286,7 +285,7 @@ final class ReviewsModel: ObservableObject {
                 )
             ],
             body: CreateReviewRequest(
-                orgContribution: try Self.contributionRequest(contributions, drafts: drafts),
+                orgContribution: contributions?.isEmpty == false ? contributions : nil,
                 drafts: prepared.map { draft in
                     let reconciliation = reconciliationByDraftId[draft.draftId]
                     return ReviewDraftRequest(
