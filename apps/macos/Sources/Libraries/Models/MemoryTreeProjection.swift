@@ -91,7 +91,7 @@ enum MemoryTreeProjection {
         // targeted Draft. The Org catalog presents shared authority only.
         guard let activeProjectId else { return [] }
         return drafts.filter { draft in
-            guard draft.status != .discarded && draft.status != .merged else {
+            guard draft.hasChanges, draft.status != .discarded && draft.status != .merged else {
                 return false
             }
             return draft.projectId == activeProjectId
@@ -121,11 +121,8 @@ enum MemoryTreeProjection {
         targetingAny resourceIds: Set<String>,
         drafts: [LocalDraft]
     ) -> Bool {
-        drafts.contains { draft in
-            draft.projectId == projectId
-                && draft.status != .discarded
-                && draft.status != .merged
-                && draft.targetId.map(resourceIds.contains) == true
+        memoryTreeDrafts(drafts, activeProjectId: projectId).contains { draft in
+            draft.targetId.map(resourceIds.contains) == true
         }
     }
 
@@ -135,11 +132,8 @@ enum MemoryTreeProjection {
         drafts: [LocalDraft]
     ) -> LocalDraft? {
         guard let projectId else { return nil }
-        let matchingDrafts = drafts.filter { draft in
+        let matchingDrafts = memoryTreeDrafts(drafts, activeProjectId: projectId).filter { draft in
             (draft.id == itemId || draft.targetId == itemId || draft.orgSource?.resourceId == itemId)
-                && draft.projectId == projectId
-                && draft.status != .discarded
-                && draft.status != .merged
         }
         return matchingDrafts.first { $0.id == itemId }
             ?? preferredMemoryTreeDrafts(matchingDrafts).first { $0.scope == .project }
