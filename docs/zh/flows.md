@@ -6,7 +6,7 @@
 
 ## 先看全程
 
-[![Memory 生命周期：为 Project 选择组织 Memory，本地检索，保存并同步 Draft，Review 合并，再同步新的 Project 快照。](/diagrams/memory-lifecycle.png)](/diagrams/memory-lifecycle.png)
+项目内修改发布到 Project；可选的 Organization 贡献使用另一份独立 Review，见 [Memory 归属](/zh/project-org-memory-ownership)。
 
 图的文字说明：
 
@@ -19,7 +19,7 @@
   → daemon 把操作上传到 Server Draft
   → 作者把 Draft 提交为 Review
   → 管理员批准并合并
-  → Server 创建组织 Commit，更新受影响的 Project 投影
+  → Server 创建 Project Commit，并通知项目成员
   → 各台 Mac 的 daemon 安装新快照并准备检索
 ```
 
@@ -106,6 +106,8 @@ Activation 的可选 `state` 用来记录已经返回过的片段。只有旧片
 
 **本地校验。** daemon 检查目标是否允许修改、正文是否仍匹配 `expected_hash`、替换原文是否匹配。如果文档已经变化，会返回错误，不会把编辑套到另一份内容上。
 
+**项目适配。** 编辑选用的 Org 资源时，会创建具有独立身份的项目适配，记录来源 ID 及包含该 Org 版本的固定 Project 快照。后续 Org 更新不会覆盖项目适配。
+
 **持久化。** daemon 在一个 SQLite 事务中创建或复用 Draft，把操作写入 `local_draft_operations`，标记 `sync_status = queued`，并排入 Project 索引更新任务。事务完成后，再唤醒后台工作进程。
 
 **完成后的结果。** 返回 `queued: true` 表示本地已受理，不能证明 Server 已经收到。Project 的 Effective Memory 会通过本地读取和索引流程纳入 Draft；匹配的索引尚未就绪时，检索可能返回准备状态。
@@ -116,7 +118,7 @@ Desktop 编辑也使用同一个持久化 Draft 队列。Agent 无需一直保�
 
 **后台动作。** daemon 创建或复用对应的 Server Draft，上传队列中的操作，并拉取更新后的 Draft 状态。
 
-Draft 记录提案基于哪个组织 Commit、作者是谁、由哪个 Project 承载，以及操作历史和版本。daemon 同时记录本地 Draft 与 Server Draft 的对应关系。
+Project Draft 记录提案基于哪个 Project Commit、作者是谁、由哪个 Project 承载，以及操作历史和版本。daemon 同时记录本地 Draft 与 Server Draft 的对应关系。
 
 **完成后的结果。** Server 已经保存提案。所需操作同步完成后，作者可以提交 Review。组织中正式发布的检查单仍未改变。
 
@@ -126,41 +128,41 @@ Server 不可达时，已持久化的本地队列仍然保留。修复连接或�
 
 ## 5. 处理其他人已经发布的新版本
 
-开发者编辑期间，另一位管理员可能已经发布了新版检查单。此时 Draft 会变成 **behind**：它的 base Commit 与当前组织 Ref 不同。
+开发者编辑期间，另一位管理员可能已经发布了新版检查单。此时 Draft 会变成 **behind**：它的 base Commit 与当前 Project Ref 不同。
 
 Clumsies 比较三份内容：
 
 | 内容 | 含义 |
 | --- | --- |
 | **Base** | Draft 开始时所依据的正式内容 |
-| **Current** | 当前组织 Ref 指向的正式内容 |
+| **Current** | 当前 Project Ref 指向的正式内容 |
 | **Draft** | 把作者操作应用到 Base 后的内容 |
 
 **reconciliation candidate（协调候选）**保存针对某个 Draft 版本和当前 Commit 的比较结果。请求或查看候选，不会把结果写回 Draft。
 
-Desktop 提供 **Merge latest version**。用户检查结果并确认；存在重叠修改时，需要手动解决冲突。即使比较结果是 clean，也不会仅凭查看就无声改写作者的 Draft。
+同步时，已上传且没有待同步本地操作的 Draft 可自动应用干净候选。冲突保留基线和操作并通知作者，通过 **Merge latest version** 检查和解决。结果变化会使旧批准失效。
 
-已经跟上当前版本的 Draft 可以直接提交。落后的 Draft 可以携带有效候选和必要的冲突解决结果提交，Server 在创建 Review 的事务中完成整组协调。候选必须仍然匹配当前 Draft 版本和组织 Ref。
+已经跟上当前版本的 Draft 可以直接提交。落后的 Draft 可以携带有效候选和必要的冲突解决结果提交，Server 在创建 Review 的事务中完成整组协调。候选必须仍然匹配当前 Draft 版本和 Project Ref。
 
 **失败后的状态。** 如果 Draft 或共享 Ref 再次变化，旧确认会被拒绝，或需要重新比较。正式内容不会被覆盖；刷新后检查新的候选即可。
 
 ## 6. 提交、讨论、批准与发布
 
-**作者操作。** 选择一个或多个 Draft，填写 Review 标题和修改说明，并按确定的顺序提交。这些 Draft 必须属于同一个 Project、同一个作者，并满足当前发布规则。
+**作者操作。** 选择一个或多个 Draft，填写 Review 标题和修改说明，并按确定的顺序提交。这些 Draft 必须属于同一个 Project、同一个作者和同一个发布目标，并满足当前发布规则。
 
-**Server 校验。** 检查每个 Draft 版本，以及请求预期的组织 Ref。Review 保存有序的 Draft ID 集合。评论和决定也关联具体 Review 版本，避免悄悄作用于另一版提案。
+**Server 校验。** 检查每个 Draft 版本，以及请求预期的 Project Ref。Review 保存有序的 Draft ID 集合。评论和决定也关联具体 Review 版本，避免悄悄作用于另一版提案。
 
-**审查者操作。** 组织 owner 或 admin 可以驳回提案，或批准并合并。普通 Project 成员可以提案、参与讨论，但不能发布。
+**审查者操作。** Project owner 或 admin 可以驳回项目提案，或批准并合并。普通 Project 成员可以提案、参与讨论，但不能发布。
 
 当前 Desktop 的批准操作调用 merge 接口，在一个事务内批准并发布 Open Review。API 也保留了独立的 Approved 状态，支持合并已经批准的 Review。单独“已批准”不等于“已发布”。
 
-**发布事务。** Server 按顺序应用完整 Draft 集合，创建组织 Commit，移动组织 Ref，更新受影响的 Project 投影，并把 Review 和 Draft 标记为已合并。新创建的组织 Memory 还会自动选入发起提案的 Project。
+**发布事务。** Server 按顺序应用完整 Draft 集合，创建 Project Commit，移动 Project Ref，并把 Review 和 Draft 标记为已合并。Organization 资源不变。如果作者选择了 Org 贡献，Server 再从此固定 Project Commit 创建独立 Org Review。Org 审批、拒绝或可重试的创建失败都不撤销项目发布。
 
 整组 Draft 原子发布。Ref 过期或冲突尚未解决时，发布不会进行，不会只发布前几个文件。Review 被驳回后，其 Draft 会重新开放，供作者继续编辑和再次提交。
 
 ## 7. 让各台 Mac 能读到新版本
 
-**Server 的结果。** 组织已经有一个新的正式版本。选择了受影响 Memory 的 Project 会得到更新后的投影快照。
+**Server 的结果。** Project 已有新的正式版本，成员收到更新通知。Org 贡献仍需 Organization owner/admin 独立审批。
 
 **本机后续动作。** 各台 Mac 的 daemon 拉取 Project Ref 和 Commit 内容，准备完整的本地 generation，并更新派生搜索索引。daemon 保护 generation 切换边界，避免一次读取混用前后两份快照。
 
@@ -176,7 +178,7 @@ Desktop 提供 **Merge latest version**。用户检查结果并确认；存在�
 | Activation 提示模型或索引准备中 | 本地检索准备 | 查看就绪状态和进度，完成后重试 |
 | 更新返回 `memory_content_changed` | 内容并发校验 | 重新 load，以最新原文制定替换 |
 | Draft 一直 queued | 本地到 Server 的同步 | 检查同步状态、网络和登录，重试已有 Draft |
-| Review 要求 reconciliation | Draft base 与当前组织 Ref | 检查并确认 Base/Current/Draft 比较 |
+| Review 要求 reconciliation | Draft base 与当前 Project Ref | 检查并确认 Base/Current/Draft 比较 |
 | 提交 Review 成功，页面仍在加载 | Desktop 的 Review 详情和 diff 加载 | 单独检查后续读取与页面就绪，不能把它等同于提交失败 |
 | Review 已合并，Agent 仍读到旧内容 | Project 快照/索引同步，或 Agent 已有上下文 | 检查本地就绪状态，再次检索 |
 | Project 存储不可用 | 配置的本地存储位置 | 接回磁盘或恢复权限，不要编辑托管缓存文件 |

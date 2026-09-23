@@ -274,6 +274,19 @@ pub(crate) fn review_from_row(
     coordination: DraftCoordination,
 ) -> Result<Review, ServerError> {
     Ok(Review {
+        org_contribution: row
+            .try_get::<Option<sqlx::types::Json<super::dto::OrgContribution>>, _>(
+                "org_contribution",
+            )?
+            .map(|value| value.0),
+        project_source: row
+            .try_get::<Option<sqlx::types::Json<super::dto::ProjectReviewSource>>, _>(
+                "project_source",
+            )?
+            .map(|value| value.0),
+        scope: crate::app::memory::model::resource_scope(
+            row.try_get::<String, _>("resource_scope")?.as_str(),
+        )?,
         review_id: row.try_get("review_id")?,
         project_id: row.try_get("project_id")?,
         draft_id: row.try_get("draft_id")?,
@@ -424,6 +437,10 @@ pub(crate) async fn list_reviews(
         sqlx::query(
             "SELECT
                 r.review_id, r.project_id, r.draft_id, r.title, r.description,
+                (SELECT resource_scope FROM drafts WHERE draft_id = r.draft_id) AS resource_scope,
+                (SELECT row_to_json(c) FROM review_org_contributions c WHERE c.source_review_id = r.review_id) AS org_contribution,
+                (SELECT json_build_object('review_id', c.source_review_id, 'commit_id', c.source_commit_id)
+                   FROM review_org_contributions c WHERE c.org_review_id = r.review_id) AS project_source,
                 r.status, r.version, r.decision_body, r.approved_result_hash,
                 r.decided_at, r.created_at, r.updated_at,
                 u.user_id, u.email, u.display_name, u.avatar_url, u.role,
@@ -448,6 +465,10 @@ pub(crate) async fn list_reviews(
         sqlx::query(
             "SELECT
                 r.review_id, r.project_id, r.draft_id, r.title, r.description,
+                (SELECT resource_scope FROM drafts WHERE draft_id = r.draft_id) AS resource_scope,
+                (SELECT row_to_json(c) FROM review_org_contributions c WHERE c.source_review_id = r.review_id) AS org_contribution,
+                (SELECT json_build_object('review_id', c.source_review_id, 'commit_id', c.source_commit_id)
+                   FROM review_org_contributions c WHERE c.org_review_id = r.review_id) AS project_source,
                 r.status, r.version, r.decision_body, r.approved_result_hash,
                 r.decided_at, r.created_at, r.updated_at,
                 u.user_id, u.email, u.display_name, u.avatar_url, u.role,
@@ -1126,6 +1147,10 @@ pub(super) async fn load_review(
     let row = sqlx::query(
         "SELECT
             r.review_id, r.project_id, r.draft_id, r.title, r.description,
+                (SELECT resource_scope FROM drafts WHERE draft_id = r.draft_id) AS resource_scope,
+                (SELECT row_to_json(c) FROM review_org_contributions c WHERE c.source_review_id = r.review_id) AS org_contribution,
+                (SELECT json_build_object('review_id', c.source_review_id, 'commit_id', c.source_commit_id)
+                   FROM review_org_contributions c WHERE c.org_review_id = r.review_id) AS project_source,
             r.status, r.version, r.decision_body, r.approved_result_hash,
             r.decided_by_user_id, r.decided_at,
             r.created_at, r.updated_at,
@@ -1289,4 +1314,134 @@ pub(super) struct NewReviewComment<'a> {
     pub(super) anchor_line: Option<i64>,
     /// Review revision observed when the action or comment was created.
     pub(super) review_version: i64,
+}
+
+/// Save one durable intent in the same transaction that submits the Project Review.
+///
+/// # Errors
+/// Propagates persistence failures without accepting a partial submission.
+pub(super) async fn insert_contribution(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+    entries: &[super::dto::OrgContributionEntry],
+) -> Result<(), ServerError> {
+    sqlx::query("INSERT INTO review_org_contributions (source_review_id, entries) VALUES ($1, $2) ON CONFLICT (source_review_id) DO UPDATE SET entries = EXCLUDED.entries, last_error = NULL WHERE review_org_contributions.source_commit_id IS NULL")
+        .bind(review_id)
+        .bind(sqlx::types::Json(entries))
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Bind an intent to the exact successful Project publication.
+///
+/// # Errors
+/// Propagates persistence failures as part of the publication transaction.
+pub(super) async fn fix_contribution_source(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+    commit_id: &str,
+) -> Result<(), ServerError> {
+    sqlx::query("UPDATE review_org_contributions SET source_commit_id = $2 WHERE source_review_id = $1 AND source_commit_id IS NULL")
+        .bind(review_id).bind(commit_id).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Identify an independent Org contribution before changing any Project selection.
+///
+/// # Errors
+/// Propagates database failures.
+pub(super) async fn is_org_contribution(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+) -> Result<bool, ServerError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM review_org_contributions WHERE org_review_id = $1)",
+    )
+    .bind(review_id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// Lock a contribution intent so concurrent retries cannot create duplicate Reviews.
+///
+/// # Errors
+/// Propagates database or stored intent decoding failures.
+pub(super) async fn lock_contribution(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+) -> Result<Option<super::dto::OrgContribution>, ServerError> {
+    Ok(sqlx::query_scalar::<_, sqlx::types::Json<super::dto::OrgContribution>>(
+        "SELECT row_to_json(c) FROM review_org_contributions c WHERE source_review_id = $1 FOR UPDATE",
+    ).bind(review_id).fetch_optional(&mut **tx).await?.map(|value| value.0))
+}
+
+/// Read one resource's content from a fixed Project commit, never from mutable resources.
+///
+/// # Errors
+/// Rejects absent or foreign snapshot entries and propagates database errors.
+pub(super) async fn contribution_source_content(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: &str,
+    commit_id: &str,
+    path: &str,
+) -> Result<String, ServerError> {
+    sqlx::query_scalar("SELECT b.content FROM commits c JOIN tree_entries e USING(tree_id) JOIN blobs b USING(blob_id)
+        WHERE c.commit_id = $1 AND c.project_id = $2 AND c.scope = 'project'
+          AND e.scope = 'project' AND e.resource_kind = 'memory' AND e.path = $3")
+        .bind(commit_id).bind(project_id).bind(path).fetch_optional(&mut **tx).await?
+        .ok_or_else(|| ServerError::not_found("published Project Memory", path))
+}
+
+/// Preserve original proposal authorship only while its author retains Project access.
+///
+/// # Errors
+/// Rejects removed or disabled authors; propagates persistence failures.
+pub(super) async fn ensure_contribution_author(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: &str,
+    author_id: &str,
+) -> Result<(), ServerError> {
+    let accessible: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM project_members m JOIN users u USING(user_id)
+        WHERE m.project_id = $1 AND m.user_id = $2 AND u.status = 'active')",
+    )
+    .bind(project_id)
+    .bind(author_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !accessible {
+        return Err(ServerError::Forbidden(
+            "contribution author no longer has Project access".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Record the single completed proposal link in its creation transaction.
+///
+/// # Errors
+/// Propagates persistence failures without creating an unlinked proposal.
+pub(super) async fn finish_contribution(
+    tx: &mut Transaction<'_, Postgres>,
+    source_review: &str,
+    org_review: &str,
+) -> Result<(), ServerError> {
+    sqlx::query("UPDATE review_org_contributions SET org_review_id = $2, last_error = NULL WHERE source_review_id = $1")
+        .bind(source_review).bind(org_review).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Keep a retryable creation failure visible without changing either publication target.
+///
+/// # Errors
+/// Propagates persistence failures; never overwrites a concurrent successful retry.
+pub(super) async fn record_contribution_error(
+    pool: &sqlx::PgPool,
+    review_id: &str,
+    error: &str,
+) -> Result<(), ServerError> {
+    sqlx::query("UPDATE review_org_contributions SET last_error = $2 WHERE source_review_id = $1 AND org_review_id IS NULL")
+        .bind(review_id).bind(error.chars().take(1000).collect::<String>()).execute(pool).await?;
+    Ok(())
 }

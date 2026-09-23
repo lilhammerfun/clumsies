@@ -41,8 +41,8 @@ async fn migration_flattens_effective_project_memory_into_org_drafts() {
     postgres
         .pool
         .execute(
-            "ALTER TABLE resources DROP CONSTRAINT resources_no_active_project_authority;
-             ALTER TABLE drafts DROP CONSTRAINT drafts_no_active_project_authority;",
+            "ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_no_active_project_authority;
+             ALTER TABLE drafts DROP CONSTRAINT IF EXISTS drafts_no_active_project_authority;",
         )
         .await
         .unwrap();

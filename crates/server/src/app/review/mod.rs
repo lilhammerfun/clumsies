@@ -1,5 +1,6 @@
 //! Review submissions, comments, decisions, and atomic publication.
 
+mod contribution;
 pub mod dto;
 mod handler;
 mod repository;
@@ -20,3 +21,5 @@ pub(crate) use service::{
     load_review, refresh_review_after_draft_content_change, remove_discarded_draft,
     review_result_hash,
 };
+
+pub use contribution::retry_org_contribution;

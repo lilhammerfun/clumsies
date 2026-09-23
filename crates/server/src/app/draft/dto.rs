@@ -90,6 +90,9 @@ pub struct DraftResourceRef {
 /// Editable Markdown payload and optional descriptive metadata.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftResourceContent {
+    /// Explicit immutable origin of a Project adaptation; omitted for ordinary Memory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_source: Option<crate::app::memory::dto::OrgMemorySource>,
     /// Human-readable explanation associated with the resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

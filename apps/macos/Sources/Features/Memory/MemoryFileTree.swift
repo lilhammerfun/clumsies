@@ -256,13 +256,13 @@ enum MemoryDirectoryMutationError: UserFacingError, Equatable {
 enum MemoryFileTreeMenu {
     static func isReviewSelectionReady(_ drafts: [LocalDraft]) -> Bool {
         // The request sheet reconciles behind drafts, including conflicts.
-        !drafts.isEmpty && drafts.allSatisfy {
+        !drafts.isEmpty && Set(drafts.map(\.scope)).count == 1 && drafts.allSatisfy {
             $0.syncStatus == .synced && $0.serverId != nil
         }
     }
 
-    /// One directory Review contains every open Organization Draft below the
-    /// selection. Unchanged files and legacy Project authority are excluded.
+    /// One directory Review contains open Drafts with the same owner below the
+    /// selection. Unchanged files are excluded.
     static func reviewableDrafts(
         _ items: [MemoryListItem],
         inOrgView: Bool
@@ -290,20 +290,18 @@ enum MemoryFileTreeMenu {
             }
     }
 
-    /// Rename is an organization-authority proposal. Project views only
+    /// Rename is a Project proposal by default. Project views only
     /// expose it for Org resources that are still selected by that project.
     /// The Org overview is authority-only/read-only because it has no
     /// unambiguous Project carrier for a LocalDraft.
     /// Pure create Drafts keep their full local document and can be renamed;
-    /// target-backed orphan rows and legacy Project authority stay read-only.
+    /// published Project Memory supports the same proposal actions.
     static func canRename(_ item: MemoryListItem, inOrgView: Bool) -> Bool {
         guard !inOrgView, item.draft?.isDeletion != true else {
             return false
         }
         if item.resource?.scope == .org { return item.inherited }
-        return item.resource == nil
-            && item.draft?.scope == .org
-            && item.draft?.targetId == nil
+        return item.scope == .project || (item.resource == nil && item.draft?.targetId == nil)
     }
 
     static func directoryRenamePlan(
@@ -399,7 +397,7 @@ enum MemoryFileTreeMenu {
         var itemsToDelete: [MemoryListItem] = []
         var draftsToDiscard: [LocalDraft] = []
         for item in items {
-            if canProposeOrganizationDeletion(item, inOrgView: inOrgView) {
+            if canProposeMemoryDeletion(item, inOrgView: inOrgView) {
                 itemsToDelete.append(item)
             } else if item.resource == nil, let draft = item.draft {
                 draftsToDiscard.append(draft)
@@ -419,7 +417,7 @@ enum MemoryFileTreeMenu {
     /// New memories are Project-bound proposals for Org authority. The Org
     /// overview is read-only and therefore has no creation scope.
     static func creationScope(inOrgView: Bool) -> MemoryScope? {
-        inOrgView ? nil : .org
+        inOrgView ? nil : .project
     }
 
     /// Org memories that may be added to a project: only in the Org view.
@@ -437,18 +435,16 @@ enum MemoryFileTreeMenu {
 
     /// Items that may propose deletion of Org authority. This is the shared
     /// predicate for single-row, batch, and document-toolbar actions.
-    static func canProposeOrganizationDeletion(
+    static func canProposeMemoryDeletion(
         _ item: MemoryListItem,
         inOrgView: Bool
     ) -> Bool {
-        guard item.resource?.scope == .org,
-              item.draft?.isDeletion != true else {
-            return false
-        }
-        return !inOrgView && item.inherited
+        guard !inOrgView, item.draft?.isDeletion != true else { return false }
+        return item.resource?.scope == .project || (item.draft?.scope == .org && item.draft?.targetId != nil)
+
     }
 
     static func trashable(_ items: [MemoryListItem], inOrgView: Bool) -> [MemoryListItem] {
-        items.filter { canProposeOrganizationDeletion($0, inOrgView: inOrgView) }
+        items.filter { canProposeMemoryDeletion($0, inOrgView: inOrgView) }
     }
 }

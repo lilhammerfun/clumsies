@@ -52,7 +52,7 @@ Local state includes both unsynchronized edits and rebuildable caches. They must
 
 | Location | Contents | Ownership and durability |
 | --- | --- | --- |
-| Server PostgreSQL | Organizations/Projects, members, published Memory, Drafts/Reviews, Blob/Tree/Commit/Ref, audit | Shared server state; the Organization Ref identifies the published version |
+| Server PostgreSQL | Organizations/Projects, members, published Memory, Drafts/Reviews, Blob/Tree/Commit/Ref, audit | Shared server state; the Org and Project Refs identify their published versions |
 | Central daemon SQLite | Project bindings, local drafts and operation queues, cached objects/Refs, retrieval history | Includes edits that may not have reached the Server; not a disposable cache |
 | Project Local Storage | Verified Commit file snapshots and Effective Memory search indexes | Rebuildable derived data, managed per Project |
 | macOS Keychain | Server access/refresh token pair | Credentials stored separately from content and SQLite |
@@ -65,12 +65,12 @@ Users may choose a custom Project Local Storage location. The Server never recei
 Suppose an organization publishes a deployment rollback checklist and a Project selects it.
 
 1. The **Organization Ref** points to the organization's current Commit. A Ref is a movable head pointer; a Commit is an immutable snapshot.
-2. A **Project selection** contains Memory IDs. The Server produces the Project's Commit and Ref from the selected content. This is a projection, not a separate authority for publishing organization content.
+2. A **Project selection** contains Memory IDs. The Server produces the Project's Commit and Ref from selected Org content and Project-owned Memory, using explicit adaptations to resolve source precedence. This is a projection, not a separate authority for publishing organization content.
 3. The daemon downloads that Project Commit, validates its Tree, Blobs, paths, and ownership, then installs a local file snapshot called a generation.
 4. Resources without active drafts use the installed projection. For a resource with a draft, the daemon computes the full result from **that draft's Base snapshot + operations**, then overlays it onto the resource. This produces **Effective Memory**.
 5. `activate` searches an index matching the effective content hash; `load` reads complete current resources by ID or path.
 
-A creation Draft may have no existing resource, and its Base can be absent when the Organization has no snapshot yet. When upstream content changes, an existing Draft Base does not silently move. Otherwise the same operations might apply to different text. The system reports `behind` and uses three-way comparison so the user can confirm a new result.
+A creation Draft may have no existing resource, and its Base can be absent when the Organization has no snapshot yet. When upstream content changes, an existing Draft Base does not silently move. Otherwise the same operations might apply to different text. The system reports `behind` and uses three-way comparison. Clean results reconcile automatically; conflicts preserve the proposal and notify its author.
 
 Each read uses an identifiable snapshot, but content can change between separate calls. Reload before editing and supply the returned `content_hash`; an earlier search is not a guarantee about the content at write time. See [Data structures](/data-model) for the different version fields.
 
@@ -81,7 +81,7 @@ Each read uses an identifiable snapshot, but content can change between separate
 | Local save | Desktop or MCP → daemon; a SQLite transaction writes operations and the sync queue | This device has saved the edit |
 | Synchronization | daemon → Server HTTP; create/reuse a draft, append operations, pull changes | The Server has saved a shared proposal |
 | Review submission | Desktop → daemon → Server; ordered drafts, versions, and required reconciliation candidates | The draft set has entered review |
-| Publication | Desktop Approve calls merge; the Server checks roles, Review/Draft state, and Ref in a transaction | One result Commit contains the set; the Organization Ref advances |
+| Publication | Desktop Approve calls merge; the Server checks roles, Review/Draft state, and Ref in a transaction | One result Commit contains the set; the publication owner’s Ref advances |
 | Read readiness | The Server refreshes affected Project projections; the daemon downloads, verifies, installs, and prepares an index | This device can answer using the new version |
 
 A standalone HTTP `approved` decision does not publish. Desktop's current Approve action uses the merge route to publish. The Server can merge an `open` or `approved` Review. See [Domain interfaces](/reference/domain-api) and [End-to-end flows](/flows).

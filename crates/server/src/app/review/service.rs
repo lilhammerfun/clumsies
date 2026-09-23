@@ -13,15 +13,13 @@ use crate::app::commit::{
 use crate::app::draft;
 use crate::app::draft::dto::{CreateDraftRebaseRequest, DraftEventType};
 use crate::app::draft::model::{
-    CommitOutcome, aggregate_draft_coordination, content_text, ensure_publishable_draft_scope,
-    materialize_draft_operations,
+    CommitOutcome, aggregate_draft_coordination, content_text, materialize_draft_operations,
 };
 use crate::app::draft::{
     apply_draft_rebase_in_tx, apply_operation, create_reconciliation_candidate_in_tx,
     draft_result_hash, draft_result_state, insert_draft_event, invalidate_draft_candidates,
     load_draft_detail, load_draft_operations, target_ref_for_draft, user_ref,
-    validate_org_draft_operation_inputs_are_selected,
-    validate_stored_org_draft_operations_are_selected,
+    validate_org_draft_operation_inputs_in_org, validate_stored_org_draft_operations_in_org,
 };
 use crate::app::memory::dto::ResourceScope;
 use crate::app::memory::model::{OrgResourceImpact, resource_scope};
@@ -144,7 +142,7 @@ pub async fn create_review_auto_rebase(
     let mut tx = pool.begin().await?;
     let detail = lock_review_update(&mut tx, review_id, request.expected_review_version).await?;
     if detail.review.author.user_id != principal.user_id {
-        principal.require_org_admin()?;
+        ensure_review_admin(&mut tx, principal, review_id).await?;
     }
     let mut candidates = Vec::new();
     for item in &detail.drafts {
@@ -315,6 +313,7 @@ pub async fn create_review(
             principal,
             expected_ref,
             CreateReviewSubmissionRequest {
+                org_contribution: request.org_contribution,
                 expected_review_version: version,
                 drafts: request.drafts,
                 title: request.title,
@@ -445,7 +444,27 @@ pub async fn create_review_comment(
     Ok(comment)
 }
 
-/// Require organization administration and project access before deciding the submitted content.
+/// Authorize the review's single publication target inside its transaction.
+///
+/// # Errors
+/// Rejects inaccessible targets or insufficient target-specific administration rights.
+pub(super) async fn ensure_review_admin(
+    tx: &mut Transaction<'_, Postgres>,
+    principal: &AuthPrincipal,
+    review_id: &str,
+) -> Result<(), ServerError> {
+    let target = repository::load_coordination(tx, review_id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("review", review_id))?;
+    match resource_scope(&target.resource_scope)? {
+        ResourceScope::Org => principal.require_org_admin(),
+        ResourceScope::Project => {
+            crate::app::project::ensure_project_admin_tx(tx, principal, &target.project_id).await
+        }
+    }
+}
+
+/// Require administration of the publication target before deciding the submitted content.
 ///
 /// # Errors
 /// Rejects an identity outside the resource authorization boundary, and propagates persistence
@@ -457,10 +476,10 @@ pub async fn create_review_decision(
     request: CreateReviewDecisionRequest,
 ) -> Result<ReviewDetail, ServerError> {
     let decided_by_user_id = &principal.user_id;
-    principal.require_org_admin()?;
     ensure_review_member(pool, principal, review_id).await?;
 
     let mut tx = pool.begin().await?;
+    ensure_review_admin(&mut tx, principal, review_id).await?;
     let detail =
         create_review_decision_in_tx(&mut tx, review_id, decided_by_user_id, request).await?;
     tx.commit().await?;
@@ -523,10 +542,10 @@ pub async fn create_review_merge(
     request: CreateReviewMergeRequest,
 ) -> Result<ReviewMergeResult, ServerError> {
     let actor_user_id = &principal.user_id;
-    principal.require_org_admin()?;
     ensure_review_member(pool, principal, review_id).await?;
 
     let mut tx = pool.begin().await?;
+    ensure_review_admin(&mut tx, principal, review_id).await?;
     let outcome = create_review_merge_in_tx(
         &mut tx,
         review_id,
@@ -540,6 +559,9 @@ pub async fn create_review_merge(
         CommitOutcome::Success(merge) => merge,
         CommitOutcome::Failure(error) => return Err(error),
     };
+    if let Err(error) = super::contribution::create_after_merge(pool, review_id).await {
+        tracing::warn!(%review_id, %error, "could not record Organization contribution creation outcome");
+    }
     let review = get_review(pool, principal, review_id).await?;
     Ok(ReviewMergeResult {
         review,
@@ -1007,7 +1029,6 @@ pub(crate) async fn create_review_in_tx(
     }
     let project_id: String = row.project_id.clone();
     let scope = resource_scope(row.resource_scope.clone().as_str())?;
-    ensure_publishable_draft_scope(scope)?;
     let current_ref = target_ref_for_draft(tx, &project_id, scope).await?;
     if current_ref.as_deref() != expected_ref {
         return Err(ServerError::precondition_failed(
@@ -1038,7 +1059,7 @@ pub(crate) async fn create_review_in_tx(
     }
     if scope == ResourceScope::Org {
         let org_id = project_org_id(tx, &project_id).await?;
-        validate_stored_org_draft_operations_are_selected(
+        validate_stored_org_draft_operations_in_org(
             tx,
             &project_id,
             &org_id,
@@ -1079,7 +1100,6 @@ pub(crate) async fn create_review_in_tx(
             ));
         }
         let additional_scope = resource_scope(additional.resource_scope.clone().as_str())?;
-        ensure_publishable_draft_scope(additional_scope)?;
         if additional_scope != scope {
             return Err(ServerError::InvalidRequest(
                 "all drafts in a review must use the same scope".to_owned(),
@@ -1103,7 +1123,7 @@ pub(crate) async fn create_review_in_tx(
         }
         if scope == ResourceScope::Org {
             let org_id = project_org_id(tx, &project_id).await?;
-            validate_stored_org_draft_operations_are_selected(
+            validate_stored_org_draft_operations_in_org(
                 tx,
                 &project_id,
                 &org_id,
@@ -1160,6 +1180,10 @@ pub(crate) async fn create_review_in_tx(
     for (ordinal, requested) in request.drafts.iter().enumerate() {
         repository::insert_review_draft(tx, &review_id, &requested.draft_id, ordinal as i32)
             .await?;
+    }
+
+    if let Some(entries) = request.org_contribution {
+        super::contribution::record_intent(tx, &review_id, scope, &request.drafts, entries).await?;
     }
 
     let detail = load_review_detail(tx, &review_id).await?;
@@ -1259,7 +1283,6 @@ pub(crate) async fn create_review_submission_in_tx(
     }
     let project_id: String = row.project_id.clone();
     let scope = resource_scope(row.resource_scope.clone().as_str())?;
-    ensure_publishable_draft_scope(scope)?;
     let current_ref = target_ref_for_draft(tx, &project_id, scope).await?;
     if current_ref.as_deref() != expected_ref {
         return Err(ServerError::precondition_failed(
@@ -1290,7 +1313,7 @@ pub(crate) async fn create_review_submission_in_tx(
     }
     if scope == ResourceScope::Org {
         let org_id = project_org_id(tx, &project_id).await?;
-        validate_stored_org_draft_operations_are_selected(
+        validate_stored_org_draft_operations_in_org(
             tx,
             &project_id,
             &org_id,
@@ -1359,7 +1382,7 @@ pub(crate) async fn create_review_submission_in_tx(
         }
         if scope == ResourceScope::Org {
             let org_id = project_org_id(tx, &project_id).await?;
-            validate_stored_org_draft_operations_are_selected(
+            validate_stored_org_draft_operations_in_org(
                 tx,
                 &project_id,
                 &org_id,
@@ -1400,6 +1423,9 @@ pub(crate) async fn create_review_submission_in_tx(
         repository::insert_review_draft(tx, review_id, &requested.draft_id, ordinal as i32).await?;
     }
 
+    if let Some(entries) = request.org_contribution {
+        super::contribution::record_intent(tx, review_id, scope, &request.drafts, entries).await?;
+    }
     let detail = load_review_detail(tx, review_id).await?;
     crate::app::inbox::notify_review(
         tx,
@@ -1465,7 +1491,6 @@ pub(crate) async fn create_review_merge_in_tx(
             .clone()
             .as_str(),
     )?;
-    ensure_publishable_draft_scope(primary_scope)?;
     for draft_row in &draft_rows {
         let scope = resource_scope(draft_row.resource_scope.clone().as_str())?;
         if scope != primary_scope {
@@ -1526,7 +1551,7 @@ pub(crate) async fn create_review_merge_in_tx(
         materialized_operations.extend(materialize_draft_operations(&operations)?);
     }
     if primary_scope == ResourceScope::Org {
-        validate_org_draft_operation_inputs_are_selected(
+        validate_org_draft_operation_inputs_in_org(
             tx,
             &project_id,
             &org_id,
@@ -1562,7 +1587,9 @@ pub(crate) async fn create_review_merge_in_tx(
                 &commit_id,
             )
             .await?;
-            if !created_resource_ids.is_empty() {
+            if !created_resource_ids.is_empty()
+                && !repository::is_org_contribution(tx, review_id).await?
+            {
                 select_created_org_resources_for_project(
                     tx,
                     &project_id,
@@ -1578,9 +1605,12 @@ pub(crate) async fn create_review_merge_in_tx(
         ResourceScope::Project => {
             let commit_id = create_project_commit(tx, &project_id, current_head.as_deref()).await?;
             advance_project_ref(tx, &project_id, &commit_id).await?;
+            crate::app::inbox::notify_shared_update(tx, &project_id, &commit_id, actor_user_id)
+                .await?;
             commit_id
         }
     };
+    repository::fix_contribution_source(tx, review_id, &commit_id).await?;
     repository::mark_merged(
         tx,
         review_id,

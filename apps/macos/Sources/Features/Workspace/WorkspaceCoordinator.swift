@@ -39,7 +39,7 @@ final class WorkspaceCoordinator {
         self.edits = edits
         let refresh = DaemonSyncService(context: context, feedback: feedback)
         self.refresh = refresh
-        let sync = MemorySyncService(catalog: catalog, context: context, feedback: feedback)
+        let sync = MemorySyncService(catalog: catalog, context: context, feedback: feedback, edits: edits, sessions: sessions)
         self.sync = sync
         let bundleSelection = BundlesModel(bundles: bundles)
         self.bundleSelection = bundleSelection

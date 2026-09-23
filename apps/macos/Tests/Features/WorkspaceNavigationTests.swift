@@ -1210,6 +1210,47 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertTrue(MemorySyncPlan.staleResourcePlansMatch(first, second))
     }
 
+    func testReviewContributionRequiresAnExplicitSelectionAndKeepsItsTarget() async {
+        let draft = localDraft(id: "project-draft", targetId: nil)
+        var submitted: [OrgContributionEntry] = []
+        let model = ReviewRequestModel(initialTitle: "Publish", drafts: [draft], loadCandidates: { [] }) { _, _, _, entries in submitted = entries }
+        XCTAssertTrue(model.contributionEntries.isEmpty)
+        model.contributesToOrg = true
+        let emptySelection = await model.submit()
+        XCTAssertFalse(emptySelection)
+        XCTAssertTrue(submitted.isEmpty)
+        model.contributionDraftIds = [draft.id]
+        model.contributionTargets[draft.id] = "org-target"
+        model.contributionPaths[draft.id] = "unused-new-path.md"
+        let saved = await model.submit()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(submitted.count, 1)
+        XCTAssertEqual(submitted.first?.draftId, draft.id)
+        XCTAssertEqual(submitted.first?.targetId, "org-target")
+        XCTAssertNil(submitted.first?.path)
+    }
+
+    func testPublishedUpdatesInstallAutomaticallyWhileDraftsKeepTheirBaseline() {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "project"
+        workspace.context.projects = [.init(id: "project", name: "Project", refCommitId: "old", refEtag: "old", selectedOrgResourceIds: [], orgSelectionRevision: 0, isLoaded: true)]
+        let local = projectResource(id: "memory", path: "guide.md", hash: "old")
+        var remote = projectResource(id: "memory", path: "guide.md", hash: "new", commitId: "new")
+        remote.document.body = "Published update"
+        let snapshot = StaleResourceSyncSnapshot(projectId: "project", observedProjectRefCommitId: "old", observedSelectedOrgResourceIds: [], observedOrgSelectionRevision: 0, authoritativeCommitId: "new", authoritativeRefEtag: nil, selectedOrgResourceIds: [], orgSelectionRevision: 0, generation: UUID(), local: local, remote: remote)
+        workspace.catalog.resources = [local]
+        workspace.catalog.installStaleResourcePlan([local.id: snapshot], for: "project")
+        workspace.edits.drafts = [localDraft(id: "my-draft", targetId: local.id)]
+        workspace.sync.applyUneditedUpdates(projectId: "project")
+        XCTAssertEqual(workspace.catalog.resources.first?.contentHash, "old")
+        XCTAssertNotNil(workspace.catalog.staleResourceSnapshots[local.id])
+        workspace.edits.drafts = []
+        workspace.sync.applyUneditedUpdates(projectId: "project")
+        XCTAssertEqual(workspace.catalog.resources.first?.document.body, "Published update")
+        XCTAssertTrue(workspace.catalog.staleResourceSnapshots.isEmpty)
+        XCTAssertEqual(workspace.context.projects.first?.refCommitId, "new")
+    }
+
     func testDocumentPathChangesAttributeRemoteRenameAndDeletionToShared() {
         XCTAssertEqual(
             MemoryModel.documentPathChanges(
@@ -1455,7 +1496,7 @@ final class WorkspaceNavigationTests: XCTestCase {
             plan,
             .init(targetId: "memory", newPath: "renamed.md")
         )
-        XCTAssertFalse(MemoryFileTreeMenu.canRename(item, inOrgView: false))
+        XCTAssertTrue(MemoryFileTreeMenu.canRename(item, inOrgView: false))
 
         let dirty = EditableMemoryDocument(
             title: "old.md",
@@ -1944,17 +1985,17 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertEqual(keyQ.projectId, "project-q")
     }
 
-    func testOnlyOrganizationDraftsCanRequestReview() {
+    func testBothOwnersCanRequestIndependentReviews() {
         let localCreate = localDraft(id: "local", targetId: nil)
         let legacyProjectUpdate = localDraft(id: "legacy", targetId: "project-memory")
         let orgCreate = localDraft(id: "org", targetId: nil, scope: .org)
 
-        XCTAssertFalse(ReviewsModel.canRequestReview(localCreate))
-        XCTAssertFalse(ReviewsModel.canRequestReview(legacyProjectUpdate))
+        XCTAssertTrue(ReviewsModel.canRequestReview(localCreate))
+        XCTAssertTrue(ReviewsModel.canRequestReview(legacyProjectUpdate))
         XCTAssertTrue(ReviewsModel.canRequestReview(orgCreate))
     }
 
-    func testProjectReviewUsesEveryOpenOrganizationDraft() {
+    func testProjectReviewExcludesIndependentOrganizationDrafts() {
         let older = localDraft(
             id: "older",
             targetId: "shared",
@@ -1985,7 +2026,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 [older, newer, created, otherProject],
                 projectId: "project"
             ).map(\.id),
-            ["newer", "created"]
+            []
         )
 
         let legacy = localDraft(id: "legacy", targetId: "legacy-memory")
@@ -1994,7 +2035,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 [newer, created, legacy],
                 projectId: "project"
             ).map(\.id),
-            ["newer", "created"]
+            ["legacy"]
         )
     }
 

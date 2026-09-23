@@ -499,12 +499,12 @@ pub struct DaemonDraftOperationRequest {
     pub source: Option<DaemonDraftOperationSource>,
 }
 
-/// Desktop request to create one set of Organization Memory proposals atomically.
+/// Desktop request to create one set of Project Memory proposals atomically.
 #[derive(Debug, Deserialize)]
 pub(crate) struct DaemonCreateMemoryDraftsRequest {
     /// Project carrying the proposed documents before publication.
     pub project_id: String,
-    /// Organization head against which the caller checked the document paths.
+    /// Project head against which the caller checked the document paths.
     pub base_commit_id: Option<String>,
     /// Create-only operations; duplicate or already drafted paths are rejected.
     pub operations: Vec<DaemonDraftOperation>,
@@ -731,8 +731,21 @@ pub struct DaemonTextReplacement {
     pub new_text: String,
 }
 
+/// Immutable selected Organization version used for a Project adaptation.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OrgMemorySource {
+    /// Source identity, independent of its path.
+    pub resource_id: String,
+    /// Project snapshot containing the selected source.
+    pub commit_id: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DaemonDraftContent {
+    /// Explicit source of a Project adaptation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_source: Option<OrgMemorySource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub content: String,
@@ -741,6 +754,7 @@ pub struct DaemonDraftContent {
 impl DaemonDraftContent {
     pub(crate) fn from_resource(_resource: DaemonDraftResourceKind, content: String) -> Self {
         Self {
+            org_source: None,
             description: None,
             content,
         }
@@ -778,6 +792,7 @@ mod draft_operation_validation_tests {
     #[test]
     fn rejects_blank_memory_content_before_storage() {
         let operation = create_operation(DaemonDraftContent {
+            org_source: None,
             description: None,
             content: "  ".to_owned(),
         });
@@ -788,6 +803,7 @@ mod draft_operation_validation_tests {
     #[test]
     fn accepts_non_blank_memory_content() {
         let operation = create_operation(DaemonDraftContent {
+            org_source: None,
             description: None,
             content: "# Memory".to_owned(),
         });
@@ -804,6 +820,7 @@ mod draft_operation_validation_tests {
             "memory/test\\file.md",
         ] {
             let mut operation = create_operation(DaemonDraftContent {
+                org_source: None,
                 description: None,
                 content: "# Memory".to_owned(),
             });

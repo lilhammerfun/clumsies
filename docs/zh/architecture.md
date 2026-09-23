@@ -52,7 +52,7 @@ proxy 和 daemon 使用 App 内**同一份可执行文件**，只是启动方式
 
 | 位置 | 保存什么 | 数据性质 |
 | --- | --- | --- |
-| Server PostgreSQL | Organization/Project、成员、正式 Memory、Draft/Review、Blob/Tree/Commit/Ref、审计 | 多人共享的服务端状态；Organization Ref 决定当前正式版本 |
+| Server PostgreSQL | Organization/Project、成员、正式 Memory、Draft/Review、Blob/Tree/Commit/Ref、审计 | 多人共享的服务端状态；Project 与 Organization Ref 分别决定各自当前正式版本 |
 | daemon 中心 SQLite | 本机 Project 绑定、Draft 与操作队列、同步对象和 Ref 副本、检索历史 | 包含尚未上传的编辑；不是可随意删除的缓存 |
 | Project Local Storage | 已验证 Commit 的文件快照、有效内容的检索索引 | 按 Project 管理、可重建的派生数据 |
 | macOS Keychain | Server access/refresh token pair | 凭据；与正文和 SQLite 分开存储 |

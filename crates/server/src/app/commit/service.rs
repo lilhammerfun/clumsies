@@ -181,6 +181,7 @@ pub(crate) async fn create_project_commit(
     })?;
     let selection_blob_id = store_blob(tx, &selection_content).await?;
     entries.push(PendingTreeEntry {
+        org_source: None,
         item_id: format!("project_org_selection:{project_id}"),
         resource_kind: "project_org_selection".to_owned(),
         scope: "daemon".to_owned(),

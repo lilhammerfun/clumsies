@@ -119,7 +119,8 @@ final class DocumentEditorModel: ObservableObject {
         title: String,
         description: String,
         candidate: DraftReconciliationCandidate?,
-        resolvedState: ReconciliationResourceState?
+        resolvedState: ReconciliationResourceState?,
+        contributions: [OrgContributionEntry] = []
     ) async throws {
         try await draftStore.flushDocumentSave(item)
         let latest = draftStore.drafts.first { $0.id == draft.id } ?? draft
@@ -128,7 +129,8 @@ final class DocumentEditorModel: ObservableObject {
             title: title,
             description: description,
             candidate: candidate,
-            resolvedState: resolvedState
+            resolvedState: resolvedState,
+            contributions: contributions
         )
     }
 
@@ -151,7 +153,7 @@ final class DocumentEditorModel: ObservableObject {
         guard let activeProjectId = workspaceContext.activeProjectId,
               item.projectContextId == activeProjectId,
               draftStore.canEditMemory(item),
-              MemoryFileTreeMenu.canProposeOrganizationDeletion(
+              MemoryFileTreeMenu.canProposeMemoryDeletion(
                   item,
                   inOrgView: false
               ) else {

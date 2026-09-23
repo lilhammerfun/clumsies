@@ -215,6 +215,15 @@ pub async fn migrate_project_authority(
         .await?;
     }
 
+    let retired: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'resources_no_active_project_authority' AND conrelid = 'resources'::regclass)",
+    ).fetch_one(&mut *tx).await?;
+    if retired {
+        return Err(ServerError::InvalidRequest(
+            "Organization-only authority migration is retired; Project Memory is independently owned".to_owned(),
+        ));
+    }
+
     let plan = build_plan(&mut tx).await?;
     let mut report = report_for_plan(&plan, false);
     match mode {
@@ -1326,6 +1335,7 @@ async fn apply_project_plan(
                     action,
                     resource,
                     content: Some(DraftResourceContent {
+                        org_source: None,
                         description: Some(replacement.description.clone()),
                         content: replacement.content.clone(),
                     }),

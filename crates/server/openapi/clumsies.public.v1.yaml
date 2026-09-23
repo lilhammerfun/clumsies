@@ -39,7 +39,7 @@ paths:
                         notification_id: { type: string }
                         project_id: { type: [string, "null"] }
                         project_name: { type: [string, "null"] }
-                        kind: { type: string, enum: [review_requested, review_comment, review_approved, review_rejected, review_merged, shared_update, welcome, project_joined, project_removed, project_role_changed, org_role_changed] }
+                        kind: { type: string, enum: [review_requested, review_comment, review_approved, review_rejected, review_merged, shared_update, welcome, project_joined, project_removed, project_role_changed, org_role_changed, draft_conflict] }
                         target_id: { type: string }
                         title: { type: string }
                         actor_name: { type: [string, "null"] }
@@ -883,13 +883,51 @@ paths:
                 $ref: "#/components/schemas/ReviewUpdatePlan"
         default:
           $ref: "#/components/responses/Error"
+  /api/v1/drafts/{draft_id}/auto-rebases:
+    parameters:
+      - $ref: "#/components/parameters/DraftId"
+    post:
+      operationId: createDraftAutoRebase
+      summary: Reconcile an uploaded Draft after a published update.
+      description: Author only. Checks the Draft version and saves only a clean three-way result. Conflicts preserve the Draft and notify its author. Changed Review results invalidate approvals.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDraftReconciliationCandidateRequest"
+      responses:
+        "200":
+          description: Current Draft, including reconciliation status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DraftDetail"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/reviews/{review_id}/org-contribution:
+    parameters:
+      - $ref: "#/components/parameters/ReviewId"
+    post:
+      operationId: retryReviewOrgContribution
+      summary: Retry the independent Org proposal from a fixed Project publication.
+      description: The author or a Project administrator may retry. Requires a merged Project Review with recorded intent. Concurrent retries return the same linked Org Review. A recorded creation error never rolls back Project publication.
+      responses:
+        "200":
+          description: Project Review with its contribution link or last creation error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewDetail"
+        default:
+          $ref: "#/components/responses/Error"
   /api/v1/reviews/{review_id}/auto-rebases:
     parameters:
       - $ref: "#/components/parameters/ReviewId"
     post:
       operationId: createReviewAutoRebase
       summary: Save conflict-free file updates without requiring a manual save.
-      description: The author or an organization owner/admin with access to the carrying Project may trigger this operation. Locks the Review and its proposals, checks expected_review_version, and applies only server-computed clean results against one locked remote reference. Conflicting proposals remain unchanged and are returned as candidates. All clean updates and their audit records commit together; no approval or publication occurs. Repeating against the returned revision does not reapply saved updates.
+      description: The author or an administrator of the publication owner may trigger this operation. Project Reviews accept Project owner/admin authority; Org Reviews require Org owner/admin authority. Locks the Review and its proposals, checks expected_review_version, and applies only server-computed clean results against one locked remote reference. Conflicting proposals remain unchanged and are returned as candidates. All clean updates and their audit records commit together; no approval or publication occurs. Repeating against the returned revision does not reapply saved updates.
       requestBody:
         required: true
         content:
@@ -947,7 +985,7 @@ paths:
     post:
       operationId: createReviewDecision
       summary: Create an organization-authorized review decision.
-      description: Requires the caller to be an Organization owner or administrator and a member of the carrying Project. New clients use this endpoint for rejection; the approved decision value remains wire-compatible for older two-step clients, while current clients approve atomically through the merge endpoint.
+      description: Requires access to the carrying Project and administrator authority over the publication owner (Project owner/admin for Project Reviews, Org owner/admin for Org Reviews). New clients use this endpoint for rejection; the approved decision value remains wire-compatible for older two-step clients, while current clients approve atomically through the merge endpoint.
       requestBody:
         required: true
         content:
@@ -1570,10 +1608,39 @@ components:
           type: [string, "null"]
           minLength: 1
           description: Portable normalized relative path used by a rename operation.
+    OrgMemorySource:
+      type: object
+      required: [resource_id, commit_id]
+      description: Immutable provenance for a Project adaptation. The Project commit must contain the selected Org resource version. The adaptation has its own identity and is not overwritten by later Org updates or deletion.
+      properties:
+        resource_id: {type: string}
+        commit_id: {type: string}
+    OrgContributionEntry:
+      type: object
+      required: [draft_id]
+      properties:
+        draft_id: {type: string}
+        target_id: {type: [string, "null"], description: Existing Org resource to update; omit to create.}
+        path: {type: [string, "null"], description: Optional new Org path; not allowed for an existing target.}
+    OrgContribution:
+      type: object
+      required: [entries, source_commit_id, org_review_id, last_error]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrgContributionEntry"
+        source_commit_id: {type: [string, "null"]}
+        org_review_id: {type: [string, "null"]}
+        last_error: {type: [string, "null"]}
     DraftResourceContent:
       type: object
       required: [content]
       properties:
+        org_source:
+          oneOf:
+            - $ref: "#/components/schemas/OrgMemorySource"
+            - type: "null"
         description:
           type: [string, "null"]
           description: Optional semantic summary updated with the content.
@@ -1842,6 +1909,12 @@ components:
       type: object
       required: [drafts]
       properties:
+        org_contribution:
+          type: [array, "null"]
+          minItems: 1
+          description: Explicitly selected Project results to propose independently to Org after merge.
+          items:
+            $ref: "#/components/schemas/OrgContributionEntry"
         drafts:
           type: array
           minItems: 1
@@ -1855,6 +1928,12 @@ components:
       type: object
       required: [expected_review_version, drafts]
       properties:
+        org_contribution:
+          type: [array, "null"]
+          minItems: 1
+          description: Replace contribution choices on resubmission; omitted choices preserve existing intent.
+          items:
+            $ref: "#/components/schemas/OrgContributionEntry"
         expected_review_version:
           type: integer
         drafts:
@@ -1958,6 +2037,18 @@ components:
         - created_at
         - updated_at
       properties:
+        scope:
+          $ref: "#/components/schemas/ResourceScope"
+        org_contribution:
+          oneOf:
+            - $ref: "#/components/schemas/OrgContribution"
+            - type: "null"
+        project_source:
+          type: [object, "null"]
+          required: [review_id, commit_id]
+          properties:
+            review_id: {type: string}
+            commit_id: {type: string}
         review_id:
           type: string
         project_id:
@@ -2073,6 +2164,10 @@ components:
       type: object
       required: [memory_id, scope, project_id, path, name, description, content_hash, status, updated_at]
       properties:
+        org_source:
+          oneOf:
+            - $ref: "#/components/schemas/OrgMemorySource"
+            - type: "null"
         memory_id:
           type: string
         scope:
@@ -2188,6 +2283,10 @@ components:
       type: object
       required: [id, type, scope, project_id, path, blob_id, source]
       properties:
+        org_source:
+          oneOf:
+            - $ref: "#/components/schemas/OrgMemorySource"
+            - type: "null"
         id:
           type: string
         type:

@@ -177,13 +177,14 @@ Use the returned `resource_id` for an update and the returned `content_hash` for
 Call `memory` with `op: { store: ... }` only when the user explicitly asks to create, update, rename,
 delete, or discard managed memory.
 
-Every MCP Draft is carried by the Project resolved from the current directory.
-Its internal `org` scope is the authority target for a future Review, not Draft
-ownership and not a direct Organization write. Before merge, the Draft overlays
-only that Project's Effective Memory. MCP exposes no Review decision, merge, or
-publish operation; those Organization authority actions require an Org
-administrator in the Review workflow. Organization is not represented by a
-synthetic Project.
+MCP creates Project-owned Drafts in the Project bound to the current directory.
+Updating or renaming a selected Org reference creates an explicit Project adaptation
+with a separate identity and a fixed source version. Deleting an Org reference
+requires removing its selection in the App or making an explicit Org proposal.
+Existing Org Drafts keep their original publication target. Saving changes only the
+Project's local Effective Memory; publication requires a Review. MCP exposes no
+Review decision or merge operation. A Project PR and an optional Org contribution
+are independent Reviews with separate permissions and outcomes.
 
 Operations:
 
@@ -259,8 +260,8 @@ A successful result contains the local operation ID, Draft ID, queue status,
 and sync status. It means the operation is durably stored locally and queued
 for automatic synchronization. It does not mean a Review was merged or an
 authority Ref moved. Ordinary Project members may propose and submit changes,
-but only an Org owner or administrator may approve, reject, or merge an Org
-publication Review.
+Project owners/administrators decide and merge Project Reviews. Org Reviews
+require Org owner/administrator authority.
 
 For example, a queued local write can return:
 

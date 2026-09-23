@@ -8,5 +8,5 @@ pub(crate) mod routes;
 mod service;
 
 pub(crate) use account::{notify_access_change, notify_welcome};
-pub(crate) use repository::{notify_review, notify_shared_update};
+pub(crate) use repository::{notify_draft_conflict, notify_review, notify_shared_update};
 pub use service::{list, update};

@@ -18,4 +18,4 @@ pub use service::{
     update_project,
 };
 
-pub(crate) use service::{ensure_project_admin, ensure_project_member};
+pub(crate) use service::{ensure_project_admin, ensure_project_admin_tx, ensure_project_member};

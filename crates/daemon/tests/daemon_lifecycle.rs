@@ -164,6 +164,7 @@ fn signed_runtime_binary(root: &Path) -> PathBuf {
 
 fn context_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
+        org_source: None,
         description: None,
         content: content.to_owned(),
     }
@@ -171,6 +172,7 @@ fn context_content(content: &str) -> DaemonDraftContent {
 
 fn rule_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
+        org_source: None,
         description: None,
         content: content.to_owned(),
     }

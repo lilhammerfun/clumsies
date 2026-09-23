@@ -1809,14 +1809,25 @@ fn load_project_checkout(
             )
         })?;
 
-    let mut selected_org_resource_ids = BTreeSet::new();
+    let selected_org_resource_ids: BTreeSet<String> = selection
+        .get("memories")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| DaemonError::Server("Project selection is missing memories".to_owned()))?
+        .iter()
+        .map(|memory| {
+            memory
+                .get("memory_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    DaemonError::Server("Project selection has no Memory identity".to_owned())
+                })
+        })
+        .collect::<Result<_, _>>()?;
     let mut resources = Vec::new();
     for entry in &payload.tree.entries {
         let scope = match entry.scope {
-            ServerTreeEntryScope::Org => {
-                selected_org_resource_ids.insert(entry.id.clone());
-                DaemonDraftScope::Org
-            }
+            ServerTreeEntryScope::Org => DaemonDraftScope::Org,
             ServerTreeEntryScope::Project => DaemonDraftScope::Project,
             ServerTreeEntryScope::Daemon => continue,
         };
@@ -1840,7 +1851,10 @@ fn load_project_checkout(
             project_id: entry.project_id.clone(),
             path,
             content_hash: content_hash(&blob.content),
-            content: project_checkout_content(entry.kind, &blob.content)?,
+            content: DaemonDraftContent {
+                org_source: entry.org_source.clone(),
+                ..project_checkout_content(entry.kind, &blob.content)?
+            },
         });
     }
 
@@ -1865,6 +1879,7 @@ fn project_checkout_content(
         | ServerTreeEntryKind::Rule
         | ServerTreeEntryKind::Workflow
         | ServerTreeEntryKind::Memory => Ok(DaemonDraftContent {
+            org_source: None,
             description: None,
             content: blob.to_owned(),
         }),
@@ -2027,6 +2042,8 @@ struct ServerTree {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct ServerTreeEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    org_source: Option<crate::types::OrgMemorySource>,
     id: String,
     #[serde(rename = "type")]
     kind: ServerTreeEntryKind,
@@ -2169,6 +2186,7 @@ mod tests {
     fn rejects_case_and_file_directory_materialization_collisions() {
         fn context_entry(id: &str, path: &str) -> ServerTreeEntry {
             ServerTreeEntry {
+                org_source: None,
                 id: id.to_owned(),
                 kind: ServerTreeEntryKind::Memory,
                 scope: ServerTreeEntryScope::Project,
@@ -2265,6 +2283,7 @@ mod tests {
             .iter()
             .zip(&blobs)
             .map(|(entry, blob)| ServerTreeEntry {
+                org_source: None,
                 id: entry.0.to_owned(),
                 kind: entry.1,
                 scope: entry.2,

@@ -132,12 +132,6 @@ pub async fn replace_project_org_selection(
             current_revision,
         ));
     }
-    repository::ensure_removed_org_resources_have_no_active_drafts(
-        &mut tx,
-        project_id,
-        &request.resource_ids,
-    )
-    .await?;
     let next_revision = current_revision + 1;
     repository::delete_project_org_selections(&mut tx, project_id).await?;
     repository::insert_project_org_selection_items(
@@ -317,6 +311,7 @@ pub(crate) async fn pending_resource_entry(
         }
     }
     Ok(PendingTreeEntry {
+        org_source: row.org_source.clone().map(|source| source.0),
         item_id: resource_id,
         resource_kind,
         scope: scope.to_owned(),
@@ -355,10 +350,19 @@ pub(crate) async fn apply_resource_operation(
             })?;
             let prepared = prepare_resource_content(path, content, None)?;
             let resource_id = prefixed_id("mem");
+            if let Some(source) = &content.org_source {
+                if scope != ResourceScope::Project {
+                    return Err(ServerError::InvalidRequest(
+                        "only Project Memory can adapt Organization Memory".to_owned(),
+                    ));
+                }
+                repository::validate_org_source(tx, project_id, source).await?;
+            }
             repository::insert_memory(
                 tx,
                 repository::NewMemory {
                     resource_id: &resource_id,
+                    org_source: content.org_source.as_ref(),
                     org_id: &org_id,
                     project_id: resource_project_id,
                     scope: scope.as_str(),

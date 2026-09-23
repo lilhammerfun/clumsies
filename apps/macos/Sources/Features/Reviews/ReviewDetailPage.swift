@@ -75,11 +75,41 @@ struct ReviewDetailPage: View {
     private func content(_ review: ReviewRecord) -> some View {
         return VStack(spacing: 0) {
             reviewHeader(review).padding(20)
+            Text(review.scope == .project ? String(localized: "Publishes to Project Memory") : String(localized: "Publishes to Organization Memory"))
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.bottom, 12)
             if review.freshness == .behind, review.reconciliation == .conflicts, !workspaceContext.isReviewAuthor(review) {
                 Text("The author needs to resolve the conflicts in this Review.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20).padding(.bottom, 12)
+            }
+            if let intent = review.orgContribution {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let linkedReview = intent.orgReviewId {
+                        NavigationLink("Open Organization contribution", value: ReviewRoute(reviewId: linkedReview))
+                    } else if review.status == "merged" {
+                        Text(intent.lastError ?? String(localized: "Organization contribution is waiting to be created."))
+                            .foregroundStyle(.secondary)
+                        if workspaceContext.isReviewAuthor(review) || workspaceContext.canMergeReview(review) {
+                            Button("Retry Organization contribution") {
+                                Task {
+                                    do {
+                                        try await reviewModel.retryOrgContribution(review)
+                                        await model.refreshDetail()
+                                    } catch { workspaceFeedback.errorMessage = error.actionMessage }
+                                }
+                            }
+                        }
+                    } else {
+                        Text("Selected documents will be proposed to the Organization after Project merge.")
+                            .foregroundStyle(.secondary)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.bottom, 12)
+            }
+            if let source = review.projectSource {
+                NavigationLink("View source Project Review", value: ReviewRoute(reviewId: source.reviewId))
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.bottom, 12)
             }
             Divider()
             HSplitView {

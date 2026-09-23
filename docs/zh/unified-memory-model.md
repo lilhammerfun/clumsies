@@ -2,6 +2,10 @@
 
 本页解释数据模型背后的约束与取舍，适合已经读过[核心数据模型](/zh/data-model)、准备实现或评审功能的人。这里描述当前代码行为；历史迁移见 [Project 权威切换](/zh/project-authority-migration)。
 
+::: warning 历史单一组织发布设计
+2026-09-23 确认的 [Project 与 Organization Memory 归属决策](/zh/project-org-memory-ownership)替代下文的单一组织发布目标：Project 与 Organization 各自拥有正式记忆，每个 Review 只有一个目标，组织贡献独立审阅。本页保留历史设计，当前发布行为以归属决策为准。
+:::
+
 ## 为什么只有一种 Memory
 
 部署回滚检查单、编码约束、架构说明，都保存为具有稳定 ID 的 Markdown Memory。当前协议不会因为文件放在 `rules/` 或 `workflow/` 下就赋予它新的类型、权限或执行能力。

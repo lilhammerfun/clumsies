@@ -214,3 +214,17 @@ pub(super) async fn create_review_merge(
         .await?,
     ))
 }
+
+/// Retry a separately reviewed Organization contribution after Project publication.
+///
+/// # Errors
+/// Rejects inaccessible or unauthorized requests; returns stored creation failures on the Review.
+pub(super) async fn retry_org_contribution(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Path(review_id): Path<String>,
+) -> Result<Json<dto::ReviewDetail>, HttpError> {
+    Ok(Json(
+        super::retry_org_contribution(&state.pool, &principal, &review_id).await?,
+    ))
+}

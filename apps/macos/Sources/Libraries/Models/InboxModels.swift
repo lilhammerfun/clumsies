@@ -113,7 +113,7 @@ struct InboxItem: Identifiable, Sendable {
         case "project_joined", "project_removed", "project_role_changed", "org_role_changed": .accessChanges
         case "review_requested": .reviewRequests
         case "review_comment": .reviewComments
-        case "shared_update": .sharedUpdates
+        case "shared_update", "draft_conflict": .sharedUpdates
         default: .reviewResults
         }
         let roleTitle: (String) -> String? = notice.kind == "org_role_changed"
@@ -128,6 +128,7 @@ struct InboxItem: Identifiable, Sendable {
         case "project_removed": String(localized: "\(actor) removed your access to this project.")
         case "project_role_changed": String(localized: "\(actor) changed your project role: \(previousRole) → \(newRole).")
         case "org_role_changed": String(localized: "\(actor) changed your organization role: \(previousRole) → \(newRole).")
+        case "draft_conflict": String(localized: "Your draft needs conflict resolution")
         case "review_requested": notice.reviewStatus == "open" ? String(localized: "Review requested") : updatedReviewReason(notice.reviewStatus)
         case "review_comment": String(localized: "New review comment")
         case "review_approved": String(localized: "Review approved")
@@ -146,7 +147,7 @@ struct InboxItem: Identifiable, Sendable {
         let destination: InboxDestination? = switch notice.kind {
         case "welcome", "project_removed", "org_role_changed": nil
         case "project_joined", "project_role_changed": notice.canOpenProject ? notice.projectId.map(InboxDestination.project) : nil
-        case "shared_update": notice.projectId.map { .sharedChanges(projectId: $0) }
+        case "shared_update", "draft_conflict": notice.projectId.map { .sharedChanges(projectId: $0) }
         case "review_requested", "review_comment", "review_approved", "review_rejected", "review_merged": .review(notice.targetId)
         default: nil
         }

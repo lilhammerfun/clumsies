@@ -25,6 +25,9 @@ pub struct ReviewDraftRequest {
 /// Ordered proposals and optional metadata for a new review.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateReviewRequest {
+    /// Selected Project results to propose independently after Project publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_contribution: Option<Vec<OrgContributionEntry>>,
     /// Proposals included in the response, export, or review.
     pub drafts: Vec<ReviewDraftRequest>,
     /// Human-readable summary of a proposal or review.
@@ -33,9 +36,46 @@ pub struct CreateReviewRequest {
     pub description: Option<String>,
 }
 
+/// One Project proposal result and its explicit Organization destination.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OrgContributionEntry {
+    /// Project draft included in this Review whose published result will be copied.
+    pub draft_id: String,
+    /// Existing Organization identity to update, or absent to create a new resource.
+    pub target_id: Option<String>,
+    /// Destination for a new Organization resource; defaults to the published Project path.
+    pub path: Option<String>,
+}
+
+/// Durable contribution intent and the independently reviewed result, if created.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OrgContribution {
+    /// Selected Project results and explicit destinations.
+    pub entries: Vec<OrgContributionEntry>,
+    /// Fixed Project publication from which content is copied.
+    pub source_commit_id: Option<String>,
+    /// Independent Organization Review; retries always return this identity.
+    pub org_review_id: Option<String>,
+    /// Last creation failure, retained without rolling back Project publication.
+    pub last_error: Option<String>,
+}
+
+/// Immutable Project publication that originated an Organization contribution.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectReviewSource {
+    /// Source Project Review identity.
+    pub review_id: String,
+    /// Fixed source Project snapshot.
+    pub commit_id: String,
+}
+
 /// Updated proposal revisions and reconciliation data for a rejected review.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateReviewSubmissionRequest {
+    /// Optional replacement contribution choices when resubmitting a Project Review.
+    #[serde(default)]
+    pub org_contribution: Option<Vec<OrgContributionEntry>>,
     /// Review revision on which the caller's decision or mutation is based.
     pub expected_review_version: i64,
     /// Proposals included in the response, export, or review.
@@ -88,6 +128,14 @@ pub enum ReviewStatus {
 /// Lifecycle and approval state for an ordered set of resource proposals.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Review {
+    /// Optional separately reviewed Organization contribution after this Project merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_contribution: Option<OrgContribution>,
+    /// Source of this independently reviewed Organization contribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_source: Option<ProjectReviewSource>,
+    /// Single authority to which this review publishes.
+    pub scope: crate::app::memory::dto::ResourceScope,
     /// Stable identifier of a review spanning one or more proposals.
     pub review_id: String,
     /// Project boundary containing the resource or proposal.

@@ -1597,3 +1597,52 @@ pub(crate) struct UnlinkedLocalOperation {
     operation: DaemonDraftOperation,
     linked: bool,
 }
+
+/// Reconcile uploaded proposals after installing new published snapshots.
+///
+/// # Errors
+/// Reports remote failures after checking every independent proposal; never sends pending edits.
+pub(crate) async fn reconcile_uploaded_drafts(
+    state: &DaemonState,
+    project_id: Option<&str>,
+) -> Result<(), DaemonError> {
+    let _mutation_guard = state.inner.draft_mutation_lock.lock().await;
+    let access = crate::project_access::require_current(state)?;
+    let rows: Vec<(String, i64, String)> = sqlx::query_as("SELECT server_draft_id, server_version, project_id FROM local_drafts d
+        WHERE freshness = 'behind' AND reconciliation <> 'conflicts' AND status IN ('open', 'submitted') AND server_draft_id IS NOT NULL
+          AND ($1 IS NULL OR project_id = $1)
+          AND NOT EXISTS(SELECT 1 FROM local_draft_operations o WHERE o.draft_id = d.draft_id AND o.sync_status <> 'synced')")
+        .bind(project_id).fetch_all(&state.inner.pool).await?;
+    let mut first_error = None;
+    for (id, version, project) in rows {
+        if !access.project_ids.contains(&project) {
+            continue;
+        }
+        let result = async {
+            let detail: ServerDraftProjectionDetail = post_server_json(
+                state,
+                &format!("/api/v1/drafts/{id}/auto-rebases"),
+                &json!({"expected_draft_version": version}),
+            )
+            .await?;
+            if let Some(base) = &detail.draft.base_commit_id {
+                commit_sync::ensure_commit_cached(state, base).await?;
+            }
+            let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+            project_server_draft(&mut tx, &detail).await?;
+            crate::search::scheduler::enqueue_project_in_tx(&mut tx, &detail.draft.project_id)
+                .await?;
+            tx.commit().await?;
+            Ok::<(), DaemonError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            first_error.get_or_insert(error);
+        }
+    }
+    state.inner.search_index_notify.notify_one();
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}

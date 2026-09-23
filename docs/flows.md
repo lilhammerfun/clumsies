@@ -6,7 +6,7 @@ Read [Understand Clumsies](/overview) first if Memory, Draft, and Project are ne
 
 ## The whole journey
 
-[![Memory lifecycle: select organization Memory for a Project, retrieve it locally, save and synchronize a Draft, review and merge, then synchronize a new Project snapshot.](/diagrams/memory-lifecycle.png)](/diagrams/memory-lifecycle.png)
+Project edits publish to the Project. An optional Organization contribution goes through a separate Review; see [Memory ownership](/project-org-memory-ownership).
 
 Text equivalent:
 
@@ -19,7 +19,7 @@ Organization publishes the checklist
   → daemon uploads that operation to a Server Draft
   → author submits Drafts for Review
   → administrator approves and merges
-  → Server creates an organization Commit and updates affected Project projections
+  → Server creates a Project Commit and notifies Project members
   → each daemon installs its new snapshot and prepares retrieval
 ```
 
@@ -106,6 +106,8 @@ The ID, hash, and text above are illustrative. A real update must use the values
 
 **Local validation.** The daemon checks that the resource is a valid target, its content still matches `expected_hash`, and the replacements match. If the document changed, it returns an error instead of applying the edit to different content.
 
+**Project adaptation.** Editing a selected Org resource creates a separately identified Project adaptation, recording its source ID and the exact Project snapshot containing that Org version. Later Org changes preserve the adaptation.
+
 **Durable write.** In one SQLite transaction, the daemon creates or reuses a Draft, writes the operation to `local_draft_operations` with `sync_status = queued`, and queues the Project index refresh. It then wakes its background workers.
 
 **Result.** A response with `queued: true` means the operation was accepted locally. It does not prove Server has received the change. The Project's Effective Memory incorporates the Draft through the local read/index pipeline; until the matching index is ready, retrieval may report a preparation state.
@@ -116,7 +118,7 @@ Desktop editing follows the same durable Draft queue. The agent does not need to
 
 **Background action.** The daemon creates or reuses the corresponding Server Draft, uploads queued operations, and pulls updated Draft state.
 
-A Draft records the organization Commit that the proposal was based on, its author, carrying Project, operation history, and version. The daemon associates the local Draft with its Server identity.
+A Project Draft records the Project Commit that the proposal was based on, its author, carrying Project, operation history, and version. The daemon associates the local Draft with its Server identity.
 
 **Result.** Server has the proposal. The author can submit it for Review once the required operations are synchronized. The organization's published checklist has still not changed.
 
@@ -126,19 +128,19 @@ If a request response is lost, an error alone cannot tell you whether Server app
 
 ## 5. Reconcile with a newer published version
 
-While the developer was editing, another administrator may have published a newer checklist. The Draft then becomes **behind**: its base Commit differs from the current organization Ref.
+While the developer was editing, another administrator may have published a newer checklist. The Draft then becomes **behind**: its base Commit differs from the current Project Ref.
 
 Clumsies compares three states:
 
 | State | Meaning |
 | --- | --- |
 | **Base** | The published content the Draft started from |
-| **Current** | The content at today's organization Ref |
+| **Current** | The content at today's Project Ref |
 | **Draft** | Base with the author's operations applied |
 
 A **reconciliation candidate** captures that comparison for a particular Draft version and current Commit. Requesting or viewing a candidate does not apply it to the Draft.
 
-Desktop offers **Merge latest version**. The user inspects the result and confirms it. When changes overlap, the user resolves the conflicting content. Even a clean candidate is not a license to silently rewrite the author's Draft.
+Synchronization automatically applies clean candidates to uploaded Drafts with no pending local edits. Conflicts preserve the baseline and operations and notify the author; **Merge latest version** lets the author inspect and resolve them. Changed results invalidate prior approvals.
 
 A current Draft can be submitted directly. A behind Draft can be submitted with its valid candidate and any required resolution; Server coordinates the submitted Drafts inside the Review-creation transaction. The candidate must still match the Draft version and current Ref.
 
@@ -146,21 +148,21 @@ A current Draft can be submitted directly. A behind Draft can be submitted with 
 
 ## 6. Submit, discuss, approve, and publish
 
-**Author action.** The author selects one or more Drafts, gives the Review a title and explanation, and submits them in a defined order. All Drafts must belong to the same Project and author and satisfy current publication rules.
+**Author action.** The author selects one or more Drafts, gives the Review a title and explanation, and submits them in a defined order. All Drafts must belong to the same Project and author, target the same publication owner, and satisfy current publication rules.
 
-**Server checks.** It validates each Draft version and the expected organization Ref. The Review records the ordered Draft IDs. Comments and decisions also refer to a specific Review version so they cannot silently act on a different revision.
+**Server checks.** It validates each Draft version and the expected Project Ref. The Review records the ordered Draft IDs. Comments and decisions also refer to a specific Review version so they cannot silently act on a different revision.
 
-**Reviewer action.** An organization owner or administrator can reject the proposal or approve and merge it. A normal Project member can propose and discuss changes but cannot publish them.
+**Reviewer action.** A Project owner or administrator can reject the Project proposal or approve and merge it. A normal Project member can propose and discuss changes but cannot publish them.
 
 The current Desktop approval action uses the merge endpoint to approve and publish an Open Review in one transaction. The API also retains a separate Approved state and can merge a previously Approved Review. Approval alone is not publication.
 
-**Publication transaction.** Server applies the complete ordered Draft set, creates an organization Commit, advances the organization Ref, updates affected Project projections, and marks the Review and Drafts as merged. A newly created organization Memory is also selected for its originating Project.
+**Publication transaction.** Server applies the complete ordered Draft set, creates a Project Commit, advances the Project Ref, and marks the Review and Drafts as merged. The Organization resource remains unchanged. If the author selected an Org contribution, Server separately creates an Org Review from this fixed Project commit. Org approval, rejection, or a retryable creation failure cannot undo the Project publication.
 
 The whole Draft set publishes atomically. A stale Ref or an unresolved conflict prevents publication; it does not publish just the first few files. Rejecting a Review reopens its Drafts for editing and later resubmission.
 
 ## 7. Make the new version usable on every Mac
 
-**Server result.** The organization now has a published version. Projects that selected the affected Memory receive updated projection snapshots.
+**Server result.** The Project has a new published version and members receive update notifications. An Org contribution needs separate Organization owner/admin approval.
 
 **Local follow-through.** Each daemon fetches its Project Ref and Commit content, prepares a complete local generation, and updates the derived search index. The daemon protects the generation boundary so a reader does not receive a mixture of two snapshots.
 
@@ -176,7 +178,7 @@ Closing Desktop does not stop the resident daemon's workers. Closing the short-l
 | Activation reports models or index preparing | Local retrieval preparation | Inspect readiness/progress; retry when preparation completes |
 | Update reports `memory_content_changed` | Content concurrency check | Load the current document and formulate replacements against that version |
 | Draft remains queued | Local-to-Server synchronization | Check sync status, connection, and sign-in; retry the existing Draft |
-| Review requires reconciliation | Draft base versus current organization Ref | Inspect and confirm the Base/Current/Draft comparison |
+| Review requires reconciliation | Draft base versus current Project Ref | Inspect and confirm the Base/Current/Draft comparison |
 | Review request succeeded but the page is still loading | Review detail and diff loading in Desktop | Inspect subsequent reads and rendering readiness separately from submission |
 | Review merged but the agent sees older guidance | Project snapshot/index synchronization or existing agent context | Check local readiness, then retrieve again |
 | Project storage is unavailable | Configured local storage location | Reconnect the volume or restore permission; do not edit managed cache files |

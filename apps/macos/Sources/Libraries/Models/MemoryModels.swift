@@ -108,6 +108,7 @@ struct MemoryResource: Identifiable, Hashable, Sendable {
     let refCommitId: String?
     var contentLoaded: Bool
     var document: EditableMemoryDocument
+    var orgSource: OrgMemorySource? = nil
 }
 
 struct LocalDraft: Identifiable, Hashable, Sendable {
@@ -131,6 +132,7 @@ struct LocalDraft: Identifiable, Hashable, Sendable {
     var document: EditableMemoryDocument
     var isDeletion: Bool
     var documentBaselineAvailable: Bool = true
+    var orgSource: OrgMemorySource? = nil
 }
 
 struct MemoryListItem: Identifiable, Hashable, Sendable {
@@ -200,6 +202,9 @@ struct ReviewRecord: Identifiable, Hashable, Sendable {
     let updatedAt: String
     var draftIds: [String] = []
     var autoRebased = false
+    var scope: MemoryScope = .org
+    var orgContribution: OrgContribution? = nil
+    var projectSource: ProjectReviewSource? = nil
 }
 
 struct ReviewChangeSources: Sendable {
@@ -272,7 +277,7 @@ struct WorkbenchTab: Identifiable, Hashable, Sendable {
 
 enum ReviewRequestError: UserFacingError, Sendable {
     case draftNotSynchronized
-    case legacyProjectDraftCannotBePublished
+    case mixedScopes
     case reconciliationRequired
     case mixedProjects
     case reviewChanged
@@ -281,8 +286,8 @@ enum ReviewRequestError: UserFacingError, Sendable {
         switch self {
         case .draftNotSynchronized:
             String(localized: "Wait for this draft to finish syncing before requesting a review.")
-        case .legacyProjectDraftCannotBePublished:
-            String(localized: "Legacy Project-scoped drafts are read-only and cannot be published.")
+        case .mixedScopes:
+            String(localized: "All drafts in a Review must publish to the same Project or Organization.")
         case .reconciliationRequired:
             String(localized: "Merge the latest remote version before requesting a review.")
         case .mixedProjects:

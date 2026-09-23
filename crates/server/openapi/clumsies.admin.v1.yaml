@@ -929,6 +929,12 @@ components:
       required:
         [memory_id, scope, path, name, description, status, content_hash, body, updated_at]
       properties:
+        org_source:
+          type: [object, "null"]
+          required: [resource_id, commit_id]
+          properties:
+            resource_id: {type: string}
+            commit_id: {type: string}
         memory_id:
           type: string
           description: >-

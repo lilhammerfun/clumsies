@@ -552,15 +552,22 @@ struct DaemonCreateMemoryDraftsRequest: Encodable, Sendable {
     let operations: [DaemonDraftOperation]
 }
 
+struct OrgMemorySource: Codable, Hashable, Sendable {
+    let resourceId: String
+    let commitId: String
+}
+
 struct DaemonDraftContent: Codable, Hashable, Sendable {
     let description: String?
     let content: String
+
+    var orgSource: OrgMemorySource? = nil
 
     var primaryText: String { content }
     var renderedText: String { content }
 
     func replacingPrimaryText(with text: String) -> DaemonDraftContent {
-        .init(description: description, content: text)
+        .init(description: description, content: text, orgSource: orgSource)
     }
 }
 

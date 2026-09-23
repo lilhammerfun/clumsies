@@ -7,7 +7,7 @@ The macOS Memory surface edits project-scoped Draft overlays while showing organ
 - The tree presents effective Memory for the selected Project.
 - A resource opens the authoritative body plus its project-carried Draft overlay.
 - Create, rename, update, and delete actions produce Draft proposals.
-- Review is the only path from a proposal to organization authority.
+- Review publishes to the selected Project or Organization owner. Project edits default to Project ownership; **Propose Organization Change…** creates an explicit Org proposal.
 
 ## State and synchronization
 
@@ -19,13 +19,17 @@ The tree retains file-type icons and change colors: green for additions, amber f
 
 Documents have no extra Draft, Review, or remote-update status strip. **View Review**, **Review Remote Changes**, and **Update from Remote Version** remain available in the existing document and file menus where applicable. A deletion Draft explains the pending deletion in the document content. Conflict resolution and save failures stay visible at the operation; reading or archiving a notification does not publish, reconcile, or discard content.
 
-File menus use **Rename…** and **Delete…**. Their confirmations explain that the change is saved as a Draft and affects every project referencing the file after review and merge. **Remove from Project** only removes that project's reference.
+File menus use **Rename…** and **Delete…**. Their confirmations explain the Draft and publication target. Project publication affects its members; Org publication affects Projects using that Org resource. **Remove from Project** only removes that project's reference.
 
 ## Review requests
 
-Directory and multi-selection Review requests include open Organization Drafts carried by the selected Project. Every Draft must be synced and have a Server ID; directory operations and document synchronization also block the entry point.
+Directory and multi-selection Review requests include open Drafts with one publication owner. The Project-wide request collects Project Drafts. Org proposals are submitted independently. Every Draft must be synced and have a Server ID; directory operations and document synchronization also block the entry point.
 
 Behind Drafts, including those with conflicts, can open the request sheet. The sheet loads reconciliation candidates and asks the user to resolve conflicting files before updating the Drafts and creating one Review in the same transaction. The entry point does not require freshness to be current.
+
+The request sheet can record selected Project entries for an independent Org contribution after Project merge. The Project Review shows the linked Org PR, or a retryable creation failure. Org rejection never reverses Project publication.
+
+Verified published updates install automatically for unedited files. Pending editor text and Draft baselines remain protected; clean Drafts reconcile automatically and conflicting Drafts notify their authors.
 
 ## ZIP export
 

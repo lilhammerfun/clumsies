@@ -35,19 +35,6 @@ fn build_http_client(
         .map_err(DaemonError::Reqwest)
 }
 
-fn legacy_project_memory_read_only_error(resource_id: &str) -> DaemonError {
-    DaemonError::InvalidRequest(format!(
-        "legacy Project Memory {resource_id} is read-only; MCP mutations may target only selected Organization Memory"
-    ))
-}
-
-fn project_memory_authority_removed_error() -> DaemonError {
-    DaemonError::InvalidRequest(
-        "Project is a Draft carrier, not a Memory authority scope; store an Organization proposal"
-            .to_owned(),
-    )
-}
-
 #[derive(Default)]
 pub(crate) struct CredentialRecovery {
     last_attempt: Option<Instant>,
@@ -1380,18 +1367,24 @@ impl DaemonState {
     ) -> Result<DaemonDraftOperationResponse, DaemonError> {
         request.op.validate(request.resource)?;
         let has_text_update = request.op.has_text_update();
-        let is_mcp_target_mutation = request.source == Some(DaemonDraftOperationSource::McpStore)
-            && request.op.discard.is_none()
+        let is_project_target_mutation = request.op.discard.is_none()
+            && (request.scope == DaemonDraftScope::Project
+                || request.source == Some(DaemonDraftOperationSource::McpStore))
             && (request.op.update.is_some()
                 || request.op.rename.is_some()
                 || request.op.delete.is_some());
-        if has_text_update || is_mcp_target_mutation {
+        if has_text_update || is_project_target_mutation {
             let _sync_guard = self.inner.sync_lock.lock().await;
             let _mutation_guard = self.inner.draft_mutation_lock.lock().await;
             let request = if has_text_update {
                 self.materialize_text_update(request).await?
             } else {
-                self.normalize_mcp_target_mutation(request).await?
+                request
+            };
+            let request = if is_project_target_mutation {
+                self.normalize_project_target_mutation(request).await?
+            } else {
+                request
             };
             return self.persist_draft_operation(request).await;
         }
@@ -1412,10 +1405,28 @@ impl DaemonState {
         self.persist_draft_operation(request).await
     }
 
-    async fn normalize_mcp_target_mutation(
+    async fn normalize_project_target_mutation(
         &self,
         mut request: DaemonDraftOperationRequest,
     ) -> Result<DaemonDraftOperationRequest, DaemonError> {
+        if let Some(id) = request.draft_id.as_deref() {
+            let row: Option<(String, String)> = sqlx::query_as(
+                "SELECT project_id, resource_scope FROM local_drafts WHERE draft_id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.inner.pool)
+            .await?;
+            if let Some((project, scope)) = row
+                && (project != request.project_id
+                    || (request.source != Some(DaemonDraftOperationSource::McpStore)
+                        && scope != request.scope.as_str()))
+            {
+                return Err(DaemonError::InvalidRequest(
+                    "explicit Draft identity does not match the requested Project and scope"
+                        .to_owned(),
+                ));
+            }
+        }
         let target_id = request.op.target_id().ok_or_else(|| {
             DaemonError::InvalidRequest(
                 "target-backed MCP mutation requires a stable Memory resource id".to_owned(),
@@ -1428,7 +1439,7 @@ impl DaemonState {
         if let Some(local) = sqlx::query(
             "SELECT draft_id, resource_scope
              FROM local_drafts
-             WHERE draft_id = $1
+             WHERE (draft_id = $1 OR draft_id = $4)
                AND project_id = $2
                AND resource_kind = $3
                AND target_id IS NULL
@@ -1437,6 +1448,7 @@ impl DaemonState {
         .bind(target_id)
         .bind(&request.project_id)
         .bind(request.resource.as_str())
+        .bind(request.draft_id.as_deref())
         .fetch_optional(&self.inner.pool)
         .await?
         {
@@ -1444,17 +1456,81 @@ impl DaemonState {
             request.scope = daemon_draft_scope_from_str(
                 local.try_get::<String, _>("resource_scope")?.as_str(),
             )?;
+            let id = request.draft_id.clone().expect("resolved create draft");
+            if let Some(DaemonUpdateDraftOperation::Content(update)) = &mut request.op.update {
+                update.id = id.clone();
+            }
+            if let Some(rename) = &mut request.op.rename {
+                rename.id = id.clone();
+            }
+            if let Some(delete) = &mut request.op.delete {
+                delete.id = id;
+            }
             return Ok(request);
         }
         let resource = self
             .load_stable_mutation_target(&request, target_id)
             .await?;
-        request.scope = match resource.scope {
-            SourceScope::Org => DaemonDraftScope::Org,
-            SourceScope::Project => {
-                return Err(legacy_project_memory_read_only_error(&resource.resource_id));
+        request.scope = DaemonDraftScope::Project;
+        if resource.scope == SourceScope::Org {
+            if request.op.delete.is_some() {
+                return Err(DaemonError::InvalidRequest(
+                    "Remove an Organization reference using Project selections; deleting shared Organization Memory requires an explicit Org proposal".to_owned(),
+                ));
             }
-        };
+            let commit_id = commit_sync::current_base_commit_id(
+                &self.inner.pool,
+                &request.project_id,
+                DaemonDraftScope::Project,
+            )
+            .await?
+            .ok_or_else(|| {
+                DaemonError::InvalidRequest(
+                    "Sync the Project snapshot before adapting Organization Memory".to_owned(),
+                )
+            })?;
+            let content = request
+                .op
+                .update
+                .as_ref()
+                .and_then(|update| update.content())
+                .cloned()
+                .unwrap_or_else(|| {
+                    DaemonDraftContent::from_resource(
+                        request.resource,
+                        resource.content.clone().unwrap_or_default(),
+                    )
+                });
+            let mut content = content;
+            content.org_source = Some(crate::types::OrgMemorySource {
+                resource_id: resource.resource_id,
+                commit_id: commit_id.clone(),
+            });
+            let path = request
+                .op
+                .rename
+                .as_ref()
+                .map(|rename| rename.new_path.clone())
+                .unwrap_or(resource.path);
+            let description = request.op.update.as_ref().and_then(|update| match update {
+                DaemonUpdateDraftOperation::Content(update) => update.description.clone(),
+                DaemonUpdateDraftOperation::Text(update) => update.description.clone(),
+            });
+            request.op = DaemonDraftOperation {
+                create: Some(DaemonCreateDraftOperation {
+                    path,
+                    content,
+                    description,
+                }),
+                update: None,
+                rename: None,
+                delete: None,
+                discard: None,
+            };
+            request.draft_id = None;
+            request.base_commit_id = Some(commit_id);
+            request.op.validate(request.resource)?;
+        }
         Ok(request)
     }
 
@@ -1505,14 +1581,10 @@ impl DaemonState {
         let resource = self
             .load_stable_mutation_target(&request, &update.id)
             .await?;
-        match resource.scope {
-            SourceScope::Org => request.scope = DaemonDraftScope::Org,
-            SourceScope::Project
-                if request.source == Some(DaemonDraftOperationSource::McpStore) =>
-            {
-                return Err(legacy_project_memory_read_only_error(&resource.resource_id));
-            }
-            SourceScope::Project => request.scope = DaemonDraftScope::Project,
+        if resource.scope == SourceScope::Project
+            || request.source == Some(DaemonDraftOperationSource::McpStore)
+        {
+            request.scope = DaemonDraftScope::Project;
         }
         if resource.content_hash != update.expected_hash {
             return Err(DaemonError::State {
@@ -1583,11 +1655,6 @@ impl DaemonState {
         &self,
         request: DaemonDraftOperationRequest,
     ) -> Result<DaemonDraftOperationResponse, DaemonError> {
-        if request.scope == DaemonDraftScope::Project
-            && (request.op.discard.is_none() || request.draft_id.is_none())
-        {
-            return Err(project_memory_authority_removed_error());
-        }
         let new_draft_base_commit_id = match request.base_commit_id.as_deref() {
             Some(commit_id) => Some(commit_id.to_owned()),
             None => {
@@ -1655,7 +1722,7 @@ impl DaemonState {
                 commit_sync::current_base_commit_id(
                     &self.inner.pool,
                     &request.project_id,
-                    DaemonDraftScope::Org,
+                    DaemonDraftScope::Project,
                 )
                 .await?
             }
@@ -1684,7 +1751,7 @@ impl DaemonState {
                         draft_id: None,
                         base_commit_id: request.base_commit_id.clone(),
                         project_id: request.project_id.clone(),
-                        scope: DaemonDraftScope::Org,
+                        scope: DaemonDraftScope::Project,
                         resource: DaemonDraftResourceKind::Memory,
                         op,
                         source: Some(DaemonDraftOperationSource::Desktop),
@@ -1907,6 +1974,12 @@ impl DaemonState {
                 {
                     first_error = Some(error);
                 }
+            }
+            if sync_drafts
+                && sync_commits
+                && let Err(error) = crate::draft::reconcile_uploaded_drafts(self, project_id).await
+            {
+                first_error.get_or_insert(error);
             }
             match first_error {
                 Some(error) => Err(error),

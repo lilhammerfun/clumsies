@@ -183,6 +183,7 @@ impl StoreResource {
 
     fn content(self, body: String, description: Option<String>) -> DaemonDraftContent {
         DaemonDraftContent {
+            org_source: None,
             description,
             content: body,
         }
@@ -368,7 +369,7 @@ impl StoreInput {
                 // The bound Project carries this LocalDraft and is the only place
                 // its overlay is visible before merge. Org is the proposal's
                 // authority target, not a Project and not directly writable here.
-                scope: DaemonDraftScope::Org,
+                scope: DaemonDraftScope::Project,
                 resource,
                 op: operation,
                 source: Some(DaemonDraftOperationSource::McpStore),
@@ -416,7 +417,7 @@ pub fn tool_definitions_with_guidelines(guidelines_path: &str) -> Vec<Value> {
 fn memory_tool_definition(guidelines_path: &str) -> Value {
     let guidelines = memory_guidelines_instructions(guidelines_path);
     let description = format!(
-        "Consult Clumsies project memory before answering project questions, planning, implementing, debugging, or reviewing, even when the user does not mention memory. Follow applicable host memory policies and additionally query Clumsies, even when host memory has already been consulted. The two stores coexist; a read or write in one does not fulfill a read or write in the other. Recall decisions, conventions, procedures, and project-maintained skills, or remember, record, correct, update, or delete project knowledge when explicitly requested. Respect explicit user requests to skip Clumsies or use only another source or destination. Activate ranked fragments, load complete resources by ID or path, or store Project-carried proposal Drafts. Ordinary development and current-task reminders do not authorize Clumsies memory writes. Store never writes Organization authority; publication requires an authorized Review decision and merge. Report the saved resource and Draft status. {guidelines} Pass exactly one tagged operation in op."
+        "Consult Clumsies project memory before answering project questions, planning, implementing, debugging, or reviewing, even when the user does not mention memory. Follow applicable host memory policies and additionally query Clumsies, even when host memory has already been consulted. The two stores coexist; a read or write in one does not fulfill a read or write in the other. Recall decisions, conventions, procedures, and project-maintained skills, or remember, record, correct, update, or delete project knowledge when explicitly requested. Respect explicit user requests to skip Clumsies or use only another source or destination. Activate ranked fragments, load complete resources by ID or path, or store Project-owned proposal Drafts. Ordinary development and current-task reminders do not authorize Clumsies memory writes. Store never writes Organization authority; publication requires an authorized Review decision and merge. Report the saved resource and Draft status. {guidelines} Pass exactly one tagged operation in op."
     );
     json!({
         "name": MEMORY_TOOL_NAME,
@@ -469,7 +470,7 @@ fn memory_tool_definition(guidelines_path: &str) -> Value {
                         },
                         "store": {
                             "type": "object",
-                            "description": "Create, update, rename, delete, or discard a Clumsies Memory proposal Draft when the user explicitly requests memory maintenance, such as remembering, recording, correcting, updating, or deleting project knowledge. Ordinary development and current-task reminders do not authorize writes. Before merge its overlay affects only the bound Project's Effective Memory. Before update, load the complete resource and use its content_hash with exact text replacements; update never accepts a complete document body. A successful call means durable local persistence and queued synchronization, not an authorized Review decision, merge, or Organization authority publication. Follow the project memory conventions identified in the tool description and report the saved resource and Draft status.",
+                            "description": "Create, update, rename, delete, or discard a Clumsies Memory proposal Draft when the user explicitly requests memory maintenance, such as remembering, recording, correcting, updating, or deleting project knowledge. Ordinary development and current-task reminders do not authorize writes. Edits to selected Org references create explicit Project adaptations. Before merge its overlay affects only the bound Project's Effective Memory. Before update, load the complete resource and use its content_hash with exact text replacements; update never accepts a complete document body. A successful call means durable local persistence and queued synchronization, not an authorized Review decision, merge, or Organization authority publication. Follow the project memory conventions identified in the tool description and report the saved resource and Draft status.",
                             "properties": {
                                 "resource": {
                                     "type": "string",
@@ -625,7 +626,7 @@ mod tests {
         let AgentRuntimeRequest::Store(request) = request else {
             panic!("unexpected request variant");
         };
-        assert_eq!(request.scope, DaemonDraftScope::Org);
+        assert_eq!(request.scope, DaemonDraftScope::Project);
         assert_eq!(request.resource, DaemonDraftResourceKind::Memory);
         assert_eq!(request.source, Some(DaemonDraftOperationSource::McpStore));
         assert!(request.op.create.is_some());

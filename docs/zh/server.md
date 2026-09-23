@@ -31,7 +31,7 @@ Draft(base_commit_id)
 
 Project 当前选择通过 `/api/v1/projects/{project_id}/org-selections` 管理。daemon 通过 `/api/v1/projects/{project_id}/commit-state` 和 Commit payload 安装 Project 投影，再在本地叠加该 Project 的 `open`/`submitted` Draft，才得到 Agent 实际读取的 Effective Memory。
 
-需要特别区分旧接口：`GET /api/v1/projects/{project_id}/memories` 及其详情路由只读取遗留的 `scope=project` 权威行，不是 Project 选择投影，也不是包含 Draft overlay 的 Effective Memory。当前主链不能用这组接口解释 Project 的有效视图。
+需要区分读取边界：`GET /api/v1/projects/{project_id}/memories` 及其详情路由读取项目拥有的已发布 `scope=project` 资源，不是 Project 选择投影，也不是包含 Draft overlay 的 Effective Memory。当前主链不能用这组接口解释 Project 的有效视图。
 
 Organization 管理员可用 `GET /api/v1/admin/memory-export` 导出全部 Organization Memory（包括历史 `issues/` 路径）、Draft 及原始操作、Project 选择和个人 Bundle，作为可重复验证的迁移输入。
 

@@ -13189,14 +13189,34 @@
     },
     "Select notification": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Select notification" } },
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "选择通知" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select notification"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择通知"
+          }
+        }
       }
     },
     "Select notification: %@": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Select notification: %@" } },
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "选择通知：%@" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select notification: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择通知：%@"
+          }
+        }
       }
     },
     "Select Project": {
@@ -17968,6 +17988,358 @@
           "stringUnit": {
             "state": "translated",
             "value": "不能移除项目所有者或降低其角色。"
+          }
+        }
+      }
+    },
+    "After Project merge, propose an Organization contribution": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After Project merge, propose an Organization contribution"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目 PR 合并后，创建组织贡献提案"
+          }
+        }
+      }
+    },
+    "New Organization Memory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Organization Memory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新建组织记忆"
+          }
+        }
+      }
+    },
+    "Open Organization contribution": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Organization contribution"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开组织贡献 PR"
+          }
+        }
+      }
+    },
+    "Organization contribution is waiting to be created.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Organization contribution is waiting to be created."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "组织贡献 PR 等待创建。"
+          }
+        }
+      }
+    },
+    "Organization destination": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Organization destination"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "组织内的目标"
+          }
+        }
+      }
+    },
+    "Organization path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Organization path"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "组织记忆路径"
+          }
+        }
+      }
+    },
+    "Propose New Project Memory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Propose New Project Memory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新建项目记忆提案"
+          }
+        }
+      }
+    },
+    "Propose Organization Change…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Propose Organization Change…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提议修改组织记忆…"
+          }
+        }
+      }
+    },
+    "Publishes to Organization Memory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Publishes to Organization Memory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发布到组织记忆"
+          }
+        }
+      }
+    },
+    "Publishes to Project Memory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Publishes to Project Memory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发布到项目记忆"
+          }
+        }
+      }
+    },
+    "Refresh Organization Memory and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh Organization Memory and try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请刷新组织记忆后重试。"
+          }
+        }
+      }
+    },
+    "Retry Organization contribution": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry Organization contribution"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重试创建组织贡献 PR"
+          }
+        }
+      }
+    },
+    "Select at least one document to contribute.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select at least one document to contribute."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请至少选择一份要贡献的文档。"
+          }
+        }
+      }
+    },
+    "Selected documents will be proposed to the Organization after Project merge.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected documents will be proposed to the Organization after Project merge."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目 PR 合并后，将为选中文档创建组织贡献提案。"
+          }
+        }
+      }
+    },
+    "Sync Project Memory before creating a Draft.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync Project Memory before creating a Draft."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先同步项目记忆，再创建草稿。"
+          }
+        }
+      }
+    },
+    "The Organization proposal is reviewed separately. Project publication does not depend on its approval.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Organization proposal is reviewed separately. Project publication does not depend on its approval."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "组织提案独立审阅，不影响项目记忆的发布。"
+          }
+        }
+      }
+    },
+    "The deletion is saved as a draft. After review and merge, these %lld files will be deleted from their publication owner.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The deletion is saved as a draft. After review and merge, these %lld files will be deleted from their publication owner."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除操作将保存为草稿，审阅并合并后才会从所属项目或组织中删除这 %lld 个文件。"
+          }
+        }
+      }
+    },
+    "The deletion is saved as a draft. After review and merge, this file will be deleted from its publication owner.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The deletion is saved as a draft. After review and merge, this file will be deleted from its publication owner."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除操作将保存为草稿，审阅并合并后才会从所属项目或组织中删除文件。"
+          }
+        }
+      }
+    },
+    "The rename is saved as a Project draft and takes effect for project members after review and merge.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The rename is saved as a Project draft and takes effect for project members after review and merge."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重命名将保存为项目草稿，审阅并合并后对项目成员生效。"
+          }
+        }
+      }
+    },
+    "View source Project Review": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View source Project Review"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看来源项目 PR"
+          }
+        }
+      }
+    },
+    "Your draft needs conflict resolution": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your draft needs conflict resolution"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的草稿有冲突需要处理"
+          }
+        }
+      }
+    },
+    "All drafts in a Review must publish to the same Project or Organization.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All drafts in a Review must publish to the same Project or Organization."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一个 PR 中的草稿必须发布到同一个项目或组织。"
           }
         }
       }

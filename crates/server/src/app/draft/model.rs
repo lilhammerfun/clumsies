@@ -26,6 +26,11 @@ pub(crate) fn validate_draft_operation_resource(
     }
     if let Some(content) = operation.content.as_ref() {
         validate_draft_content_shape(content)?;
+        if content.org_source.is_some() && operation.resource.scope != ResourceScope::Project {
+            return Err(ServerError::InvalidRequest(
+                "only Project Memory can adapt an Organization resource".to_owned(),
+            ));
+        }
     }
     if let Some(path) = operation.resource.path.as_deref() {
         validate_resource_path(path)?;
@@ -62,34 +67,6 @@ pub(crate) fn validate_draft_operation_resource(
             "draft operation fields do not match its action".to_owned(),
         ))
     }
-}
-
-/// Reject legacy proposal scopes that may no longer enter the publication workflow.
-///
-/// # Errors
-/// Rejects legacy scopes that cannot enter the active publication workflow.
-pub(crate) fn ensure_publishable_draft_scope(scope: ResourceScope) -> Result<(), ServerError> {
-    if scope == ResourceScope::Project {
-        return Err(ServerError::InvalidRequest(
-            "Project is not a Memory authority scope; publish an Organization-scoped Draft"
-                .to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-/// Reject proposal scopes retired from the active authoring workflow.
-///
-/// # Errors
-/// Rejects scopes retired from the current authoring workflow.
-pub(crate) fn ensure_writable_draft_scope(scope: ResourceScope) -> Result<(), ServerError> {
-    if scope == ResourceScope::Project {
-        return Err(ServerError::InvalidRequest(
-            "Project is a Draft carrier, not a Memory authority scope; create an Organization-scoped Draft"
-                .to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 /// Require new-resource proposals to use a coherent create/edit sequence without deletion.
@@ -151,6 +128,7 @@ pub(crate) fn content_for_kind(
     description: Option<String>,
 ) -> DraftResourceContent {
     DraftResourceContent {
+        org_source: None,
         description,
         content,
     }
@@ -173,7 +151,7 @@ pub(crate) fn apply_operations_to_state(
                 state = ReconciliationResourceState {
                     exists: true,
                     resource: operation.input.resource.clone(),
-                    content: Some(content),
+                    content: merge_draft_contents(state.content, Some(content))?,
                 };
             }
             DraftOperationAction::Update => {
@@ -182,9 +160,20 @@ pub(crate) fn apply_operations_to_state(
                         "update operation targets a resource absent from the draft base".to_owned(),
                     ));
                 }
-                state.content = Some(operation.input.content.clone().ok_or_else(|| {
+                let mut content = operation.input.content.clone().ok_or_else(|| {
                     ServerError::InvalidRequest("update operation requires content".to_owned())
-                })?);
+                })?;
+                let origin = state
+                    .content
+                    .as_ref()
+                    .and_then(|content| content.org_source.clone());
+                if content.org_source.is_some() && content.org_source != origin {
+                    return Err(ServerError::InvalidRequest(
+                        "an adaptation's source cannot be changed by an update".to_owned(),
+                    ));
+                }
+                content.org_source = origin;
+                state.content = Some(content);
             }
             DraftOperationAction::Rename => {
                 if !state.exists {
@@ -351,7 +340,23 @@ pub(crate) fn merge_resource_states(
         Some(ReconciliationResourceState {
             exists: true,
             resource,
-            content: merged_text.map(|content| content_for_kind("memory", content, None)),
+            content: merged_text.map(|content| DraftResourceContent {
+                org_source: current
+                    .content
+                    .as_ref()
+                    .and_then(|content| content.org_source.clone())
+                    .or_else(|| {
+                        draft
+                            .content
+                            .as_ref()
+                            .and_then(|content| content.org_source.clone())
+                    }),
+                description: draft
+                    .content
+                    .as_ref()
+                    .and_then(|content| content.description.clone()),
+                content,
+            }),
         }),
         Vec::new(),
     )
@@ -400,7 +405,12 @@ pub(super) fn reconciliation_merge_preview(
         {
             Ok(text) | Err(text) => text,
         };
-        state.content = Some(content_for_kind("memory", text, None));
+        let mut content = content_for_kind("memory", text, None);
+        content.org_source = draft
+            .content
+            .as_ref()
+            .and_then(|content| content.org_source.clone());
+        state.content = Some(content);
     }
     super::dto::ReconciliationMergePreview {
         state,
@@ -524,7 +534,10 @@ pub(crate) fn materialize_draft_operations(
         match operation.input.action {
             DraftOperationAction::Create => {
                 materialized.resource.path = operation.input.resource.path.clone();
-                materialized.content = operation.input.content.clone();
+                materialized.content = merge_draft_contents(
+                    materialized.content.take(),
+                    operation.input.content.clone(),
+                )?;
             }
             DraftOperationAction::Update => {
                 materialized.content = merge_draft_contents(
@@ -549,8 +562,18 @@ pub(crate) fn merge_draft_contents(
     base: Option<DraftResourceContent>,
     update: Option<DraftResourceContent>,
 ) -> Result<Option<DraftResourceContent>, ServerError> {
-    let _ = base;
-    Ok(update)
+    let Some(mut update) = update else {
+        return Ok(base);
+    };
+    if let Some(base) = base {
+        if update.org_source.is_some() && update.org_source != base.org_source {
+            return Err(ServerError::InvalidRequest(
+                "an adaptation's source cannot be changed by an edit".to_owned(),
+            ));
+        }
+        update.org_source = base.org_source;
+    }
+    Ok(Some(update))
 }
 
 /// Decode a persisted proposal mutation, rejecting unknown actions.
@@ -646,6 +669,7 @@ mod tests {
                 path: Some(path.to_owned()),
             },
             content: content.map(|content| DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: content.to_owned(),
             }),
@@ -689,6 +713,7 @@ mod tests {
     fn memory_content_must_not_be_blank() {
         assert!(
             validate_draft_content_shape(&DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: String::new(),
             })
@@ -696,6 +721,7 @@ mod tests {
         );
         assert!(
             validate_draft_content_shape(&DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: "  \n".to_owned(),
             })
@@ -703,6 +729,7 @@ mod tests {
         );
         assert!(
             validate_draft_content_shape(&DraftResourceContent {
+                org_source: None,
                 description: None,
                 content: "# Testing\n\nRun focused tests.".to_owned(),
             })

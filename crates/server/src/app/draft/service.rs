@@ -1,14 +1,14 @@
 //! Draft use cases, reconciliation, and transaction coordination.
 
 use super::model::{
-    apply_operations_to_state, diff_resource_states, draft_status, ensure_writable_draft_scope,
-    merge_resource_states, state_hash, validate_draft_operation_resource, validate_draft_resource,
+    apply_operations_to_state, diff_resource_states, draft_status, merge_resource_states,
+    state_hash, validate_draft_operation_resource, validate_draft_resource,
     validate_new_resource_draft_operations,
 };
 use super::repository;
 use super::repository::{
     insert_draft_operation, path_is_occupied, resolve_org_draft_target_id,
-    resource_state_at_commit, validate_org_draft_target_is_selected,
+    resource_state_at_commit, validate_org_draft_target,
 };
 use crate::app::auth::AuthPrincipal;
 use crate::app::commit::{
@@ -158,6 +158,42 @@ pub async fn create_draft_reconciliation_candidate(
     Ok(candidate)
 }
 
+/// Synchronize an author's clean proposal; conflicting content remains at its original base.
+///
+/// # Errors
+/// Rejects inaccessible or stale proposals and propagates persistence errors without partial edits.
+pub async fn auto_rebase_draft(
+    pool: &sqlx::PgPool,
+    principal: &AuthPrincipal,
+    draft_id: &str,
+    request: CreateDraftReconciliationCandidateRequest,
+) -> Result<DraftDetail, ServerError> {
+    ensure_draft_owner(pool, principal, draft_id).await?;
+    let mut tx = pool.begin().await?;
+    let detail = load_draft_detail(&mut tx, draft_id).await?;
+    if detail.draft.version != request.expected_draft_version {
+        return Err(ServerError::version_conflict(
+            "draft",
+            request.expected_draft_version,
+            detail.draft.version,
+        ));
+    }
+    if detail.draft.coordination.freshness == DraftFreshness::Behind {
+        let candidate = create_reconciliation_candidate_in_tx(
+            &mut tx,
+            draft_id,
+            request.expected_draft_version,
+        )
+        .await?;
+        if candidate.status == ReconciliationCandidateStatus::Clean {
+            auto_rebase_draft_in_tx(&mut tx, principal, &candidate).await?;
+        }
+    }
+    let detail = load_draft_detail(&mut tx, draft_id).await?;
+    tx.commit().await?;
+    Ok(detail)
+}
+
 /// Return an owned proposal's candidate with validity checked against current references.
 ///
 /// # Errors
@@ -299,7 +335,7 @@ pub async fn list_draft_events(
 ///
 /// # Errors
 /// Rejects invalid input or lifecycle state, and propagates persistence failures.
-pub(crate) async fn canonicalize_org_draft_targets_are_selected(
+pub(crate) async fn canonicalize_org_draft_targets_in_org(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
     org_id: &str,
@@ -314,7 +350,7 @@ pub(crate) async fn canonicalize_org_draft_targets_are_selected(
         return Ok(());
     }
     if draft_resource.id.is_some() {
-        canonicalize_org_draft_target_is_selected(
+        canonicalize_org_draft_target_in_org(
             tx,
             project_id,
             org_id,
@@ -333,11 +369,11 @@ pub(crate) async fn canonicalize_org_draft_targets_are_selected(
         .await?
     {
         draft_resource.id = Some(resource_id);
-        validate_org_draft_target_is_selected(tx, project_id, org_id, draft_resource).await?;
+        validate_org_draft_target(tx, org_id, draft_resource).await?;
     }
     for operation in operations {
         if operation.action != DraftOperationAction::Create {
-            canonicalize_org_draft_target_is_selected(
+            canonicalize_org_draft_target_in_org(
                 tx,
                 project_id,
                 org_id,
@@ -356,7 +392,7 @@ pub(crate) async fn canonicalize_org_draft_targets_are_selected(
 ///
 /// # Errors
 /// Rejects invalid input or lifecycle state, and propagates persistence failures.
-pub(crate) async fn validate_org_draft_operation_inputs_are_selected(
+pub(crate) async fn validate_org_draft_operation_inputs_in_org(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
     org_id: &str,
@@ -371,7 +407,7 @@ pub(crate) async fn validate_org_draft_operation_inputs_are_selected(
     }
     for operation in operations {
         if operation.action != DraftOperationAction::Create {
-            validate_org_draft_target_is_selected_at_base(
+            validate_org_draft_target_in_org_at_base(
                 tx,
                 project_id,
                 org_id,
@@ -391,7 +427,7 @@ pub(crate) async fn validate_org_draft_operation_inputs_are_selected(
 ///
 /// # Errors
 /// Rejects invalid input or lifecycle state, and propagates persistence failures.
-pub(crate) async fn validate_stored_org_draft_operations_are_selected(
+pub(crate) async fn validate_stored_org_draft_operations_in_org(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
     org_id: &str,
@@ -406,7 +442,7 @@ pub(crate) async fn validate_stored_org_draft_operations_are_selected(
     }
     for operation in operations {
         if operation.input.action != DraftOperationAction::Create {
-            validate_org_draft_target_is_selected_at_base(
+            validate_org_draft_target_in_org_at_base(
                 tx,
                 project_id,
                 org_id,
@@ -425,9 +461,9 @@ pub(crate) async fn validate_stored_org_draft_operations_are_selected(
 ///
 /// # Errors
 /// Rejects invalid input or lifecycle state, and propagates persistence failures.
-pub(crate) async fn canonicalize_org_draft_target_is_selected(
+pub(crate) async fn canonicalize_org_draft_target_in_org(
     tx: &mut Transaction<'_, Postgres>,
-    project_id: &str,
+    _project_id: &str,
     org_id: &str,
     base_commit_id: Option<&str>,
     resource: &mut DraftResourceRef,
@@ -436,7 +472,7 @@ pub(crate) async fn canonicalize_org_draft_target_is_selected(
         resource.id =
             resolve_org_draft_target_id(tx, org_id, base_commit_id, resource, true).await?;
     }
-    validate_org_draft_target_is_selected(tx, project_id, org_id, resource).await
+    validate_org_draft_target(tx, org_id, resource).await
 }
 
 /// Require the selected target identity to exist at the proposal's ancestor snapshot.
@@ -445,7 +481,7 @@ pub(crate) async fn canonicalize_org_draft_target_is_selected(
 ///
 /// # Errors
 /// Rejects invalid input or lifecycle state, and propagates persistence failures.
-pub(crate) async fn validate_org_draft_target_is_selected_at_base(
+pub(crate) async fn validate_org_draft_target_in_org_at_base(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
     org_id: &str,
@@ -453,14 +489,8 @@ pub(crate) async fn validate_org_draft_target_is_selected_at_base(
     resource: &DraftResourceRef,
 ) -> Result<(), ServerError> {
     let mut canonical = resource.clone();
-    canonicalize_org_draft_target_is_selected(
-        tx,
-        project_id,
-        org_id,
-        base_commit_id,
-        &mut canonical,
-    )
-    .await
+    canonicalize_org_draft_target_in_org(tx, project_id, org_id, base_commit_id, &mut canonical)
+        .await
 }
 
 /// Fingerprint the proposal's final resource state for reconciliation and approval checks.
@@ -544,9 +574,15 @@ pub(crate) async fn append_draft_operation_in_tx(
         .await?
         .ok_or_else(|| ServerError::not_found("draft", draft_id))?;
     let identity_scope = resource_scope(identity.resource_scope.clone().as_str())?;
-    ensure_writable_draft_scope(identity_scope)?;
     if identity_scope == ResourceScope::Org && !org_coordination_already_locked {
         lock_org_draft_selection_coordination_for_project(tx, &identity.project_id.clone()).await?;
+    }
+    if let Some(source) = operation
+        .content
+        .as_ref()
+        .and_then(|content| content.org_source.as_ref())
+    {
+        crate::app::memory::validate_org_source(tx, &identity.project_id, source).await?;
     }
     let row = repository::lock_append_state(tx, draft_id)
         .await?
@@ -584,7 +620,7 @@ pub(crate) async fn append_draft_operation_in_tx(
         let project_id: String = row.project_id.clone();
         let org_id = project_org_id(tx, &project_id).await?;
         let base_commit_id: Option<String> = row.base_commit_id.clone();
-        canonicalize_org_draft_target_is_selected(
+        canonicalize_org_draft_target_in_org(
             tx,
             &project_id,
             &org_id,
@@ -908,6 +944,9 @@ pub(crate) async fn create_reconciliation_candidate_in_tx(
         },
     )
     .await?;
+    if status == ReconciliationCandidateStatus::Conflicts {
+        crate::app::inbox::notify_draft_conflict(tx, draft_id, &candidate_id).await?;
+    }
     load_reconciliation_candidate(tx, draft_id, &candidate_id).await
 }
 
@@ -1004,7 +1043,13 @@ async fn apply_rebase_in_tx(
         }
         RebaseAuthority::Automatic(principal) => {
             if row.author_user_id != principal.user_id {
-                principal.require_org_admin()?;
+                match resource_scope(&row.resource_scope)? {
+                    ResourceScope::Org => principal.require_org_admin()?,
+                    ResourceScope::Project => {
+                        crate::app::project::ensure_project_admin_tx(tx, principal, &row.project_id)
+                            .await?
+                    }
+                }
             }
             &principal.user_id
         }
@@ -1164,9 +1209,17 @@ pub(crate) async fn create_draft_in_tx(
     author_user_id: &str,
     mut request: CreateDraftRequest,
 ) -> Result<String, ServerError> {
-    ensure_writable_draft_scope(request.resource.scope)?;
     if request.resource.scope == ResourceScope::Org {
         lock_org_draft_selection_coordination_for_project(tx, &request.project_id).await?;
+    }
+    for operation in &request.operations {
+        if let Some(source) = operation
+            .content
+            .as_ref()
+            .and_then(|content| content.org_source.as_ref())
+        {
+            crate::app::memory::validate_org_source(tx, &request.project_id, source).await?;
+        }
     }
     let org_id = project_org_id(tx, &request.project_id).await?;
     user_ref(tx, author_user_id).await?;
@@ -1184,7 +1237,7 @@ pub(crate) async fn create_draft_in_tx(
     }
     validate_new_resource_draft_operations(&request.operations)?;
     if request.resource.scope == ResourceScope::Org {
-        canonicalize_org_draft_targets_are_selected(
+        canonicalize_org_draft_targets_in_org(
             tx,
             &request.project_id,
             &org_id,

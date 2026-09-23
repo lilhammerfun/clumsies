@@ -3,14 +3,15 @@ import SwiftUI
 
 struct ReviewRequestSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var catalog: MemoryCatalog
 
     @StateObject private var model: ReviewRequestModel
 
-    init(initialTitle: String,
+    init(initialTitle: String, drafts: [LocalDraft] = [],
          loadCandidates: @escaping () async throws -> [DraftReconciliationCandidate],
-         onSubmit: @escaping (String, String, [ReviewDraftReconciliation]) async throws -> Void) {
+         onSubmit: @escaping (String, String, [ReviewDraftReconciliation], [OrgContributionEntry]) async throws -> Void) {
         _model = StateObject(wrappedValue: ReviewRequestModel(
-            initialTitle: initialTitle, loadCandidates: loadCandidates, onSubmit: onSubmit
+            initialTitle: initialTitle, drafts: drafts, loadCandidates: loadCandidates, onSubmit: onSubmit
         ))
     }
 
@@ -27,7 +28,8 @@ struct ReviewRequestSheet: View {
                     try await self.model.onSubmit(
                         self.model.normalizedTitle,
                         self.model.normalizedDescription,
-                        [.init(candidate: candidate, resolvedState: resolvedState)]
+                        [.init(candidate: candidate, resolvedState: resolvedState)],
+                        self.model.contributionEntries
                     )
                 }
                 .frame(minWidth: 780, idealWidth: 980, minHeight: 560, idealHeight: 680)
@@ -65,6 +67,41 @@ struct ReviewRequestSheet: View {
                 } footer: {
                     FormErrorMessage(message: model.errorMessage)
                 }
+                if model.canContribute {
+                    Section {
+                        Toggle("After Project merge, propose an Organization contribution", isOn: $model.contributesToOrg)
+                        if model.contributesToOrg {
+                            ForEach(model.contributableDrafts) { draft in
+                                Toggle(draft.document.path, isOn: Binding(
+                                    get: { model.contributionDraftIds.contains(draft.id) },
+                                    set: { selected in
+                                        if selected { model.contributionDraftIds.insert(draft.id) }
+                                        else { model.contributionDraftIds.remove(draft.id) }
+                                    }
+                                ))
+                                if model.contributionDraftIds.contains(draft.id) {
+                                    Picker("Organization destination", selection: Binding(
+                                        get: { model.contributionTargets[draft.id] ?? "" },
+                                        set: { model.contributionTargets[draft.id] = $0 }
+                                    )) {
+                                        Text("New Organization Memory").tag("")
+                                        ForEach(catalog.resources.filter { $0.scope == .org }) { resource in
+                                            Text(resource.document.path).tag(resource.id)
+                                        }
+                                    }
+                                    if (model.contributionTargets[draft.id] ?? "").isEmpty {
+                                        TextField("Organization path", text: Binding(
+                                            get: { model.contributionPaths[draft.id] ?? draft.document.path },
+                                            set: { model.contributionPaths[draft.id] = $0 }
+                                        ))
+                                    }
+                                }
+                            }
+                            Text("The Organization proposal is reviewed separately. Project publication does not depend on its approval.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             .formStyle(.grouped)
             .disabled(model.isSubmitting)
@@ -77,7 +114,7 @@ struct ReviewRequestSheet: View {
                 }
             )
         }
-        .frame(width: 480, height: 270)
+        .frame(width: 520, height: model.canContribute ? (model.contributesToOrg ? 560 : 340) : 270)
     }
 
     private var batchConfirmation: some View {

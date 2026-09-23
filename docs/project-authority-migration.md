@@ -2,6 +2,8 @@
 
 Date: 2026-08-26 · Migration format: version 1
 
+This is the historical Organization-only cutover. Its target is superseded by the accepted [Project and Organization ownership decision](/project-org-memory-ownership), implemented by additive migrations that preserve existing identities. The commands below perform the old cutover, not the new migration.
+
 ## Target model
 
 Organization is the only active Memory authority. Project remains responsible

@@ -901,6 +901,7 @@ async fn load_effective_memory_under_storage_guard(
     let _active_storage = super::project_storage::resolve_active(state, project_id).await?;
 
     let mut resources = BTreeMap::<String, EffectiveResource>::new();
+    let mut adaptations = HashMap::<String, String>::new();
     if let (Some(root_path), Some(base_commit_id)) = (
         cache.active_generation_path.as_deref(),
         cache.commit_id.as_deref(),
@@ -931,6 +932,9 @@ async fn load_effective_memory_under_storage_guard(
             .map(|blob| (blob.blob_id, blob.content))
             .collect::<HashMap<_, _>>();
         for entry in payload.tree.entries {
+            if let Some(source) = &entry.org_source {
+                adaptations.insert(entry.id.clone(), source.resource_id.clone());
+            }
             let Some(kind) = overlay::cached_memory_kind(entry.kind) else {
                 continue;
             };
@@ -973,8 +977,22 @@ async fn load_effective_memory_under_storage_guard(
     }
 
     for draft in overlay::load_draft_overlays(&state.inner.pool, project_id).await? {
+        for (_, _, operation) in &draft.operations {
+            if let Some(create) = &operation.create
+                && let Some(source) = &create.content.org_source
+            {
+                adaptations.insert(draft.draft_id.clone(), source.resource_id.clone());
+            }
+        }
         overlay::apply_draft_overlay(project_id, &mut resources, draft)?;
     }
+    let adapted_sources = adaptations
+        .into_iter()
+        .filter_map(|(id, source)| resources.contains_key(&id).then_some(source))
+        .collect::<std::collections::HashSet<_>>();
+    resources.retain(|id, resource| {
+        resource.source.scope != SourceScope::Org || !adapted_sources.contains(id)
+    });
     let source_resources = resources
         .into_values()
         .map(|resource| resource.source)
@@ -1823,6 +1841,7 @@ mod tests {
                         DaemonContentDraftUpdate {
                         id: "rule_testing".to_owned(),
                         content: DaemonDraftContent {
+                            org_source: None,
                             description: None,
                             content: "# Testing\n\nTesting now covers BM25, vectors, RRF, and reranking."
                                 .to_owned(),
@@ -2342,7 +2361,7 @@ mod tests {
         let loaded = service
             .load_memory(LoadMemoryRequest {
                 project_id: "prj_test".to_owned(),
-                ids: vec!["rule_testing".to_owned()],
+                ids: vec![stored.draft_id.clone()],
                 known_hashes: BTreeMap::new(),
             })
             .await
@@ -2362,6 +2381,7 @@ mod tests {
         // BEGIN IMMEDIATE reservation and commit normally.
         let writer = central_pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
         let repeated_service = service.clone();
+        let adaptation_id = stored.draft_id.clone();
         let repeated_task = tokio::spawn(async move {
             repeated_service
                 .dispatch(DaemonIpcRequest::new(
@@ -2372,7 +2392,7 @@ mod tests {
                         "resource": "memory",
                         "op": {
                             "update": {
-                                "id": "rule_testing",
+                                "id": adaptation_id,
                                 "expected_hash": updated_hash,
                                 "replacements": [{
                                     "old_text": "Run integration and regression tests.",
@@ -2397,6 +2417,7 @@ mod tests {
             serde_json::from_value(repeated.payload).unwrap();
         assert_eq!(repeated.draft_id, stored.draft_id);
 
+        let adaptation_id = stored.draft_id.clone();
         let stale = service
             .dispatch(DaemonIpcRequest::new(
                 "store_draft_operation",
@@ -2406,7 +2427,7 @@ mod tests {
                     "resource": "memory",
                     "op": {
                         "update": {
-                            "id": "rule_testing",
+                            "id": adaptation_id,
                             "expected_hash": original.content_hash,
                             "replacements": [{
                                 "old_text": "Run integration and regression tests.",
@@ -2438,6 +2459,7 @@ mod tests {
         assert_eq!(
             update.content,
             DaemonDraftContent {
+                org_source: None,
                 description: None,
                 content: "# Testing\n\nApply when changing retrieval behavior.\n\nRun integration, regression, and smoke tests.\n\nTags: testing"
                     .to_owned()
@@ -2446,7 +2468,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_target_mutations_reject_legacy_project_authority_without_local_pollution() {
+    async fn mcp_target_mutations_preserve_project_ownership() {
         let (_temp, state) = test_state().await;
         let pool = state.inner.pool.clone();
         let service = DaemonIpcService::new(state);
@@ -2470,7 +2492,7 @@ mod tests {
                     "expected_hash": original.content_hash,
                     "replacements": [{
                         "old_text": "Hybrid search",
-                        "new_text": "Forbidden update"
+                        "new_text": "Updated search"
                     }]
                 }
             }),
@@ -2499,17 +2521,7 @@ mod tests {
                     }),
                 ))
                 .await;
-            assert!(!response.ok);
-            let error = response
-                .error
-                .expect("legacy mutation must return an error");
-            assert_eq!(error.code, "invalid_request");
-            assert!(
-                error
-                    .message
-                    .contains("legacy Project Memory ctx_retrieval")
-            );
-            assert!(error.message.contains("read-only"));
+            assert!(response.ok, "mutation failed: {:?}", response.error);
         }
 
         let draft_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM local_drafts")
@@ -2521,22 +2533,13 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(draft_count, 0);
-        assert_eq!(operation_count, 0);
-
-        let unchanged = service
-            .load_memory(LoadMemoryRequest {
-                project_id: "prj_test".to_owned(),
-                ids: vec!["ctx_retrieval".to_owned()],
-                known_hashes: BTreeMap::new(),
-            })
+        assert_eq!(draft_count, 1);
+        assert_eq!(operation_count, 3);
+        let scope: String = sqlx::query_scalar("SELECT resource_scope FROM local_drafts")
+            .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(unchanged.resources[0].path, original.path);
-        assert_eq!(
-            unchanged.resources[0].content.as_deref(),
-            original.content.as_deref()
-        );
+        assert_eq!(scope, "project");
     }
 
     #[tokio::test]
@@ -2621,9 +2624,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_cannot_create_new_project_authority_drafts() {
+    async fn desktop_creates_project_authority_drafts() {
         let (_temp, state) = test_state().await;
-        let error = state
+        let response = state
             .store_draft_operation(DaemonDraftOperationRequest {
                 draft_id: None,
                 base_commit_id: Some("commit_test".to_owned()),
@@ -2634,7 +2637,8 @@ mod tests {
                     create: Some(DaemonCreateDraftOperation {
                         path: "project/new.md".to_owned(),
                         content: DaemonDraftContent {
-                            description: Some("No Project authority".to_owned()),
+                            org_source: None,
+                            description: Some("Project authority".to_owned()),
                             content: "# New".to_owned(),
                         },
                         description: None,
@@ -2647,17 +2651,14 @@ mod tests {
                 source: Some(DaemonDraftOperationSource::Desktop),
             })
             .await
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Project is a Draft carrier, not a Memory authority scope")
-        );
+            .unwrap();
+        let detail = state.get_draft(&response.draft_id).await.unwrap();
+        assert_eq!(detail.draft.scope, crate::DaemonDraftScope::Project);
         let draft_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM local_drafts")
             .fetch_one(&state.inner.pool)
             .await
             .unwrap();
-        assert_eq!(draft_count, 0);
+        assert_eq!(draft_count, 1);
     }
 
     #[tokio::test]
@@ -2665,6 +2666,7 @@ mod tests {
         let (_temp, state) = test_state().await;
         let service = DaemonIpcService::new(state.clone());
         let original_content = DaemonDraftContent {
+            org_source: None,
             description: Some("Keep this semantic description.".to_owned()),
             content: "# New Memory\n\nOriginal body.".to_owned(),
         };
@@ -2739,7 +2741,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_text_update_of_org_resource_resolves_its_real_scope() {
+    async fn mcp_text_update_of_org_reference_creates_explicit_project_adaptation() {
         let (_temp, state) = test_state().await;
         sqlx::query(
             "INSERT INTO cached_refs (
@@ -2794,12 +2796,23 @@ mod tests {
             serde_json::from_value(response.payload).unwrap();
 
         let detail = service.get_draft(&stored.draft_id).await.unwrap();
-        assert_eq!(detail.draft.scope, crate::DaemonDraftScope::Org);
+        assert_eq!(detail.draft.scope, crate::DaemonDraftScope::Project);
+        let source = detail.operations[0]
+            .operation
+            .create
+            .as_ref()
+            .unwrap()
+            .content
+            .org_source
+            .as_ref()
+            .unwrap();
+        assert_eq!(source.resource_id, "rule_testing");
+        assert_eq!(source.commit_id, "commit_test");
 
         let loaded = service
             .load_memory(LoadMemoryRequest {
                 project_id: "prj_test".to_owned(),
-                ids: vec!["rule_testing".to_owned()],
+                ids: vec![stored.draft_id.clone()],
                 known_hashes: BTreeMap::new(),
             })
             .await
@@ -2908,6 +2921,7 @@ mod tests {
                         DaemonContentDraftUpdate {
                             id: "ctx_target".to_owned(),
                             content: DaemonDraftContent {
+                                org_source: None,
                                 description: None,
                                 content: "# Personal Draft".to_owned(),
                             },
@@ -2987,6 +3001,7 @@ mod tests {
                     create: Some(DaemonCreateDraftOperation {
                         path: "context/new.md".to_owned(),
                         content: DaemonDraftContent {
+                            org_source: None,
                             description: None,
                             content: "# New Draft".to_owned(),
                         },
@@ -3010,6 +3025,7 @@ mod tests {
             create: Some(DaemonCreateDraftOperation {
                 path: "context/new.md".to_owned(),
                 content: DaemonDraftContent {
+                    org_source: None,
                     description: None,
                     content: "# New context".to_owned(),
                 },
@@ -3049,6 +3065,7 @@ mod tests {
             create: Some(DaemonCreateDraftOperation {
                 path: "context/new.md".to_owned(),
                 content: DaemonDraftContent {
+                    org_source: None,
                     description: Some("Semantic metadata".to_owned()),
                     content: "# Initial".to_owned(),
                 },
@@ -3065,6 +3082,7 @@ mod tests {
                 DaemonContentDraftUpdate {
                     id: "draft_provisional".to_owned(),
                     content: DaemonDraftContent {
+                        org_source: None,
                         description: None,
                         content: "# Updated".to_owned(),
                     },

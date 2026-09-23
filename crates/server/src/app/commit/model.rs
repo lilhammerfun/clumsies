@@ -10,6 +10,9 @@ use std::collections::BTreeMap;
 /// Validated resource or configuration entry before tree content addressing.
 #[derive(serde::Serialize)]
 pub(crate) struct PendingTreeEntry {
+    /// Explicit immutable origin of a Project adaptation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) org_source: Option<crate::app::memory::dto::OrgMemorySource>,
     /// Stable identity of the resource or configuration item in a tree.
     pub(crate) item_id: String,
     /// Stored content category used to validate and materialize the payload.
@@ -123,6 +126,7 @@ mod tests {
 
     fn pending_context_entry(id: &str, path: &str) -> PendingTreeEntry {
         PendingTreeEntry {
+            org_source: None,
             item_id: id.to_owned(),
             resource_kind: "memory".to_owned(),
             scope: "project".to_owned(),

@@ -112,6 +112,9 @@ pub struct CommitStateResponse {
 /// One resource or configuration payload within a materialized snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TreeEntry {
+    /// Explicit immutable origin of a Project adaptation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_source: Option<crate::app::memory::dto::OrgMemorySource>,
     /// Stable identifier of the resource described by this result.
     pub id: String,
     /// Whether the entry contains Memory or project selection configuration.

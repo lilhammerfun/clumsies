@@ -30,6 +30,7 @@ For requested setup, direct the user to the App's empty Project **Memory** view:
 - Call `memory.store` only when the user explicitly requests memory maintenance. Requests to remember, record, correct, update, or delete project knowledge authorize that change; ordinary development and current-task reminders do not.
 - Load existing targets in full. Follow the guide to decide whether to leave covered knowledge unchanged, update an existing document, or create a distinct topic. Keep detailed maintenance conventions in the guide.
 - For updates, use the resource ID and complete-resource `content_hash` returned by `load`, with exact text replacements. A retrieval fragment's hash is not the document hash. Reload and reconcile a version conflict instead of overwriting concurrent changes.
+- New drafts belong to the bound Project. Editing an Org reference creates an explicit Project adaptation; a separate Org Review is needed to change the original.
 - Report the saved resource and Draft status, or that no change was needed. Drafts can affect the bound Project before review; saving does not publish Organization-wide changes. Edit the guide itself only within an explicit request that covers it.
 
 If Clumsies is unavailable or the workspace is unbound, state that plainly. Do not silently substitute host-local memory or claim a Clumsies read or write succeeded.

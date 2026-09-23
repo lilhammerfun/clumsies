@@ -10,8 +10,8 @@ Project 把一个项目的成员、使用的知识和待发布修改组织在一
 |---|---|---|
 | 名称、描述、成员 | Server | 标识项目及访问权限 |
 | Org Selection | Server | 决定该 Project 使用哪些已发布 Organization Memory |
-| Project Ref / Commit | Server，并同步到 daemon | 给选择结果建立一个可安装的版本 |
-| Project 携带的 Draft | 先在本机持久化，再同步到 Server | 保存以 Organization 为发布目标的提案 |
+| Project Ref / Commit | Server，并同步到 daemon | 把项目自有与选用的 Org 内容组合为可安装版本 |
+| Project 携带的 Draft | 先在本机持久化，再同步到 Server | 保存默认以 Project、或显式以 Organization 为目标的提案 |
 | 本机目录绑定 | daemon | 把当前仓库目录解析为 `project_id` |
 | 安装 generation 与检索索引 | daemon 管理的文件 / SQLite | 支持 Agent 在本机读取和检索 |
 
@@ -19,7 +19,7 @@ Project 把一个项目的成员、使用的知识和待发布修改组织在一
 
 ## 在 Memory 中创建和配置
 
-通过 Memory 顶部项目选择器的 **New Project…** 创建项目。普通组织成员也能创建；创建者成为项目管理员，可以修改资料、添加或移除已有组织成员、选择 Memory、删除项目。这些权限不会授予组织管理或组织内容发布权限。
+通过 Memory 顶部项目选择器的 **New Project…** 创建项目。普通组织成员也能创建；创建者成为项目所有者，可以修改资料、添加或移除已有组织成员、选择 Memory、删除项目。这些权限不会授予组织管理或组织内容发布权限。
 
 点击选择器旁的 **Project Settings** 配置当前项目。**Repositories on This Mac** 和缓存设置仅在本机生效，其他成员分别绑定自己的目录。普通成员和组织管理员的选择器末尾都显示 **New Project…**。
 
@@ -28,7 +28,7 @@ Project 把一个项目的成员、使用的知识和待发布修改组织在一
 ## 选择怎样变成当前可读内容
 
 ```text
-Organization 当前 Memory + Project Org Selection
+Project 自有 Memory + 选用的 Organization Memory
   → Server 生成 Project Commit / Ref
   → daemon 安装快照
   + 该 Project 的 open/submitted Draft 修改
@@ -37,9 +37,9 @@ Organization 当前 Memory + Project Org Selection
 
 以 Payments 为例，它选择部署回滚检查单后，所有绑定到这个 Project 的工作目录都指向同一个 Server Project。某次编辑生成由 Payments 携带的 Draft；同步到另一台安装后，那台安装也能呈现这个 Project 的提案。它不是某个目录中独立发布的文件，也不会变成另一个 Project 的未发布修改。
 
-未发布修改仅叠加到承载它的 Project。merge 后，Organization 内容更新，选中受影响资源的 Project 才会获得新的投影。对于新建 Memory，Server 还会把它自动加入发起 Project 的选择。
+未发布修改仅叠加到承载它的 Project。Project merge 只发布项目自有内容并通知成员。可选的 Org 贡献会生成独立审批的 Org Review。Org 更新会刷新选用它的 Project，同时保留项目适配。
 
-`GET /api/v1/projects/{project_id}/memories` 是历史 Project-authority 数据的读取接口。它不包含当前选择投影和本地 Draft，不能用它代替 Effective Memory。
+`GET /api/v1/projects/{project_id}/memories` 读取已发布的项目自有 Memory。它不包含当前选择投影和本地 Draft，不能用它代替 Effective Memory。
 
 ## 目录绑定怎样工作
 

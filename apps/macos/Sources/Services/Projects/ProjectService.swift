@@ -199,14 +199,6 @@ final class ProjectService: ObservableObject {
             for key in pendingSaveKeys {
                 try await self.edits.flushDocumentSave(key)
             }
-            if case .remove = mutation,
-               MemoryTreeProjection.hasActiveDraft(
-                   in: projectId,
-                   targetingAny: resourceIds,
-                   drafts: self.edits.drafts
-               ) {
-                throw ProjectMemorySelectionError.activeDrafts
-            }
             let current: ProjectOrgSelection = try await self.context.server.get(
                 "/api/v1/projects/\(projectId)/org-selections"
             )

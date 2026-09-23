@@ -229,6 +229,8 @@ pub(crate) fn resource_status(value: &str) -> Result<dto::ResourceStatus, Server
 /// Memory content and identity required to construct a snapshot entry.
 #[derive(sqlx::FromRow)]
 pub(crate) struct CommitResource {
+    /// Explicit immutable origin of a Project adaptation.
+    pub(crate) org_source: Option<sqlx::types::Json<crate::app::memory::dto::OrgMemorySource>>,
     /// Stable identity of the persisted resource.
     pub(crate) resource_id: String,
     /// Stored text content, including Markdown where the resource contract permits it.

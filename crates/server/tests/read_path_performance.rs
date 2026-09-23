@@ -90,6 +90,7 @@ async fn metadata_and_draft_reads_skip_payloads_and_ref_locks() {
                     path: Some("context/read-paths.md".to_owned()),
                 },
                 content: Some(DraftResourceContent {
+                    org_source: None,
                     description: None,
                     content: "# Read paths".to_owned(),
                 }),

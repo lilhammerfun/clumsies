@@ -26,7 +26,8 @@ pub(crate) async fn notify_review(
          JOIN project_members m ON m.project_id = r.project_id
          JOIN users u ON u.user_id = m.user_id
          WHERE r.review_id = $1 AND m.user_id <> $2 AND u.status = 'active' AND (
-             ($3 = 'review_requested' AND u.role IN ('owner', 'admin'))
+             ($3 = 'review_requested' AND (u.role IN ('owner', 'admin') OR (m.role IN ('owner', 'admin')
+                 AND EXISTS(SELECT 1 FROM drafts d WHERE d.draft_id = r.draft_id AND d.resource_scope = 'project'))))
              OR ($3 <> 'review_requested' AND (
                  m.user_id = r.author_user_id
                  OR EXISTS (SELECT 1 FROM review_comments c WHERE c.review_id = r.review_id AND c.author_user_id = m.user_id)
@@ -83,20 +84,23 @@ pub(super) async fn list(
         "SELECT n.*, COALESCE(n.project_name_snapshot, p.name) AS project_name,
                 CASE WHEN n.kind = 'welcome' THEN 'Welcome to Clumsies'
                      WHEN n.kind = 'org_role_changed' THEN 'Organization role changed'
-                     ELSE COALESCE(r.title, n.project_name_snapshot, p.name, 'Clumsies') END AS title,
+                     ELSE COALESCE(d.title, r.title, n.project_name_snapshot, p.name, 'Clumsies') END AS title,
                 (m.user_id IS NOT NULL AND n.kind <> 'project_removed') AS can_open_project,
                 COALESCE(u.display_name, u.email) AS actor_name, r.status AS review_status,
-                (((r.status = 'open' AND r.author_user_id <> $1) OR r.status = 'approved') AND $5 IN ('owner', 'admin')
-                  OR (r.status = 'rejected' AND r.author_user_id = $1)) AS needs_action
+                ((d.status IN ('open', 'submitted') AND EXISTS(SELECT 1 FROM draft_reconciliation_candidates rc
+                    WHERE rc.draft_id = d.draft_id AND rc.draft_version = d.version AND rc.status = 'conflicts' AND rc.invalidated_at IS NULL)) OR
+                 (((r.status = 'open' AND r.author_user_id <> $1) OR r.status = 'approved') AND ($5 IN ('owner', 'admin') OR (m.role IN ('owner', 'admin') AND EXISTS(SELECT 1 FROM drafts rd WHERE rd.draft_id = r.draft_id AND rd.resource_scope = 'project')))
+                  OR (r.status = 'rejected' AND r.author_user_id = $1))) AS needs_action
          FROM inbox_notifications n
          LEFT JOIN projects p ON p.project_id = n.project_id AND p.org_id = n.org_id
          LEFT JOIN project_members m ON m.project_id = p.project_id AND m.user_id = $1
          LEFT JOIN reviews r ON n.kind IN ('review_requested', 'review_comment', 'review_approved', 'review_rejected', 'review_merged') AND r.review_id = n.target_id AND r.project_id = p.project_id
+         LEFT JOIN drafts d ON n.kind = 'draft_conflict' AND d.draft_id = n.target_id AND d.author_user_id = $1 AND d.project_id = p.project_id
          LEFT JOIN users u ON u.user_id = n.actor_user_id
          WHERE n.user_id = $1 AND n.org_id = $2
            AND ($3::text IS NULL OR n.notification_id > $3)
            AND (n.kind IN ('welcome', 'project_joined', 'project_removed', 'project_role_changed', 'org_role_changed')
-                OR (m.user_id IS NOT NULL AND (n.kind = 'shared_update' OR r.review_id IS NOT NULL)))
+                OR (m.user_id IS NOT NULL AND (n.kind = 'shared_update' OR r.review_id IS NOT NULL OR d.draft_id IS NOT NULL)))
          ORDER BY n.notification_id LIMIT $4",
     ).bind(&principal.user_id).bind(&principal.org_id).bind(cursor).bind(limit + 1)
         .bind(&principal.role).fetch_all(pool).await?;
@@ -173,5 +177,24 @@ pub(super) async fn update(
     if result.rows_affected() == 0 {
         return Err(ServerError::not_found("notification", id));
     }
+    Ok(())
+}
+
+/// Notify only the author whose preserved proposal requires conflict resolution.
+///
+/// # Errors
+/// Propagates persistence failures with the reconciliation transaction.
+pub(crate) async fn notify_draft_conflict(
+    tx: &mut Transaction<'_, Postgres>,
+    draft_id: &str,
+    candidate_id: &str,
+) -> Result<(), ServerError> {
+    sqlx::query("INSERT INTO inbox_notifications (user_id, notification_id, org_id, project_id, kind, target_id, event_key)
+        SELECT d.author_user_id, 'draft-conflict:' || d.draft_id, p.org_id, d.project_id, 'draft_conflict', d.draft_id, $2
+        FROM drafts d JOIN projects p USING(project_id) WHERE d.draft_id = $1
+        ON CONFLICT (user_id, notification_id) DO UPDATE SET event_key = EXCLUDED.event_key,
+            version = inbox_notifications.version + 1, occurred_at = clock_timestamp()
+        WHERE inbox_notifications.event_key <> EXCLUDED.event_key")
+        .bind(draft_id).bind(candidate_id).execute(&mut **tx).await?;
     Ok(())
 }

@@ -164,7 +164,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertTrue(MemoryFileTreeMenu.trashable(items, inOrgView: true).isEmpty)
         XCTAssertFalse(MemoryFileTreeMenu.canRename(items[0], inOrgView: true))
         XCTAssertFalse(
-            MemoryFileTreeMenu.canProposeOrganizationDeletion(items[0], inOrgView: true)
+            MemoryFileTreeMenu.canProposeMemoryDeletion(items[0], inOrgView: true)
         )
     }
 
@@ -191,7 +191,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertEqual(MemoryFileTreeMenu.removable(items, inOrgView: false).map(\.id), ["org-ref"])
     }
 
-    func testProjectViewAuthorityActionsOnlyIncludeSelectedOrgResources() {
+    func testProjectViewEditsReferencesAndProjectResources() {
         let items = [
             resourceItem("org-ref", scope: .org, inherited: true),
             resourceItem("org-unref", scope: .org, inherited: false),
@@ -199,16 +199,16 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         ]
         XCTAssertEqual(
             items.map { MemoryFileTreeMenu.canRename($0, inOrgView: false) },
-            [true, false, false]
+            [true, false, true]
         )
         XCTAssertEqual(
             MemoryFileTreeMenu.trashable(items, inOrgView: false).map(\.id),
-            ["org-ref"]
+            ["own-a"]
         )
     }
 
-    func testProjectViewCreatesProjectBoundOrgProposals() {
-        XCTAssertEqual(MemoryFileTreeMenu.creationScope(inOrgView: false), .org)
+    func testProjectViewCreatesProjectProposals() {
+        XCTAssertEqual(MemoryFileTreeMenu.creationScope(inOrgView: false), .project)
     }
 
     func testProjectViewCanRenamePureCreateDraft() {
@@ -218,7 +218,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertFalse(MemoryFileTreeMenu.canRename(item, inOrgView: true))
     }
 
-    func testDirectoryReviewIncludesOnlyOpenOrganizationDraftsInProjectView() {
+    func testDirectoryReviewIncludesOpenDraftsAndRejectsMixedOwners() {
         let openOrg = resourceItem(
             "org-open",
             scope: .org,
@@ -243,7 +243,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
                 [openOrg, submittedOrg, project],
                 inOrgView: false
             ).map(\.id),
-            ["draft-open"]
+            ["draft-open", "project-draft"]
         )
         XCTAssertTrue(
             MemoryFileTreeMenu.reviewableDrafts([openOrg], inOrgView: true).isEmpty
@@ -453,11 +453,11 @@ final class MemoryFileTreeMenuTests: XCTestCase {
     func testDirectoryDeletionCombinesSharedDeletionAndPureDraftDiscard() throws {
         let shared = resourceItem(
             "shared",
-            scope: .org,
+            scope: .project,
             inherited: true,
             path: "notes/shared.md"
         )
-        let draft = draftItem("draft", scope: .org, path: "notes/new.md")
+        let draft = draftItem("draft", scope: .project, path: "notes/new.md")
         let plan = try XCTUnwrap(
             MemoryFileTreeMenu.directoryDeletionPlan(
                 [shared, draft],
@@ -469,52 +469,37 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertEqual(plan.draftsToDiscard.map(\.id), ["draft"])
     }
 
-    func testDirectoryMutationRejectsLegacyProjectAuthority() {
-        let legacy = resourceItem(
-            "legacy",
-            scope: .project,
-            inherited: false,
-            projectId: "p1",
-            path: "notes/legacy.md"
+    func testDirectoryMutationSupportsProjectAuthority() throws {
+        let item = resourceItem("project", scope: .project, inherited: false, projectId: "p1", path: "notes/project.md")
+        XCTAssertNotNil(MemoryFileTreeMenu.directoryDeletionPlan([item], inOrgView: false))
+        _ = try MemoryFileTreeMenu.directoryRenamePlan(
+            directoryId: "directory:notes", newName: "renamed", items: [item],
+            occupiedPaths: [item.document.path], occupiedTreePaths: [item.document.path], inOrgView: false
         )
-
-        XCTAssertNil(
-            MemoryFileTreeMenu.directoryDeletionPlan([legacy], inOrgView: false)
-        )
-        XCTAssertThrowsError(try MemoryFileTreeMenu.directoryRenamePlan(
-            directoryId: "directory:notes",
-            newName: "renamed",
-            items: [legacy],
-            occupiedPaths: [legacy.document.path],
-            occupiedTreePaths: [legacy.document.path],
-            inOrgView: false
-        )) { error in
-            XCTAssertEqual(error as? MemoryDirectoryMutationError, .readOnly)
-        }
     }
 
     func testSelectedOrgAuthorityOffersExplicitMutationActionsInProjectView() {
         let item = resourceItem("org-ref", scope: .org, inherited: true)
 
         XCTAssertTrue(MemoryFileTreeMenu.canRename(item, inOrgView: false))
-        XCTAssertTrue(MemoryFileTreeMenu.canProposeOrganizationDeletion(item, inOrgView: false))
-        XCTAssertEqual(MemoryFileTreeMenu.trashable([item], inOrgView: false), [item])
+        XCTAssertFalse(MemoryFileTreeMenu.canProposeMemoryDeletion(item, inOrgView: false))
+        XCTAssertTrue(MemoryFileTreeMenu.trashable([item], inOrgView: false).isEmpty)
     }
 
     func testUnselectedOrgAuthorityDoesNotOfferMutationActionsInProjectView() {
         let item = resourceItem("org-unselected", scope: .org, inherited: false)
 
         XCTAssertFalse(MemoryFileTreeMenu.canRename(item, inOrgView: false))
-        XCTAssertFalse(MemoryFileTreeMenu.canProposeOrganizationDeletion(item, inOrgView: false))
+        XCTAssertFalse(MemoryFileTreeMenu.canProposeMemoryDeletion(item, inOrgView: false))
         XCTAssertTrue(MemoryFileTreeMenu.trashable([item], inOrgView: false).isEmpty)
     }
 
-    func testTargetBackedDraftOnlyRowDoesNotOfferAuthorityMutationActions() {
+    func testExplicitOrgDraftCanProposeDeletionWithoutSelection() {
         let item = draftItem("draft", scope: .org, targetId: "org-removed")
 
         XCTAssertFalse(MemoryFileTreeMenu.canRename(item, inOrgView: false))
-        XCTAssertFalse(MemoryFileTreeMenu.canProposeOrganizationDeletion(item, inOrgView: false))
-        XCTAssertTrue(MemoryFileTreeMenu.trashable([item], inOrgView: false).isEmpty)
+        XCTAssertTrue(MemoryFileTreeMenu.canProposeMemoryDeletion(item, inOrgView: false))
+        XCTAssertEqual(MemoryFileTreeMenu.trashable([item], inOrgView: false), [item])
     }
 
     func testDeletionDraftDoesNotOfferDeletionAgain() {
@@ -531,11 +516,11 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         )
 
         XCTAssertFalse(MemoryFileTreeMenu.canRename(item, inOrgView: false))
-        XCTAssertFalse(MemoryFileTreeMenu.canProposeOrganizationDeletion(item, inOrgView: false))
+        XCTAssertFalse(MemoryFileTreeMenu.canProposeMemoryDeletion(item, inOrgView: false))
         XCTAssertTrue(MemoryFileTreeMenu.trashable([item], inOrgView: false).isEmpty)
     }
 
-    func testLegacyProjectAuthorityDoesNotOfferOrganizationMutationActions() {
+    func testProjectAuthorityOffersProjectMutationActions() {
         let item = resourceItem(
             "legacy-project",
             scope: .project,
@@ -543,9 +528,27 @@ final class MemoryFileTreeMenuTests: XCTestCase {
             projectId: "p1"
         )
 
-        XCTAssertFalse(MemoryFileTreeMenu.canRename(item, inOrgView: false))
-        XCTAssertFalse(MemoryFileTreeMenu.canProposeOrganizationDeletion(item, inOrgView: false))
-        XCTAssertTrue(MemoryFileTreeMenu.trashable([item], inOrgView: false).isEmpty)
+        XCTAssertTrue(MemoryFileTreeMenu.canRename(item, inOrgView: false))
+        XCTAssertTrue(MemoryFileTreeMenu.canProposeMemoryDeletion(item, inOrgView: false))
+        XCTAssertEqual(MemoryFileTreeMenu.trashable([item], inOrgView: false), [item])
+    }
+
+    func testAdaptationAndOrganizationProposalKeepIndependentIdentities() {
+        let source = resourceItem("org-source", scope: .org, inherited: true, path: "guide.md").resource!
+        var adaptation = localDraft("adaptation", scope: .project, path: "guide.md")
+        adaptation.orgSource = .init(resourceId: source.id, commitId: "project-v1")
+        let proposal = localDraft("org-proposal", scope: .org, targetId: source.id, path: "guide.md")
+        for drafts in [[adaptation, proposal], [proposal, adaptation]] {
+            let items = MemoryTreeProjection.items(resources: [source], drafts: drafts, activeProjectId: "p1", selectedOrgResourceIds: [source.id])
+            XCTAssertEqual(items.count, 2)
+            XCTAssertEqual(Set(items.compactMap { $0.draft?.id }), [adaptation.id, proposal.id])
+            XCTAssertEqual(Set(items.map(\.id)).count, 2)
+            XCTAssertEqual(items.first { $0.id == source.id }?.draft?.id, adaptation.id)
+            XCTAssertEqual(MemoryTreeProjection.memoryTabDraft(itemId: proposal.id, projectId: "p1", drafts: drafts)?.scope, .org)
+        }
+        var published = resourceItem("project-adaptation", scope: .project, inherited: false, projectId: "p1", path: "guide.md").resource!
+        published.orgSource = adaptation.orgSource
+        XCTAssertEqual(MemoryTreeProjection.memoryTreeResources([source, published], activeProjectId: "p1", selectedOrgResourceIds: [source.id]).map(\.id), [published.id])
     }
 
     // MARK: - Mixed selection stays predictable
@@ -559,7 +562,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertEqual(MemoryFileTreeMenu.removable(items, inOrgView: false).map(\.id), ["org-ref"])
         XCTAssertEqual(
             MemoryFileTreeMenu.trashable(items, inOrgView: false).map(\.id),
-            ["org-ref"]
+            ["own-a"]
         )
     }
 
@@ -578,10 +581,10 @@ final class MemoryFileTreeMenuTests: XCTestCase {
             path: "notes/new.md"
         )
 
-        let organization = MemoryFileTreeAlert.organizationDeletion(items: [shared])
+        let organization = MemoryFileTreeAlert.memoryDeletion(items: [shared])
         XCTAssertEqual(organization.title, "Delete File?")
         XCTAssertEqual(organization.confirmationTitle, "Delete")
-        XCTAssertTrue(organization.message.contains("every project"))
+        XCTAssertTrue(organization.message.contains("publication owner"))
 
         let discard = MemoryFileTreeAlert.directoryDiscard(
             name: "notes",
@@ -617,7 +620,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         let fileTree = source[start.lowerBound..<end.lowerBound]
 
         XCTAssertEqual(fileTree.components(separatedBy: ".alert(").count - 1, 1)
-        XCTAssertTrue(fileTree.contains("pendingAlert = .organizationDeletion"))
+        XCTAssertTrue(fileTree.contains("pendingAlert = .memoryDeletion"))
         XCTAssertTrue(fileTree.contains("pendingAlert = .directoryDiscard"))
         XCTAssertTrue(fileTree.contains("pendingAlert = .directoryDeletion"))
     }

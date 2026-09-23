@@ -8,11 +8,11 @@ The organization owning shared Memory publication history. Organization owners/a
 
 ## Project
 
-A Server-identified project that manages members, Organization Memory selection, and proposed Drafts. Local directories bind to it but are not its identity. Workspace is a former name; current APIs use `project_id`.
+A Server-identified project that manages members, its own published Memory, Organization Memory selection, and proposed Drafts. Local directories bind to it but are not its identity. Workspace is a former name; current APIs use `project_id`.
 
 ## Memory
 
-A Markdown knowledge resource with a stable ID. SQL calls it `resources`; HTTP uses `memory_id`. Active published resources currently belong only to Organization. Rules, procedures, and background notes all use the same Memory object.
+A Markdown knowledge resource with a stable ID. SQL calls it `resources`; HTTP uses `memory_id`. A published resource belongs to either a Project or Organization. Rules, procedures, and background notes all use the same Memory object.
 
 ID identifies the resource, path locates it in the namespace, and revision identifies a resource revision. Renaming preserves ID. `name` comes from the filename; the daemon's display title comes from a Markdown heading or filename. See the [data model](/data-model).
 
@@ -26,7 +26,7 @@ The explicit set of Organization Memory IDs selected for a Project's published b
 
 ## Projection
 
-A purpose-specific view generated from existing authoritative data. A Project Commit is a versioned projection of Organization content through Org Selection. It supports synchronization without becoming another publication source.
+A purpose-specific view generated from existing authoritative data. A Project Commit combines Project-owned Memory with selected Organization content. The selected part is a read projection; Project-owned content has its own publication history.
 
 ## Effective Memory
 
@@ -34,7 +34,7 @@ Content the daemon assembles from the installed Project projection and that Proj
 
 ## Draft
 
-A proposal carried by a Project and targeting Organization publication. It records Base Commit, version, and ordered create/update/rename/delete operations. Lifecycle states are `open`, `submitted`, `merged`, and `discarded`. A local Draft may not yet be synchronized and is not disposable cache data.
+A proposal carried by a Project and targeting either that Project or Organization publication. It records Base Commit, version, and ordered create/update/rename/delete operations. Lifecycle states are `open`, `submitted`, `merged`, and `discarded`. A local Draft may not yet be synchronized and is not disposable cache data.
 
 ## Base / Current / Draft Result
 
@@ -57,7 +57,7 @@ A Server object for coordinating and publishing an ordered group of Drafts. Merg
 - **Blob:** immutable text that several snapshots can reference.
 - **Tree:** entries connecting Memory IDs, paths, and provenance to Blobs.
 - **Commit:** an immutable complete snapshot referencing a Tree and parent; not a Git commit in the code repository.
-- **Ref:** a movable pointer to the current Commit. Organization Ref identifies publication; Project Ref identifies a selection projection.
+- **Ref:** a movable pointer to the current Commit. Organization Ref identifies publication; Project Ref identifies the combined Project-owned and selected snapshot.
 
 ## Revision / Version / ETag / CAS
 

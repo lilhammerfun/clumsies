@@ -4,7 +4,28 @@ import Foundation
 @MainActor
 final class ReviewRequestModel: ObservableObject {
     private let loadCandidates: () async throws -> [DraftReconciliationCandidate]
-    let onSubmit: (String, String, [ReviewDraftReconciliation]) async throws -> Void
+    let onSubmit: (String, String, [ReviewDraftReconciliation], [OrgContributionEntry]) async throws -> Void
+
+    let drafts: [LocalDraft]
+    @Published var contributesToOrg = false
+    @Published var contributionDraftIds = Set<String>()
+    @Published var contributionTargets = [String: String]()
+    @Published var contributionPaths = [String: String]()
+
+    var contributionEntries: [OrgContributionEntry] {
+        guard contributesToOrg else { return [] }
+        return contributableDrafts.filter { contributionDraftIds.contains($0.id) }.map { draft in
+            let target = contributionTargets[draft.id] ?? ""
+            return .init(draftId: draft.id, targetId: target.isEmpty ? nil : target,
+                         path: target.isEmpty ? contributionPaths[draft.id] ?? draft.document.path : nil)
+        }
+    }
+
+    var contributableDrafts: [LocalDraft] { drafts.filter { $0.scope == .project && !$0.isDeletion } }
+
+    var canContribute: Bool {
+        !contributableDrafts.isEmpty && drafts.allSatisfy { $0.scope == .project }
+    }
 
     @Published var title: String
     @Published var description = ""
@@ -14,10 +35,11 @@ final class ReviewRequestModel: ObservableObject {
     @Published var resolvedStatesByCandidateId = [String: ReconciliationResourceState]()
     @Published var conflictIndex = 0
 
-    init(initialTitle: String,
+    init(initialTitle: String, drafts: [LocalDraft] = [],
          loadCandidates: @escaping () async throws -> [DraftReconciliationCandidate],
-         onSubmit: @escaping (String, String, [ReviewDraftReconciliation]) async throws -> Void) {
+         onSubmit: @escaping (String, String, [ReviewDraftReconciliation], [OrgContributionEntry]) async throws -> Void) {
         title = initialTitle
+        self.drafts = drafts
         self.loadCandidates = loadCandidates
         self.onSubmit = onSubmit
     }
@@ -44,18 +66,22 @@ final class ReviewRequestModel: ObservableObject {
 
     func submit() async -> Bool {
         guard !isSubmitting, !normalizedTitle.isEmpty else { return false }
+        if contributesToOrg && contributionEntries.isEmpty {
+            errorMessage = String(localized: "Select at least one document to contribute.")
+            return false
+        }
         isSubmitting = true
         errorMessage = nil
         defer { isSubmitting = false }
         do {
-            try await onSubmit(normalizedTitle, normalizedDescription, [])
+            try await onSubmit(normalizedTitle, normalizedDescription, [], contributionEntries)
             return true
         } catch ReviewRequestError.reconciliationRequired {
             do {
                 let candidates = try await loadCandidates()
                 try Task.checkCancellation()
                 if candidates.isEmpty {
-                    try await onSubmit(normalizedTitle, normalizedDescription, [])
+                    try await onSubmit(normalizedTitle, normalizedDescription, [], contributionEntries)
                     return true
                 }
                 reconciliationCandidates = candidates
@@ -81,7 +107,7 @@ final class ReviewRequestModel: ObservableObject {
             ReviewDraftReconciliation(candidate: candidate, resolvedState: resolvedStatesByCandidateId[candidate.candidateId])
         }
         do {
-            try await onSubmit(normalizedTitle, normalizedDescription, reconciliations)
+            try await onSubmit(normalizedTitle, normalizedDescription, reconciliations, contributionEntries)
             return true
         } catch where error.isUserCancellation {
         } catch {
