@@ -761,7 +761,9 @@ struct WorkspaceLoader: Sendable {
             documentBaselineAvailable: base != nil
                 || summary.targetId == nil
                 || hasSelfContainedContent,
-            orgSource: orgSource
+            orgSource: orgSource,
+            hasChanges: !detail.operations.isEmpty
+                || summary.pendingOperationCount > 0 || summary.failedOperationCount > 0
         )
     }
 

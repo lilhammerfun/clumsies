@@ -15,7 +15,7 @@ Project selection controls effective Memory, Drafts, and Review context. A proje
 
 The UI restores a selection only when it remains valid. Loading, conflict, offline, selection, and error states do not rely on color alone, and keyboard navigation remains available.
 
-The tree retains file-type icons and change colors: green for additions, amber for modifications, and red for deletions, including submitted changes until they are merged. [Inbox](inbox.md) collects Review events, remote shared updates affecting referenced Memory, and sync failures; the global sidebar shows its unread count. Background state no longer adds trailing file-tree badges or a global sync toolbar button.
+The tree retains file-type icons and change colors: green for additions, amber for modifications, and red for deletions, including submitted changes until they are merged. Draft records with no remaining operations do not mark files as changed, override published content in open tabs, or enter new Review requests. Their records remain available for history and later edits. [Inbox](inbox.md) collects Review events, remote shared updates affecting referenced Memory, and sync failures; the global sidebar shows its unread count. Background state no longer adds trailing file-tree badges or a global sync toolbar button.
 
 Documents have no extra Draft, Review, or remote-update status strip. **View Review**, **Review Remote Changes**, and **Update from Remote Version** remain available in the existing document and file menus where applicable. A deletion Draft explains the pending deletion in the document content. Conflict resolution and save failures stay visible at the operation; reading or archiving a notification does not publish, reconcile, or discard content.
 

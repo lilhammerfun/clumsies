@@ -1523,6 +1523,36 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertFalse(item.supportsMarkdownPreview)
     }
 
+    @MainActor
+    func testEmptyDraftHistoryIsNotAPendingTreeOrReviewChange() throws {
+        let published = resource(id: "memory", kind: .context, path: "guide.md")
+        let empty = WorkspaceLoader.mapDraft(.init(
+            draft: inventorySummary(id: "empty", targetId: published.id, updatedAt: timestamp),
+            operations: []), resources: [published])
+        let submitted = inventoryDraft(from: inventorySummary(
+            id: "awaiting-review", status: .submitted, targetId: "another-memory", updatedAt: timestamp))
+        let items = MemoryTreeProjection.items(resources: [published], drafts: [empty, submitted],
+            activeProjectId: "project-1", selectedOrgResourceIds: [])
+        let item = try XCTUnwrap(items.first { $0.id == published.id })
+        XCTAssertNil(item.draft, "an empty Draft record is history, not a pending change")
+        XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: item), .primary)
+        XCTAssertFalse(ReviewsModel.canRequestReview(empty))
+        XCTAssertTrue(ReviewsModel.reviewableProjectDrafts([empty, submitted], projectId: "project-1").isEmpty)
+        XCTAssertNil(MemoryTreeProjection.memoryTabDraft(itemId: published.id,
+            projectId: "project-1", drafts: [empty]))
+        XCTAssertFalse(MemoryTreeProjection.hasActiveDraft(in: "project-1", targetingAny: [published.id], drafts: [empty]))
+        XCTAssertEqual(MemoryFileTreeTitleTone.resolve(item: items.first { $0.draft?.id == submitted.id }),
+            .modifiedDraft, "another open Review still contains unpublished changes")
+
+        let edited = WorkspaceLoader.mapDraft(.init(
+            draft: inventorySummary(id: empty.id, targetId: published.id, updatedAt: timestamp),
+            operations: [operation(.update(id: published.id,
+                content: .init(description: nil, content: "New local edit"), description: nil), id: "queued-edit")]),
+            resources: [published])
+        XCTAssertTrue(ReviewsModel.canRequestReview(edited))
+        XCTAssertEqual(MemoryTreeProjection.memoryTreeDrafts([edited], activeProjectId: "project-1"), [edited])
+    }
+
     func testDraftInventoryPlanDiscoversExternalDraftChanges() {
         let unchanged = inventorySummary(id: "draft-unchanged", updatedAt: "2026-07-23T01:00:00Z")
         let external = inventorySummary(id: "draft-external", updatedAt: "2026-07-23T02:00:00Z")

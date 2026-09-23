@@ -438,7 +438,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     nonisolated static func canRequestReview(_ draft: LocalDraft) -> Bool {
-        draft.status == .open
+        draft.status == .open && draft.hasChanges
     }
 
     nonisolated static func reviewableProjectDrafts(

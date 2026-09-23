@@ -133,6 +133,8 @@ struct LocalDraft: Identifiable, Hashable, Sendable {
     var isDeletion: Bool
     var documentBaselineAvailable: Bool = true
     var orgSource: OrgMemorySource? = nil
+    /// Reconciliation can leave an open record with no remaining operations.
+    var hasChanges: Bool = true
 }
 
 struct MemoryListItem: Identifiable, Hashable, Sendable {
