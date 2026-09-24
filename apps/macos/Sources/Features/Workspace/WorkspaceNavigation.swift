@@ -23,6 +23,16 @@ final class WorkspaceNavigation: ObservableObject {
     private let edits: DraftStore
     private let feedback: WorkspaceFeedback
     private let sessions: DocumentSessions
+    private let defaults: UserDefaults?
+    private var persistenceKey: String?
+    private var isRestoring = false
+    private var awaitsRestoredDrafts = false
+    private var activeTabsByProject: [String: String] = [:]
+
+    private struct SavedTabs: Codable {
+        var tabs: [WorkbenchTab]
+        var activeTabsByProject: [String: String]
+    }
     var memoryItems: [MemoryListItem] {
         MemoryTreeProjection.items(
             resources: catalog.resources, drafts: edits.drafts,
@@ -31,12 +41,13 @@ final class WorkspaceNavigation: ObservableObject {
         )
     }
 
-    init(catalog: MemoryCatalog, context: WorkspaceContext, edits: DraftStore, feedback: WorkspaceFeedback, sessions: DocumentSessions) {
+    init(catalog: MemoryCatalog, context: WorkspaceContext, edits: DraftStore, feedback: WorkspaceFeedback, sessions: DocumentSessions, defaults: UserDefaults? = nil) {
         self.catalog = catalog
         self.context = context
         self.edits = edits
         self.feedback = feedback
         self.sessions = sessions
+        self.defaults = defaults
     }
 
     @Published var showsLocalProjectRecovery = false
@@ -49,8 +60,17 @@ final class WorkspaceNavigation: ObservableObject {
     @Published var showsProjectCreation = false
     @Published var showsProjectSettings = false
     @Published var sidebarExpanded = true
-    @Published var tabs: [WorkbenchTab] = []
-    @Published var activeTabId: String?
+    @Published var tabs: [WorkbenchTab] = [] {
+        didSet { persistTabs() }
+    }
+    @Published var activeTabId: String? {
+        didSet {
+            if let tab = tabs.first(where: { $0.id == activeTabId }), tab.section == .memory {
+                activeTabsByProject[tab.projectId ?? "org"] = tab.id
+            }
+            persistTabs()
+        }
+    }
     @Published var navigationBackStack: [String] = []
     @Published var navigationForwardStack: [String] = []
     @Published var pendingDocumentCommand: DocumentSessionCommand?
@@ -178,7 +198,9 @@ final class WorkspaceNavigation: ObservableObject {
     }
 
     var activeVisibleTab: WorkbenchTab? {
-        visibleTabs.first { $0.id == self.activeTabId } ?? visibleTabs.last
+        visibleTabs.first { $0.id == self.activeTabId }
+            ?? visibleTabs.first { $0.id == self.activeTabsByProject[self.context.activeProjectId ?? "org"] }
+            ?? visibleTabs.last
     }
 
     var canGoBack: Bool {
@@ -331,6 +353,10 @@ final class WorkspaceNavigation: ObservableObject {
     /// Project P as soon as P removes it, even though the Org authority remains
     /// globally live. A P-bound LocalDraft still retains P's draft-only tab.
     func pruneOrphanedMemoryTabs() {
+        if awaitsRestoredDrafts {
+            guard case .loaded = edits.draftInventoryLoadState else { return }
+            awaitsRestoredDrafts = false
+        }
         let retainedTabs = Self.retainedMemoryTabs(
             tabs,
             projects: context.projects,
@@ -483,6 +509,10 @@ final class WorkspaceNavigation: ObservableObject {
     }
 
     func resetAuthority() {
+        // Detach persistence before clearing account-owned state.
+        persistenceKey = nil
+        activeTabsByProject = [:]
+        awaitsRestoredDrafts = false
         showsLocalProjectRecovery = false
         selectedSection = .memory
         selectedItemId = nil
@@ -495,8 +525,10 @@ final class WorkspaceNavigation: ObservableObject {
     }
 
     func applyWorkspace() {
+        restoreTabsIfNeeded()
         pruneOrphanedMemoryTabs()
         refreshAllDocumentTabs()
+        activateCurrentProjectTab()
         if context.projects.isEmpty {
             selectedSection = .memory
             showsProjectSettings = false
@@ -504,5 +536,36 @@ final class WorkspaceNavigation: ObservableObject {
             activeTabId = nil
             selectedItemId = nil
         }
+    }
+
+    func activateCurrentProjectTab() {
+        let tab = activeVisibleTab
+        activeTabId = tab?.id
+        selectedItemId = tab?.itemId
+    }
+
+    private func persistTabs() {
+        guard !isRestoring, let defaults, let persistenceKey else { return }
+        let documentTabs = tabs.filter { $0.section == .memory }
+        let ids = Set(documentTabs.map(\.id))
+        let state = SavedTabs(tabs: documentTabs,
+                              activeTabsByProject: activeTabsByProject.filter { ids.contains($0.value) })
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        defaults.set(data, forKey: persistenceKey)
+    }
+
+    private func restoreTabsIfNeeded() {
+        guard let defaults, let account = context.account, let organization = context.organization else { return }
+        let key = ["DocumentTabs.v1", ClumsiesIdentifiers.serverURL.absoluteString, account.userId, organization.orgId].joined(separator: "|")
+        guard persistenceKey != key else { return }
+        isRestoring = true
+        defer { isRestoring = false }
+        persistenceKey = key
+        guard let data = defaults.data(forKey: key),
+              let saved = try? JSONDecoder().decode(SavedTabs.self, from: data) else { return }
+        var seen = Set<String>()
+        tabs = saved.tabs.filter { $0.section == .memory && seen.insert($0.id).inserted }
+        activeTabsByProject = saved.activeTabsByProject
+        awaitsRestoredDrafts = !tabs.isEmpty
     }
 }

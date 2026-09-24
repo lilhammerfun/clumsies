@@ -10,6 +10,8 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
     let isFiltering: Bool
     let onOpen: (String) -> Void
     let onRename: (String) -> Void
+    var canMove: (Set<String>, String?) -> Bool = { _, _ in false }
+    var onMove: (Set<String>, String?) -> Void = { _, _ in }
     @ViewBuilder let row: (FileTreeNode, Bool, Bool, Set<String>) -> Row
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -45,6 +47,7 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
         private var selection: Set<String> = []
         private var expansionBeforeFiltering: Set<String>?
         private var isUpdating = false
+        private let dragType = NSPasteboard.PasteboardType("ai.clumsies.file-nodes")
 
         init(_ parent: FileOutlineView) {
             self.parent = parent
@@ -60,6 +63,9 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
             outline.indentationPerLevel = 14
             outline.allowsMultipleSelection = true
             outline.allowsEmptySelection = true
+            outline.registerForDraggedTypes([dragType])
+            outline.setDraggingSourceOperationMask(.move, forLocal: true)
+            outline.setDraggingSourceOperationMask([], forLocal: false)
             outline.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
             outline.dataSource = self
             outline.delegate = self
@@ -189,6 +195,36 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
 
         func outlineView(_ outlineView: NSOutlineView, persistentObjectForItem item: Any?) -> Any? {
             (item as? Node)?.value.id
+        }
+
+        func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+            guard let node = item as? Node else { return nil }
+            let writer = NSPasteboardItem()
+            writer.setString(node.value.id, forType: dragType)
+            return writer
+        }
+
+        private func draggedIDs(_ info: NSDraggingInfo) -> Set<String> {
+            guard (info.draggingSource as? NSOutlineView) === outline else { return [] }
+            return Set((info.draggingPasteboard.pasteboardItems ?? []).compactMap { $0.string(forType: dragType) })
+        }
+
+        func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo,
+                         proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+            let target = item as? Node
+            guard target == nil || target?.value.children != nil,
+                  parent.canMove(draggedIDs(info), target?.value.id) else { return [] }
+            outlineView.setDropItem(item, dropChildIndex: NSOutlineViewDropOnItemIndex)
+            return .move
+        }
+
+        func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo,
+                         item: Any?, childIndex index: Int) -> Bool {
+            let ids = draggedIDs(info)
+            let destination = (item as? Node)?.value.id
+            guard parent.canMove(ids, destination) else { return false }
+            parent.onMove(ids, destination)
+            return true
         }
 
         func outlineView(_ outlineView: NSOutlineView, itemForPersistentObject object: Any) -> Any? {

@@ -1,6 +1,6 @@
 import Foundation
 
-enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
+enum WorkspaceSection: String, CaseIterable, Codable, Identifiable, Sendable {
     case dashboard
     case inbox
     case memory
@@ -234,7 +234,7 @@ struct RuntimeState: Equatable, Sendable {
     let serverDataSource: String
 }
 
-enum WorkbenchTabMode: String, CaseIterable, Hashable, Sendable {
+enum WorkbenchTabMode: String, CaseIterable, Codable, Hashable, Sendable {
     case preview
     case source
     case diff
@@ -256,7 +256,7 @@ enum WorkbenchTabMode: String, CaseIterable, Hashable, Sendable {
     }
 }
 
-struct WorkbenchTab: Identifiable, Hashable, Sendable {
+struct WorkbenchTab: Codable, Identifiable, Hashable, Sendable {
     var id: String {
         "\(section.rawValue):\(projectId ?? "shared"):\(itemId)"
     }

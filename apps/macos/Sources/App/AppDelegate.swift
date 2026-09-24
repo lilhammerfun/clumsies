@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private let store = WorkspaceCoordinator()
+    private let store = WorkspaceCoordinator(navigationDefaults: .standard)
     private lazy var administration = AdministrationModel(
         context: store.context, onWorkspaceChanged: { [weak store] in await store?.reload() }
     )

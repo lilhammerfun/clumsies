@@ -2,6 +2,47 @@ import XCTest
 @testable import Clumsies
 
 final class MemoryFileTreeMenuTests: XCTestCase {
+    func testMovePreservesNestedPathsAndDeduplicatesSelectedChildren() throws {
+        let items = [
+            resourceItem("a", scope: .org, inherited: true, path: "guides/nested/a.md"),
+            resourceItem("b", scope: .org, inherited: true, path: "workflow/guides/b.md", kind: .workflows),
+            resourceItem("c", scope: .org, inherited: true, path: "archive/c.md")
+        ]
+        let plan = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["directory:guides", "a"], to: "directory:archive",
+            roots: FileTreeNode.build(items), occupiedPaths: Set(items.map(\.document.path)),
+            occupiedTreePaths: Set(items.map { FileTreeNode.treePath(for: $0) }), inOrgView: false
+        )
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: plan.changes.map { ($0.item.id, $0.newPath) }),
+                       ["a": "archive/guides/nested/a.md", "b": "workflow/archive/guides/b.md"])
+        let top = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["a"], to: nil, roots: FileTreeNode.build(items),
+            occupiedPaths: Set(items.map(\.document.path)),
+            occupiedTreePaths: Set(items.map { FileTreeNode.treePath(for: $0) }), inOrgView: false
+        )
+        XCTAssertEqual(top.changes.first?.newPath, "a.md")
+    }
+
+    func testMoveRejectsCyclesCollisionsReadOnlyAndNoOpDestinations() {
+        let items = [
+            resourceItem("a", scope: .org, inherited: true, path: "notes/nested/a.md"),
+            resourceItem("b", scope: .org, inherited: true, path: "other/A.md")
+        ]
+        func plan(_ ids: Set<String>, _ destination: String?, org: Bool = false) throws {
+            _ = try MemoryFileTreeMenu.movePlan(
+                selectedNodeIds: ids, to: destination, roots: FileTreeNode.build(items),
+                occupiedPaths: Set(items.map(\.document.path)),
+                occupiedTreePaths: Set(items.map(\.document.path)), inOrgView: org
+            )
+        }
+        XCTAssertThrowsError(try plan(["directory:notes"], "directory:notes/nested"))
+        XCTAssertThrowsError(try plan(["a"], "directory:other"))
+        XCTAssertThrowsError(try plan(["a"], "directory:notes/nested"))
+        XCTAssertThrowsError(try plan(["a"], nil, org: true))
+        XCTAssertThrowsError(try plan(["a", "b"], nil))
+        XCTAssertThrowsError(try plan(["missing"], nil))
+    }
+
     private func resourceItem(
         _ id: String,
         scope: MemoryScope,

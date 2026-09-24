@@ -1,6 +1,134 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Updated %lld of %lld paths. ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updated %lld of %lld paths. "
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已更新 %1$lld 个路径，共 %2$lld 个。 "
+          }
+        }
+      }
+    },
+    "Updating path %lld of %lld…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating path %lld of %lld…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在更新第 %1$lld 个路径，共 %2$lld 个…"
+          }
+        }
+      }
+    },
+    "Updating %lld paths…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating %lld paths…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在更新 %1$lld 个路径…"
+          }
+        }
+      }
+    },
+    "Open a file from the navigator": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a file from the navigator"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从导航栏打开文件"
+          }
+        }
+      }
+    },
+    "The destination already contains %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The destination already contains %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目标位置已存在 %1$@。"
+          }
+        }
+      }
+    },
+    "Choose a different destination outside the selected folders.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a different destination outside the selected folders."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请选择所选文件夹以外的其他目标位置。"
+          }
+        }
+      }
+    },
+    "Top Level": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Top Level"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "根目录"
+          }
+        }
+      }
+    },
+    "Move To": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move To"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移动到"
+          }
+        }
+      }
+    },
     " (request %@)": {
       "localizations": {
         "en": {

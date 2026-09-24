@@ -186,7 +186,9 @@ struct FileTreeView: View {
                 } else if workspaceContext.activeProjectId != nil {
                     beginRenamingDirectory(node)
                 }
-            }
+            },
+            canMove: canMove,
+            onMove: move
         ) { node, expanded, selected, menuSelection in
             FileTreeRow(node: node, isExpanded: expanded, isSelected: selected)
                 .contextMenu { fileTreeMenu(for: menuSelection) }
@@ -375,6 +377,47 @@ struct FileTreeView: View {
         }
     }
 
+    private func movePlan(_ ids: Set<String>, to destination: String?) throws -> MemoryDirectoryRenamePlan {
+        guard operations.directoryOperationProgress == nil, !workspaceContext.isSwitchingMemoryContext,
+              workspaceContext.activeProjectId != nil else { throw MemoryDirectoryMutationError.readOnly }
+        let targets = FileTreeNode.items(in: operationRoots, selectedNodeIds: ids)
+        guard targets.allSatisfy({ draftStore.canEditMemory($0)
+            && !documentSessions.isSynchronizingDocument($0.id) }) else {
+            throw MemoryDirectoryMutationError.readOnly
+        }
+        let resources = memoryCatalog.resources.filter {
+            $0.scope == .org || $0.projectId == workspaceContext.activeProjectId
+        }
+        let drafts = draftStore.drafts.filter {
+            $0.projectId == workspaceContext.activeProjectId && $0.status != .discarded && $0.status != .merged
+        }
+        return try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ids, to: destination, roots: operationRoots,
+            occupiedPaths: Set(resources.map(\.document.path)).union(drafts.map(\.document.path)),
+            occupiedTreePaths: Set(memoryModel.visibleMemoryItems.map { FileTreeNode.treePath(for: $0) }),
+            inOrgView: false
+        )
+    }
+
+    private func canMove(_ ids: Set<String>, to destination: String?) -> Bool {
+        (try? movePlan(ids, to: destination)) != nil
+    }
+
+    private func move(_ ids: Set<String>, to destination: String?) {
+        do {
+            let plan = try movePlan(ids, to: destination)
+            let authority = workspaceContext.authorityGeneration
+            let project = workspaceContext.activeProjectId
+            Task {
+                guard workspaceContext.authorityGeneration == authority,
+                      workspaceContext.activeProjectId == project else { return }
+                await operations.renameDirectory(plan)
+            }
+        } catch {
+            workspaceFeedback.errorMessage = error.actionMessage
+        }
+    }
+
     @ViewBuilder
     private func fileTreeMenu(for nodeIds: Set<String>) -> some View {
         let targetItems = FileTreeNode.items(in: operationRoots, selectedNodeIds: nodeIds)
@@ -491,6 +534,19 @@ struct FileTreeView: View {
                         || trashSelectionContainsSynchronizingDocument
                 )
             }
+        }
+
+        if !isOrgView, !targetItems.isEmpty,
+           targetItems.allSatisfy({ MemoryFileTreeMenu.canRename($0, inOrgView: false) && draftStore.canEditMemory($0) }) {
+            Menu("Move To") {
+                Button("Top Level") { move(nodeIds, to: nil) }
+                    .disabled(!canMove(nodeIds, to: nil))
+                ForEach(FileTreeNode.allIds(in: operationRoots).filter { FileTreeNode.directoryPath(from: $0) != nil }, id: \.self) { id in
+                    Button(FileTreeNode.directoryPath(from: id) ?? "") { move(nodeIds, to: id) }
+                        .disabled(!canMove(nodeIds, to: id))
+                }
+            }
+            .disabled(operations.directoryOperationProgress != nil || selectionContainsSynchronizingDocument)
         }
 
         if !exportItems.isEmpty {

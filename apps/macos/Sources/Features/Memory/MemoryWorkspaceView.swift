@@ -170,7 +170,7 @@ private struct EmptyWorkspaceView: View {
             Image(systemName: "doc.text")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Open a memory from the navigator")
+            Text("Open a file from the navigator")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
