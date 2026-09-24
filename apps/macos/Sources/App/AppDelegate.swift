@@ -467,7 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let fileItem = NSMenuItem()
         mainMenu.addItem(fileItem)
         let fileMenu = NSMenu(title: String(localized: "File"))
-        let newMemory = fileMenu.addItem(withTitle: String(localized: "New Memory"), action: #selector(newMemory(_:)), keyEquivalent: "n")
+        let newMemory = fileMenu.addItem(withTitle: String(localized: "New File"), action: #selector(newMemory(_:)), keyEquivalent: "n")
         newMemory.target = self
         let newProject = fileMenu.addItem(
             withTitle: String(localized: "New Project…"),

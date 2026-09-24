@@ -207,7 +207,9 @@ final class MemoryModel: ObservableObject {
                 activeProjectId: self.context.activeProjectId,
                 expectedProjectId: projectId
             ), self.context.workspaceReloadGeneration == generation else { return nil }
-            self.navigation.selectedItemId = response.draftId
+            if let item = self.navigation.memoryItems.first(where: { $0.id == response.draftId }) {
+                self.navigation.open(item, mode: .source)
+            }
             return response.draftId
         }
     }

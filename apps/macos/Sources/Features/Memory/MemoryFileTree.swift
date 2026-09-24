@@ -1,79 +1,7 @@
 import AppKit
 import SwiftUI
 
-struct FileTreeDirectoryClickResult {
-    let selection: Set<String>
-    let anchorId: String?
-    let togglesDirectory: Bool
-}
-
-enum FileTreeSelectionInteraction {
-    static func directoryClick(
-        nodeId: String,
-        visibleNodeIds: [String],
-        currentSelection: Set<String>,
-        anchorId: String?,
-        modifierFlags: NSEvent.ModifierFlags
-    ) -> FileTreeDirectoryClickResult {
-        if modifierFlags.contains(.shift) {
-            let effectiveAnchor = anchorId ?? nodeId
-            guard let anchorIndex = visibleNodeIds.firstIndex(of: effectiveAnchor),
-                  let nodeIndex = visibleNodeIds.firstIndex(of: nodeId) else {
-                return .init(
-                    selection: [nodeId],
-                    anchorId: nodeId,
-                    togglesDirectory: false
-                )
-            }
-            let range = min(anchorIndex, nodeIndex) ... max(anchorIndex, nodeIndex)
-            let rangeSelection = Set(range.map { visibleNodeIds[$0] })
-            return .init(
-                selection: modifierFlags.contains(.command)
-                    ? currentSelection.union(rangeSelection)
-                    : rangeSelection,
-                anchorId: effectiveAnchor,
-                togglesDirectory: false
-            )
-        }
-
-        if modifierFlags.contains(.command) {
-            var selection = currentSelection
-            if selection.contains(nodeId) {
-                selection.remove(nodeId)
-            } else {
-                selection.insert(nodeId)
-            }
-            return .init(
-                selection: selection,
-                anchorId: nodeId,
-                togglesDirectory: false
-            )
-        }
-
-        guard modifierFlags.intersection([.option, .control]).isEmpty else {
-            return .init(
-                selection: currentSelection,
-                anchorId: anchorId,
-                togglesDirectory: false
-            )
-        }
-
-        return .init(
-            selection: [nodeId],
-            anchorId: nodeId,
-            togglesDirectory: true
-        )
-    }
-}
-
-struct VisibleFileTreeNode: Identifiable {
-    let node: FileTreeNode
-    let depth: Int
-
-    var id: String { node.id }
-}
-
-struct FileTreeNode: Identifiable {
+struct FileTreeNode: Identifiable, Equatable {
     let id: String
     let name: String
     let item: MemoryListItem?
@@ -127,14 +55,6 @@ struct FileTreeNode: Identifiable {
         guard id.hasPrefix(prefix) else { return nil }
         let path = String(id.dropFirst(prefix.count))
         return path.isEmpty ? nil : path
-    }
-
-    static func directoryIds(in nodes: [FileTreeNode]) -> Set<String> {
-        nodes.reduce(into: Set<String>()) { result, node in
-            guard let children = node.children else { return }
-            result.insert(node.id)
-            result.formUnion(directoryIds(in: children))
-        }
     }
 
     static func allIds(in nodes: [FileTreeNode]) -> [String] {
@@ -194,23 +114,6 @@ struct FileTreeNode: Identifiable {
         }
     }
 
-    static func visibleNodes(
-        _ nodes: [FileTreeNode],
-        expandedDirectoryIds: Set<String>,
-        depth: Int = 0
-    ) -> [VisibleFileTreeNode] {
-        nodes.flatMap { node in
-            var result = [VisibleFileTreeNode(node: node, depth: depth)]
-            if expandedDirectoryIds.contains(node.id), let children = node.children {
-                result.append(contentsOf: visibleNodes(
-                    children,
-                    expandedDirectoryIds: expandedDirectoryIds,
-                    depth: depth + 1
-                ))
-            }
-            return result
-        }
-    }
 }
 
 struct MemoryDirectoryRenameChange: Hashable, Sendable {

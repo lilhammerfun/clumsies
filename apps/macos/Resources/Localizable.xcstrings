@@ -6089,6 +6089,22 @@
         }
       }
     },
+    "Files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件"
+          }
+        }
+      }
+    },
     "Filter Activity by Project": {
       "localizations": {
         "en": {
@@ -8134,6 +8150,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "新建 Bundle"
+          }
+        }
+      }
+    },
+    "New File": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New File"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新建文件"
           }
         }
       }

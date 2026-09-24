@@ -121,10 +121,7 @@ struct FileTreeView: View {
     @EnvironmentObject private var reviewModel: ReviewsModel
     @EnvironmentObject private var documentSessions: DocumentSessions
     let items: [MemoryListItem]
-    @State private var expandedDirectoryIds: Set<String> = []
     @State private var selectedNodeIds: Set<String> = []
-    @State private var selectionAnchorId: String?
-    @State private var initializedExpansion = false
     @State private var proposedName = ""
     @State private var proposedDirectoryName = ""
     @State private var pendingAlert: MemoryFileTreeAlert?
@@ -140,8 +137,12 @@ struct FileTreeView: View {
         FileTreeNode.build(items)
     }
 
-    private var visibleNodes: [VisibleFileTreeNode] {
-        FileTreeNode.visibleNodes(roots, expandedDirectoryIds: expandedDirectoryIds)
+    private var operationRoots: [FileTreeNode] {
+        FileTreeNode.build(memoryModel.visibleMemoryItems)
+    }
+
+    private var treePersistenceKey: String {
+        "MemoryFiles.\(workspaceContext.account?.userId ?? "").\(workspaceContext.organization?.orgId ?? "").\(workspaceContext.activeProjectId ?? "org")"
     }
 
     var body: some View {
@@ -166,39 +167,45 @@ struct FileTreeView: View {
     }
 
     private var fileTreeContent: some View {
-        List(selection: selection) {
-            ForEach(self.visibleNodes) { entry in
-                self.fileTreeRow(for: entry)
+        FileOutlineView(
+            roots: roots,
+            selection: $selectedNodeIds,
+            persistenceKey: treePersistenceKey,
+            isFiltering: !workspaceNavigation.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            onOpen: { id in
+                if let item = FileTreeNode.node(withId: id, in: roots)?.item {
+                    workspaceNavigation.open(item)
+                }
+            },
+            onRename: { id in
+                guard let node = FileTreeNode.node(withId: id, in: operationRoots) else { return }
+                if let item = node.item {
+                    guard MemoryFileTreeMenu.canRename(item, inOrgView: workspaceContext.activeProjectId == nil),
+                          draftStore.canEditMemory(item) else { return }
+                    beginRenaming(item)
+                } else if workspaceContext.activeProjectId != nil {
+                    beginRenamingDirectory(node)
+                }
             }
+        ) { node, expanded, selected, menuSelection in
+            FileTreeRow(node: node, isExpanded: expanded, isSelected: selected)
+                .contextMenu { fileTreeMenu(for: menuSelection) }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .id(treePersistenceKey)
+        .contextMenu { fileTreeMenu(for: []) }
         .pageFeedback(operations.directoryOperationProgress, isStatus: true)
-        .contextMenu(forSelectionType: String.self) { nodeIds in
-            self.fileTreeMenu(for: nodeIds)
-        }
-        .onAppear {
-            guard !self.initializedExpansion else { return }
-            self.expandedDirectoryIds = FileTreeNode.directoryIds(in: self.roots)
-            self.initializedExpansion = true
-            self.synchronizeSelectionWithActiveItem()
-        }
-        .onChange(of: items.map { "\($0.id):\($0.document.path)" }) { _, _ in
-            self.expandedDirectoryIds.formUnion(FileTreeNode.directoryIds(in: self.roots))
-            self.selectedNodeIds.formIntersection(Set(FileTreeNode.allIds(in: self.roots)))
-            if let selectionAnchorId,
-               FileTreeNode.node(withId: selectionAnchorId, in: roots) == nil {
-                self.selectionAnchorId = nil
-            }
-            self.synchronizeSelectionWithActiveItem()
+        .onAppear { synchronizeSelectionWithActiveItem() }
+        .onChange(of: memoryModel.visibleMemoryItems.map { "\($0.id):\($0.document.path)" }) { _, _ in
+            selectedNodeIds.formIntersection(Set(FileTreeNode.allIds(in: operationRoots)))
         }
         .onChange(of: workspaceNavigation.activeVisibleTab?.itemId ?? workspaceNavigation.selectedItemId) { _, _ in
-            self.synchronizeSelectionWithActiveItem()
+            synchronizeSelectionWithActiveItem()
         }
-        .onChange(of: workspaceContext.activeProjectId) { _, _ in
-            self.dismissAlert()
-            self.pendingDirectoryReview = nil
+        .onChange(of: treePersistenceKey) { _, _ in
+            selectedNodeIds = []
+            synchronizeSelectionWithActiveItem()
+            dismissAlert()
+            pendingDirectoryReview = nil
         }
     }
 
@@ -237,19 +244,6 @@ struct FileTreeView: View {
         } message: { alert in
             Text(alert.message)
         }
-    }
-
-    private func fileTreeRow(for entry: VisibleFileTreeNode) -> some View {
-        return FileTreeRow(
-            entry: entry,
-            isExpanded: expandedDirectoryIds.contains(entry.id),
-            onDirectoryClick: { modifierFlags in
-                self.handleDirectoryClick(entry.id, modifierFlags: modifierFlags)
-            }
-        )
-        .tag(entry.id)
-        .listRowInsets(.init(top: 0, leading: 5, bottom: 0, trailing: 5))
-        .listRowSeparator(.hidden)
     }
 
     private var isValidProposedName: Bool {
@@ -323,7 +317,7 @@ struct FileTreeView: View {
     private func beginRenamingDirectory(_ directory: FileTreeNode) {
         guard operations.directoryOperationProgress == nil else { return }
         let targetItems = FileTreeNode.items(
-            in: roots,
+            in: operationRoots,
             selectedNodeIds: [directory.id]
         )
         guard targetItems.allSatisfy({
@@ -343,7 +337,7 @@ struct FileTreeView: View {
         guard let directoryToRenameId else { return }
         let name = proposedDirectoryName.trimmingCharacters(in: .whitespacesAndNewlines)
         let targetItems = FileTreeNode.items(
-            in: roots,
+            in: operationRoots,
             selectedNodeIds: [directoryToRenameId]
         )
         do {
@@ -365,7 +359,7 @@ struct FileTreeView: View {
             }
             let occupiedPaths = Set(resources.map(\.document.path))
                 .union(drafts.map(\.document.path))
-            let occupiedTreePaths = Set(items.map { FileTreeNode.treePath(for: $0) })
+            let occupiedTreePaths = Set(memoryModel.visibleMemoryItems.map { FileTreeNode.treePath(for: $0) })
             let plan = try MemoryFileTreeMenu.directoryRenamePlan(
                 directoryId: directoryToRenameId,
                 newName: name,
@@ -381,64 +375,15 @@ struct FileTreeView: View {
         }
     }
 
-    private var selection: Binding<Set<String>> {
-        Binding(
-            get: { self.selectedNodeIds },
-            set: { newSelection in
-                let previous = self.selectedNodeIds
-                self.selectedNodeIds = newSelection
-                guard newSelection.count == 1,
-                      let nodeId = newSelection.first,
-                      let node = FileTreeNode.node(withId: nodeId, in: roots) else {
-                    return
-                }
-
-                if newSelection != previous {
-                    self.selectionAnchorId = nodeId
-                }
-                guard newSelection != previous, let item = node.item else { return }
-                self.workspaceNavigation.open(item)
-            }
-        )
-    }
-
-    private func handleDirectoryClick(
-        _ nodeId: String,
-        modifierFlags: NSEvent.ModifierFlags
-    ) {
-        let result = FileTreeSelectionInteraction.directoryClick(
-            nodeId: nodeId,
-            visibleNodeIds: visibleNodes.map(\.id),
-            currentSelection: selectedNodeIds,
-            anchorId: selectionAnchorId,
-            modifierFlags: modifierFlags
-        )
-        selectedNodeIds = result.selection
-        selectionAnchorId = result.anchorId
-        if result.togglesDirectory {
-            toggleDirectory(nodeId)
-        }
-    }
-
-    private func toggleDirectory(_ nodeId: String) {
-        withAnimation(.snappy(duration: 0.14)) {
-            if self.expandedDirectoryIds.contains(nodeId) {
-                self.expandedDirectoryIds.remove(nodeId)
-            } else {
-                self.expandedDirectoryIds.insert(nodeId)
-            }
-        }
-    }
-
     @ViewBuilder
     private func fileTreeMenu(for nodeIds: Set<String>) -> some View {
-        let targetItems = FileTreeNode.items(in: roots, selectedNodeIds: nodeIds)
+        let targetItems = FileTreeNode.items(in: operationRoots, selectedNodeIds: nodeIds)
         let exportItems = FileTreeNode.items(
             in: FileTreeNode.build(memoryModel.visibleMemoryItems),
             selectedNodeIds: nodeIds
         )
         let selectedDirectory = FileTreeNode.selectedDirectory(
-            in: roots,
+            in: operationRoots,
             selectedNodeIds: nodeIds
         )
         let singleItem = selectedDirectory == nil && targetItems.count == 1
@@ -697,7 +642,7 @@ struct FileTreeView: View {
 
         if targetItems.isEmpty {
             if let scope = MemoryFileTreeMenu.creationScope(inOrgView: isOrgView) {
-                Button("Propose New Project Memory") {
+                Button("New File") {
                     guard self.operations.directoryOperationProgress == nil else { return }
                     Task {
                         await self.memoryModel.createMemory(kind: self.workspaceNavigation.selectedKind, scope: scope)
@@ -718,7 +663,6 @@ struct FileTreeView: View {
             return
         }
         selectedNodeIds = [itemId]
-        selectionAnchorId = itemId
     }
 
     private func memoryDeletionTitle(count: Int) -> String {
@@ -794,37 +738,19 @@ enum MemoryFileTreeTitleTone: Equatable {
 }
 
 private struct FileTreeRow: View {
-    let entry: VisibleFileTreeNode
+    let node: FileTreeNode
     let isExpanded: Bool
-    let onDirectoryClick: (NSEvent.ModifierFlags) -> Void
+    let isSelected: Bool
 
-    private var item: MemoryListItem? { entry.node.item }
-
-    @ViewBuilder
     var body: some View {
-        if item == nil {
-            rowContent
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        self.onDirectoryClick(NSEvent.modifierFlags)
-                    }
-                )
-        } else {
-            rowContent
-        }
-    }
-
-    private var rowContent: some View {
         PathTreeRowLabel(
-            name: entry.node.name,
-            path: item?.document.path,
-            depth: entry.depth,
-            isDirectory: item == nil,
+            name: node.name,
+            path: node.item?.document.path,
+            depth: 0,
+            isDirectory: node.item == nil,
             isExpanded: isExpanded,
-            titleColor: MemoryFileTreeTitleTone.resolve(item: item).color
-        ) {
-            EmptyView()
-        }
-        .help(entry.node.name)
+            titleColor: isSelected ? Color(nsColor: .selectedControlTextColor)
+                : MemoryFileTreeTitleTone.resolve(item: node.item).color
+        )
     }
 }
