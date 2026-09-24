@@ -312,6 +312,7 @@ pub(crate) async fn pending_resource_entry(
     }
     Ok(PendingTreeEntry {
         org_source: row.org_source.clone().map(|source| source.0),
+        is_directory: row.is_directory,
         item_id: resource_id,
         resource_kind,
         scope: scope.to_owned(),
@@ -361,6 +362,7 @@ pub(crate) async fn apply_resource_operation(
             repository::insert_memory(
                 tx,
                 repository::NewMemory {
+                    is_directory: content.is_directory,
                     resource_id: &resource_id,
                     org_source: content.org_source.as_ref(),
                     org_id: &org_id,
@@ -515,6 +517,7 @@ pub(crate) async fn validate_project_effective_memory(
             &resource_id,
             &output_path,
             "project effective memory",
+            row.is_directory,
         )?;
     }
 

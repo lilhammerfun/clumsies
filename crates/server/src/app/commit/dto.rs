@@ -115,6 +115,9 @@ pub struct TreeEntry {
     /// Explicit immutable origin of a Project adaptation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_source: Option<crate::app::memory::dto::OrgMemorySource>,
+    /// Materialize this entry as a directory instead of a text file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_directory: bool,
     /// Stable identifier of the resource described by this result.
     pub id: String,
     /// Whether the entry contains Memory or project selection configuration.

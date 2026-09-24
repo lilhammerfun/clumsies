@@ -745,7 +745,7 @@ final class DraftStore: ObservableObject {
     }
 
     func daemonContent(kind: MemoryKind, document: EditableMemoryDocument) -> DaemonDraftContent {
-        .init(description: nil, content: document.body)
+        .init(description: nil, content: document.body, isDirectory: document.isDirectory ? true : nil)
     }
 
     private func validatePath(kind: MemoryKind, path: String) throws {
@@ -766,7 +766,7 @@ final class DraftStore: ObservableObject {
 
     func validate(kind: MemoryKind, document: EditableMemoryDocument) throws {
         try validatePath(kind: kind, path: document.path)
-        if kind == .rules && document.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !document.isDirectory && kind == .rules && document.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw MemoryValidationError.emptyRule
         }
     }

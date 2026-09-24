@@ -2,6 +2,37 @@ import XCTest
 @testable import Clumsies
 
 final class MemoryFileTreeMenuTests: XCTestCase {
+    func testExplicitDirectoriesKeepIdentityChildrenAndMoveIntoOtherDirectories() throws {
+        let items = [
+            resourceItem("folder", scope: .project, inherited: false, projectId: "p1", path: "guides", isDirectory: true),
+            resourceItem("file", scope: .project, inherited: false, projectId: "p1", path: "guides/readme.md"),
+            resourceItem("empty", scope: .project, inherited: false, projectId: "p1", path: "archive", isDirectory: true)
+        ]
+        let roots = FileTreeNode.build(items)
+        let folder = try XCTUnwrap(FileTreeNode.node(withId: "directory:guides", in: roots))
+        XCTAssertEqual(folder.item?.id, "folder")
+        XCTAssertEqual(folder.children?.map(\.id), ["file"])
+        XCTAssertEqual(FileTreeNode.node(withId: "directory:archive", in: roots)?.children, [])
+        let paths = Set(items.map(\.document.path))
+        let directories: Set<String> = ["guides", "archive"]
+        let plan = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["directory:guides", "file"], to: "directory:archive", roots: roots,
+            occupiedPaths: paths, occupiedTreePaths: paths, inOrgView: false,
+            directoryPaths: directories, directoryTreePaths: directories
+        )
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: plan.changes.map { ($0.item.id, $0.newPath) }),
+                       ["folder": "archive/guides", "file": "archive/guides/readme.md"])
+        let fileMove = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["file"], to: "directory:archive", roots: roots,
+            occupiedPaths: paths, occupiedTreePaths: paths, inOrgView: false,
+            directoryPaths: directories, directoryTreePaths: directories
+        )
+        XCTAssertEqual(fileMove.changes.first?.newPath, "archive/readme.md")
+        let deletion = try XCTUnwrap(MemoryFileTreeMenu.directoryDeletionPlan(
+            FileTreeNode.items(in: roots, selectedNodeIds: ["directory:archive"]), inOrgView: false))
+        XCTAssertEqual(deletion.itemsToDelete.map(\.id), ["empty"])
+    }
+
     func testMovePreservesNestedPathsAndDeduplicatesSelectedChildren() throws {
         let items = [
             resourceItem("a", scope: .org, inherited: true, path: "guides/nested/a.md"),
@@ -50,7 +81,8 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         projectId: String? = nil,
         draft: LocalDraft? = nil,
         path: String? = nil,
-        kind: MemoryKind = .context
+        kind: MemoryKind = .context,
+        isDirectory: Bool = false
     ) -> MemoryListItem {
         MemoryListItem(
             id: id,
@@ -67,7 +99,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
                 document: EditableMemoryDocument(
                     title: id,
                     path: path ?? "\(id).md",
-                    body: ""
+                    body: "", isDirectory: isDirectory
                 )
             ),
             draft: draft,
@@ -679,7 +711,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
             source.range(of: "if !isOrgView, let draft = singleItem.draft {")
         )
         let end = try XCTUnwrap(
-            source[start.lowerBound...].range(of: "\n        if targetItems.isEmpty {")
+            source[start.lowerBound...].range(of: "\n        if targetItems.isEmpty || selectedDirectory != nil {")
         )
         let discardAction = source[start.lowerBound..<end.lowerBound]
 

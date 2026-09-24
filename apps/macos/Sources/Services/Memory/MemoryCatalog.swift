@@ -215,8 +215,8 @@ final class MemoryCatalog: ObservableObject {
                     contentHash: item.contentHash,
                     updatedAt: item.updatedAt,
                     refCommitId: commitId,
-                    contentLoaded: false,
-                    document: .init(title: item.name, path: item.path, body: "")
+                    contentLoaded: item.isDirectory == true,
+                    document: .init(title: item.name, path: item.path, body: "", isDirectory: item.isDirectory == true)
                 )
             }
         )

@@ -1045,6 +1045,7 @@ fn validate_materialized_state(
             key,
             &materialization_output_path(&resource.path)?,
             &format!("project {project_id} effective memory"),
+            false,
         )?;
     }
     Ok(())
@@ -1336,6 +1337,7 @@ async fn apply_project_plan(
                     resource,
                     content: Some(DraftResourceContent {
                         org_source: None,
+                        is_directory: false,
                         description: Some(replacement.description.clone()),
                         content: replacement.content.clone(),
                     }),

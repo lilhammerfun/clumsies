@@ -109,7 +109,9 @@ actor ReviewFileLoader {
             draftContent: draftContent,
             resolutionContent: resolutionContent,
             proposedPath: finalPath,
-            operationLabels: operationLabels
+            operationLabels: operationLabels,
+            isDirectory: operations.compactMap { $0.content?.isDirectory }.last
+                ?? baseEntry?.isDirectory ?? currentEntry?.isDirectory ?? false
         )
     }
 

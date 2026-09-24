@@ -252,6 +252,7 @@ struct ListResponse<Item: Decodable & Sendable>: Decodable, Sendable {
 
 struct MemoryMetadata: Codable, Identifiable, Hashable, Sendable {
     var orgSource: OrgMemorySource? = nil
+    var isDirectory: Bool? = nil
     var id: String { memoryId }
 
     let memoryId: String
@@ -365,6 +366,7 @@ enum ServerTreeEntryKind: String, Codable, Hashable, Sendable {
 }
 
 struct CommitTreeEntry: Codable, Sendable {
+    var isDirectory: Bool? = nil
     let id: String
     let type: ServerTreeEntryKind
     let scope: String

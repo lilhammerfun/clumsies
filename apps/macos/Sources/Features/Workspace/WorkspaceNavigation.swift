@@ -238,6 +238,7 @@ final class WorkspaceNavigation: ObservableObject {
     }
 
     func open(_ item: MemoryListItem, mode: WorkbenchTabMode? = nil) {
+        guard !item.document.isDirectory else { return }
         guard let item = Self.memoryItemForViewContext(
             item,
             activeProjectId: context.activeProjectId

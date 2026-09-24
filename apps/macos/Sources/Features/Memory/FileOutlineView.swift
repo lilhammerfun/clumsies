@@ -245,7 +245,7 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
 
         private func openSelection() {
             guard selection.count == 1, let id = selection.first,
-                  nodes[id]?.value.item != nil else { return }
+                  nodes[id]?.value.item != nil, nodes[id]?.value.children == nil else { return }
             parent.onOpen(id)
         }
 

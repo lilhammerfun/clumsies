@@ -419,7 +419,8 @@ private struct ReviewFileNavigator: View {
             items: files.map { file in
                 PathTreeItem(id: file.id, path: file.path,
                              badge: file.reconciliationState?.title,
-                             badgeColor: file.reconciliationState?.badgeColor)
+                             badgeColor: file.reconciliationState?.badgeColor,
+                             isDirectory: file.isDirectory)
             },
             selection: $selection
         )

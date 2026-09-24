@@ -11,6 +11,8 @@ final class MemoryArchiveTests: XCTestCase {
             .init(title: "Skill", path: "skills/中文/SKILL.md", body: "# 说明\n\n保留正文。\r\n"),
             .init(title: "Hidden", path: ".config/settings.json", body: "{\"enabled\":true}\n"),
             .init(title: "Empty", path: "empty.txt", body: ""),
+            .init(title: "Folder", path: "empty folder/nested", body: "", isDirectory: true),
+            .init(title: "中文", path: "skills/中文", body: "", isDirectory: true),
         ]
         // Replacement must produce a fresh archive, not append to an older export.
         try MemoryArchive.write([.init(title: "Old", path: "old.md", body: "old")], to: destination)
@@ -25,6 +27,10 @@ final class MemoryArchiveTests: XCTestCase {
         unzip.waitUntilExit()
         XCTAssertEqual(unzip.terminationStatus, 0)
         for document in documents {
+            if document.isDirectory {
+                XCTAssertTrue(try extracted.appending(path: document.path).resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
+                continue
+            }
             XCTAssertEqual(
                 try Data(contentsOf: extracted.appending(path: document.path)),
                 Data(document.body.utf8)
@@ -35,7 +41,7 @@ final class MemoryArchiveTests: XCTestCase {
                 (try? extracted.appending(path: $0).resourceValues(forKeys: [.isRegularFileKey]))?
                     .isRegularFile == true
             }
-        XCTAssertEqual(Set(files), Set(documents.map(\.path)))
+        XCTAssertEqual(Set(files), Set(documents.filter { !$0.isDirectory }.map(\.path)))
     }
 
     func testUnsafeOrConflictingPathsFailWithoutReplacingDestination() throws {

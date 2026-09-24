@@ -95,6 +95,7 @@ struct EditableMemoryDocument: Hashable, Sendable {
     var title: String
     var path: String
     var body: String
+    var isDirectory = false
 }
 
 struct MemoryResource: Identifiable, Hashable, Sendable {
@@ -216,6 +217,7 @@ struct ReviewChangeSources: Sendable {
     let resolutionContent: String?
     let proposedPath: String?
     let operationLabels: [String]
+    var isDirectory = false
 }
 
 struct ProjectState: Identifiable, Hashable, Sendable {

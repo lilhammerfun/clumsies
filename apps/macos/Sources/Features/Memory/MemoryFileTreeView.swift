@@ -5,6 +5,7 @@ enum MemoryFileTreeAlert: Identifiable {
     enum ID: Hashable {
         case itemRename(String)
         case directoryRename(String)
+        case directoryCreate
         case memoryDeletion
         case directoryDiscard
         case directoryDeletion
@@ -12,6 +13,7 @@ enum MemoryFileTreeAlert: Identifiable {
 
     case itemRename(item: MemoryListItem)
     case directoryRename(id: String, items: [MemoryListItem])
+    case directoryCreate(parent: String)
     case memoryDeletion(items: [MemoryListItem])
     case directoryDiscard(name: String, drafts: [LocalDraft])
     case directoryDeletion(name: String, plan: MemoryDirectoryDeletionPlan)
@@ -22,6 +24,8 @@ enum MemoryFileTreeAlert: Identifiable {
             .itemRename(item.id)
         case .directoryRename(let id, _):
             .directoryRename(id)
+        case .directoryCreate:
+            .directoryCreate
         case .memoryDeletion:
             .memoryDeletion
         case .directoryDiscard:
@@ -37,6 +41,8 @@ enum MemoryFileTreeAlert: Identifiable {
             String(localized: "Rename \(item.document.path.split(separator: "/").last.map(String.init) ?? String(localized: "File"))")
         case .directoryRename:
             String(localized: "Rename Folder")
+        case .directoryCreate:
+            String(localized: "New Folder")
         case .memoryDeletion(let items):
             items.count == 1
                 ? String(localized: "Delete File?")
@@ -54,6 +60,8 @@ enum MemoryFileTreeAlert: Identifiable {
         switch self {
         case .itemRename, .directoryRename:
             String(localized: "Rename")
+        case .directoryCreate:
+            String(localized: "Create")
         case .memoryDeletion:
             String(localized: "Delete")
         case .directoryDiscard:
@@ -65,6 +73,8 @@ enum MemoryFileTreeAlert: Identifiable {
 
     var message: String {
         switch self {
+        case .directoryCreate:
+            return String(localized: "The folder is saved as a draft and shared after review and merge.")
         case .itemRename(let item):
             if item.resource == nil {
                 return String(localized: "This changes the path in the current Project-carried Draft.")
@@ -179,7 +189,7 @@ struct FileTreeView: View {
             },
             onRename: { id in
                 guard let node = FileTreeNode.node(withId: id, in: operationRoots) else { return }
-                if let item = node.item {
+                if let item = node.item, node.children == nil {
                     guard MemoryFileTreeMenu.canRename(item, inOrgView: workspaceContext.activeProjectId == nil),
                           draftStore.canEditMemory(item) else { return }
                     beginRenaming(item)
@@ -236,6 +246,26 @@ struct FileTreeView: View {
                     .disabled(
                         self.operations.directoryOperationProgress != nil || !self.isValidProposedDirectoryName
                     )
+            case .directoryCreate(let parent):
+                TextField("Folder name", text: $proposedDirectoryName)
+                Button("Cancel", role: .cancel) { dismissAlert() }
+                Button(alert.confirmationTitle) {
+                    let name = proposedDirectoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let path = parent.isEmpty ? name : parent + "/" + name
+                    let authority = workspaceContext.authorityGeneration
+                    let project = workspaceContext.activeProjectId
+                    dismissAlert()
+                    Task {
+                        guard workspaceContext.authorityGeneration == authority,
+                              workspaceContext.activeProjectId == project else { return }
+                        await memoryModel.createFolder(path: path)
+                        guard workspaceContext.authorityGeneration == authority,
+                              workspaceContext.activeProjectId == project,
+                              FileTreeNode.node(withId: "directory:" + path, in: operationRoots) != nil else { return }
+                        selectedNodeIds = ["directory:" + path]
+                    }
+                }
+                .disabled(operations.directoryOperationProgress != nil || !isValidFolderName)
             case .memoryDeletion, .directoryDiscard, .directoryDeletion:
                 Button("Cancel", role: .cancel) { self.dismissAlert() }
                 Button(alert.confirmationTitle, role: .destructive) {
@@ -271,6 +301,11 @@ struct FileTreeView: View {
             return false
         }
         return name != directory.name
+    }
+
+    private var isValidFolderName: Bool {
+        let name = proposedDirectoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !name.isEmpty && name != "." && name != ".." && !name.contains("/")
     }
 
     private func dismissAlert() {
@@ -350,10 +385,7 @@ struct FileTreeView: View {
             }) else {
                 throw MemoryDirectoryMutationError.readOnly
             }
-            let resources = memoryCatalog.resources.filter {
-                $0.scope == .org
-                    || ($0.scope == .project && $0.projectId == self.workspaceContext.activeProjectId)
-            }
+            let resources = memoryModel.visibleMemoryItems.compactMap(\.resource)
             let drafts = draftStore.drafts.filter {
                 $0.projectId == self.workspaceContext.activeProjectId
                     && $0.status != .discarded
@@ -368,7 +400,9 @@ struct FileTreeView: View {
                 items: targetItems,
                 occupiedPaths: occupiedPaths,
                 occupiedTreePaths: occupiedTreePaths,
-                inOrgView: false
+                inOrgView: false,
+                directoryPaths: Set((resources.map(\.document) + drafts.map(\.document)).filter(\.isDirectory).map(\.path)),
+                directoryTreePaths: Set(memoryModel.visibleMemoryItems.filter { $0.document.isDirectory }.map { FileTreeNode.treePath(for: $0) })
             )
             dismissAlert()
             Task { await self.operations.renameDirectory(plan) }
@@ -385,9 +419,7 @@ struct FileTreeView: View {
             && !documentSessions.isSynchronizingDocument($0.id) }) else {
             throw MemoryDirectoryMutationError.readOnly
         }
-        let resources = memoryCatalog.resources.filter {
-            $0.scope == .org || $0.projectId == workspaceContext.activeProjectId
-        }
+        let resources = memoryModel.visibleMemoryItems.compactMap(\.resource)
         let drafts = draftStore.drafts.filter {
             $0.projectId == workspaceContext.activeProjectId && $0.status != .discarded && $0.status != .merged
         }
@@ -395,7 +427,9 @@ struct FileTreeView: View {
             selectedNodeIds: ids, to: destination, roots: operationRoots,
             occupiedPaths: Set(resources.map(\.document.path)).union(drafts.map(\.document.path)),
             occupiedTreePaths: Set(memoryModel.visibleMemoryItems.map { FileTreeNode.treePath(for: $0) }),
-            inOrgView: false
+            inOrgView: false,
+            directoryPaths: Set((resources.map(\.document) + drafts.map(\.document)).filter(\.isDirectory).map(\.path)),
+            directoryTreePaths: Set(memoryModel.visibleMemoryItems.filter { $0.document.isDirectory }.map { FileTreeNode.treePath(for: $0) })
         )
     }
 
@@ -696,18 +730,24 @@ struct FileTreeView: View {
             }
         }
 
-        if targetItems.isEmpty {
+        if targetItems.isEmpty || selectedDirectory != nil {
             if let scope = MemoryFileTreeMenu.creationScope(inOrgView: isOrgView) {
+                let parent = selectedDirectory.flatMap { FileTreeNode.directoryPath(from: $0.id) } ?? ""
                 Button("New File") {
                     guard self.operations.directoryOperationProgress == nil else { return }
                     Task {
-                        await self.memoryModel.createMemory(kind: self.workspaceNavigation.selectedKind, scope: scope)
+                        await self.memoryModel.createMemory(kind: .context, scope: scope, parentPath: parent)
                     }
                 }
                 .disabled(
                     operations.directoryOperationProgress != nil
                         || !draftStore.canCreateMemory(kind: workspaceNavigation.selectedKind, scope: scope)
                 )
+                Button("New Folder…") {
+                    proposedDirectoryName = String(localized: "Untitled Folder")
+                    pendingAlert = .directoryCreate(parent: parent)
+                }
+                .disabled(operations.directoryOperationProgress != nil || !draftStore.canCreateMemory(kind: .context, scope: scope))
             }
         }
     }
@@ -733,7 +773,7 @@ struct FileTreeView: View {
         if nodeIds.count == 1,
            let nodeId = nodeIds.first,
            let node = FileTreeNode.node(withId: nodeId, in: roots),
-           node.item == nil {
+           node.children != nil {
             return String(localized: "Update \(node.name)")
         }
         return draftCount == 1 ? String(localized: "Update memory") : String(localized: "Update \(draftCount) memories")
@@ -747,7 +787,7 @@ struct FileTreeView: View {
     private func confirm(_ alert: MemoryFileTreeAlert) {
         dismissAlert()
         switch alert {
-        case .itemRename, .directoryRename:
+        case .itemRename, .directoryRename, .directoryCreate:
             return
         case .memoryDeletion(let items):
             Task { await self.operations.deleteItems(items) }
@@ -803,7 +843,7 @@ private struct FileTreeRow: View {
             name: node.name,
             path: node.item?.document.path,
             depth: 0,
-            isDirectory: node.item == nil,
+            isDirectory: node.children != nil,
             isExpanded: isExpanded,
             titleColor: isSelected ? Color(nsColor: .selectedControlTextColor)
                 : MemoryFileTreeTitleTone.resolve(item: node.item).color

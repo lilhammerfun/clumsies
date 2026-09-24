@@ -67,8 +67,8 @@ pub(crate) async fn store_tree(
         sqlx::query(
             "INSERT INTO tree_entries (
                 tree_id, item_id, resource_kind, scope, project_id, path, blob_id, source,
-                description, org_source
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                description, org_source, is_directory
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT DO NOTHING",
         )
         .bind(&tree_id)
@@ -81,6 +81,7 @@ pub(crate) async fn store_tree(
         .bind(&entry.source)
         .bind(&entry.description)
         .bind(entry.org_source.as_ref().map(sqlx::types::Json))
+        .bind(entry.is_directory)
         .execute(&mut **tx)
         .await?;
     }
@@ -186,7 +187,7 @@ pub(crate) async fn load_commit_payload(
     let commit = load_commit_metadata(tx, commit_id).await?;
     let item_rows = sqlx::query(
         "SELECT e.item_id, e.resource_kind, e.scope, e.project_id, e.path, e.blob_id,
-                e.source, e.description, e.org_source, b.content
+                e.source, e.description, e.org_source, e.is_directory, b.content
          FROM tree_entries e
          JOIN blobs b ON b.blob_id = e.blob_id
          WHERE e.tree_id = $1
@@ -214,6 +215,7 @@ pub(crate) async fn load_commit_payload(
                     "org_source",
                 )?
                 .map(|source| source.0),
+            is_directory: row.try_get("is_directory")?,
             id,
             kind,
             scope,
@@ -631,7 +633,7 @@ pub(super) async fn project_snapshot_resources(
 ) -> Result<Vec<crate::app::memory::model::CommitResource>, ServerError> {
     Ok(
         sqlx::query_as::<_, crate::app::memory::model::CommitResource>(
-            "SELECT resource_id, resource_kind, path, name, body, description, org_source
+            "SELECT resource_id, resource_kind, path, name, body, description, org_source, is_directory
          FROM resources
          WHERE scope = 'project' AND project_id = $1 AND status = 'active'
          ORDER BY resource_kind, path",
@@ -654,7 +656,7 @@ pub(super) async fn selected_snapshot_resources(
 ) -> Result<Vec<crate::app::memory::model::CommitResource>, ServerError> {
     Ok(
         sqlx::query_as::<_, crate::app::memory::model::CommitResource>(
-            "SELECT r.resource_id, r.resource_kind, r.path, r.name, r.body, r.description, r.org_source
+            "SELECT r.resource_id, r.resource_kind, r.path, r.name, r.body, r.description, r.org_source, r.is_directory
          FROM project_org_resource_selections s
          JOIN resources r ON r.resource_id = s.resource_id
          WHERE s.project_id = $1 AND r.status = 'active'
@@ -699,7 +701,7 @@ pub(super) async fn org_snapshot_resources(
 ) -> Result<Vec<crate::app::memory::model::CommitResource>, ServerError> {
     Ok(
         sqlx::query_as::<_, crate::app::memory::model::CommitResource>(
-            "SELECT resource_id, resource_kind, path, name, body, description, org_source
+            "SELECT resource_id, resource_kind, path, name, body, description, org_source, is_directory
          FROM resources
          WHERE scope = 'org' AND org_id = $1 AND status = 'active'
          ORDER BY resource_kind, path",

@@ -1641,12 +1641,16 @@ components:
           oneOf:
             - $ref: "#/components/schemas/OrgMemorySource"
             - type: "null"
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         description:
           type: [string, "null"]
           description: Optional semantic summary updated with the content.
         content:
           type: string
-          minLength: 1
+          description: Nonblank file text, or an empty string when is_directory is true.
     DraftResourceRef:
       type: object
       required: [scope, id, path]
@@ -2168,6 +2172,10 @@ components:
           oneOf:
             - $ref: "#/components/schemas/OrgMemorySource"
             - type: "null"
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         memory_id:
           type: string
         scope:
@@ -2287,11 +2295,15 @@ components:
           oneOf:
             - $ref: "#/components/schemas/OrgMemorySource"
             - type: "null"
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         id:
           type: string
         type:
           type: string
-          enum: [rule, context, workflow, project_org_selection]
+          enum: [memory, rule, context, workflow, project_org_selection]
         scope:
           type: string
           enum: [org, project, daemon]
