@@ -100,6 +100,11 @@ Server update. If both site and Server delivery are selected, site delivery
 first synchronizes their shared Compose/Caddy configuration. A manual dispatch
 accepts only an existing immutable digest and its full commit for retry or rollback.
 
+Site delivery builds the documentation and the official site, syncs them to
+`/srv/docs` and `/srv/www`, copies the Compose file and `deploy/Caddyfile`,
+and reloads Caddy so a synced configuration takes effect on the running
+container.
+
 The GHCR package is linked to this repository through its OCI source label.
 Make the package public once so self-hosted installations can pull it without a
 personal token. GitHub documents both [anonymous pulls for public container
