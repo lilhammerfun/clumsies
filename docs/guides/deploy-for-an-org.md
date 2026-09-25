@@ -225,7 +225,8 @@ size, backup and restore-drill freshness, and certificate expiry. Every port
 binds to loopback, and alert delivery uses SMTP through Alertmanager.
 
 The production `deploy/Caddyfile` opens a global block so Caddy exposes its HTTP
-metrics on the admin endpoint of the Compose network. Install steps, the
+metrics on the admin endpoint of the Compose network, and answers 404 for the
+Server's own `/metrics` route so the scrape endpoint stays internal. Install steps, the
 required `.env`, the alert channel configuration, and the alert rules are
 documented in [`deploy/observability/README.md`](https://github.com/lilhammerfun/clumsies/blob/main/deploy/observability/README.md).
 

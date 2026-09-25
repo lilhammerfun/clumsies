@@ -31,6 +31,10 @@ app.clumsies.ai {
 		-Server
 	}
 
+	# The metrics endpoint is for the internal Prometheus scrape only.
+	@metrics path /metrics
+	respond @metrics 404
+
 	reverse_proxy server:8080 {
 		header_up X-Request-ID {http.request.uuid}
 	}

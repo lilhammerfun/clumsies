@@ -13,6 +13,7 @@ interface only.
 | `cadvisor` | Per-container CPU, memory, and restart activity |
 | `postgres-exporter` | Connections, transactions, and database size |
 | `blackbox-exporter` | Public HTTPS probes for the app, docs, official site, and the `www` alias |
+| `server` (scrape target) | Request rate, latency histogram, in-flight gauge, and database pool gauges from the Server itself |
 | `clumsies-observability-metrics.timer` | Backup, restore-drill, and release freshness |
 
 Caddy exposes its HTTP metrics on the admin API, so the production
@@ -28,6 +29,12 @@ the Compose network and enables metrics:
 
 The admin endpoint stays reachable only from the Compose network because
 `compose.production.yml` publishes nothing but ports 80 and 443.
+
+The Server exposes Prometheus metrics on `/metrics` for the same network. Its
+route labels are registered route templates and its status labels are classes,
+so cardinality cannot grow with the number of organizations or resources.
+Caddy answers 404 for that path on the public origin, so the endpoint is never
+reachable from the internet.
 
 ## Install
 
