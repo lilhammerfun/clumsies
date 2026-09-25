@@ -621,9 +621,9 @@ Cancellation 是资源优化，generation check 才是正确性边界。
 - [PR #203：Server 规范化与热路径](https://github.com/lilhammerfun/clumsies/pull/203)
 - [PR #204：first-ready、同步与 daemon](https://github.com/lilhammerfun/clumsies/pull/204)
 - macOS 入口：`apps/macos/Sources/Features/Workspace/WorkspaceCoordinator.swift`
-- daemon Ref 同步：`crates/daemon/src/commit_sync.rs`
-- Draft event 同步：`crates/daemon/src/draft.rs`
-- daemon 会话与响应缓存：`crates/daemon/src/state.rs`
-- 401 token refresh：`crates/daemon/src/server_client.rs`
-- LaunchAgent binary hash：`crates/daemon/src/config.rs`
-- daemon 启动分支：`crates/daemon/src/main.rs`
+- daemon Ref 同步：`crates/clumsiesd/src/commit_sync.rs`
+- Draft event 同步：`crates/clumsiesd/src/draft.rs`
+- daemon 会话与响应缓存：`crates/clumsiesd/src/state.rs`
+- 401 token refresh：`crates/clumsiesd/src/server_client.rs`
+- LaunchAgent binary hash：`crates/clumsiesd/src/config.rs`
+- daemon 启动分支：`crates/clumsiesd/src/main.rs`

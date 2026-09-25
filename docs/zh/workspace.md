@@ -67,4 +67,4 @@ daemon 把关系保存在中心 SQLite 的 `project_bindings` 中。调用者位
 
 按数据流依次检查：当前目录绑定的 Project、该 Project 的 Org Selection、daemon 已安装的 Project Commit、是否有 Draft 覆盖、检索索引是否就绪。发布成功但本机尚未同步、项目未选择、Draft 覆盖旧基线，是不同的问题。
 
-继续阅读：[Organization Memory](/zh/artifact)、[核心数据模型](/zh/data-model)、[系统架构](/zh/architecture)。实现依据：[绑定解析](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/state.rs)、[MCP 入口](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/agent_runtime/mcp.rs)、[Project 投影](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/repository.rs)、[本地存储](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/project_storage.rs)。
+继续阅读：[Organization Memory](/zh/artifact)、[核心数据模型](/zh/data-model)、[系统架构](/zh/architecture)。实现依据：[绑定解析](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/state.rs)、[MCP 入口](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/agent_runtime/mcp.rs)、[Project 投影](https://github.com/lilhammerfun/clumsies/blob/main/crates/server/src/app/memory/repository.rs)、[本地存储](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/project_storage.rs)。

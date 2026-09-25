@@ -191,9 +191,9 @@ Clumsies 比较三份内容：
 
 | 行为 | 源码或可执行验证 |
 | --- | --- |
-| MCP 校验与操作格式 | [MCP 契约](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/agent_runtime/mcp_contract.rs) |
-| hash 更新校验、本地持久化队列及确认 | [daemon 状态层](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/state.rs) |
-| 检索中的本地 Draft 叠加 | [Search overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/search/overlay.rs) |
+| MCP 校验与操作格式 | [MCP 契约](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/agent_runtime/mcp_contract.rs) |
+| hash 更新校验、本地持久化队列及确认 | [daemon 状态层](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/state.rs) |
+| 检索中的本地 Draft 叠加 | [Search overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/search/overlay.rs) |
 | 候选校验、Review 创建和原子发布 | [Review 持久化](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs) |
 | 多 Draft 合并保留操作顺序 | [Draft 操作顺序测试](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/tests/draft_operation_ordering.rs) |
-| 发布变化到达两个 daemon，且重启后保留 | [Server 集成测试](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/tests/server_integration.rs) |
+| 发布变化到达两个 daemon，且重启后保留 | [Server 集成测试](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/tests/server_integration.rs) |

@@ -33,7 +33,7 @@ either token, and daemon has no plaintext credential fallback.
 
 ## Retrieval model preparation
 
-The daemon prepares models in the background before the first MCP request. It uses pinned int8 versions of `intfloat/multilingual-e5-small` for embedding and `Xenova/bge-reranker-base` for reranking. The current download is 431,831,479 bytes; the revisions, artifact sizes, and SHA-256 checksums are defined in the [model manifest](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/models.rs).
+The daemon prepares models in the background before the first MCP request. It uses pinned int8 versions of `intfloat/multilingual-e5-small` for embedding and `Xenova/bge-reranker-base` for reranking. The current download is 431,831,479 bytes; the revisions, artifact sizes, and SHA-256 checksums are defined in the [model manifest](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/search/models.rs).
 
 Downloads support resuming. Artifacts are verified before ONNX loading and cached for offline reuse. Search status reports `preparing` with downloaded and total bytes. Activation returns `search_model_preparing` immediately until preparation finishes; it does not hold an MCP request open for an unreported download or silently use a weaker retrieval path.
 
@@ -90,12 +90,12 @@ most 4 MiB per file; databases, Memory and Keychain data are not collected.
 Existing crash/legacy records are copied as logs, not re-sanitized. Nothing is
 uploaded automatically. Review the manifest if a file sink was unavailable.
 
-Regression evidence lives in `crates/daemon/tests/client_diagnostics.rs`,
+Regression evidence lives in `crates/clumsiesd/tests/client_diagnostics.rs`,
 daemon diagnostics/XPC unit tests, Server telemetry tests, and macOS
 `ClientDiagnosticsTests` / `NativeServerBootstrapTests`. Changes to request or
 logging boundaries must verify failure evidence, correlation, redaction and
-retention, in addition to successful requests. Run `cargo test -p daemon
---test client_diagnostics`, `cargo test -p daemon --lib --bins`, `cargo test -p
+retention, in addition to successful requests. Run `cargo test -p clumsiesd
+--test client_diagnostics`, `cargo test -p clumsiesd --lib --bins`, `cargo test -p
 server telemetry::tests --lib`, and `just test-macos`. All are covered by the
 existing Rust/macOS CI jobs. The timeout probe uses 118 fake Drafts, a loopback
 server, temporary storage and an in-memory credential store.

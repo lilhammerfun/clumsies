@@ -61,7 +61,7 @@ reconciliation 候选绑定 Draft ID、Draft version、Base Commit 和 Current C
 | `crates/server/openapi/clumsies.admin.v1.yaml` | Administration API、公开健康检查与首次安装配置 |
 
 本地 daemon IPC 不是 HTTP，不再维护 OpenAPI 副本。其可执行契约由
-`crates/daemon/src/types.rs` 的请求/响应类型、`crates/daemon/src/state.rs` 的分派表以及
+`crates/clumsiesd/src/types.rs` 的请求/响应类型、`crates/clumsiesd/src/state.rs` 的分派表以及
 Rust/macOS 契约测试共同定义。
 
 OpenAPI 是 HTTP wire contract 来源，但当前存在一个已知实现缺口：Public OpenAPI 的 `TreeEntry.type` 仍声明 `rule/context/workflow/project_org_selection`，且没有 `description`；Rust/数据库当前实际模型是 `memory/project_org_selection` 并携带 `description`。在契约修复前，不能把这部分 schema 视为实现的准确描述。
@@ -104,7 +104,7 @@ OIDC 变量为空时，Server 为基础设施诊断仍可启动，但 health 会
 ```bash
 cargo test -p server --lib axum_routes_match_public_and_admin_openapi
 cargo test -p server
-cargo test -p daemon
+cargo test -p clumsiesd
 ```
 
 Server 与 daemon 集成测试使用真实 PostgreSQL Testcontainer。发布流程还必须验证生产镜像和 Compose health；仅有文档构建不证明认证或 Review 并发语义正确。

@@ -2,9 +2,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use daemon::agent_runtime::mcp::McpServer;
-use daemon::agent_runtime::{AgentRuntimeBackend, mcp_contract::AgentRuntimeRequest};
-use daemon::{
+use clumsiesd::agent_runtime::mcp::McpServer;
+use clumsiesd::agent_runtime::{AgentRuntimeBackend, mcp_contract::AgentRuntimeRequest};
+use clumsiesd::{
     CredentialStore, CredentialStoreError, DAEMON_MACH_SERVICE_NAME, DEV_INSTANCE_ID_ENV,
     DaemonConfig, DaemonError, DaemonIpcClient, DaemonIpcResponse, DaemonIpcServer,
     DaemonIpcService, DaemonProjectBindingResolveRequest, DaemonState, LaunchAgentConfig,
@@ -200,7 +200,7 @@ fn agent_runtime_client(
 ) -> DaemonIpcClient {
     DaemonIpcClient::for_agent_runtime(
         runtime_mode.mach_service_name.clone(),
-        daemon::agent_runtime::current_identity(),
+        clumsiesd::agent_runtime::current_identity(),
     )
     .with_timeout(request_timeout)
 }
@@ -281,7 +281,7 @@ fn validate_test_mach_service_name(service_name: &str) -> Result<(), DaemonError
 
 fn stale_tool_identity_for_test(
     runtime_mode: &DaemonRuntimeMode,
-) -> Result<Option<daemon::AgentRuntimeIdentity>, DaemonError> {
+) -> Result<Option<clumsiesd::AgentRuntimeIdentity>, DaemonError> {
     let Some(build_id) = optional_utf8_env(
         AGENT_RUNTIME_TEST_STALE_TOOL_BUILD_ENV,
         std::env::var(AGENT_RUNTIME_TEST_STALE_TOOL_BUILD_ENV),
@@ -299,15 +299,15 @@ fn stale_tool_identity_for_test(
             "{AGENT_RUNTIME_TEST_STALE_TOOL_BUILD_ENV} is allowed only for a bounded debug test service build id"
         )));
     }
-    Ok(Some(daemon::AgentRuntimeIdentity {
-        protocol_revision: daemon::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
+    Ok(Some(clumsiesd::AgentRuntimeIdentity {
+        protocol_revision: clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
         build_id,
     }))
 }
 
-fn agent_runtime_matches(resident: &daemon::AgentRuntimeIdentity) -> bool {
-    resident.protocol_revision == daemon::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION
-        && resident.build_id == daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID
+fn agent_runtime_matches(resident: &clumsiesd::AgentRuntimeIdentity) -> bool {
+    resident.protocol_revision == clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION
+        && resident.build_id == clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID
 }
 
 async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -408,7 +408,7 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             if gap < 120 {
                 tracing::warn!(
                     gap_secs = gap,
-                    build_id = daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID,
+                    build_id = clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID,
                     "clumsiesd restarted {gap}s after its previous start; possible crash loop (see ~/Library/Logs/DiagnosticReports/clumsiesd-*.ips)"
                 );
             }
@@ -420,16 +420,16 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             tracing::error!(
                 panic = %info,
                 version = env!("CARGO_PKG_VERSION"),
-                build_id = daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID,
+                build_id = clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID,
                 "clumsiesd panicked:\n{backtrace}"
             );
-            if let Ok(mut file) = daemon::diagnostics::RotatingLog::new(&crash_log_path) {
+            if let Ok(mut file) = clumsiesd::diagnostics::RotatingLog::new(&crash_log_path) {
                 let _ = writeln!(
                     file,
                     "clumsiesd panicked (pid {} version {} build_id {}): {info}",
                     std::process::id(),
                     env!("CARGO_PKG_VERSION"),
-                    daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID
+                    clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID
                 );
                 let _ = writeln!(file, "{backtrace}");
             }
@@ -459,7 +459,7 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     tracing::info!(
         pid = std::process::id(),
         version = env!("CARGO_PKG_VERSION"),
-        build_id = daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID,
+        build_id = clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID,
         "clumsiesd initialized for Mach service {} with installation {}",
         mach_service_name,
         health.daemon_installation_id
@@ -469,15 +469,15 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-fn open_daemon_log(log_dir: &Path) -> std::io::Result<daemon::diagnostics::RotatingLog> {
-    daemon::diagnostics::RotatingLog::new(&log_dir.join("daemon.log"))
+fn open_daemon_log(log_dir: &Path) -> std::io::Result<clumsiesd::diagnostics::RotatingLog> {
+    clumsiesd::diagnostics::RotatingLog::new(&log_dir.join("daemon.log"))
 }
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-fn print_status(status: &daemon::DaemonBootstrapStatus) -> Result<(), serde_json::Error> {
+fn print_status(status: &clumsiesd::DaemonBootstrapStatus) -> Result<(), serde_json::Error> {
     println!("{}", serde_json::to_string_pretty(status)?);
     Ok(())
 }
@@ -523,12 +523,12 @@ mod tests {
 
     #[test]
     fn proxy_rejects_a_different_resident_build() {
-        assert!(agent_runtime_matches(&daemon::AgentRuntimeIdentity {
-            protocol_revision: daemon::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
-            build_id: daemon::agent_runtime::AGENT_RUNTIME_BUILD_ID.to_owned(),
+        assert!(agent_runtime_matches(&clumsiesd::AgentRuntimeIdentity {
+            protocol_revision: clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
+            build_id: clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID.to_owned(),
         }));
-        assert!(!agent_runtime_matches(&daemon::AgentRuntimeIdentity {
-            protocol_revision: daemon::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
+        assert!(!agent_runtime_matches(&clumsiesd::AgentRuntimeIdentity {
+            protocol_revision: clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
             build_id: "different-build".to_owned(),
         }));
     }

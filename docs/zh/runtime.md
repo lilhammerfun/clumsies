@@ -21,7 +21,7 @@ daemon 使用一个中心 SQLite 数据库；当前 schema version 为 `42`。�
 
 ## 检索模型准备
 
-daemon 在第一次 MCP 请求之前，就开始后台准备模型。当前使用固定版本的 int8 `intfloat/multilingual-e5-small` 做 embedding，使用 int8 `Xenova/bge-reranker-base` 做 reranking。完整下载量为 431,831,479 字节；版本、文件大小和 SHA-256 校验值定义在[模型清单](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/models.rs)中。
+daemon 在第一次 MCP 请求之前，就开始后台准备模型。当前使用固定版本的 int8 `intfloat/multilingual-e5-small` 做 embedding，使用 int8 `Xenova/bge-reranker-base` 做 reranking。完整下载量为 431,831,479 字节；版本、文件大小和 SHA-256 校验值定义在[模型清单](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/search/models.rs)中。
 
 下载支持断点续传，文件通过校验后才加载到 ONNX，随后可复用本机缓存。准备期间，搜索状态显示 `preparing` 及已下载、总字节数。Activation 会立即返回 `search_model_preparing`，不会让 MCP 请求一直等待未报告的下载，也不会静默降级到较弱的检索方式。
 
@@ -65,8 +65,8 @@ App/daemon 版本，以及缺失或不可读文件。只收集指定名称的 Ap
 检查导出清单。
 
 请求或日志边界改动需要验证失败证据、关联、脱敏及保留上限，成功请求不能替代
-这些检查。回归命令为 `cargo test -p daemon --test client_diagnostics`、
-`cargo test -p daemon --lib --bins`、`cargo test -p server telemetry::tests --lib`
+这些检查。回归命令为 `cargo test -p clumsiesd --test client_diagnostics`、
+`cargo test -p clumsiesd --lib --bins`、`cargo test -p server telemetry::tests --lib`
 和 `just test-macos`，现有 Rust/macOS CI 会运行这些测试。超时测试使用 118 条
 假草稿、回环服务器、临时目录和内存凭据存储，不接触真实账号或 Keychain。
 
@@ -166,7 +166,7 @@ Desktop 可通过 typed XPC 查看 daemon health、bootstrap、Project 配置、
 Server health 位于 `/api/v1/admin/health`。本地实现变更至少运行对应最小测试；覆盖本页主要边界的检查为：
 
 ```bash
-cargo test -p daemon
+cargo test -p clumsiesd
 cargo test -p server --lib axum_routes_match_public_and_admin_openapi
 bun run build
 ```

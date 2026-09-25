@@ -190,10 +190,10 @@ decorative skeleton rows.
 
 | Concern | Path |
 | --- | --- |
-| Shared projection and DSH reader | `crates/daemon/src/recall.rs` |
-| Summary snapshots and task pagination | `crates/daemon/src/recall/paging.rs` |
-| Codex rollout reader | `crates/daemon/src/recall/codex.rs` |
-| XPC dispatch | `crates/daemon/src/state.rs` (`list_recalls`, `get_recall_session`, `get_recall_fragment`) |
+| Shared projection and DSH reader | `crates/clumsiesd/src/recall.rs` |
+| Summary snapshots and task pagination | `crates/clumsiesd/src/recall/paging.rs` |
+| Codex rollout reader | `crates/clumsiesd/src/recall/codex.rs` |
+| XPC dispatch | `crates/clumsiesd/src/state.rs` (`list_recalls`, `get_recall_session`, `get_recall_fragment`) |
 | XPC client and models | `apps/macos/Sources/Services/Daemon/DaemonXPCClient.swift`, `apps/macos/Sources/Libraries/Models/DaemonModels.swift` |
 | Sidebar section | `apps/macos/Sources/Libraries/Models/MemoryModels.swift` (`WorkspaceSection.sessions`) |
 | Activity UI, host badge, and chunk detail | `apps/macos/Sources/Features/Activity/ActivityView.swift`, `ActivityModel.swift` |

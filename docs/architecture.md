@@ -127,8 +127,8 @@ See [Troubleshooting](/guides/troubleshooting). Commit downloads currently trans
 ## Continue into the implementation
 
 - [Server route assembly](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/http.rs): interfaces and authentication groups.
-- [Daemon startup](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/main.rs): resident/proxy modes and background workers.
-- [Draft synchronization](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/draft.rs), [Commit installation](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/commit_sync.rs), and [effective-content overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/search/overlay.rs): three separate processing stages.
+- [Daemon startup](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/main.rs): resident/proxy modes and background workers.
+- [Draft synchronization](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/draft.rs), [Commit installation](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/commit_sync.rs), and [effective-content overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/search/overlay.rs): three separate processing stages.
 - Next: [Core data structures](/data-model), connecting the diagram's names to objects, fields, and relationships.
 
 

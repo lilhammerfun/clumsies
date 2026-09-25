@@ -74,7 +74,7 @@ The checked-in HTTP specifications are listed below. They have known payload and
 
 Local daemon IPC is not HTTP and has no OpenAPI document. Its executable
 contract is defined by the request and response types in
-`crates/daemon/src/types.rs`, the dispatch table in `crates/daemon/src/state.rs`,
+`crates/clumsiesd/src/types.rs`, the dispatch table in `crates/clumsiesd/src/state.rs`,
 and the Rust/macOS contract tests.
 
 Authentication uses the organization's OIDC provider in the system browser.
@@ -139,7 +139,7 @@ not a usable deployment.
 ```bash
 cargo test -p server --lib axum_routes_match_public_and_admin_openapi
 cargo test -p server
-cargo test -p daemon
+cargo test -p clumsiesd
 ```
 
 Server and daemon integration tests use Testcontainers with a real PostgreSQL

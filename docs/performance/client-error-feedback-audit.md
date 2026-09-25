@@ -80,7 +80,7 @@ Rust, lifecycle and live results below belong to the preceding error-policy audi
 | `just test-macos` and Debug promotion contract | Passed; the final Review access regression also passed a subsequent full English run |
 | `cargo test --locked --workspace` | 433 passed, 0 failed, 2 model tests ignored by their existing configuration |
 | `cargo fmt --all --check` | Passed |
-| `cargo clippy --locked -p daemon -- -D warnings` | Passed |
+| `cargo clippy --locked -p clumsiesd -- -D warnings` | Passed |
 | `cargo clippy --locked -p server --all-targets -- -D warnings` | Passed |
 | `npm run build` and `git diff --check` | Passed |
 

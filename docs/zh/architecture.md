@@ -127,8 +127,8 @@ HTTP 的独立 `approved` 决定本身不发布内容；当前 Desktop 的 Appro
 ## 对照实现继续阅读
 
 - [Server 路由装配](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/http.rs)：领域接口及鉴权分组。
-- [daemon 启动](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/main.rs)：resident/proxy 模式与后台 worker。
-- [Draft 同步](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/draft.rs)、[Commit 安装](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/commit_sync.rs)、[有效内容覆盖](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/search/overlay.rs)：三个不同的数据处理阶段。
+- [daemon 启动](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/main.rs)：resident/proxy 模式与后台 worker。
+- [Draft 同步](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/draft.rs)、[Commit 安装](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/commit_sync.rs)、[有效内容覆盖](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/search/overlay.rs)：三个不同的数据处理阶段。
 - 下一页：[核心数据结构](/zh/data-model)，把图中的名词落实为对象、字段与关系。
 
 

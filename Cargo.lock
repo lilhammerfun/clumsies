@@ -445,6 +445,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "clumsiesd"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "block2",
+ "fastembed",
+ "hex",
+ "hf-hub",
+ "libc",
+ "objc2",
+ "objc2-foundation",
+ "pulldown-cmark",
+ "reqwest 0.13.4",
+ "ruzstd",
+ "security-framework",
+ "security-framework-sys",
+ "serde",
+ "serde_json",
+ "server",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml_edit",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -715,40 +749,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "daemon"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "block2",
- "fastembed",
- "hex",
- "hf-hub",
- "libc",
- "objc2",
- "objc2-foundation",
- "pulldown-cmark",
- "reqwest 0.13.4",
- "ruzstd",
- "security-framework",
- "security-framework-sys",
- "serde",
- "serde_json",
- "server",
- "sha2 0.10.9",
- "sqlx",
- "tempfile",
- "testcontainers",
- "testcontainers-modules",
- "thiserror 2.0.18",
- "tokio",
- "toml_edit",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

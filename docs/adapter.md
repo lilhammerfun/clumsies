@@ -138,12 +138,12 @@ helper copy from silently taking over the Agent runtime.
 
 | Concern | Active path |
 | --- | --- |
-| User-level choices, installation, and migration | `crates/daemon/src/agent_adapter/global.rs` |
-| Native installer, merge rules, and legacy discovery | `crates/daemon/src/agent_adapter.rs` |
-| Codex plugin materialization and CLI reconciliation | `crates/daemon/src/agent_adapter/codex_plugin.rs` |
+| User-level choices, installation, and migration | `crates/clumsiesd/src/agent_adapter/global.rs` |
+| Native installer, merge rules, and legacy discovery | `crates/clumsiesd/src/agent_adapter.rs` |
+| Codex plugin materialization and CLI reconciliation | `crates/clumsiesd/src/agent_adapter/codex_plugin.rs` |
 | Codex plugin source bundle | `packages/clumsies/` |
-| MCP proxy mode | `crates/daemon/src/main.rs` |
-| Typed MCP contract | `crates/daemon/src/agent_runtime/mcp_contract.rs` |
+| MCP proxy mode | `crates/clumsiesd/src/main.rs` |
+| Typed MCP contract | `crates/clumsiesd/src/agent_runtime/mcp_contract.rs` |
 
 The retired Zig adapter implementation remains recoverable from Git commit
 `4b18f7947a977dbc6b62f560b698dc992597f19d`; it is not present or executed as

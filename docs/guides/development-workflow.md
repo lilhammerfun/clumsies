@@ -88,7 +88,7 @@ worktree's loopback Local instance, never a Preview or production Server.
 
 | Layer | Command |
 |---|---|
-| daemon | `cargo test -p daemon --lib` and `cargo test -p daemon --test daemon_lifecycle` |
+| daemon | `cargo test -p clumsiesd --lib` and `cargo test -p clumsiesd --test daemon_lifecycle` |
 | macOS app | `just test-macos` |
 | Dev lifecycle | `just test-dev-macos` |
 | public docs | `bun run build` |

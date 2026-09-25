@@ -85,7 +85,7 @@ NN/G 强调按影响程度选择反馈、提供恢复建议、保留输入，并
 | `just test-macos` 与 Debug promotion contract | 通过；最后补充的 Review 权限回归再次通过全量英文测试 |
 | `cargo test --locked --workspace` | 433 通过，0 失败，2 个模型测试按原有配置忽略 |
 | `cargo fmt --all --check` | 通过 |
-| `cargo clippy --locked -p daemon -- -D warnings` | 通过 |
+| `cargo clippy --locked -p clumsiesd -- -D warnings` | 通过 |
 | `cargo clippy --locked -p server --all-targets -- -D warnings` | 通过 |
 | `npm run build`、`git diff --check` | 通过 |
 

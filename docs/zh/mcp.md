@@ -257,4 +257,4 @@ MCP operation 会映射到 daemon 的 `activate_memory`、`load_memory` 与 `sto
 
 ## 实现入口
 
-输入校验和对外工具 schema 位于 [mcp_contract.rs](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/agent_runtime/mcp_contract.rs)。[mcp.rs](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/agent_runtime/mcp.rs)负责 stdio/JSON-RPC 和结果包装；[检索响应类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/search/mod.rs)和 [daemon 操作类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/daemon/src/types.rs)定义返回数据。
+输入校验和对外工具 schema 位于 [mcp_contract.rs](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/agent_runtime/mcp_contract.rs)。[mcp.rs](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/agent_runtime/mcp.rs)负责 stdio/JSON-RPC 和结果包装；[检索响应类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/search/mod.rs)和 [daemon 操作类型](https://github.com/lilhammerfun/clumsies/blob/main/crates/clumsiesd/src/types.rs)定义返回数据。
