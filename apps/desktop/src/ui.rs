@@ -54,6 +54,16 @@ pub const RADIUS: f32 = 4.;
 /// Radius for top-level containers: windows, dialogs, flyouts.
 pub const RADIUS_LG: f32 = 8.;
 
+/// A line of text in a semantic color. Every empty state and every failure the
+/// screens draw has this shape.
+pub fn message(text: impl Into<SharedString>, color: Hsla) -> AnyElement {
+    div()
+        .text_style(&BODY)
+        .text_color(color)
+        .child(text.into())
+        .into_any_element()
+}
+
 /// Applies a ramp entry to any styled element.
 pub trait Typography: Styled + Sized {
     fn text_style(self, style: &TextStyle) -> Self {

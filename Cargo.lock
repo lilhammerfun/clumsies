@@ -1931,7 +1931,10 @@ dependencies = [
 name = "desktop"
 version = "0.1.0"
 dependencies = [
+ "clumsiesd",
  "gpui-kit",
+ "serde",
+ "serde_json",
  "similar",
 ]
 

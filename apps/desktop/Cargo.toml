@@ -13,6 +13,10 @@ path = "src/main.rs"
 gpui-kit = "0.6.6"
 # Line-level diffing for the draft and review views.
 similar = "2"
-# The daemon's wire protocol is JSON; see src/protocol.rs.
+# The daemon owns the local wire protocol. Depending on it keeps one
+# definition of that contract instead of a copy that drifts.
+clumsiesd = { path = "../../crates/clumsiesd" }
+# The Server's API is not the daemon's, so the fields this client reads from it
+# are described here, not shared.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

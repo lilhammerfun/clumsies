@@ -1,3 +1,9 @@
+// The draft screen and the review screen are its callers and neither exists
+// yet, so nothing constructs it today. That is a state, not an oversight: the
+// model mirrors the macOS client and the rendering is proven, so the screens
+// consume it rather than reinventing it.
+#![allow(dead_code)]
+
 //! The diff view for a pending draft or a review.
 //!
 //! Line-level differences come from `similar`; this module owns the model and

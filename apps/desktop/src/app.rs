@@ -5,8 +5,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
 
-use crate::engine;
-use crate::protocol::EngineStatus;
+use crate::engine::{self, EngineStatus, MemoryDocument, Project};
 use crate::screens::memory::MemoryScreen;
 use crate::ui::{self, Typography};
 
@@ -14,12 +13,14 @@ use crate::ui::{self, Typography};
 const RAIL_WIDTH: f32 = 200.;
 
 pub struct DesktopApp {
-    projects: Vec<engine::Project>,
-    selected_project: usize,
-    memory: MemoryScreen,
     /// The engine is asked when the window opens and again when its row is
     /// clicked. Asking inside a frame would stall the render on a socket read.
     engine: EngineStatus,
+    projects: Vec<Project>,
+    /// Why the Project list could not be read, when it could not be.
+    projects_error: Option<String>,
+    selected_project: Option<usize>,
+    memory: MemoryScreen,
     /// Debug-build probe for the platform input method. Not part of the
     /// product: DESIGN.md keeps development scaffolding out of shipped UI.
     probe: Entity<InputState>,
@@ -27,15 +28,36 @@ pub struct DesktopApp {
 
 impl DesktopApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let memory = MemoryScreen::new(cx);
+        let engine = engine::engine_status();
+        let (projects, projects_error) = match engine::projects() {
+            Ok(projects) => (projects, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        let (documents, memory_error) = match projects.first() {
+            Some(project) => read_memory(project),
+            None => (Vec::new(), None),
+        };
+        let memory = MemoryScreen::new(cx, documents, memory_error);
         let probe = cx.new(|cx| InputState::new(window, cx).placeholder("用中文输入法打几个字"));
         Self {
-            projects: engine::projects(),
-            selected_project: 0,
+            engine,
+            selected_project: (!projects.is_empty()).then_some(0),
+            projects,
+            projects_error,
             memory,
-            engine: engine::engine_status(),
             probe,
         }
+    }
+
+    /// Selecting a Project reads its Memory. That read is a socket call to the
+    /// daemon, which is why it happens on the click rather than every frame.
+    fn select_project(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.selected_project = Some(index);
+        if let Some(project) = self.projects.get(index) {
+            let (documents, error) = read_memory(project);
+            self.memory.set_documents(documents, error, cx);
+        }
+        cx.notify();
     }
 
     /// Returns an owned element on purpose: edition 2024 makes `impl Trait`
@@ -56,40 +78,28 @@ impl DesktopApp {
                     .py_1()
                     .rounded(px(ui::RADIUS))
                     .text_style(&ui::BODY)
-                    .child(project.name);
-                let row = if index == selected {
+                    .child(project.name.clone());
+                let row = if Some(index) == selected {
                     row.bg(cx.theme().list_active)
                 } else {
                     row
                 };
                 row.on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.selected_project = index;
-                    cx.notify();
+                    this.select_project(index, cx);
                 }))
             })
             .collect::<Vec<_>>();
 
-        let probe = cfg!(debug_assertions).then(|| {
-            div()
-                .v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .text_style(&ui::CAPTION)
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Input method probe (debug builds only)"),
-                )
-                .child(Input::new(&self.probe))
-                .child(
-                    div()
-                        .text_style(&ui::CAPTION)
-                        .child(format!("你输入的是：{typed}")),
-                )
-                .into_any_element()
-        });
+        // An empty account, an unreachable engine and an empty organization are
+        // three different situations and the rail says which one it is in.
+        let projects: AnyElement = match &self.projects_error {
+            Some(error) => ui::message(error.clone(), cx.theme().danger),
+            None if self.projects.is_empty() => {
+                ui::message("还没有项目。", cx.theme().muted_foreground)
+            }
+            None => div().v_flex().gap_1().children(rows).into_any_element(),
+        };
 
-        // The engine is the one thing on this rail that is not a fixture, so
-        // it says what it is: reachable, and what it reports about itself.
         let (engine_state, engine_state_color) = match &self.engine {
             EngineStatus::Connected(health) => (
                 format!("v{} · connected", health.daemon_version),
@@ -106,7 +116,7 @@ impl DesktopApp {
                 if health.project_id.is_some() {
                     "project bound"
                 } else {
-                    "signed out"
+                    "signed in"
                 },
             ),
             EngineStatus::Unreachable(reason) => reason.clone(),
@@ -155,7 +165,25 @@ impl DesktopApp {
                 EngineStatus::Unreachable(_) => None,
             });
 
-        let project = &self.projects[selected];
+        let probe = cfg!(debug_assertions).then(|| {
+            div()
+                .v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_style(&ui::CAPTION)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Input method probe (debug builds only)"),
+                )
+                .child(Input::new(&self.probe))
+                .child(
+                    div()
+                        .text_style(&ui::CAPTION)
+                        .child(format!("你输入的是：{typed}")),
+                )
+                .into_any_element()
+        });
+
         div()
             .v_flex()
             .w(px(RAIL_WIDTH))
@@ -168,23 +196,27 @@ impl DesktopApp {
                     .text_color(cx.theme().muted_foreground)
                     .child("Projects"),
             )
-            .children(rows)
+            .child(projects)
             .child(div().flex_1())
-            .child(
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(project.repository),
-            )
-            .child(
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("{} Memory", project.memory_count)),
-            )
             .children(probe)
             .child(engine)
             .into_any_element()
+    }
+}
+
+/// Reads one Project's Memory, keeping the reason when it cannot.
+fn read_memory(project: &Project) -> (Vec<MemoryDocument>, Option<String>) {
+    match engine::memory_documents(&project.project_id) {
+        Ok(documents) => (documents, None),
+        Err(error) => (Vec::new(), Some(error)),
+    }
+}
+
+impl Render for DesktopApp {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let rail = self.rail(cx);
+        let screen = self.memory.render(cx);
+        div().h_flex().size_full().child(rail).child(screen)
     }
 }
 
@@ -210,12 +242,4 @@ fn truncate(value: &str, limit: usize) -> String {
     }
     let kept: String = value.chars().take(limit.saturating_sub(1)).collect();
     format!("{kept}…")
-}
-
-impl Render for DesktopApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rail = self.rail(cx);
-        let screen = self.memory.render(cx);
-        div().h_flex().size_full().child(rail).child(screen)
-    }
 }

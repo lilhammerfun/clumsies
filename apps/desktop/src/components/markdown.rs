@@ -7,7 +7,10 @@
 use gpui_kit::component::text::{FrontmatterPlugin, MarkdownExtensions, TextView};
 use gpui_kit::*;
 
-pub fn memory_document(id: impl Into<ElementId>, text: &'static str) -> impl IntoElement {
+pub fn memory_document(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+) -> impl IntoElement {
     TextView::markdown(id, text)
         .markdown_extensions(MarkdownExtensions::default().frontmatter())
         .plugin(FrontmatterPlugin::new())

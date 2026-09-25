@@ -1,165 +1,90 @@
 //! Everything the client reads from the local engine.
 //!
-//! This module is the seam. Today each function returns a fixture compiled
-//! into the binary; when the daemon serves a client on this platform, the
-//! bodies become calls to it and the fixtures disappear. The signatures are
-//! written for that swap: no fixture type leaks into the screens.
+//! The daemon owns the session and the Project's local state; the client asks
+//! it and never reaches the Server itself. Every function here returns a
+//! message rather than panicking, because a signed-out or unreachable engine is
+//! a state the screens draw.
 
-use gpui_kit::component::tree::TreeItem;
+use std::collections::BTreeMap;
 
-use crate::protocol::{self, EngineStatus};
+use clumsiesd::{DaemonHealth, DaemonIpcClient, DaemonProjectCheckoutRequest, DaemonServerRequest};
+use serde::Deserialize;
 
-/// Whether the local engine is reachable, and what it reports when it is. The
-/// fixtures below stand in for the documents it will serve; this does not.
-pub fn engine_status() -> EngineStatus {
-    protocol::health()
+/// The service name the daemon registers. The client resolves it to the local
+/// endpoint by the daemon's own rule, so both halves agree on where to talk.
+const DAEMON_SERVICE: &str = "ai.clumsies.daemon";
+
+/// Whether the local engine is reachable, and what it reports when it is.
+pub enum EngineStatus {
+    Connected(DaemonHealth),
+    Unreachable(String),
 }
 
+/// One Project as the Server describes it.
+#[derive(Clone, Deserialize)]
 pub struct Project {
-    pub name: &'static str,
-    pub repository: &'static str,
-    pub memory_count: usize,
+    pub project_id: String,
+    pub name: String,
 }
 
+#[derive(Deserialize)]
+struct ProjectPage {
+    items: Vec<Project>,
+}
+
+/// One Memory document in the Project's current Effective Memory.
 pub struct MemoryDocument {
-    /// Stable id, and the path shown above the preview.
-    pub path: &'static str,
-    pub content: &'static str,
+    pub path: String,
+    pub content: String,
 }
 
-/// A pending local change to one document: the published text and the draft.
-pub struct DraftChange {
-    pub path: &'static str,
-    pub before: &'static str,
-    pub after: &'static str,
+pub fn engine_status() -> EngineStatus {
+    match client().health() {
+        Ok(health) => EngineStatus::Connected(health),
+        Err(error) => EngineStatus::Unreachable(error.to_string()),
+    }
 }
 
-pub fn projects() -> Vec<Project> {
-    vec![
-        Project {
-            name: "clumsies",
-            repository: "~/Projects/clumsies",
-            memory_count: 12,
-        },
-        Project {
-            name: "atlas-api",
-            repository: "~/Projects/atlas-api",
-            memory_count: 7,
-        },
-        Project {
-            name: "web-console",
-            repository: "~/Projects/web-console",
-            memory_count: 0,
-        },
-    ]
+/// The Projects this account can reach. The daemon holds the session, so a
+/// signed-out daemon and an empty organization arrive as different errors.
+pub fn projects() -> Result<Vec<Project>, String> {
+    let response = client()
+        .server_request(DaemonServerRequest {
+            method: "GET".to_owned(),
+            path: "/api/v1/projects".to_owned(),
+            headers: BTreeMap::new(),
+            body: None,
+        })
+        .map_err(|error| error.to_string())?;
+    if response.status != 200 {
+        return Err(format!("the Server answered HTTP {}", response.status));
+    }
+    serde_json::from_str::<ProjectPage>(&response.body)
+        .map(|page| page.items)
+        .map_err(|error| format!("unreadable Project list: {error}"))
 }
 
-/// The tree the engine builds from the Project's Memory refs.
-pub fn memory_tree() -> Vec<TreeItem> {
-    let file = |path: &'static str, label: &'static str| TreeItem::new(path, label);
-    vec![
-        TreeItem::new("knowledge", "knowledge")
-            .expanded(true)
-            .child(file("knowledge/README.md", "README.md")),
-        TreeItem::new("lessons", "lessons")
-            .expanded(true)
-            .child(file("lessons/README.md", "README.md")),
-        TreeItem::new("procedures", "procedures")
-            .expanded(true)
-            .child(file("procedures/README.md", "README.md"))
-            .child(file("procedures/rollback.md", "部署回滚清单.md")),
-        TreeItem::new("drafts", "drafts")
-            .expanded(true)
-            .child(file("drafts/rollback.md", "● 部署回滚清单.md")),
-        TreeItem::new("skills", "skills").expanded(true).child(
-            TreeItem::new("skills/project-memory", "project-memory")
-                .expanded(true)
-                .child(file("skills/project-memory/SKILL.md", "SKILL.md")),
-        ),
-    ]
+/// Every Memory document the Project currently resolves to, in path order.
+/// The daemon serves these from its own checkout; a Project that has not
+/// synced yet reports that instead of an empty list.
+pub fn memory_documents(project_id: &str) -> Result<Vec<MemoryDocument>, String> {
+    let checkout = client()
+        .project_checkout(DaemonProjectCheckoutRequest {
+            project_id: project_id.to_owned(),
+        })
+        .map_err(|error| error.to_string())?;
+    let mut documents: Vec<MemoryDocument> = checkout
+        .resources
+        .into_iter()
+        .map(|resource| MemoryDocument {
+            path: resource.path,
+            content: resource.content.content,
+        })
+        .collect();
+    documents.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(documents)
 }
 
-const DOCUMENTS: [MemoryDocument; 5] = [
-    MemoryDocument {
-        path: "knowledge/README.md",
-        content: include_str!("../../macos/Resources/MemoryStarter/knowledge/README.md"),
-    },
-    MemoryDocument {
-        path: "lessons/README.md",
-        content: include_str!("../../macos/Resources/MemoryStarter/lessons/README.md"),
-    },
-    MemoryDocument {
-        path: "procedures/README.md",
-        content: include_str!("../../macos/Resources/MemoryStarter/procedures/README.md"),
-    },
-    MemoryDocument {
-        path: "procedures/rollback.md",
-        content: include_str!("../assets/markdown-sample.md"),
-    },
-    MemoryDocument {
-        path: "skills/project-memory/SKILL.md",
-        content: include_str!("../../../packages/clumsies/skills/project-memory/SKILL.md"),
-    },
-];
-
-pub fn document(path: &str) -> Option<&'static MemoryDocument> {
-    DOCUMENTS.iter().find(|document| document.path == path)
-}
-
-const DRAFTS: [DraftChange; 1] = [DraftChange {
-    path: "drafts/rollback.md",
-    before: "\
-# 部署回滚清单
-
-当一次发布把错误版本带到线上时，按这个清单回滚。
-
-## 步骤
-
-1. 确认当前线上版本号
-2. 切换到上一个已验证版本
-3. 验证健康检查
-4. 通知相关同学
-
-## 版本对照
-
-| 环境 | 当前版本 | 回滚目标 |
-| --- | --- | --- |
-| production | 2.14.0 | 2.13.3 |
-| staging | 2.15.0-rc1 | 2.14.0 |
-
-## 验证清单
-
-- [x] 健康检查通过
-- [ ] 错误率回到基线
-",
-    after: "\
-# 部署回滚清单
-
-当一次发布把错误版本带到线上时，按这个清单回滚。先止血，再复盘。
-
-## 步骤
-
-1. 确认当前线上版本号
-2. 冻结发布流水线
-3. 切换到上一个已验证版本
-4. 验证健康检查
-5. 通知相关同学，并在事故群同步
-
-## 版本对照
-
-| 环境 | 当前版本 | 回滚目标 |
-| --- | --- | --- |
-| production | 2.14.0 | 2.13.3 |
-| staging | 2.15.0-rc2 | 2.14.0 |
-
-## 验证清单
-
-- [x] 健康检查通过
-- [ ] 错误率回到基线
-- [ ] 补一条事故记录
-",
-}];
-
-pub fn draft(path: &str) -> Option<&'static DraftChange> {
-    DRAFTS.iter().find(|draft| draft.path == path)
+fn client() -> DaemonIpcClient {
+    DaemonIpcClient::new(DAEMON_SERVICE)
 }

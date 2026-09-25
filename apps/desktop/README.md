@@ -26,6 +26,12 @@ src/
 
 ## Current state
 
-Skeleton. The Memory screen is real-shaped (tree, Markdown, draft diff) but
-every document is compiled in and nothing is loaded from `clumsiesd` yet;
-`engine.rs` is the only file that changes when it is.
+The Project rail, the Memory tree and the Markdown preview all read from the
+local `clumsiesd`: Projects come through its Server proxy, and a Project's
+Memory comes from its checkout. Signing in is a daemon concern; on Linux and
+Windows `dev/dev-login.py` performs the same authorization a client does and
+hands the session to the daemon.
+
+What is still missing is screen coverage, not data: Reviews, Inbox, Settings
+and the draft editing surface are not translated yet. `components/diff.rs`
+is waiting for the first two.
