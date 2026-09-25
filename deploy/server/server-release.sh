@@ -199,12 +199,14 @@ write_runtime_configuration() {
 
 require_environment() {
   local compose_version
+  local compose_major
 
   [[ -f "$COMPOSE_FILE" ]] || die "missing $COMPOSE_FILE"
   [[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE"
   compose_version="$(docker compose version --short 2>/dev/null || true)"
-  [[ "${compose_version%%.*}" == "2" ]] ||
-    die "Docker Compose v2 is required; found ${compose_version:-none}"
+  compose_major="${compose_version%%.*}"
+  [[ "$compose_major" =~ ^[0-9]+$ && "$compose_major" -ge 2 ]] ||
+    die "Docker Compose v2 or newer is required; found ${compose_version:-none}"
 
   install -d -m 0700 "$BACKUP_DIR" "$RELEASE_DIR"
   ensure_image_setting
@@ -237,10 +239,34 @@ public_origin() {
   printf '%s\n' "$origin"
 }
 
+# Reach the public origin through the local edge instead of this host's
+# resolver. A stale resolver cache (for example while an installation moves to
+# another host) would otherwise fail the probe against a healthy Server and
+# roll back a good release.
+local_edge_healthy() {
+  local origin="$1"
+  local authority="${origin#https://}"
+  local host="${authority%%:*}"
+  local port="${authority#"$host"}"
+
+  port="${port#:}"
+  curl --fail --silent --show-error --max-time 8 \
+    --resolve "$host:${port:-443}:127.0.0.1" \
+    "$origin/api/v1/admin/health" >/dev/null 2>&1
+}
+
+public_dns_reaches_host() {
+  local origin="$1"
+
+  curl --fail --silent --show-error --max-time 8 \
+    "$origin/api/v1/admin/health" >/dev/null 2>&1
+}
+
 wait_public_health() {
   local attempts="${1:-30}"
   local origin="${2:-}"
   local attempt
+  local warned=0
 
   if [[ -z "$origin" ]]; then
     origin="$(public_origin)"
@@ -248,8 +274,11 @@ wait_public_health() {
     validate_public_origin "$origin"
   fi
   for ((attempt = 1; attempt <= attempts; attempt += 1)); do
-    if curl --fail --silent --show-error --max-time 8 \
-      "$origin/api/v1/admin/health" >/dev/null; then
+    if local_edge_healthy "$origin"; then
+      if [[ "$warned" -eq 0 ]] && ! public_dns_reaches_host "$origin"; then
+        warned=1
+        log "warning: $origin does not reach this host through public DNS yet"
+      fi
       return 0
     fi
     sleep 2

@@ -28,12 +28,19 @@ event() {
   printf '%s\n' "$*" >>"$EVENT_LOG"
 }
 
+# Preserve the real probe so the DNS-cache regression test can exercise it.
+# shellcheck disable=SC2294
+eval "$(declare -f wait_public_health | sed '1s/^wait_public_health/wait_public_health_real/')"
+
 reset_case() {
   : >"$EVENT_LOG"
   printf '%s\n' "$PREVIOUS_IMAGE" >"$IMAGE_STATE"
   FAIL_PREFLIGHT=0
   FAIL_TARGET_START=0
   STOP_EXIT_CODE=0
+  COMPOSE_VERSION_OUTPUT="2.39.2"
+  LOCAL_EDGE_EXIT=0
+  PUBLIC_PATH_EXIT=0
 }
 
 current_image() {
@@ -48,9 +55,19 @@ docker() {
   event "docker:$*"
   if [[ "$1" == ps ]]; then
     printf 'server-container\n'
+  elif [[ "$1" == compose && "$*" == *"version --short"* ]]; then
+    printf '%s\n' "$COMPOSE_VERSION_OUTPUT"
   elif [[ "$1" == inspect && "$*" == *'{{.State.ExitCode}}'* ]]; then
     printf '%s\n' "$STOP_EXIT_CODE"
   fi
+}
+
+curl() {
+  event "curl:$*"
+  if [[ "$*" == *" --resolve "* ]]; then
+    return "$LOCAL_EDGE_EXIT"
+  fi
+  return "$PUBLIC_PATH_EXIT"
 }
 
 compose() {
@@ -133,6 +150,64 @@ assert_before() {
     cat "$EVENT_LOG" >&2
     exit 1
   }
+}
+
+write_present_env() {
+  printf 'CLUMSIES_SERVER_IMAGE=%s\n' "$PREVIOUS_IMAGE" >"$ENV_FILE"
+  printf 'placeholder\n' >"$COMPOSE_FILE"
+}
+
+test_compose_version_gate_accepts_two_and_newer() {
+  local version
+
+  for version in 2.39.2 5.5.1; do
+    reset_case
+    COMPOSE_VERSION_OUTPUT="$version"
+    write_present_env
+    require_environment || {
+      printf 'expected Compose %s to be accepted\n' "$version" >&2
+      exit 1
+    }
+  done
+}
+
+test_compose_version_gate_rejects_legacy_and_unknown() {
+  local version
+
+  for version in 1.29.2 ""; do
+    reset_case
+    COMPOSE_VERSION_OUTPUT="$version"
+    write_present_env
+    if (require_environment); then
+      printf 'expected Compose "%s" to be rejected\n' "$version" >&2
+      exit 1
+    fi
+  done
+}
+
+test_health_probe_survives_stale_host_dns() {
+  reset_case
+  LOCAL_EDGE_EXIT=0
+  PUBLIC_PATH_EXIT=22
+
+  wait_public_health_real 1 "https://app.clumsies.ai" || {
+    printf 'expected a healthy local edge to pass despite stale public DNS\n' >&2
+    exit 1
+  }
+  assert_present "curl:--fail --silent --show-error --max-time 8 --resolve app.clumsies.ai:443:127.0.0.1"
+  assert_present "curl:--fail --silent --show-error --max-time 8 https://app.clumsies.ai/api/v1/admin/health"
+}
+
+test_health_probe_skips_public_dns_when_edge_is_down() {
+  reset_case
+  LOCAL_EDGE_EXIT=7
+  PUBLIC_PATH_EXIT=0
+
+  if (wait_public_health_real 1 "https://app.clumsies.ai"); then
+    printf 'expected an unreachable local edge to fail\n' >&2
+    exit 1
+  fi
+  assert_absent "curl:--fail --silent --show-error --max-time 8 https://app.clumsies.ai"
 }
 
 test_successful_cutover() {
@@ -224,6 +299,10 @@ test_failed_target_restores_database_before_old_image() {
   assert_before "$previous_start" "record:rolled-back "
 }
 
+test_compose_version_gate_accepts_two_and_newer
+test_compose_version_gate_rejects_legacy_and_unknown
+test_health_probe_survives_stale_host_dns
+test_health_probe_skips_public_dns_when_edge_is_down
 test_successful_cutover
 test_failed_preflight_leaves_production_untouched
 test_nonzero_exit_after_stop_aborts_cutover

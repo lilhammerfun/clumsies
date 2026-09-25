@@ -20,7 +20,7 @@ network.
 
 ## Prerequisites
 
-- Docker Engine and Docker Compose v2;
+- Docker Engine and Docker Compose v2 or newer;
 - a public HTTPS hostname;
 - an OIDC confidential client with the callback below registered at the IdP;
 - a published Clumsies Server image pinned by digest.
@@ -30,7 +30,7 @@ https://memory.example.com/login/oauth2/code/oidc
 ```
 
 Production must not use the legacy Python `docker-compose` command. The release
-script rejects every Compose major version except 2.
+script requires Compose v2 or newer and rejects every older major version.
 
 ## Configure
 
@@ -145,7 +145,8 @@ cannot obtain an interactive deployment shell.
 `clumsies-server-release deploy` performs the following operation under an
 exclusive host lock:
 
-1. validate Compose v2, the digest, commit, current configuration, and public origin;
+1. validate Compose v2 or newer, the digest, commit, current configuration, and
+   public origin;
 2. pull the immutable image and render the Compose configuration;
 3. create and validate an online PostgreSQL backup;
 4. restore that backup into isolated PostgreSQL, start the target image against
@@ -155,6 +156,11 @@ exclusive host lock:
 7. atomically persist the desired image digest, start only Server, and require
    both container and public HTTPS health;
 8. record the commit, target and previous images, both backups, timestamp, and result.
+
+Health is probed through the local edge by resolving the public origin to
+loopback, so a stale resolver cache or an in-progress DNS move cannot roll back a
+healthy release. When public DNS does not reach this host yet, the release still
+succeeds and logs a warning.
 
 If target container or public health fails after cutover, the script stops the
 target Server, replaces the production database from the write-free backup,
