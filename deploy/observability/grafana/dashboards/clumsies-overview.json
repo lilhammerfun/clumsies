@@ -9,7 +9,7 @@
   "schemaVersion": 39,
   "refresh": "1m",
   "time": {
-    "from": "now-6h",
+    "from": "now-12h",
     "to": "now"
   },
   "panels": [
@@ -17,8 +17,8 @@
       "type": "stat",
       "title": "Endpoints answering",
       "gridPos": {
-        "h": 5,
-        "w": 6,
+        "h": 4,
+        "w": 4,
         "x": 0,
         "y": 0
       },
@@ -29,6 +29,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": null,
+          "decimals": null,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -71,10 +72,10 @@
       "type": "stat",
       "title": "Backup age",
       "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
-        "y": 5
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 4
       },
       "datasource": {
         "type": "prometheus",
@@ -83,6 +84,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "h",
+          "decimals": null,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -127,12 +129,12 @@
     },
     {
       "type": "stat",
-      "title": "Cert days left",
+      "title": "Certificate days left",
       "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 12,
-        "y": 10
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -141,6 +143,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "d",
+          "decimals": null,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -187,10 +190,10 @@
       "type": "stat",
       "title": "Disk free /",
       "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 18,
-        "y": 15
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -199,6 +202,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
+          "decimals": null,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -242,11 +246,70 @@
       ]
     },
     {
-      "type": "timeseries",
-      "title": "HTTP requests by status",
+      "type": "stat",
+      "title": "Unread inbox",
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_inbox_unread",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Oldest open draft",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
         "x": 0,
         "y": 20
       },
@@ -256,17 +319,87 @@
       },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 8
+          "unit": "d",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 14
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
           }
         },
         "overrides": []
       },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (code) (rate(caddy_http_requests_total[5m]))",
+          "expr": "clumsies_oldest_open_draft_age_seconds / 86400",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests by status class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (code) (rate(caddy_http_request_duration_seconds_count[5m]))",
           "legendFormat": "{{code}}",
           "datasource": {
             "type": "prometheus",
@@ -281,8 +414,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 28
+        "x": 0,
+        "y": 32
       },
       "datasource": {
         "type": "prometheus",
@@ -290,19 +423,29 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "s",
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
-          },
-          "unit": "s"
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "histogram_quantile(0.95, sum by (le) (rate(caddy_http_request_duration_seconds_bucket[5m])))",
-          "legendFormat": "__auto",
+          "legendFormat": "p95",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -312,12 +455,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Host CPU",
+      "title": "Business throughput",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 40
       },
       "datasource": {
         "type": "prometheus",
@@ -325,19 +468,29 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "cps",
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
-          },
-          "unit": "percent"
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
-          "legendFormat": "__auto",
+          "expr": "sum(rate(clumsies_commits_total[1h])) * 3600",
+          "legendFormat": "commits/hour",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -347,47 +500,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Host memory used",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 44
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 8
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-          "legendFormat": "__auto",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Clumsies containers memory",
+      "title": "Draft backlog by state",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 52
+        "y": 48
       },
       "datasource": {
         "type": "prometheus",
@@ -395,19 +513,29 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": null,
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
-          },
-          "unit": "bytes"
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (name) (container_memory_working_set_bytes{name=~\"clumsies-.*\"})",
-          "legendFormat": "__auto",
+          "expr": "clumsies_drafts{status=~\"open|merged|discarded\"}",
+          "legendFormat": "{{status}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -417,12 +545,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Clumsies containers CPU",
+      "title": "Open drafts per hour (growth)",
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 60
+        "x": 0,
+        "y": 56
       },
       "datasource": {
         "type": "prometheus",
@@ -430,19 +558,254 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": null,
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
-          },
-          "unit": "percent"
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"clumsies-.*\"}[5m]))",
-          "legendFormat": "__auto",
+          "expr": "deriv(clumsies_drafts{status=\"open\"}[6h])",
+          "legendFormat": "growth/hour",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Reconciliation conflicts",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_reconciliation_candidates{status=\"conflicts\"}",
+          "legendFormat": "conflicts",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Unread notifications",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_inbox_unread",
+          "legendFormat": "unread",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Drafts created per hour",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 80
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(clumsies_drafts_total[1h])) * 3600",
+          "legendFormat": "drafts/hour",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "PostgreSQL activity",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_db_active_backends",
+          "legendFormat": "active backends",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Longest running query",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 96
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_db_longest_query_seconds",
+          "legendFormat": "seconds",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -457,7 +820,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 68
+        "y": 104
       },
       "datasource": {
         "type": "prometheus",
@@ -465,12 +828,23 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": null,
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
           }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
@@ -490,8 +864,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 76
+        "x": 0,
+        "y": 112
       },
       "datasource": {
         "type": "prometheus",
@@ -499,13 +873,23 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "bytes",
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
-          },
-          "unit": "bytes"
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
@@ -521,12 +905,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Probe duration",
+      "title": "Host CPU",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 84
+        "y": 120
       },
       "datasource": {
         "type": "prometheus",
@@ -534,13 +918,203 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "percent",
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
-          },
-          "unit": "s"
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Host memory used",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 128
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Clumsies container memory",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 136
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (name) (container_memory_working_set_bytes{name=~\"clumsies-.*\"})",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Clumsies container CPU",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 144
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"clumsies-.*\"}[5m]))",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Probe duration",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 152
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
@@ -556,12 +1130,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Prometheus targets up",
+      "title": "Scrape targets up",
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 92
+        "x": 0,
+        "y": 160
       },
       "datasource": {
         "type": "prometheus",
@@ -569,12 +1143,23 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": null,
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            }
           }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
