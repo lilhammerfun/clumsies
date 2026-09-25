@@ -1,26 +1,75 @@
 //! Clumsies desktop client for Windows and Linux.
 //!
 //! Everything here is a development skeleton: hard-coded data, no engine calls.
-//! It proves the pieces the real client depends on -- window, layout, list
-//! interaction, platform input methods, and Markdown rendering.
+//! It proves the pieces the real client depends on -- window, layout, list and
+//! tree interaction, platform input methods, and Markdown rendering.
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::text::{FrontmatterPlugin, MarkdownExtensions, TextView};
+use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::*;
 
-/// A real product document, rendered straight out of the repository.
-const REAL_DOCUMENT: &str =
-    include_str!("../../../packages/clumsies/skills/project-memory/SKILL.md");
+struct MemoryDocument {
+    /// Stable id, also the path shown above the preview.
+    path: &'static str,
+    content: &'static str,
+}
 
-/// A document that exercises every block the Memory editor has to render.
-const SAMPLE_DOCUMENT: &str = include_str!("../assets/markdown-sample.md");
-
-const DOCUMENTS: [(&str, &str); 2] = [
-    ("真实文档 SKILL.md", REAL_DOCUMENT),
-    ("渲染压力测试", SAMPLE_DOCUMENT),
+/// A stand-in for the Project's Effective Memory. The engine hands us these
+/// documents for real once the client is wired to it.
+const MEMORY_DOCUMENTS: [MemoryDocument; 5] = [
+    MemoryDocument {
+        path: "knowledge/README.md",
+        content: include_str!("../../macos/Resources/MemoryStarter/knowledge/README.md"),
+    },
+    MemoryDocument {
+        path: "lessons/README.md",
+        content: include_str!("../../macos/Resources/MemoryStarter/lessons/README.md"),
+    },
+    MemoryDocument {
+        path: "procedures/README.md",
+        content: include_str!("../../macos/Resources/MemoryStarter/procedures/README.md"),
+    },
+    MemoryDocument {
+        path: "procedures/rollback.md",
+        content: include_str!("../assets/markdown-sample.md"),
+    },
+    MemoryDocument {
+        path: "skills/project-memory/SKILL.md",
+        content: include_str!("../../../packages/clumsies/skills/project-memory/SKILL.md"),
+    },
 ];
+
+fn memory_document(path: &str) -> Option<&'static MemoryDocument> {
+    MEMORY_DOCUMENTS
+        .iter()
+        .find(|document| document.path == path)
+}
+
+/// The tree the engine will eventually build from the Project's Memory refs.
+fn memory_tree_items() -> Vec<TreeItem> {
+    let file = |path: &'static str, label: &'static str| TreeItem::new(path, label);
+    vec![
+        TreeItem::new("knowledge", "knowledge")
+            .expanded(true)
+            .child(file("knowledge/README.md", "README.md")),
+        TreeItem::new("lessons", "lessons")
+            .expanded(true)
+            .child(file("lessons/README.md", "README.md")),
+        TreeItem::new("procedures", "procedures")
+            .expanded(true)
+            .child(file("procedures/README.md", "README.md"))
+            .child(file("procedures/rollback.md", "部署回滚清单.md")),
+        TreeItem::new("skills", "skills").expanded(true).child(
+            TreeItem::new("skills/project-memory", "project-memory")
+                .expanded(true)
+                .child(file("skills/project-memory/SKILL.md", "SKILL.md")),
+        ),
+    ]
+}
 
 struct Project {
     name: &'static str,
@@ -30,15 +79,27 @@ struct Project {
 
 struct DesktopApp {
     projects: Vec<Project>,
-    selected: usize,
+    selected_project: usize,
+    memory_tree: Entity<TreeState>,
+    /// Dropping a subscription cancels it, so the view has to hold it.
+    _tree_selection: Subscription,
     /// Input method probe: the same text input the Memory editor will use.
     probe: Entity<InputState>,
-    selected_document: usize,
 }
 
 impl DesktopApp {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let memory_tree = cx.new(|cx| {
+            let mut state = TreeState::new(cx).items(memory_tree_items());
+            let id: SharedString = "knowledge/README.md".into();
+            state.set_selected_index(state.index_of(&id), cx);
+            state
+        });
+        // Selecting an entry notifies the tree state, not this view.
+        let tree_selection = cx.observe(&memory_tree, |_, _, cx| cx.notify());
+
         let probe = cx.new(|cx| InputState::new(window, cx).placeholder("用中文输入法打几个字"));
+
         Self {
             projects: vec![
                 Project {
@@ -57,20 +118,27 @@ impl DesktopApp {
                     memory_count: 0,
                 },
             ],
-            selected: 0,
+            selected_project: 0,
+            memory_tree,
+            _tree_selection: tree_selection,
             probe,
-            selected_document: 0,
         }
     }
 }
 
 impl Render for DesktopApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected_index = self.selected;
-        let selected_document = self.selected_document;
+        let selected_project = self.selected_project;
         let typed = self.probe.read(cx).value();
 
-        let sidebar = div()
+        let selected_path = self
+            .memory_tree
+            .read(cx)
+            .selected_entry()
+            .map(|entry| entry.item().id.to_string());
+        let document = selected_path.as_deref().and_then(memory_document);
+
+        let projects = div()
             .v_flex()
             .w(px(200.))
             .h_full()
@@ -88,72 +156,86 @@ impl Render for DesktopApp {
                             .py_1()
                             .rounded_md()
                             .child(project.name);
-                        let row = if index == selected_index {
+                        let row = if index == selected_project {
                             row.bg(rgb(0x2f3542))
                         } else {
                             row
                         };
                         row.on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.selected = index;
+                            this.selected_project = index;
                             cx.notify();
                         }))
                     })
                     .collect::<Vec<_>>(),
-            );
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_sm()
+                    .child(self.projects[selected_project].repository),
+            )
+            .child(div().text_sm().child(format!(
+                "{} Memory",
+                self.projects[selected_project].memory_count
+            )))
+            .child(div().mt_2().text_sm().child("Input method probe"))
+            .child(Input::new(&self.probe))
+            .child(div().text_sm().child(format!("你输入的是：{typed}")));
 
-        let tabs = div().h_flex().gap_2().children(
-            DOCUMENTS
-                .iter()
-                .enumerate()
-                .map(|(index, (label, _))| {
-                    let tab = div()
-                        .id(("document", index))
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .child(*label);
-                    let tab = if index == selected_document {
-                        tab.bg(rgb(0x2f3542))
-                    } else {
-                        tab
-                    };
-                    tab.on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.selected_document = index;
-                        cx.notify();
-                    }))
-                })
-                .collect::<Vec<_>>(),
+        let tree_view = tree(
+            &self.memory_tree,
+            |index, entry, _selected, _window, _cx| {
+                let marker = if entry.is_folder() {
+                    if entry.is_expanded() { "▾ " } else { "▸ " }
+                } else {
+                    "   "
+                };
+                ListItem::new(index).child(
+                    div()
+                        .pl(px(entry.depth() as f32 * 14.))
+                        .child(format!("{marker}{}", entry.item().label)),
+                )
+            },
         );
+
+        let memory_column = div()
+            .v_flex()
+            .w(px(230.))
+            .h_full()
+            .p_2()
+            .gap_1()
+            .child(div().text_sm().child("Memory"))
+            .child(div().flex_1().min_h(px(0.)).child(tree_view));
 
         // Frontmatter is not part of CommonMark, so the parser has to be told
         // to read it and a plugin has to render the resulting node.
-        let preview = div().flex_1().min_h(px(0.)).child(
-            TextView::markdown("memory-preview", DOCUMENTS[selected_document].1)
-                .markdown_extensions(MarkdownExtensions::default().frontmatter())
-                .plugin(FrontmatterPlugin::new())
-                .selectable(true)
-                .scrollable(true)
-                .size_full(),
-        );
-
-        let project = &self.projects[selected_index];
-        let detail = div()
+        let preview_text = document.map_or("在左侧选择一篇文档。", |document| {
+            document.content
+        });
+        let preview = div()
             .v_flex()
             .flex_1()
             .min_h(px(0.))
             .p_4()
             .gap_2()
-            .child(div().text_lg().child(project.name))
-            .child(format!("Repository: {}", project.repository))
-            .child(format!("Selected Memory: {}", project.memory_count))
-            .child(div().mt_2().text_sm().child("Input method probe"))
-            .child(Input::new(&self.probe))
-            .child(format!("你输入的是：{typed}"))
-            .child(div().mt_2().text_sm().child("Markdown preview"))
-            .child(tabs)
-            .child(preview);
+            .child(div().text_sm().child(selected_path.unwrap_or_default()))
+            .child(
+                div().flex_1().min_h(px(0.)).child(
+                    TextView::markdown("memory-preview", preview_text)
+                        .markdown_extensions(MarkdownExtensions::default().frontmatter())
+                        .plugin(FrontmatterPlugin::new())
+                        .selectable(true)
+                        .scrollable(true)
+                        .size_full(),
+                ),
+            );
 
-        div().h_flex().size_full().child(sidebar).child(detail)
+        div()
+            .h_flex()
+            .size_full()
+            .child(projects)
+            .child(memory_column)
+            .child(preview)
     }
 }
 
