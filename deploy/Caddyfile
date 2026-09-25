@@ -44,6 +44,10 @@ docs.clumsies.ai {
 	file_server
 }
 
+www.clumsies.ai {
+	redir https://clumsies.ai{uri} permanent
+}
+
 clumsies.ai {
 	encode zstd gzip
 

@@ -38,7 +38,7 @@ ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.ym
 
 echo "==> Verifying locally reachable endpoints"
 ssh "${SSH_TARGET}" <<'EOF'
-for host in docs.clumsies.ai clumsies.ai app.clumsies.ai; do
+for host in docs.clumsies.ai clumsies.ai www.clumsies.ai app.clumsies.ai; do
   code=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${host}:443:127.0.0.1" "https://${host}/" || true)
   echo "${host} -> ${code}"
 done
