@@ -212,9 +212,13 @@ impl Render for DesktopApp {
         let preview_text = document.map_or("在左侧选择一篇文档。", |document| {
             document.content
         });
+        // h_flex centers the cross axis, so a column in a row takes its content
+        // height unless it asks for h_full(); the scroll region inside needs the
+        // row's height to resolve against.
         let preview = div()
             .v_flex()
             .flex_1()
+            .h_full()
             .min_h(px(0.))
             .p_4()
             .gap_2()
@@ -242,8 +246,18 @@ impl Render for DesktopApp {
 fn main() {
     gpui_kit::application().run(|cx| {
         gpui_kit::init(cx);
+        // The app id groups the window under one desktop entry; the title is
+        // what the window list and the compositor show.
+        let options = WindowOptions {
+            titlebar: Some(TitlebarOptions {
+                title: Some("Clumsies".into()),
+                ..Default::default()
+            }),
+            app_id: Some("ai.clumsies.desktop".into()),
+            ..Default::default()
+        };
         cx.spawn(async move |cx| {
-            cx.open_window(WindowOptions::default(), |window, cx| {
+            cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| DesktopApp::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             })
