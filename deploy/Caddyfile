@@ -1,3 +1,10 @@
+{
+	# Prometheus scrapes HTTP metrics on the admin endpoint. It stays on the
+	# Compose network because only ports 80 and 443 are published.
+	admin :2019
+	metrics
+}
+
 app.clumsies.ai {
 	encode zstd gzip
 	log {

@@ -1,0 +1,22 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: smtp.gmail.com:587
+  smtp_from: REPLACE_GMAIL_USER
+  smtp_auth_username: REPLACE_GMAIL_USER
+  smtp_auth_password: REPLACE_GMAIL_APP_PASSWORD
+  smtp_require_tls: true
+
+route:
+  receiver: gmail
+  group_by: [alertname, instance]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: gmail
+    email_configs:
+      - to: REPLACE_ALERT_TO
+        send_resolved: true
+        headers:
+          Subject: '[clumsies] {{ .Status | toUpper }} {{ .CommonLabels.alertname }}'

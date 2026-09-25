@@ -1,0 +1,41 @@
+#!/bin/sh
+# Freshness metrics for the node-exporter textfile collector.
+set -eu
+
+OUT=/var/lib/clumsies-observability/textfile/clumsies.prom
+TMP="${OUT}.tmp"
+
+{
+  newest_dump="$(find /opt/clumsies/backups -maxdepth 1 -type f -name '*.dump' \
+    -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+  if [ -n "${newest_dump:-}" ]; then
+    printf 'clumsies_backup_last_success_timestamp_seconds %s\n' "$(stat -c %Y "${newest_dump}")"
+  fi
+
+  newest_release="$(grep -l '^status=success' /opt/clumsies/releases/deploy-*.env 2>/dev/null | sort | tail -1 || true)"
+  if [ -n "${newest_release:-}" ]; then
+    printf 'clumsies_release_last_success_timestamp_seconds %s\n' "$(stat -c %Y "${newest_release}")"
+  fi
+
+  for unit in clumsies-backup.service clumsies-restore-drill.service; do
+    result="$(systemctl show -p Result --value "${unit}" 2>/dev/null || echo unknown)"
+    exit_at="$(systemctl show -p ExecMainExitTimestamp --value "${unit}" 2>/dev/null || true)"
+    case "${result}" in
+      success) ok=1 ;;
+      *) ok=0 ;;
+    esac
+    printf 'clumsies_unit_last_exit_ok{unit="%s"} %s\n' "${unit}" "${ok}"
+    if [ -n "${exit_at}" ]; then
+      epoch="$(date -d "${exit_at}" +%s 2>/dev/null || true)"
+      [ -n "${epoch}" ] && printf 'clumsies_unit_last_exit_timestamp_seconds{unit="%s"} %s\n' "${unit}" "${epoch}"
+    fi
+  done
+
+  drill_stamp="$(systemctl show -p ExecMainExitTimestamp --value clumsies-restore-drill.service 2>/dev/null || true)"
+  if [ -n "${drill_stamp}" ] && [ "$(systemctl show -p Result --value clumsies-restore-drill.service 2>/dev/null || true)" = "success" ]; then
+    epoch="$(date -d "${drill_stamp}" +%s 2>/dev/null || true)"
+    [ -n "${epoch}" ] && printf 'clumsies_restore_drill_last_success_timestamp_seconds %s\n' "${epoch}"
+  fi
+} > "${TMP}"
+
+mv "${TMP}" "${OUT}"

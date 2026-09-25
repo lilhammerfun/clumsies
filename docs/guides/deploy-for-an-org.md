@@ -215,6 +215,20 @@ encrypted off-host storage appropriate to the installing organization and test
 restoration from that copy; do not place database dumps in the source
 repository or ordinary GitHub Actions artifacts.
 
+## Observability
+
+`deploy/observability` ships an optional Prometheus stack for one installation:
+Prometheus, Alertmanager, Grafana, node-exporter, cadvisor, postgres-exporter, and
+blackbox probes for the public endpoints. It reports host and container
+resources, Server request rate and latency from Caddy, PostgreSQL connections and
+size, backup and restore-drill freshness, and certificate expiry. Every port
+binds to loopback, and alert delivery uses SMTP through Alertmanager.
+
+The production `deploy/Caddyfile` opens a global block so Caddy exposes its HTTP
+metrics on the admin endpoint of the Compose network. Install steps, the
+required `.env`, the alert channel configuration, and the alert rules are
+documented in [`deploy/observability/README.md`](https://github.com/lilhammerfun/clumsies/blob/main/deploy/observability/README.md).
+
 ## Documentation site
 
 The docs site (`docs.clumsies.ai`) and the official site (`clumsies.ai`) are
