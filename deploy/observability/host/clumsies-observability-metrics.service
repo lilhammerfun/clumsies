@@ -1,0 +1,6 @@
+[Unit]
+Description=Write Clumsies operational freshness metrics for node-exporter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/clumsies-observability-metrics

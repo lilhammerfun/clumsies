@@ -1,0 +1,105 @@
+groups:
+  - name: availability
+    rules:
+      - alert: PublicEndpointDown
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is not answering"
+          description: "Blackbox probe has failed for 2 minutes."
+
+      - alert: CertificateExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in under 14 days"
+
+      - alert: ScrapeTargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus target {{ $labels.job }} ({{ $labels.instance }}) is down"
+
+  - name: capacity
+    rules:
+      - alert: DiskSpaceLow
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"} < 0.15
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} is below 15% free"
+
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Available memory below 10% on {{ $labels.instance }}"
+
+  - name: application
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is not reachable by the exporter"
+
+      - alert: PostgresConnectionsHigh
+        expr: sum(pg_stat_database_numbackends) / max(pg_settings_max_connections) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connection usage above 80%"
+
+      - alert: ContainerMemoryHigh
+        expr: sum by (name) (container_memory_working_set_bytes{name=~"clumsies-.*"}) / 1024 / 1024 / 1024 > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} uses more than 2 GiB"
+
+  - name: operations
+    rules:
+      - alert: BackupStale
+        expr: time() - clumsies_backup_last_success_timestamp_seconds > 26 * 3600
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful PostgreSQL backup in the last 26 hours"
+
+      - alert: RestoreDrillStale
+        expr: time() - clumsies_restore_drill_last_success_timestamp_seconds > 8 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No successful restore drill in the last 8 days"
+
+      - alert: BackupUnitFailed
+        expr: clumsies_unit_last_exit_ok{unit="clumsies-backup.service"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "clumsies-backup.service last run failed"
+
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Alert pipeline watchdog (always firing)"
+          description: "This alert confirms Prometheus to Alertmanager to email delivery works."

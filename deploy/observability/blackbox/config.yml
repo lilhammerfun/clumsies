@@ -1,0 +1,7 @@
+modules:
+  https_follow:
+    prober: http
+    timeout: 10s
+    http:
+      follow_redirects: true
+      preferred_ip_protocol: ip4
