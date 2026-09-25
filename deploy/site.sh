@@ -32,9 +32,14 @@ echo "==> Syncing Caddyfile and compose file"
 scp deploy/Caddyfile "${SSH_TARGET}:${DEPLOY_DIR}/deploy/Caddyfile"
 scp compose.production.yml "${SSH_TARGET}:${DEPLOY_DIR}/compose.production.yml"
 
-echo "==> Recreating Caddy container to pick up new mounts"
+echo "==> Applying the Caddy configuration"
+# The Caddyfile is a mounted file: changing its contents does not make Docker
+# recreate the container, and Caddy does not watch it by default. Start the
+# container, then reload so a synced configuration takes effect.
 # shellcheck disable=SC2029 # DEPLOY_DIR intentionally expands client-side
 ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml up -d caddy"
+# shellcheck disable=SC2029 # DEPLOY_DIR intentionally expands client-side
+ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
 
 echo "==> Verifying locally reachable endpoints"
 ssh "${SSH_TARGET}" <<'EOF'
