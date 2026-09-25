@@ -24,8 +24,14 @@ const LATENCY_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0
 /// Index of the +Inf bucket, which collects requests above every finite bound.
 const OVERFLOW_BUCKET: usize = LATENCY_BUCKETS.len();
 
-/// Names of the recorded status classes, covering 1xx through 5xx.
-const STATUS_CLASS_NAMES: [&str; 5] = ["1xx", "2xx", "3xx", "4xx", "5xx"];
+/// Response codes recorded per route; anything else lands in `other`.
+///
+/// The list mirrors the codes the Server answers with, so the label stays
+/// bounded while still separating a conflict from a validation failure.
+const STATUS_CODES: [u16; 27] = [
+    100, 200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 409, 410, 412,
+    413, 415, 422, 429, 500, 501, 502, 503,
+];
 
 /// Process-wide request metrics shared by the middleware and the scrape route.
 static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::default);
@@ -33,8 +39,8 @@ static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::default);
 /// Request counters and latency samples for one route template.
 #[derive(Default)]
 struct RouteMetrics {
-    /// Completed requests per status class.
-    requests: [AtomicU64; STATUS_CLASS_NAMES.len()],
+    /// Completed requests per response code, with a slot for anything else.
+    requests: [AtomicU64; STATUS_CODES.len() + 1],
     /// Completed requests per latency bucket, accumulated while rendering.
     buckets: [AtomicU64; OVERFLOW_BUCKET + 1],
     /// Sum of observed request durations in microseconds.
@@ -46,9 +52,7 @@ struct RouteMetrics {
 impl RouteMetrics {
     /// Record one completed request.
     fn observe(&self, status: StatusCode, elapsed: Duration) {
-        if let Some(class) = status_class(status) {
-            self.requests[class].fetch_add(1, Ordering::Relaxed);
-        }
+        self.requests[status_index(status)].fetch_add(1, Ordering::Relaxed);
         let seconds = elapsed.as_secs_f64();
         let bucket = LATENCY_BUCKETS
             .iter()
@@ -86,12 +90,13 @@ fn route_metrics(route: &str) -> Arc<RouteMetrics> {
     Arc::clone(routes.entry(route.to_owned()).or_default())
 }
 
-/// Map an HTTP status to its recorded class index.
-fn status_class(status: StatusCode) -> Option<usize> {
+/// Resolve the counter slot for a response, falling back to the `other` slot.
+fn status_index(status: StatusCode) -> usize {
     let code = status.as_u16();
-    (100..600)
-        .contains(&code)
-        .then_some(usize::from(code / 100 - 1))
+    STATUS_CODES
+        .iter()
+        .position(|known| *known == code)
+        .unwrap_or(STATUS_CODES.len())
 }
 
 /// Decrement the in-flight gauges however the request future ends.
@@ -148,16 +153,21 @@ pub(crate) async fn render(State(state): State<AppState>) -> Response {
 
 /// Render per-route request counters.
 fn render_requests(body: &mut String, routes: &[(String, Arc<RouteMetrics>)]) {
-    body.push_str("# HELP clumsies_http_requests_total Requests handled per route and status class.\n");
+    body.push_str(
+        "# HELP clumsies_http_requests_total Requests handled per route and status class.\n",
+    );
     body.push_str("# TYPE clumsies_http_requests_total counter\n");
     for (route, metrics) in routes {
         let route = escape(route);
-        for (index, class) in STATUS_CLASS_NAMES.iter().enumerate() {
-            let count = metrics.requests[index].load(Ordering::Relaxed);
+        for (index, counter) in metrics.requests.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
             if count > 0 {
+                let status = STATUS_CODES
+                    .get(index)
+                    .map_or_else(|| "other".to_owned(), u16::to_string);
                 let _ = writeln!(
                     body,
-                    "clumsies_http_requests_total{{route=\"{route}\",status=\"{class}\"}} {count}",
+                    "clumsies_http_requests_total{{route=\"{route}\",status=\"{status}\"}} {count}",
                 );
             }
         }
@@ -209,9 +219,15 @@ fn render_pool(body: &mut String, state: &AppState) {
     let size = state.pool.size();
     body.push_str("# HELP clumsies_db_pool_connections Database pool connections by state.\n");
     body.push_str("# TYPE clumsies_db_pool_connections gauge\n");
-    let _ = writeln!(body, "clumsies_db_pool_connections{{state=\"idle\"}} {idle}");
+    let _ = writeln!(
+        body,
+        "clumsies_db_pool_connections{{state=\"idle\"}} {idle}"
+    );
     let used = size.saturating_sub(idle);
-    let _ = writeln!(body, "clumsies_db_pool_connections{{state=\"used\"}} {used}");
+    let _ = writeln!(
+        body,
+        "clumsies_db_pool_connections{{state=\"used\"}} {used}"
+    );
     body.push_str("# HELP clumsies_db_pool_size Configured maximum pool connections.\n");
     body.push_str("# TYPE clumsies_db_pool_size gauge\n");
     let _ = writeln!(body, "clumsies_db_pool_size {size}");
@@ -250,13 +266,14 @@ mod tests {
     use tower::ServiceExt;
 
     #[test]
-    fn status_classes_cover_informational_through_server_errors() {
-        assert_eq!(status_class(StatusCode::CONTINUE), Some(0));
-        assert_eq!(status_class(StatusCode::OK), Some(1));
-        assert_eq!(status_class(StatusCode::SEE_OTHER), Some(2));
-        assert_eq!(status_class(StatusCode::NOT_FOUND), Some(3));
-        assert_eq!(status_class(StatusCode::SERVICE_UNAVAILABLE), Some(4));
-        assert_eq!(status_class(StatusCode::from_u16(999).unwrap()), None);
+    fn known_codes_resolve_and_unknown_codes_share_one_slot() {
+        assert_eq!(status_index(StatusCode::OK), 1);
+        assert_eq!(status_index(StatusCode::CONFLICT), 16);
+        assert_eq!(status_index(StatusCode::SERVICE_UNAVAILABLE), 26);
+        assert_eq!(
+            status_index(StatusCode::from_u16(999).unwrap()),
+            STATUS_CODES.len()
+        );
     }
 
     #[test]
@@ -271,12 +288,24 @@ mod tests {
         render_requests(&mut body, &routes);
         render_durations(&mut body, &routes);
 
-        assert!(body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="2xx"} 2"#));
-        assert!(body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="5xx"} 1"#));
-        assert!(body.contains(r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="0.005"} 1"#));
-        assert!(body.contains(r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="0.05"} 2"#));
-        assert!(body.contains(r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="+Inf"} 3"#));
-        assert!(body.contains(r#"clumsies_http_request_duration_seconds_count{route="/items/{id}"} 3"#));
+        assert!(
+            body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="200"} 2"#)
+        );
+        assert!(
+            body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="500"} 1"#)
+        );
+        assert!(body.contains(
+            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="0.005"} 1"#
+        ));
+        assert!(body.contains(
+            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="0.05"} 2"#
+        ));
+        assert!(body.contains(
+            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="+Inf"} 3"#
+        ));
+        assert!(
+            body.contains(r#"clumsies_http_request_duration_seconds_count{route="/items/{id}"} 3"#)
+        );
     }
 
     #[test]
@@ -302,8 +331,7 @@ mod tests {
 
         let mut body = String::new();
         render_requests(&mut body, &snapshot());
-        assert!(body.contains(r#"route="/metrics-test/{id}",status="2xx""#));
+        assert!(body.contains(r#"route="/metrics-test/{id}",status="200""#));
         assert!(!body.contains("/metrics-test/abc123"));
     }
 }
-
