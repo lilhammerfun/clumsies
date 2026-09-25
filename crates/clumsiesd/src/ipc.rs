@@ -536,7 +536,292 @@ impl DaemonIpcServer {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Decodes one request, turning a malformed payload into the error reply the
+/// client receives rather than a dropped connection. Shared by every transport,
+/// so a bad frame behaves the same on each platform.
+fn decode_request(
+    json: Result<String, DaemonError>,
+) -> Result<DaemonIpcRequest, Box<DaemonIpcResponse>> {
+    json.and_then(|json| serde_json::from_str(&json).map_err(DaemonError::from))
+        .map_err(|error| {
+            let response = DaemonIpcResponse::from_result(Err(error));
+            if let Some(error) = &response.error {
+                tracing::warn!(
+                    event = "ipc_decode_failed",
+                    request_id = %error.request_id,
+                    code = %error.code
+                );
+            }
+            Box::new(response)
+        })
+}
+
+/// Validates the Agent runtime identity and dispatches one request, returning
+/// the reply as JSON. This is the whole server-side request path; a transport
+/// only moves the two strings.
+async fn dispatch_request(
+    service: &DaemonIpcService,
+    request_json: Result<String, DaemonError>,
+) -> Result<String, DaemonError> {
+    let response = match decode_request(request_json) {
+        Ok(request) => match validate_agent_runtime_request(&request) {
+            Ok(()) => service.dispatch(request).await,
+            Err(error) => {
+                tracing::warn!(
+                    event = "ipc_validation_failed",
+                    request_id = %crate::diagnostics::validated_request_id(&request.request_id)
+                        .unwrap_or_default(),
+                    kind = crate::diagnostics::error_kind(&error)
+                );
+                let id = crate::diagnostics::validated_request_id(&request.request_id)
+                    .unwrap_or_else(crate::diagnostics::new_request_id);
+                crate::diagnostics::REQUEST_ID
+                    .scope(id, async { DaemonIpcResponse::from_result(Err(error)) })
+                    .await
+            }
+        },
+        Err(response) => *response,
+    };
+    serde_json::to_string(&response).map_err(DaemonError::from)
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_payload_becomes_an_error_reply_and_log() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("ipc.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&path).unwrap())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let response = decode_request(Ok("{SECRET_BODY".to_owned())).unwrap_err();
+        assert!(!response.ok);
+        let id = &response.error.as_ref().unwrap().request_id;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(serialized.contains(id));
+        let logs = std::fs::read_to_string(path).unwrap();
+        assert!(logs.contains("ipc_decode_failed"));
+        assert!(logs.contains(id));
+        // A malformed body must never reach the log.
+        assert!(!logs.contains("SECRET_BODY"));
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+mod platform {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::runtime::Handle;
+
+    use super::*;
+
+    /// A frame is a 4-byte big-endian length followed by that many bytes of
+    /// JSON payload, in both directions. A length prefix means a reader never
+    /// has to scan the payload for a delimiter that JSON itself may contain,
+    /// and the cap keeps a local peer from asking us to allocate without bound.
+    const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+
+    /// The socket the daemon listens on. A service name that is already a path
+    /// is used as-is, which is what lets a test or a Dev Instance point one
+    /// client at one daemon without touching the shared location.
+    fn endpoint(service_name: &str) -> Result<PathBuf, DaemonError> {
+        if service_name.starts_with('/') {
+            return Ok(PathBuf::from(service_name));
+        }
+        crate::config::daemon_socket_path()
+    }
+
+    pub fn call(
+        service_name: &str,
+        request: DaemonIpcRequest,
+        timeout: Duration,
+    ) -> Result<DaemonIpcResponse, DaemonError> {
+        let path = endpoint(service_name)?;
+        let request_json = serde_json::to_string(&request)?;
+        let mut stream = std::os::unix::net::UnixStream::connect(&path).map_err(|error| {
+            DaemonError::Ipc(format!(
+                "failed to reach the daemon at {}: {error}",
+                path.display()
+            ))
+        })?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .and_then(|()| stream.set_write_timeout(Some(timeout)))
+            .map_err(|error| {
+                DaemonError::Ipc(format!(
+                    "failed to configure the daemon connection: {error}"
+                ))
+            })?;
+        write_frame(&mut stream, request_json.as_bytes())?;
+        let response = read_frame(&mut stream)?;
+        serde_json::from_slice(&response).map_err(DaemonError::from)
+    }
+
+    fn write_frame(stream: &mut impl std::io::Write, payload: &[u8]) -> Result<(), DaemonError> {
+        let length = u32::try_from(payload.len())
+            .map_err(|_| DaemonError::Ipc("the daemon request is too large to frame".to_owned()))?;
+        stream
+            .write_all(&length.to_be_bytes())
+            .and_then(|()| stream.write_all(payload))
+            .and_then(|()| stream.flush())
+            .map_err(|error| DaemonError::Ipc(format!("failed to send the request: {error}")))
+    }
+
+    fn read_frame(stream: &mut impl std::io::Read) -> Result<Vec<u8>, DaemonError> {
+        let mut header = [0u8; 4];
+        stream
+            .read_exact(&mut header)
+            .map_err(|error| DaemonError::Ipc(format!("failed to read the reply: {error}")))?;
+        let length = u32::from_be_bytes(header) as usize;
+        if length > MAX_FRAME_BYTES {
+            return Err(DaemonError::Ipc(format!(
+                "the daemon reply claims {length} bytes, above the {MAX_FRAME_BYTES} byte limit"
+            )));
+        }
+        let mut payload = vec![0u8; length];
+        stream
+            .read_exact(&mut payload)
+            .map_err(|error| DaemonError::Ipc(format!("failed to read the reply body: {error}")))?;
+        Ok(payload)
+    }
+
+    pub struct DaemonIpcServerInner {
+        service_name: String,
+        socket: PathBuf,
+    }
+
+    impl DaemonIpcServerInner {
+        pub fn start(service_name: String, service: DaemonIpcService) -> Result<Self, DaemonError> {
+            let runtime = Handle::try_current().map_err(|error| {
+                DaemonError::Ipc(format!(
+                    "tokio runtime is required for the socket server: {error}"
+                ))
+            })?;
+            let socket = endpoint(&service_name)?;
+            if let Some(parent) = socket.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    DaemonError::Ipc(format!("failed to create {}: {error}", parent.display()))
+                })?;
+            }
+            // A socket file left behind by a crashed daemon would keep bind
+            // from succeeding; the daemon is the only owner of that path.
+            match std::fs::remove_file(&socket) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(DaemonError::Ipc(format!(
+                        "failed to clear the old socket at {}: {error}",
+                        socket.display()
+                    )));
+                }
+            }
+            let listener = std::os::unix::net::UnixListener::bind(&socket).map_err(|error| {
+                DaemonError::Ipc(format!("failed to bind {}: {error}", socket.display()))
+            })?;
+            // Owner-only, like the credential file: another local user must not
+            // be able to talk to this daemon.
+            std::fs::set_permissions(&socket, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+                .map_err(|error| {
+                    DaemonError::Ipc(format!("failed to restrict {}: {error}", socket.display()))
+                })?;
+            listener.set_nonblocking(true).map_err(|error| {
+                DaemonError::Ipc(format!("failed to configure the listener: {error}"))
+            })?;
+            let listener = tokio::net::UnixListener::from_std(listener).map_err(|error| {
+                DaemonError::Ipc(format!("failed to register the listener: {error}"))
+            })?;
+            // Each connection is served on its own task so one slow request
+            // cannot block the accept loop. The handle is cloned rather than
+            // captured, because the outer spawn already borrows the runtime.
+            let accept_handle = runtime.clone();
+            runtime.spawn(async move {
+                loop {
+                    match listener.accept().await {
+                        Ok((stream, _)) => {
+                            let service = service.clone();
+                            let handle = accept_handle.clone();
+                            handle.spawn(async move { serve(stream, service).await });
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                event = "daemon_socket_accept_failed",
+                                kind = crate::diagnostics::error_kind(&DaemonError::Ipc(
+                                    error.to_string()
+                                ))
+                            );
+                        }
+                    }
+                }
+            });
+            Ok(Self {
+                service_name: socket.to_string_lossy().into_owned(),
+                socket,
+            })
+        }
+
+        pub fn service_name(&self) -> &str {
+            &self.service_name
+        }
+    }
+
+    /// Serves one connection: one request, one reply. Clients open a connection
+    /// per call, which costs little on a local socket and keeps a request from
+    /// inheriting any state from the one before it.
+    async fn serve(mut stream: tokio::net::UnixStream, service: DaemonIpcService) {
+        let request = read_request(&mut stream).await;
+        let reply = dispatch_request(&service, request).await;
+        let reply = match reply {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::error!(
+                    event = "daemon_reply_failed",
+                    kind = crate::diagnostics::error_kind(&error)
+                );
+                return;
+            }
+        };
+        let bytes = reply.as_bytes();
+        let Ok(length) = u32::try_from(bytes.len()) else {
+            tracing::error!(event = "daemon_reply_failed", reason = "too_large");
+            return;
+        };
+        let _ = stream.write_all(&length.to_be_bytes()).await;
+        let _ = stream.write_all(bytes).await;
+        let _ = stream.flush().await;
+    }
+
+    async fn read_request(stream: &mut tokio::net::UnixStream) -> Result<String, DaemonError> {
+        let mut header = [0u8; 4];
+        stream
+            .read_exact(&mut header)
+            .await
+            .map_err(|error| DaemonError::Ipc(format!("failed to read the request: {error}")))?;
+        let length = u32::from_be_bytes(header) as usize;
+        if length > MAX_FRAME_BYTES {
+            return Err(DaemonError::Ipc(format!(
+                "the request claims {length} bytes, above the {MAX_FRAME_BYTES} byte limit"
+            )));
+        }
+        let mut payload = vec![0u8; length];
+        stream.read_exact(&mut payload).await.map_err(|error| {
+            DaemonError::Ipc(format!("failed to read the request body: {error}"))
+        })?;
+        String::from_utf8(payload)
+            .map_err(|error| DaemonError::Ipc(format!("the request is not UTF-8: {error}")))
+    }
+}
+
+/// Windows needs a named pipe here. It is a small, self-contained module with
+/// the same three entry points, and it is the one platform piece this work
+/// could not verify: there is no Windows machine in the loop yet.
+#[cfg(not(unix))]
 mod platform {
     use super::*;
 
@@ -546,7 +831,7 @@ mod platform {
         _timeout: Duration,
     ) -> Result<DaemonIpcResponse, DaemonError> {
         Err(DaemonError::Ipc(format!(
-            "local daemon IPC is only implemented on macOS; requested XPC Mach service {service_name}"
+            "local daemon IPC is not implemented on this platform yet; requested endpoint {service_name}"
         )))
     }
 
@@ -560,7 +845,7 @@ mod platform {
             _service: DaemonIpcService,
         ) -> Result<Self, DaemonError> {
             Err(DaemonError::Ipc(format!(
-                "local daemon IPC is only implemented on macOS; requested XPC Mach service {service_name}"
+                "local daemon IPC is not implemented on this platform yet; requested endpoint {service_name}"
             )))
         }
 
@@ -826,64 +1111,13 @@ mod platform {
 
     /// Handles one XPC request on a tokio worker thread. The GCD callback
     /// thread only retains the message and spawns this task, so request
-    /// handling never runs on the 512 KiB dispatch stack.
+    /// handling never runs on the 512 KiB dispatch stack. Everything past the
+    /// dictionary read is shared with the socket transport.
     async fn dispatch_message(
         service: &DaemonIpcService,
         message: SendXpc,
     ) -> Result<String, DaemonError> {
-        let request = decode_xpc_request(xpc_dictionary_string(message.0, REQUEST_JSON_KEY));
-        let response = match request {
-            Ok(request) => match validate_agent_runtime_request(&request) {
-                Ok(()) => service.dispatch(request).await,
-                Err(error) => {
-                    tracing::warn!(event = "xpc_validation_failed", request_id = %crate::diagnostics::validated_request_id(&request.request_id).unwrap_or_default(), kind = crate::diagnostics::error_kind(&error));
-                    let id = crate::diagnostics::validated_request_id(&request.request_id)
-                        .unwrap_or_else(crate::diagnostics::new_request_id);
-                    crate::diagnostics::REQUEST_ID
-                        .scope(id, async { DaemonIpcResponse::from_result(Err(error)) })
-                        .await
-                }
-            },
-            Err(response) => *response,
-        };
-        serde_json::to_string(&response).map_err(DaemonError::from)
-    }
-
-    fn decode_xpc_request(
-        json: Result<String, DaemonError>,
-    ) -> Result<DaemonIpcRequest, Box<DaemonIpcResponse>> {
-        json.and_then(|json| serde_json::from_str(&json).map_err(DaemonError::from)).map_err(|error| {
-            let response = DaemonIpcResponse::from_result(Err(error));
-            if let Some(error) = &response.error {
-                tracing::warn!(event = "xpc_decode_failed", request_id = %error.request_id, code = %error.code);
-            }
-            Box::new(response)
-        })
-    }
-
-    #[cfg(test)]
-    mod diagnostic_tests {
-        use super::*;
-        #[test]
-        fn malformed_xpc_payload_becomes_an_error_reply_and_log() {
-            let root = tempfile::tempdir().unwrap();
-            let path = root.path().join("xpc.log");
-            let subscriber = tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::INFO)
-                .with_ansi(false)
-                .with_writer(std::fs::File::create(&path).unwrap())
-                .finish();
-            let _guard = tracing::subscriber::set_default(subscriber);
-            let response = decode_xpc_request(Ok("{SECRET_BODY".to_owned())).unwrap_err();
-            assert!(!response.ok);
-            let id = &response.error.as_ref().unwrap().request_id;
-            let serialized = serde_json::to_string(&response).unwrap();
-            assert!(serialized.contains(id));
-            let logs = std::fs::read_to_string(path).unwrap();
-            assert!(logs.contains("xpc_decode_failed"));
-            assert!(logs.contains(id));
-            assert!(!logs.contains("SECRET_BODY"));
-        }
+        super::dispatch_request(service, xpc_dictionary_string(message.0, REQUEST_JSON_KEY)).await
     }
 
     /// XPC objects are reference-counted and documented as safe to use from

@@ -445,9 +445,10 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         DaemonState::initialize(config).await?
     };
     let service = DaemonIpcService::new(state.clone());
-    let _ipc_server = DaemonIpcServer::start(mach_service_name.clone(), service.clone())?;
-    // The unique test service exercises the real process/XPC boundary while
-    // deliberately avoiding network sync and model downloads in user space.
+    let ipc_server = DaemonIpcServer::start(mach_service_name.clone(), service.clone())?;
+    // The unique test service exercises the real process/transport boundary
+    // while deliberately avoiding network sync and model downloads in user
+    // space.
     // Dev instances are not test services and retain every production worker.
     let _sync_worker = (!runtime_mode.isolated_test).then(|| state.start_sync_worker());
     let _search_model_worker =
@@ -460,8 +461,8 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         pid = std::process::id(),
         version = env!("CARGO_PKG_VERSION"),
         build_id = clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID,
-        "clumsiesd initialized for Mach service {} with installation {}",
-        mach_service_name,
+        "clumsiesd initialized on {} with installation {}",
+        ipc_server.service_name(),
         health.daemon_installation_id
     );
 

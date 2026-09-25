@@ -59,7 +59,7 @@ impl DaemonConfig {
         let dev_instance_id = Self::dev_instance_id_from_env()?;
         let mut paths = match env::var_os("CLUMSIES_DAEMON_ROOT") {
             Some(value) => DaemonRuntimePaths::for_root(PathBuf::from(value)),
-            None => DaemonRuntimePaths::from_home(home_dir()?, dev_instance_id.as_deref()),
+            None => platform_paths(home_dir()?, dev_instance_id.as_deref()),
         };
         if let Some(value) = env::var_os("CLUMSIES_DAEMON_CACHE_DIR") {
             paths.cache_dir = PathBuf::from(value);
@@ -278,6 +278,50 @@ impl DaemonRuntimePaths {
         }
     }
 
+    /// macOS keeps state in ~/Library; everywhere else follows the XDG base
+    /// directories, so a Linux install does not scatter `Library` folders
+    /// through the home directory.
+    ///
+    /// The base directories are passed in rather than read from the
+    /// environment here, so the layout can be tested without racing on
+    /// process-wide variables.
+    #[cfg(not(target_os = "macos"))]
+    fn from_base(
+        data: PathBuf,
+        cache: PathBuf,
+        state: PathBuf,
+        dev_instance_id: Option<&str>,
+    ) -> Self {
+        let (root_dir, cache_dir, log_dir) = match dev_instance_id {
+            Some(instance_id) => (
+                data.join(IDENTIFIER_NAMESPACE)
+                    .join("dev")
+                    .join(instance_id),
+                cache
+                    .join(IDENTIFIER_NAMESPACE)
+                    .join("dev")
+                    .join(instance_id),
+                state
+                    .join(IDENTIFIER_NAMESPACE)
+                    .join("dev")
+                    .join(instance_id)
+                    .join("logs"),
+            ),
+            None => (
+                data.join(IDENTIFIER_NAMESPACE),
+                cache.join(IDENTIFIER_NAMESPACE),
+                state.join(IDENTIFIER_NAMESPACE).join("logs"),
+            ),
+        };
+        Self {
+            launch_agents_dir: root_dir.join("units"),
+            root_dir,
+            cache_dir,
+            log_dir,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn from_home(home: PathBuf, dev_instance_id: Option<&str>) -> Self {
         match dev_instance_id {
             Some(instance_id) => {
@@ -318,6 +362,54 @@ impl DaemonRuntimePaths {
             },
         }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn xdg_dir(variable: &str, home: &Path, fallback: &str) -> PathBuf {
+    match env::var_os(variable) {
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => home.join(fallback),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn platform_paths(home: PathBuf, dev_instance_id: Option<&str>) -> DaemonRuntimePaths {
+    DaemonRuntimePaths::from_home(home, dev_instance_id)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_paths(home: PathBuf, dev_instance_id: Option<&str>) -> DaemonRuntimePaths {
+    DaemonRuntimePaths::from_base(
+        xdg_dir("XDG_DATA_HOME", &home, ".local/share"),
+        xdg_dir("XDG_CACHE_HOME", &home, ".cache"),
+        xdg_dir("XDG_STATE_HOME", &home, ".local/state"),
+        dev_instance_id,
+    )
+}
+
+fn runtime_paths_for_current_user() -> Result<DaemonRuntimePaths, DaemonError> {
+    if let Some(value) = env::var_os("CLUMSIES_DAEMON_ROOT") {
+        return Ok(DaemonRuntimePaths::for_root(PathBuf::from(value)));
+    }
+    let dev_instance_id = DaemonConfig::dev_instance_id_from_env()?;
+    Ok(platform_paths(home_dir()?, dev_instance_id.as_deref()))
+}
+
+/// The state directory the daemon owns, resolved exactly the way its
+/// configuration resolves it. Clients and platform code use this instead of
+/// repeating the rules.
+pub fn daemon_root_dir() -> Result<PathBuf, DaemonError> {
+    Ok(runtime_paths_for_current_user()?.root_dir)
+}
+
+/// The local endpoint clients connect to. macOS serves XPC; everywhere else
+/// the daemon listens on a Unix socket inside its own root.
+#[cfg(unix)]
+pub fn daemon_socket_path() -> Result<PathBuf, DaemonError> {
+    if let Some(value) = env::var_os("CLUMSIES_DAEMON_SOCKET") {
+        return Ok(PathBuf::from(value));
+    }
+    Ok(daemon_root_dir()?.join("daemon.sock"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -672,6 +764,7 @@ mod launch_agent_tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn dev_default_paths_are_isolated_while_stable_paths_are_unchanged() {
         let home = PathBuf::from("/Users/tester");
@@ -745,6 +838,42 @@ mod launch_agent_tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("absolute normalized Dev path"));
+    }
+
+    /// The XDG counterpart of the test above: same isolation, different base
+    /// directories. `from_base` takes them as arguments, so this asserts the
+    /// layout without depending on the environment the tests run in.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn dev_default_paths_follow_xdg_and_stay_isolated() {
+        let data = PathBuf::from("/home/tester/.local/share");
+        let cache = PathBuf::from("/home/tester/.cache");
+        let state = PathBuf::from("/home/tester/.local/state");
+
+        let stable =
+            DaemonRuntimePaths::from_base(data.clone(), cache.clone(), state.clone(), None);
+        assert_eq!(stable.root_dir, data.join("ai.clumsies"));
+        assert_eq!(stable.cache_dir, cache.join("ai.clumsies"));
+        assert_eq!(stable.log_dir, state.join("ai.clumsies/logs"));
+
+        let dev = DaemonRuntimePaths::from_base(
+            data.clone(),
+            cache.clone(),
+            state.clone(),
+            Some("a1b2c3d4e5f6"),
+        );
+        assert_eq!(dev.root_dir, data.join("ai.clumsies/dev/a1b2c3d4e5f6"));
+        assert_eq!(dev.cache_dir, cache.join("ai.clumsies/dev/a1b2c3d4e5f6"));
+        assert_eq!(dev.log_dir, state.join("ai.clumsies/dev/a1b2c3d4e5f6/logs"));
+
+        // A Dev Instance must not be able to point at the stable tree.
+        let error = validate_dev_runtime_paths(
+            "a1b2c3d4e5f6",
+            &stable,
+            Some(&stable.root_dir.join("codex-home")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("CLUMSIES_DAEMON_ROOT"));
     }
 
     #[cfg(unix)]
