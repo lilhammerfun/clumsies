@@ -92,6 +92,8 @@ pub(crate) fn router_with_services(
         .merge(public_routes)
         .merge(admin_routes)
         .merge(protected_routes)
+        // Scraped from the Compose network only; the edge answers 404 publicly.
+        .route("/metrics", axum::routing::get(crate::metrics::render))
         .with_state(state)
         .layer(middleware::from_fn(security_headers))
 }

@@ -80,6 +80,9 @@ pub(crate) fn instrument(app: Router) -> Router {
             )
             .on_failure(()),
     )
+    // Inside the request context so the span, response, and metrics share one
+    // matched route and one correlation identity.
+    .layer(middleware::from_fn(crate::metrics::record_request))
     .layer(middleware::from_fn(request_context))
 }
 

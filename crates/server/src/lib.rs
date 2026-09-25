@@ -9,6 +9,7 @@ mod http;
 mod identity;
 pub mod infra;
 pub mod maintenance;
+mod metrics;
 mod middleware;
 pub mod pagination;
 mod routes;
