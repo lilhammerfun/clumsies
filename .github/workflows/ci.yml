@@ -265,26 +265,11 @@ jobs:
           CI_NEEDS: ${{ toJSON(needs) }}
         run: python3 dev/ci_impact.py gate
 
-  delivery_probe:
-    needs: [changes, build]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Report delivery inputs
-        env:
-          SITE_DEPLOY_HOST: ${{ secrets.SITE_DEPLOY_HOST }}
-          SITE_DEPLOY_SSH_KEY: ${{ secrets.SITE_DEPLOY_SSH_KEY }}
-          SITE_DEPLOY_USER: ${{ secrets.SITE_DEPLOY_USER }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          echo "event=${GITHUB_EVENT_NAME} ref=${GITHUB_REF}"
-          echo "site_delivery=${{ needs.changes.outputs.site_delivery }} server_delivery=${{ needs.changes.outputs.server_delivery }}"
-          echo "secrets: host=${#SITE_DEPLOY_HOST} key=${#SITE_DEPLOY_SSH_KEY} user=${#SITE_DEPLOY_USER} known_hosts=${#DEPLOY_KNOWN_HOSTS}"
-
   site_delivery:
     needs: [changes, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.site_delivery == 'true'
+    if: >-
+      always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.site_delivery == 'true'
     uses: ./.github/workflows/site-delivery.yml
     secrets:
       SITE_DEPLOY_HOST: ${{ secrets.SITE_DEPLOY_HOST }}
