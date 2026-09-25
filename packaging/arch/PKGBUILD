@@ -1,0 +1,44 @@
+# Maintainer: Clumsies <hello@clumsies.ai>
+#
+# The Linux desktop client. This package carries a prebuilt binary on purpose:
+# the GPUI stack needs a full Rust toolchain and many minutes to compile, which
+# is more than an install should ask of anyone.
+#
+# This copy builds from the files sitting next to it, which is how it is tested
+# inside the repository. The AUR copy replaces the first source entry with the
+# release tarball and uses real checksums:
+#
+#   source=("https://github.com/lilhammerfun/clumsies/releases/download/v${pkgver}/clumsies-${pkgver}-linux-x86_64.tar.gz")
+#
+# The daemon is not packaged yet: it cannot serve a client on Linux until the
+# local transport lands, so shipping a binary that exits on start would only
+# mislead. Its systemd user unit arrives with that work.
+
+pkgname=clumsies-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Shared Markdown memory for coding agents"
+arch=('x86_64')
+url="https://clumsies.ai"
+license=('MIT')
+# Read off the running process (`ldd` plus what the renderer loads at runtime),
+# not guessed: the client links xcb and xkbcommon, and dlopens wayland, EGL and
+# the GPU driver stack. It does not use fontconfig or freetype at all.
+depends=('glibc' 'gcc-libs' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'libglvnd')
+options=('!debug')
+source=(
+  "clumsies-desktop"
+  "ai.clumsies.desktop"
+  "ai.clumsies.desktop.png"
+  "LICENSE"
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -Dm755 "$srcdir/clumsies-desktop" "$pkgdir/usr/bin/clumsies-desktop"
+  install -Dm644 "$srcdir/ai.clumsies.desktop" \
+    "$pkgdir/usr/share/applications/ai.clumsies.desktop"
+  install -Dm644 "$srcdir/ai.clumsies.desktop.png" \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/ai.clumsies.desktop.png"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
