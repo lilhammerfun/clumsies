@@ -4,13 +4,18 @@
 //! It proves the pieces the real client depends on -- window, layout, list and
 //! tree interaction, platform input methods, and Markdown rendering.
 
+mod diff;
+
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::text::{FrontmatterPlugin, MarkdownExtensions, TextView};
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::*;
+
+use diff::{diff_rows, diff_view};
 
 struct MemoryDocument {
     /// Stable id, also the path shown above the preview.
@@ -49,6 +54,71 @@ fn memory_document(path: &str) -> Option<&'static MemoryDocument> {
         .find(|document| document.path == path)
 }
 
+/// A pending local change to one document: the published text and the draft.
+struct DraftChange {
+    path: &'static str,
+    before: &'static str,
+    after: &'static str,
+}
+
+const DRAFTS: [DraftChange; 1] = [DraftChange {
+    path: "drafts/rollback.md",
+    before: "\
+# 部署回滚清单
+
+当一次发布把错误版本带到线上时，按这个清单回滚。
+
+## 步骤
+
+1. 确认当前线上版本号
+2. 切换到上一个已验证版本
+3. 验证健康检查
+4. 通知相关同学
+
+## 版本对照
+
+| 环境 | 当前版本 | 回滚目标 |
+| --- | --- | --- |
+| production | 2.14.0 | 2.13.3 |
+| staging | 2.15.0-rc1 | 2.14.0 |
+
+## 验证清单
+
+- [x] 健康检查通过
+- [ ] 错误率回到基线
+",
+    after: "\
+# 部署回滚清单
+
+当一次发布把错误版本带到线上时，按这个清单回滚。先止血，再复盘。
+
+## 步骤
+
+1. 确认当前线上版本号
+2. 冻结发布流水线
+3. 切换到上一个已验证版本
+4. 验证健康检查
+5. 通知相关同学，并在事故群同步
+
+## 版本对照
+
+| 环境 | 当前版本 | 回滚目标 |
+| --- | --- | --- |
+| production | 2.14.0 | 2.13.3 |
+| staging | 2.15.0-rc2 | 2.14.0 |
+
+## 验证清单
+
+- [x] 健康检查通过
+- [ ] 错误率回到基线
+- [ ] 补一条事故记录
+",
+}];
+
+fn draft_change(path: &str) -> Option<&'static DraftChange> {
+    DRAFTS.iter().find(|draft| draft.path == path)
+}
+
 /// The tree the engine will eventually build from the Project's Memory refs.
 fn memory_tree_items() -> Vec<TreeItem> {
     let file = |path: &'static str, label: &'static str| TreeItem::new(path, label);
@@ -63,6 +133,9 @@ fn memory_tree_items() -> Vec<TreeItem> {
             .expanded(true)
             .child(file("procedures/README.md", "README.md"))
             .child(file("procedures/rollback.md", "部署回滚清单.md")),
+        TreeItem::new("drafts", "drafts")
+            .expanded(true)
+            .child(file("drafts/rollback.md", "● 部署回滚清单.md")),
         TreeItem::new("skills", "skills").expanded(true).child(
             TreeItem::new("skills/project-memory", "project-memory")
                 .expanded(true)
@@ -207,11 +280,27 @@ impl Render for DesktopApp {
             .child(div().text_sm().child("Memory"))
             .child(div().flex_1().min_h(px(0.)).child(tree_view));
 
-        // Frontmatter is not part of CommonMark, so the parser has to be told
-        // to read it and a plugin has to render the resulting node.
-        let preview_text = document.map_or("在左侧选择一篇文档。", |document| {
-            document.content
-        });
+        // A draft shows the change; a published document shows its content.
+        let body: AnyElement = match selected_path.as_deref().and_then(draft_change) {
+            Some(draft) => {
+                let rows = diff_rows(draft.before, draft.after);
+                diff_view(rows, cx.theme().mono_font_family.clone()).into_any_element()
+            }
+            None => {
+                // Frontmatter is not part of CommonMark, so the parser has to be
+                // told to read it and a plugin has to render the resulting node.
+                let preview_text = document.map_or("在左侧选择一篇文档。", |document| {
+                    document.content
+                });
+                TextView::markdown("memory-preview", preview_text)
+                    .markdown_extensions(MarkdownExtensions::default().frontmatter())
+                    .plugin(FrontmatterPlugin::new())
+                    .selectable(true)
+                    .scrollable(true)
+                    .size_full()
+                    .into_any_element()
+            }
+        };
         // h_flex centers the cross axis, so a column in a row takes its content
         // height unless it asks for h_full(); the scroll region inside needs the
         // row's height to resolve against.
@@ -223,16 +312,7 @@ impl Render for DesktopApp {
             .p_4()
             .gap_2()
             .child(div().text_sm().child(selected_path.unwrap_or_default()))
-            .child(
-                div().flex_1().min_h(px(0.)).child(
-                    TextView::markdown("memory-preview", preview_text)
-                        .markdown_extensions(MarkdownExtensions::default().frontmatter())
-                        .plugin(FrontmatterPlugin::new())
-                        .selectable(true)
-                        .scrollable(true)
-                        .size_full(),
-                ),
-            );
+            .child(div().flex_1().min_h(px(0.)).child(body));
 
         div()
             .h_flex()

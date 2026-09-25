@@ -11,3 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 gpui-kit = "0.6.6"
+# Line-level diffing for the draft and review views.
+similar = "2"
