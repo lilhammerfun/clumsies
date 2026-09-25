@@ -70,6 +70,16 @@ groups:
         annotations:
           summary: "Container {{ $labels.name }} uses more than 2 GiB"
 
+      - alert: HttpServerErrorRate
+        expr: >-
+          sum(rate(caddy_http_request_duration_seconds_count{code=~"5.."}[5m]))
+          / clamp_min(sum(rate(caddy_http_request_duration_seconds_count[5m])), 0.01) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5 percent of edge requests answer with a server error"
+
   - name: operations
     rules:
       - alert: BackupStale
@@ -103,3 +113,57 @@ groups:
         annotations:
           summary: "Alert pipeline watchdog (always firing)"
           description: "This alert confirms Prometheus to Alertmanager to email delivery works."
+
+  # Queueing, saturation, and business throughput. These are the signals that
+  # stay green while the product silently stops doing useful work.
+  - name: business
+    rules:
+      - alert: ClientActivityWithoutCommits
+        expr: >-
+          sum(increase(caddy_http_request_duration_seconds_count{code=~"2.."}[6h])) > 200
+          and increase(clumsies_commits_total[6h]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clients reach the Server but nothing was committed for six hours"
+
+      - alert: OpenDraftBacklogGrowing
+        expr: deriv(clumsies_drafts{status="open"}[6h]) > 0.5
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Open drafts keep growing by more than half a draft per hour"
+
+      - alert: OpenDraftBacklogAging
+        expr: clumsies_oldest_open_draft_age_seconds > 30 * 24 * 3600
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The oldest open draft is more than 30 days old"
+
+      - alert: ReconciliationConflictsBacklog
+        expr: clumsies_reconciliation_candidates{status="conflicts"} > 20
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 20 drafts wait on unresolved reconciliation conflicts"
+
+      - alert: UnreadNotificationBacklog
+        expr: clumsies_inbox_unread > 100
+        for: 12h
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 100 unread inbox notifications"
+
+      - alert: DatabaseLongRunningQuery
+        expr: clumsies_db_longest_query_seconds > 60
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A PostgreSQL query has been running for more than a minute"

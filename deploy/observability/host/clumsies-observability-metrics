@@ -1,11 +1,58 @@
 #!/bin/sh
-# Freshness metrics for the node-exporter textfile collector.
+# Operational metrics for the node-exporter textfile collector: backup, restore
+# drill, and release freshness, plus the backlog, saturation, and business
+# throughput signals that only the database knows about.
 set -eu
 
 OUT=/var/lib/clumsies-observability/textfile/clumsies.prom
-TMP="${OUT}.tmp"
+COMPOSE=/opt/clumsies/compose.production.yml
+# A unique temporary file keeps overlapping runs from clobbering each other.
+TMP="$(mktemp "${OUT}.XXXXXX")"
+trap 'rm -f "${TMP}"' EXIT
+
+READ_SQL="
+SELECT 'drafts' AS kind, status AS label, count(*)::text AS value FROM drafts GROUP BY status
+UNION ALL SELECT 'reviews', status, count(*)::text FROM reviews GROUP BY status
+UNION ALL SELECT 'reconciliation', status, count(*)::text FROM draft_reconciliation_candidates GROUP BY status
+UNION ALL SELECT 'inbox_unread', '', count(*)::text FROM inbox_notifications WHERE read_version < version
+UNION ALL SELECT 'oldest_open_draft_age', '', coalesce(round(extract(epoch FROM (now() - min(created_at))))::text, '0') FROM drafts WHERE status = 'open'
+UNION ALL SELECT 'commits_total', '', count(*)::text FROM commits
+UNION ALL SELECT 'drafts_total', '', count(*)::text FROM drafts
+UNION ALL SELECT 'reviews_total', '', count(*)::text FROM reviews
+UNION ALL SELECT 'db_active_backends', '', count(*)::text FROM pg_stat_activity WHERE state = 'active'
+UNION ALL SELECT 'db_longest_query_seconds', '', coalesce(round(max(extract(epoch FROM (now() - query_start))))::text, '0') FROM pg_stat_activity WHERE state <> 'idle'
+ORDER BY 1, 2
+"
+
+read_database() {
+  # A failed read leaves the database metrics absent rather than stale.
+  docker compose --project-name clumsies --file "${COMPOSE}" exec -T postgres \
+    sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F"|" -c "$1"' _ "${READ_SQL}" </dev/null 2>/dev/null || true
+}
+
+emit_database() {
+  read_database | while IFS="|" read -r kind label value; do
+    [ -n "${value}" ] || continue
+    case "${kind}" in
+      drafts) printf 'clumsies_drafts{status="%s"} %s\n' "${label}" "${value}" ;;
+      reviews) printf 'clumsies_reviews{status="%s"} %s\n' "${label}" "${value}" ;;
+      reconciliation) printf 'clumsies_reconciliation_candidates{status="%s"} %s\n' "${label}" "${value}" ;;
+      inbox_unread) printf 'clumsies_inbox_unread %s\n' "${value}" ;;
+      oldest_open_draft_age) printf 'clumsies_oldest_open_draft_age_seconds %s\n' "${value}" ;;
+      commits_total) printf 'clumsies_commits_total %s\n' "${value}" ;;
+      drafts_total) printf 'clumsies_drafts_total %s\n' "${value}" ;;
+      reviews_total) printf 'clumsies_reviews_total %s\n' "${value}" ;;
+      db_active_backends) printf 'clumsies_db_active_backends %s\n' "${value}" ;;
+      db_longest_query_seconds) printf 'clumsies_db_longest_query_seconds %s\n' "${value}" ;;
+    esac
+  done
+}
 
 {
+  printf '# TYPE clumsies_commits_total counter\n'
+  printf '# TYPE clumsies_drafts_total counter\n'
+  printf '# TYPE clumsies_reviews_total counter\n'
+
   newest_dump="$(find /opt/clumsies/backups -maxdepth 1 -type f -name '*.dump' \
     -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
   if [ -n "${newest_dump:-}" ]; then
@@ -36,6 +83,11 @@ TMP="${OUT}.tmp"
     epoch="$(date -d "${drill_stamp}" +%s 2>/dev/null || true)"
     [ -n "${epoch}" ] && printf 'clumsies_restore_drill_last_success_timestamp_seconds %s\n' "${epoch}"
   fi
+
+  emit_database
 } > "${TMP}"
 
+# node-exporter reads this file as an unprivileged user.
+chmod 0644 "${TMP}"
 mv "${TMP}" "${OUT}"
+trap - EXIT
