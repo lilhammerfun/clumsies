@@ -50,6 +50,62 @@ class CaptureRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, msg, headers, new_url)
 
 
+def repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def discover_setup_code():
+    """The Setup Code is deployment data, never something a developer types.
+
+    In order: the environment, this worktree's Dev Instance (whose compose.env
+    holds the code the instance generated), then the shared dev Server's own
+    default in dev/server.sh. The last one is why a plain
+    `python3 dev/dev-login.py` works against `sh dev/server.sh`: the value is
+    already in the repository, so asking a human for it is asking them to
+    retype a file they can read.
+    """
+    if value := os.environ.get("CLUMSIES_SETUP_CODE"):
+        return value
+    candidates = []
+    if value := os.environ.get("CLUMSIES_DEV_ROOT"):
+        candidates.append(value)
+    else:
+        data = os.environ.get("XDG_DATA_HOME") or os.path.join(
+            os.path.expanduser("~"), ".local", "share"
+        )
+        candidates.append(os.path.join(data, "ai.clumsies.dev"))
+        candidates.append(
+            os.path.join(
+                os.path.expanduser("~"), "Library", "Application Support", "ai.clumsies.dev"
+            )
+        )
+    for root in candidates:
+        instances = os.path.join(root, "instances")
+        if not os.path.isdir(instances):
+            continue
+        for name in sorted(os.listdir(instances)):
+            compose_env = os.path.join(instances, name, "compose.env")
+            found = read_env_value(compose_env, "CLUMSIES_SETUP_CODE")
+            if found:
+                return found
+    return read_env_value(os.path.join(repo_root(), "dev", "server.sh"), "CLUMSIES_SETUP_CODE")
+
+
+def read_env_value(path, key):
+    try:
+        with open(path) as handle:
+            for line in handle:
+                line = line.strip()
+                # Shell files continue lines with a trailing backslash.
+                if line.startswith(f"{key}="):
+                    return line.split("=", 1)[1].rstrip("\\").strip()
+                if line.startswith(f"export {key}="):
+                    return line.split("=", 1)[1].rstrip("\\").strip()
+    except OSError:
+        return None
+    return None
+
+
 def socket_path():
     if value := os.environ.get(SOCKET_ENV):
         return value
@@ -93,8 +149,9 @@ def main():
     parser.add_argument("--server-url", default="http://127.0.0.1:18080")
     parser.add_argument(
         "--setup-code",
-        default=os.environ.get("CLUMSIES_SETUP_CODE"),
-        help="deployment Setup Code, for a Server that has never been configured",
+        default=None,
+        help="deployment Setup Code; discovered from the environment, a Dev "
+        "Instance, or dev/server.sh when omitted",
     )
     parser.add_argument("--org-name", default="Clumsies Local")
     parser.add_argument("--project-name", default="clumsies")
@@ -140,14 +197,13 @@ def main():
     }
 
     if request("/api/v1/setup").get("state") == "setup_required":
-        if not arguments.setup_code:
+        setup_code = arguments.setup_code or discover_setup_code()
+        if not setup_code:
             raise SystemExit(
-                "this Server has never been configured; pass --setup-code "
-                "(the deployment's CLUMSIES_SETUP_CODE)"
+                "this Server has never been configured and no Setup Code was "
+                "found; pass --setup-code or set CLUMSIES_SETUP_CODE"
             )
-        session = request(
-            "/api/v1/setup/sessions", "POST", {"setup_code": arguments.setup_code}
-        )
+        session = request("/api/v1/setup/sessions", "POST", {"setup_code": setup_code})
         csrf = session["csrf_token"]
         request(
             "/api/v1/setup/configuration",
