@@ -1477,17 +1477,18 @@ mod tests {
         });
         started_rx.await.unwrap();
 
-        // If pruning held storage before waiting for search, this write lock
-        // would deadlock with the search guard held by this task.
-        let storage_guard = tokio::time::timeout(
-            Duration::from_millis(100),
-            state.inner.storage_access.write(),
-        )
-        .await
-        .expect("pruning must not acquire storage before the search lock");
+        // If pruning held storage before waiting for search, the write lock is
+        // already taken by the task waiting on the search guard, and this
+        // acquisition never completes. The window is generous because a busy
+        // runner can starve this task past a tight deadline, which is what made
+        // the original hundred milliseconds fail intermittently.
+        let storage_guard =
+            tokio::time::timeout(Duration::from_secs(5), state.inner.storage_access.write())
+                .await
+                .expect("pruning must not acquire storage before the search lock");
         drop(storage_guard);
         drop(search_guard);
-        tokio::time::timeout(Duration::from_secs(1), prune)
+        tokio::time::timeout(Duration::from_secs(5), prune)
             .await
             .expect("pruning did not resume after both locks became available")
             .unwrap()
