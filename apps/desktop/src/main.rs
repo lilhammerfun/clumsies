@@ -1,13 +1,26 @@
 //! Clumsies desktop client for Windows and Linux.
 //!
-//! The data below is hard-coded on purpose. This version proves four things:
-//! GPUI opens a window, lays out columns, renders a list, reacts to clicks,
-//! and hosts a text input that the platform IME can drive.
+//! Everything here is a development skeleton: hard-coded data, no engine calls.
+//! It proves the pieces the real client depends on -- window, layout, list
+//! interaction, platform input methods, and Markdown rendering.
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::Root;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::text::{FrontmatterPlugin, MarkdownExtensions, TextView};
 use gpui_kit::*;
+
+/// A real product document, rendered straight out of the repository.
+const REAL_DOCUMENT: &str =
+    include_str!("../../../packages/clumsies/skills/project-memory/SKILL.md");
+
+/// A document that exercises every block the Memory editor has to render.
+const SAMPLE_DOCUMENT: &str = include_str!("../assets/markdown-sample.md");
+
+const DOCUMENTS: [(&str, &str); 2] = [
+    ("真实文档 SKILL.md", REAL_DOCUMENT),
+    ("渲染压力测试", SAMPLE_DOCUMENT),
+];
 
 struct Project {
     name: &'static str,
@@ -18,8 +31,9 @@ struct Project {
 struct DesktopApp {
     projects: Vec<Project>,
     selected: usize,
-    /// IME probe: the same text input the real Memory editor will use.
+    /// Input method probe: the same text input the Memory editor will use.
     probe: Entity<InputState>,
+    selected_document: usize,
 }
 
 impl DesktopApp {
@@ -45,6 +59,7 @@ impl DesktopApp {
             ],
             selected: 0,
             probe,
+            selected_document: 0,
         }
     }
 }
@@ -52,11 +67,12 @@ impl DesktopApp {
 impl Render for DesktopApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_index = self.selected;
+        let selected_document = self.selected_document;
         let typed = self.probe.read(cx).value();
 
         let sidebar = div()
             .v_flex()
-            .w(px(220.))
+            .w(px(200.))
             .h_full()
             .p_3()
             .gap_1()
@@ -85,18 +101,57 @@ impl Render for DesktopApp {
                     .collect::<Vec<_>>(),
             );
 
+        let tabs = div().h_flex().gap_2().children(
+            DOCUMENTS
+                .iter()
+                .enumerate()
+                .map(|(index, (label, _))| {
+                    let tab = div()
+                        .id(("document", index))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .child(*label);
+                    let tab = if index == selected_document {
+                        tab.bg(rgb(0x2f3542))
+                    } else {
+                        tab
+                    };
+                    tab.on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.selected_document = index;
+                        cx.notify();
+                    }))
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        // Frontmatter is not part of CommonMark, so the parser has to be told
+        // to read it and a plugin has to render the resulting node.
+        let preview = div().flex_1().min_h(px(0.)).child(
+            TextView::markdown("memory-preview", DOCUMENTS[selected_document].1)
+                .markdown_extensions(MarkdownExtensions::default().frontmatter())
+                .plugin(FrontmatterPlugin::new())
+                .selectable(true)
+                .scrollable(true)
+                .size_full(),
+        );
+
         let project = &self.projects[selected_index];
         let detail = div()
             .v_flex()
             .flex_1()
+            .min_h(px(0.))
             .p_4()
             .gap_2()
             .child(div().text_lg().child(project.name))
             .child(format!("Repository: {}", project.repository))
             .child(format!("Selected Memory: {}", project.memory_count))
-            .child(div().mt_4().text_sm().child("Input method probe"))
+            .child(div().mt_2().text_sm().child("Input method probe"))
             .child(Input::new(&self.probe))
-            .child(format!("你输入的是：{typed}"));
+            .child(format!("你输入的是：{typed}"))
+            .child(div().mt_2().text_sm().child("Markdown preview"))
+            .child(tabs)
+            .child(preview);
 
         div().h_flex().size_full().child(sidebar).child(detail)
     }
