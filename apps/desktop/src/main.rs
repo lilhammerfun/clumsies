@@ -1,11 +1,12 @@
 //! Clumsies desktop client for Windows and Linux.
 //!
-//! The data below is hard-coded on purpose: this first version only proves that
-//! GPUI can open a window, lay out columns, render a list and react to clicks.
-//! Reading real Projects and Memory from `clumsiesd` comes next.
+//! The data below is hard-coded on purpose. This version proves four things:
+//! GPUI opens a window, lays out columns, renders a list, reacts to clicks,
+//! and hosts a text input that the platform IME can drive.
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::Root;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
 
 struct Project {
@@ -17,10 +18,13 @@ struct Project {
 struct DesktopApp {
     projects: Vec<Project>,
     selected: usize,
+    /// IME probe: the same text input the real Memory editor will use.
+    probe: Entity<InputState>,
 }
 
 impl DesktopApp {
-    fn new() -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let probe = cx.new(|cx| InputState::new(window, cx).placeholder("用中文输入法打几个字"));
         Self {
             projects: vec![
                 Project {
@@ -40,6 +44,7 @@ impl DesktopApp {
                 },
             ],
             selected: 0,
+            probe,
         }
     }
 }
@@ -47,6 +52,7 @@ impl DesktopApp {
 impl Render for DesktopApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_index = self.selected;
+        let typed = self.probe.read(cx).value();
 
         let sidebar = div()
             .v_flex()
@@ -87,7 +93,10 @@ impl Render for DesktopApp {
             .gap_2()
             .child(div().text_lg().child(project.name))
             .child(format!("Repository: {}", project.repository))
-            .child(format!("Selected Memory: {}", project.memory_count));
+            .child(format!("Selected Memory: {}", project.memory_count))
+            .child(div().mt_4().text_sm().child("Input method probe"))
+            .child(Input::new(&self.probe))
+            .child(format!("你输入的是：{typed}"));
 
         div().h_flex().size_full().child(sidebar).child(detail)
     }
@@ -98,7 +107,7 @@ fn main() {
         gpui_kit::init(cx);
         cx.spawn(async move |cx| {
             cx.open_window(WindowOptions::default(), |window, cx| {
-                let view = cx.new(|_| DesktopApp::new());
+                let view = cx.new(|cx| DesktopApp::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             })
             .expect("failed to open window");
