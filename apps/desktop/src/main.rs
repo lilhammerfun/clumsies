@@ -6,6 +6,7 @@
 mod app;
 mod components;
 mod engine;
+mod protocol;
 mod screens;
 mod ui;
 

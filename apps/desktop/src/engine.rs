@@ -7,6 +7,14 @@
 
 use gpui_kit::component::tree::TreeItem;
 
+use crate::protocol::{self, EngineStatus};
+
+/// Whether the local engine is reachable, and what it reports when it is. The
+/// fixtures below stand in for the documents it will serve; this does not.
+pub fn engine_status() -> EngineStatus {
+    protocol::health()
+}
+
 pub struct Project {
     pub name: &'static str,
     pub repository: &'static str,

@@ -13,3 +13,6 @@ path = "src/main.rs"
 gpui-kit = "0.6.6"
 # Line-level diffing for the draft and review views.
 similar = "2"
+# The daemon's wire protocol is JSON; see src/protocol.rs.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
