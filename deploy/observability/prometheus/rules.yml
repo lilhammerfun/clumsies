@@ -70,15 +70,17 @@ groups:
         annotations:
           summary: "Container {{ $labels.name }} uses more than 2 GiB"
 
+      # Threshold follows the one percent error-rate objective rather than a
+      # locally chosen number.
       - alert: HttpServerErrorRate
         expr: >-
           sum(rate(caddy_http_request_duration_seconds_count{code=~"5.."}[5m]))
-          / clamp_min(sum(rate(caddy_http_request_duration_seconds_count[5m])), 0.01) > 0.05
+          / clamp_min(sum(rate(caddy_http_request_duration_seconds_count[5m])), 0.01) > 0.01
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "More than 5 percent of edge requests answer with a server error"
+          summary: "More than 1 percent of edge requests answer with a server error"
 
   - name: operations
     rules:
