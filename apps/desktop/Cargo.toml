@@ -1,0 +1,13 @@
+[package]
+name = "desktop"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Clumsies desktop client for Windows and Linux."
+
+[[bin]]
+name = "clumsies-desktop"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = "0.6.6"
