@@ -487,15 +487,24 @@ class Instance:
                 with open(path) as handle:
                     sys.stdout.write("".join(handle.readlines()[-40:]))
 
-    def down(self):
+    def down(self, remove_data=False):
+        """Stops everything this instance runs.
+
+        Passing remove_data also drops the database volume, which reset needs:
+        the volume holds the password the instance generated, so a reset that
+        kept the volume and generated another password could no longer connect.
+        """
         for pid_file in (self.client_pid, self.daemon_pid, self.server_pid):
             stop(pid_file)
         if docker_available():
+            command = [
+                "docker", "compose", "--env-file", self.compose_env,
+                "-p", self.compose_project, "down",
+            ]
+            if remove_data:
+                command.append("-v")
             subprocess.run(
-                [
-                    "docker", "compose", "--env-file", self.compose_env,
-                    "-p", self.compose_project, "down",
-                ],
+                command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
@@ -503,7 +512,7 @@ class Instance:
         print(f"instance {self.instance_id} stopped")
 
     def reset(self):
-        self.down()
+        self.down(remove_data=True)
         shutil.rmtree(self.root, ignore_errors=True)
         print(f"instance {self.instance_id} deleted")
 
