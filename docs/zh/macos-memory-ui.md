@@ -1,200 +1,103 @@
 # macOS Memory 界面设计
 
-本文描述 macOS App 当前已经实现的 Memory 工作区行为，以及仍未落地的交互缺口。底层
-权威、Draft、Commit、Ref 和 Effective Memory 语义见
-[《统一 Memory 模型》](./unified-memory-model.md)；Review 的有序多 Draft 契约见
-[《macOS Reviews 当前设计》](./reviews-ui-design.md)。
+macOS 的 Memory 界面编辑按 Project 归属的 Draft overlay，
+同时把 Organization 权威显示为只读上下文。它不能绕过 Review，
+也不能直接发布到 Organization Ref。
 
-## 1. 产品边界
+## 产品边界
 
-Memory 工作区不是直接编辑共享权威的文件管理器。界面分为两个上下文：
+- 文件树呈现所选 Project 的 Effective Memory。
+- 打开一个资源时显示权威正文以及该项目承载的 Draft overlay。
+- 创建、重命名、更新与删除操作都产生 Draft 提案。
+- Review 发布到所选 Project 或 Organization 所有者。
+  Project 内的编辑默认归 Project 所有；
+  **Propose Organization Change…** 创建显式的 Org 提案。
 
-| 上下文 | 当前展示 | 可执行操作 |
-| --- | --- | --- |
-| Organization | Organization Memory 权威目录 | 浏览、预览、把权威资源加入 Project；不创建或修改 Draft |
-| Project | 当前 Project 选中的 Organization Memory、Project 携带的 Draft，以及项目自有的已发布 Memory | 通过 Project 绑定的 Draft 提议创建、编辑、改名或删除；移除 Project 选择；提交 Review |
+## 状态与同步
 
-Organization 视图没有明确的 Draft carrier，因此保持只读。Project 视图中的编辑也不会
-原位修改 Organization 权威：选中的 Organization 资源与该 Project 的 LocalDraft 叠加后
-形成可编辑文档。Project 与 Org 分别拥有已发布 Memory。项目内编辑默认产生 Project Draft，编辑 Org 引用会生成带来源版本的独立项目适配；菜单中的 **Propose Organization Change…** 用于显式 Org 提案。一个 Review 只发布到一个所有者。
+Project 选择决定 Effective Memory、
+Draft 与 Review 上下文。Project
+或会话变化会在异步结果发布之前让陈旧的文档工作失效。
+Desktop 与 MCP 使用同一个 daemon 与 Draft 契约；
+revision 冲突、离线状态与同步失败保持可见，而不会表现为发布成功。
 
-界面仍以 Context、Rule、Workflow 等 kind 和路径约定组织创建入口，但这些只是统一
-Memory 资源在线路模型上的分类与 UI 约定，不是彼此独立的存储系统。
+只有当选择仍然有效时界面才恢复它。加载、冲突、离线、选择与错误状态不只靠颜色表达，
+键盘导航始终可用。
 
-## 2. 文件树与选择
+文件树保留文件类型图标与变更颜色：新增为绿色、修改为琥珀色、删除为红色，
+已提交但尚未合并的改动同样如此。不再有任何操作的 Draft 记录不会把文件标为已变更、
+不会覆盖已打开标签页中的已发布内容，也不会进入新的 Review 请求；
+其记录仍保留用于历史与后续编辑。[Inbox](inbox.md) 汇集 Review 事件、
+影响被引用 Memory 的远端共享更新与同步失败；全局侧栏显示其未读数。
+后台状态不再在文件树尾部追加徽标或全局同步工具栏按钮。
 
-文件树使用原生 `List(selection:)` 和 path tree：目录是从资源路径派生的节点，不是独立
-Server 对象。首次出现时展开已有目录；资源或 Draft 路径变化后，树会重建并清理已经
-失效的选中项。
+文档没有额外的 Draft、Review 或远端更新状态条。**View Review**、
+**Review Remote Changes** 与 **Update from
+Remote Version** 仍在适用的既有文档与文件菜单中提供。
+删除 Draft 会在文档内容中说明待处理的删除。冲突解决与保存失败停留在操作位置；
+读取或归档通知不会发布、对账或丢弃内容。
 
-- 单击文件选择并打开文档；目录点击切换展开状态；
-- Command 和 Shift 支持多选与连续选择；
-- 对目录执行操作时，目标集合是其下所有 terminal memory，而不是目录节点本身；
-- 多选的 Open、删除提议、加入 Project 等动作复用同一目标集合；
-- menu 是否出现和是否可用，同时取决于 Org/Project 上下文、权限、Draft 状态、freshness
-  以及文档是否正在同步。
+文件菜单使用 **Rename…** 与 **Delete…**。
+它们的确认框说明 Draft 与发布目标。Project 发布影响其成员；
+Org 发布影响使用该 Org 资源的 Project。
+**Remove from Project** 只移除该项目的引用。
 
-上下文菜单把普通文档操作和 Memory 领域操作分开：Open、Open Source、Rename Folder、
-Delete Folder 属于文件树层；Add/Remove Project、Request Review、Discard Draft、Review
-Remote Changes 属于领域层。删除共享资源始终创建 Organization deletion Draft，不在客户
-端直接删除权威。
+## Review 请求
 
-文件菜单使用 `Rename…` 和 `Delete…`，确认框说明修改先保存为草稿，审核合并后影响所有
-引用该文件的项目。`Remove from Project` 只移除当前项目的引用。
+目录与多选 Review 请求会纳入属于同一个发布所有者的开放 Draft。
+全 Project 请求汇集 Project Draft。Org 提案单独提交。
+每个 Draft 都必须已同步并有 Server ID；目录操作与文档同步也会阻塞入口。
 
-文件树保留文件类型图标和改动颜色：新增绿色、修改黄色、删除红色；提交评审后仍保留颜色，直到合并。
-没有剩余操作的 Draft 记录不再标记文件有改动，不覆盖已打开 tab 中的发布版本，也不加入新的 Review；记录保留供历史追溯和后续编辑复用。
-文件名尾部不再显示状态图标。Review、远程共享更新和同步失败通知集中到
-[Inbox](../inbox.md)，全局侧栏显示未读数量。工具栏不再因后台同步状态增加按钮。
-文档顶部不增加状态栏，评审和共享更新操作保留在现有文档菜单、文件右键菜单中。
+落后的 Draft（包括存在冲突的）仍可打开请求表单。干净改动会自动对账；
+只有真正的冲突需要选择。与已发布版本一致的 Draft 会被保留但排除在 Review 之外。
+如果没有剩余改动，表单会说明没有可审阅的内容。冲突解决结果与由此产生的 Review 一起提交。
+入口不要求 freshness 是最新的。
 
-### ZIP 导出
+请求表单可以在 Project 合并之后，把选中的 Project 条目记录为一次独立的
+Org 贡献。Project Review 显示关联的 Org PR，或一个可重试的创建失败。
+Org 的拒绝绝不会回滚 Project 的发布。
 
-顶部导出按钮导出当前 Project 或 Organization 视图的全部记忆，不受搜索过滤影响。
-文件树右键菜单支持单文件、多选和目录递归导出。目录导出包含被搜索隐藏的文件；文件与
-目录混选时去重后放入同一个 ZIP。Memory Actions 菜单也可导出当前文件。
-系统保存对话框选择 ZIP 的保存位置，完成后在 Finder 中显示。
+已验证的已发布更新会为未编辑的文件自动安装。编辑器中的未保存文本与 Draft 基线保持受保护；
+干净的 Draft 自动对账，冲突的 Draft 通知其作者。
 
-ZIP 保留原有相对路径、文件扩展名和 UTF-8 正文，包含当前 Draft 的创建、改名、编辑以及
-尚在等待自动保存的编辑文本；删除 Draft 不生成文件。导出捕获点击时的工作区内容，
-不会发布草稿或自动更新到较新的共享版本。
+## ZIP 导出
 
-尚未加载的正文复用现有版本与哈希校验；正文不可用、路径不安全或文件路径冲突时，整次
-导出失败，避免悄悄漏文件。草稿清单未加载完成、文档正在同步时禁用导出。压缩在后台
-调用 macOS 自带的 `ditto`，完整 ZIP 生成后才原子写入目标文件。
+顶部工具栏导出当前 Project 或 Organization 视图中的全部 Memory，
+与搜索过滤无关。文件树右键菜单可导出单个文件、多个选中文件，或所选目录的全部后代，
+包括被搜索隐藏的文件。文件与目录混合选择会去重为一个 ZIP。
+Memory Actions 也可以导出当前打开的文件。
 
-这里导出的是文件快照。管理员 `/api/v1/admin/memory-export` 仍提供包含 Draft 操作、
-Project 选择和 Bundle 的迁移用 JSON。
+导出保留原始相对路径与 UTF-8 内容，包括本地 Draft 的重命名、编辑、
+新建文件与编辑器中的未保存文本。删除 Draft 会被排除。
+原生保存对话框选择 ZIP 的目标位置；Finder 会显示完成的归档。
+导出使用已捕获的工作区视图，不发布改动，也不把它刷新到更新的远端版本。
 
-## 3. Project 选择
+未加载的正文走既有的、带版本与哈希校验的读取路径。正文缺失、
+路径不安全或文件路径冲突会让导出失败，而不是漏掉文件或覆盖冲突条目。
+加载 Draft 清单与正在进行的文档同步会阻塞导出。
+压缩在主线程之外使用 macOS `ditto` 执行，并且只有在归档完整之后才替换目标位置。
 
-Organization 视图可把单个、多个或一个目录下的资源加入任意 Project；Project 视图可把
-已选中的 Organization 资源从当前 Project 移除。这项关系由 Server 的 Project Org
-selection 权威维护，需要 `admin:write` 能力。
+这是文件快照。org-admin 的
+`/api/v1/admin/memory-export` JSON 接口另行导出迁移状态，
+包括 Draft 操作、选择与 Bundle。
 
-一次选择变更执行：
+## 实现边界
 
-```text
-GET 当前完整 selection 与 revision
-  -> 在客户端计算完整 resource_id 集合
-  -> PUT 完整集合，并用 If-Match 携带 revision
-  -> 成功后更新本地 Project 投影并触发同步
-```
+SwiftUI 位于 `apps/macos/` 下；Draft 持久化、
+同步与权威校验位于共享 daemon 与 Server 契约中。计划中的交互作为缺口跟踪，
+不作为已交付行为写入文档。
 
-因此一次 Add/Remove 请求是 Server 侧的整体替换和 CAS，而不是逐资源写入。请求失败、
-权限不足或 revision 冲突时，不先行修改本地选择；重新读取权威状态后再重试。Project
-移除一个干净的 Organization 资源后，对应 Project tab 会关闭；该资源仍存在于
-Organization 权威中。
+## 解决远端改动
 
-## 4. 创建、改名与删除提议
+Memory 冲突操作会打开一个独立的原生窗口，带标准的关闭、最小化与缩放/全屏控件。
+主工作区保持可用；关闭来源标签页不会丢弃解决结果。窗口记住自己的位置与大小，
+并使用与 Review 详情相同的冲突选项与结果 diff。
 
-当前创建入口只存在于 Project 上下文，创建的是 Project-carried Organization Draft。
-Organization 视图不提供“新建”；Project 中的旧 Project 权威也不能编辑。
+远端与 Draft 的冲突区块并排显示，形式是相对共同原始版本的统一 diff，
+选择按钮位于各自区块的标题中。每次选择都会更新合并结果，而不会丢弃自动合并的改动。
+完成选择后显示结果 diff，其菜单中包含 Reset File Choices。
+路径与删除冲突需要显式选择；即使文件正文相同，路径冲突也会得到说明。
 
-单文件改名按两类处理：
-
-- 已有 Organization 资源：在当前 Project 创建 rename proposal；
-- 尚未发布的 create Draft：直接调整其提议路径。
-
-文件夹改名先计算所有后代的新路径，拒绝空名称、`.`、`..`、斜杠、目录自包含和大小写
-归一化后的路径冲突。文件夹删除会为已有 Organization 资源创建 deletion proposal，
-并丢弃同目录下尚未发布的 create Draft；已经是 deletion Draft 的项不重复处理。
-
-目录改名、目录删除和批量 Discard 在当前实现中仍是按文件顺序调用多个 mutation，并非
-一个跨文件事务。某一步失败时，之前的步骤可能已经完成；界面显示 `Completed n of m`
-一类进度和错误，调用方不能把批量操作理解为全成或全败。
-
-## 5. 通知与文档状态
-
-Inbox 跨项目汇总通知，支持消息类型筛选、未读、归档和搜索。列表固定两行，单击只选择，
-通过明确的按钮打开原始 Review，或直接进入对应项目的 Memory，用现有 Diff 标签查看有远程更新的文件。
-Inbox 不设消息详情页，也不在行内展开。
-成功进入原始 Review 或 Memory 后才标为已读。工具栏和右键菜单支持多选、标为已读／未读、
-归档和移回 Inbox；归档不改变已读状态，且可以撤销。新的评论、审核结果或共享发布会让通知重新出现。
-这些操作不会提交、合并、丢弃或更新 Memory。
-
-本机草稿的创建、编辑、改名、删除和提交状态不产生通知，Inbox 不读取或汇总草稿列表。
-远程发布改变了项目正在引用的记忆时，才通知该项目的相关成员；未引用该记忆的项目不受影响。
-共享正文、路径或删除状态的变化可以进入 Diff 或协调；仅仅 Draft base Ref 落后不产生提醒。
-服务器通知与本机提醒的持久化方式、收件人和首版边界见 [Inbox 说明](../inbox.md)。
-
-文档不额外显示草稿、评审或共享更新状态栏。现有菜单中的 `View Review` 打开审核，
-`Review Remote Changes` 进入协调，`Update from Remote Version` 显式更新远程版本。
-删除草稿在文档正文中说明待删除状态。正在处理的冲突和保存失败仍在操作位置展示。
-
-## 6. 文档会话与同步
-
-同一个 Organization resource 可以同时出现在 Organization 目录和多个 Project overlay
-中。可变编辑状态使用 `(project_id, item_id)` 作为 Project 会话键；Organization 权威
-tab 的 Project 身份为空。因此打开相同 resource ID 的 Org 视图与 Project 视图不会共享
-未保存正文、同步任务或 reconciliation 状态。
-
-每个上下文内同一文档只保留一个 tab；Preview、Source 与 Diff 是同一个 tab 的模式，
-不是三个独立文档。Draft baseline 不可用时强制进入 Diff。Project 取消选择资源时，仅当
-该 Project 没有仍存活的 Draft，才清理对应 tab。
-
-编辑保存进入本机 Draft/outbox，再由 daemon 与 Server 同步。资源 stale 或 Draft behind
-时，菜单提供 Update from Remote Version 或 Review Remote Changes。Memory 的冲突处理使用独立原生窗口，带关闭、最小化、
-缩放及全屏控件；主窗口保持可用，关闭原文档 tab 也不丢失解决进度。窗口记住尺寸与位置，
-与 Review 详情共用冲突选择和结果 diff 组件。
-Remote 与 Draft 的冲突片段并排显示，各自用 unified diff 展示相对共同原文的增删，选择按钮
-与各自标题同行。逐处选择保留自动合并的改动，完成后显示结果 diff，可从菜单重置选择。
-路径和删除冲突也需明确选择；即使正文相同，路径被占用时也会解释原因。
-Save to Draft 只保存草稿，不批准或发布。尚有未处理冲突时禁用保存。
-取消、红色关闭按钮及 Command-W 都确认未保存编辑；保存期间
-阻止关闭。退出登录或退出应用也检查冲突窗口的未保存编辑。
-正在同步的文档会锁住会改变路径、选择关系或 Draft 的操作。
-
-## 7. Review 集成
-
-open 且已同步到 Server 的 Project 或 Organization Draft 可以进入各自的 Review 提交
-面板；freshness 为 behind 或存在冲突不会禁用入口。选中目录或多个文件时，客户端收集
-所有符合条件的 Draft，用
-`localizedStandardCompare(path)` 排序，并用一次请求创建一个有序多 Draft Review；
-同一 Review 只包含同一发布范围的 Draft，未变化文件不会加入。该比较器没有额外 tie-breaker，因此不应把
-当前顺序当成跨 locale 的规范化顺序。
-
-behind Draft 无冲突时自动对齐，只有真正的冲突需要用户选择。与已发布版本一致的 Draft
-保留但不加入 Review；全部一致时提示没有需要提交的更改。有冲突的文件由用户逐项确认后，
-在同一事务中保存解决结果并创建 Review。未同步、
-缺少 Server ID、目录操作或文档同步进行中时，入口仍禁用。
-Discard 和 deletion proposal 仍按各自 Draft 生命周期处理。Review 详情、评论和合并行为
-由 [《macOS Reviews 当前设计》](./reviews-ui-design.md) 定义。
-
-## 8. 状态恢复与可访问性
-
-- 列表 selection、tab 和文档同步状态都以稳定资源/Draft 身份关联，不以标题或路径作唯一
-  身份；
-- 路径变化后刷新 tab 标题和文件树位置，失效上下文会被裁剪；
-- Inbox 未读状态及文档操作都有文字或 accessibility label；颜色不承担唯一语义；
-- 目录批量操作显示连续进度，失败信息保留已完成数量；
-- selection、目录递归目标、菜单权限、tab 隔离、通知回执和文档共享状态 均有纯逻辑或
-  View 测试覆盖。
-
-## 9. 当前缺口
-
-以下是设计目标与当前实现之间仍然存在的差距，不应写成已交付行为：
-
-- tab 标题目前只有文档标题，Preview 模式追加 `Preview`；没有 `Org ·` 或 Project 名称
-  前缀。虽然会话已经隔离，同名跨作用域 tab 仍可能难以辨认。
-- 即使目标 Project 只有一个，Add to Project 仍会打开二级菜单，没有单目标快捷动作。
-- 新建命令只在文件树空白上下文出现，不能以当前选中目录作为创建位置。
-- 文件夹 mutation 没有 Server 端批量事务，部分成功需要人工识别和重试。
-
-## 10. 实现定位
-
-| 关注点 | 当前代码 |
-| --- | --- |
-| 文件树、菜单、批量目录计划和视觉状态 | `apps/macos/Sources/Features/Memory/MemoryFileTreeView.swift`、`MemoryFileTree.swift` |
-| Draft 与待保存编辑 | `apps/macos/Sources/Services/Memory/DraftStore.swift` |
-| tab 与导航状态 | `apps/macos/Sources/Features/Workspace/WorkspaceNavigation.swift` |
-| Project 切换与刷新编排 | `apps/macos/Sources/Features/Workspace/WorkspaceCoordinator.swift` |
-| 文档 Sync 与共享刷新 | `apps/macos/Sources/Features/Memory/MemoryModel.swift`、`Services/Memory/MemorySyncService.swift` |
-| 文档与会话模型 | `apps/macos/Sources/Libraries/Models/MemoryModels.swift` |
-| 用户通知 | `apps/macos/Sources/Features/Inbox/InboxView.swift`、`Services/Inbox/InboxStore.swift` |
-| tab 标题与布局 | `apps/macos/Sources/Features/Memory/DocumentTabStrip.swift` |
-| 交互测试 | `apps/macos/Tests/Features/FileTreeSelectionTests.swift`、`MemoryFileTreeMenuTests.swift`、`WorkspaceNavigationTests.swift` |
-
-## 项目发布与独立 Org 贡献
-
-项目 PR 由项目 owner/admin 合并，成员自动同步已验证的已发布快照，未保存编辑和草稿基线受到保护。干净草稿自动合并；冲突保留原稿并通知作者。提交项目 PR 时可以选择在合并后贡献到 Org。系统从固定项目版本创建独立 Org PR，显示关联或可重试的创建失败，由 Org owner/admin 独立处理。Org 拒绝不会撤销项目发布。
+在所有选择完成之前，Save to Draft 保持禁用；它不会批准或发布。取消、
+关闭按钮与 Command-W 会在输入被编辑过时确认；保存进行中会阻止关闭。
+退出登录或退出应用时，也会先检查这些窗口，然后才丢弃未保存的编辑。

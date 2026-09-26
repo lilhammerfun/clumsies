@@ -9,6 +9,9 @@ export default withMermaid(
     title: "clumsies",
     description: "Use shared Memory with coding agents, understand the design, and find Clumsies integration and maintenance references.",
     base: "/",
+    // Chinese pages kept for history only; they are not part of the current locale
+    // contract and are excluded from the build so their old links cannot break it.
+    srcExclude: ["zh/archive/**"],
     head: [["link", { rel: "icon", type: "image/png", href: "/logo.png" }]],
     appearance: true,
     cleanUrls: true,
