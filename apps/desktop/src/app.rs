@@ -551,10 +551,6 @@ impl Render for DesktopApp {
             list: self.section_list(picker, cx),
             detail: self.section_detail(cx),
             band: self.section_band(cx),
-            inspector: match self.shell.section() {
-                Section::Memory => self.memory.inspector(cx),
-                _ => None,
-            },
         };
         let shell = self.shell.render(window, cx, chrome, slots, actions);
         // The window's own keys, handled above everything else: F6 moves between

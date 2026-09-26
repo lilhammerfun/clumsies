@@ -40,14 +40,9 @@ use crate::ui::{self, Typography};
 pub const RAIL_WIDTH: f32 = 52.;
 /// The open section's list column, inside the card.
 pub const LIST_WIDTH: f32 = 240.;
-/// The panel that says what is known about what is open.
-pub const PANEL_WIDTH: f32 = 280.;
 /// Below this the list and the work stack instead of sitting side by side,
 /// which is the Windows rule for a window this narrow.
 pub const STACK_WIDTH: f32 = 760.;
-/// Below this the right panel folds away: it holds what the client knows, and
-/// the work needs the width more than the facts do.
-pub const PANEL_WIDTH_MIN: f32 = 1000.;
 /// The gap between the floating card and the page it floats on.
 pub const CARD_GAP: f32 = 8.;
 
@@ -177,7 +172,6 @@ pub struct Slots {
     pub detail: AnyElement,
     /// The band's own content: what the screen adds beside the page navigation.
     pub band: AnyElement,
-    pub inspector: Option<AnyElement>,
 }
 
 pub struct Shell {
@@ -249,13 +243,7 @@ impl Shell {
         actions: Option<AnyElement>,
     ) -> AnyElement {
         let narrow = chrome.width < px(STACK_WIDTH);
-        let shows_panel = !narrow && chrome.width >= px(PANEL_WIDTH_MIN);
-        let Slots {
-            list,
-            detail,
-            band,
-            inspector,
-        } = slots;
+        let Slots { list, detail, band } = slots;
 
         let list_column = div().v_flex().w(px(LIST_WIDTH)).h_full().child(list);
         let detail_column = div()
@@ -326,8 +314,7 @@ impl Shell {
                     .flex_1()
                     .min_h(px(0.))
                     .child(self.rail(&chrome, cx))
-                    .child(card)
-                    .children(shows_panel.then(|| self.inspector(&chrome, inspector, cx))),
+                    .child(card),
             )
             .children(overlay)
             .children(panel)
@@ -344,27 +331,33 @@ impl Shell {
         actions: Option<AnyElement>,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
-        let band = TitleBar::new().pl(px(0.)).child(
-            div()
-                .h_flex()
-                .flex_1()
-                .h_full()
-                .items_center()
-                .gap_2()
-                .child(div().w(px(RAIL_WIDTH)).h_full())
-                .child(nav_button("page-back", IconName::ArrowLeft, true, cx))
-                .child(nav_button("page-forward", IconName::ArrowRight, true, cx))
-                .child(div().w(px(ui::SPACE_SM)))
-                .child(
-                    div()
-                        .h_flex()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .items_center()
-                        .child(band),
-                )
-                .children(actions),
-        );
+        // The band is the page: no surface of its own, no rule under it, so the
+        // window reads as one surface with a card floating on it.
+        let band = TitleBar::new()
+            .pl(px(0.))
+            .bg(cx.theme().sidebar)
+            .border_color(cx.theme().sidebar)
+            .child(
+                div()
+                    .h_flex()
+                    .flex_1()
+                    .h_full()
+                    .items_center()
+                    .gap_2()
+                    .child(div().w(px(RAIL_WIDTH)).h_full())
+                    .child(nav_button("page-back", IconName::ArrowLeft, true, cx))
+                    .child(nav_button("page-forward", IconName::ArrowRight, true, cx))
+                    .child(div().w(px(ui::SPACE_SM)))
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .items_center()
+                            .child(band),
+                    )
+                    .children(actions),
+            );
         let band = if draws_own_controls(window) {
             band.child(window_controls(cx))
         } else {
@@ -483,69 +476,6 @@ impl Shell {
                         move |window, cx| Tooltip::new(label.clone()).build(window, cx)
                     }),
             )
-            .into_any_element()
-    }
-
-    /// The right panel: what the client knows about what is open, in small
-    /// labelled groups. Everything in it is a fact the client already holds.
-    fn inspector(
-        &self,
-        chrome: &Chrome<'_>,
-        slot: Option<AnyElement>,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
-        let engine = &chrome.engine;
-        let mut facts = div().v_flex().gap_1().child(row(
-            "state",
-            if engine.connected {
-                "connected".to_owned()
-            } else {
-                "unavailable".to_owned()
-            },
-            cx,
-        ));
-        if engine.connected {
-            facts = facts
-                .child(row("daemon", engine.version.clone(), cx))
-                .children(
-                    engine
-                        .server
-                        .as_ref()
-                        .map(|server| row("server", server.clone(), cx)),
-                )
-                .children(
-                    engine
-                        .installation
-                        .as_ref()
-                        .map(|id| row("install", ui::shorten(id, 8), cx)),
-                )
-                .children(
-                    engine
-                        .schema
-                        .map(|schema| row("schema", schema.to_string(), cx)),
-                );
-        }
-        if let Some(detail) = &engine.detail {
-            facts = facts.child(
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().danger)
-                    .child(ui::truncate(detail, 60)),
-            );
-        }
-
-        let mut panel = div()
-            .v_flex()
-            .w(px(PANEL_WIDTH))
-            .h_full()
-            .px_3()
-            .pb_3()
-            .gap_4();
-        if let Some(slot) = slot {
-            panel = panel.child(group("Open", slot, cx));
-        }
-        panel
-            .child(group("Engine", facts.into_any_element(), cx))
             .into_any_element()
     }
 
@@ -689,38 +619,6 @@ fn control(
         })
         .on_click(move |_, window, _| act(window))
         .child(Icon::new(icon).with_size(px(14.)))
-        .into_any_element()
-}
-
-/// A labelled group in the right panel: a small muted heading and its rows.
-fn group(label: &str, body: AnyElement, cx: &App) -> AnyElement {
-    div()
-        .v_flex()
-        .gap_2()
-        .child(
-            div()
-                .text_style(&ui::CAPTION)
-                .text_color(cx.theme().muted_foreground)
-                .child(label.to_owned()),
-        )
-        .child(body)
-        .into_any_element()
-}
-
-/// One fact: its name, and its value.
-fn row(label: &str, value: String, cx: &App) -> AnyElement {
-    div()
-        .h_flex()
-        .gap_2()
-        .items_center()
-        .child(
-            div()
-                .w(px(64.))
-                .text_style(&ui::CAPTION)
-                .text_color(cx.theme().muted_foreground)
-                .child(label.to_owned()),
-        )
-        .child(div().text_style(&ui::CAPTION).child(value))
         .into_any_element()
 }
 
