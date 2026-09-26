@@ -154,7 +154,7 @@ pub(crate) async fn render(State(state): State<AppState>) -> Response {
 /// Render per-route request counters.
 fn render_requests(body: &mut String, routes: &[(String, Arc<RouteMetrics>)]) {
     body.push_str(
-        "# HELP clumsies_http_requests_total Requests handled per route and status class.\n",
+        "# HELP clumsies_http_requests_total Requests handled per route and response code.\n",
     );
     body.push_str("# TYPE clumsies_http_requests_total counter\n");
     for (route, metrics) in routes {
