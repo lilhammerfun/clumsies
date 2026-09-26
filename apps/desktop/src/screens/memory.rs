@@ -198,8 +198,14 @@ impl MemoryScreen {
             .into_any_element()
     }
 
-    /// The section's detail: the document the reader picked.
-    pub fn detail(&self, actions: AnyElement, cx: &mut Context<DesktopApp>) -> AnyElement {
+    /// What the window's band shows while this section is open: the document the
+    /// reader picked, and how to look at it.
+    pub fn band(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+        self.pane.band(self.render_target(), cx)
+    }
+
+    /// The section's detail: the work itself.
+    pub fn detail(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
         let Some(target) = self.render_target() else {
             let reason = match &self.error {
                 Some(error) => ui::message(error.clone(), cx.theme().danger),
@@ -220,7 +226,7 @@ impl MemoryScreen {
         // h_flex centers the cross axis, so a column in a row takes its content
         // height unless it asks for h_full(); the scroll regions inside need the
         // row's height to resolve against.
-        self.pane.detail(Some(target), actions, cx)
+        self.pane.detail(Some(target), cx)
     }
 
     /// What the right panel knows about the open document: where it is, and

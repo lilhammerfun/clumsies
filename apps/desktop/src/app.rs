@@ -451,14 +451,23 @@ impl DesktopApp {
         }
     }
 
-    /// Its detail. The window's actions go into it, because that is where the
-    /// macOS client keeps the same menu: in the detail's own toolbar.
-    fn section_detail(&self, actions: Option<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
+    /// Its detail: the work itself.
+    fn section_detail(&self, cx: &mut Context<Self>) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self
-                .memory
-                .detail(actions.unwrap_or_else(|| div().into_any_element()), cx),
+            Section::Memory => self.memory.detail(cx),
             other => placeholder(other.detail_note(), cx),
+        }
+    }
+
+    /// What the open screen puts in the window's band: the document it has open
+    /// and how to look at it, which is where macOS keeps the same two things.
+    fn section_band(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.shell.section() {
+            Section::Memory => self.memory.band(cx),
+            other => div()
+                .text_style(&ui::BODY)
+                .child(other.title())
+                .into_any_element(),
         }
     }
 
@@ -473,6 +482,12 @@ impl DesktopApp {
             project,
             projects: &self.projects,
             engine: self.engine_facts(),
+            // The account this window is signed in to, as the rail's foot names
+            // it: the Server the daemon holds a session with.
+            account: match &self.engine {
+                EngineStatus::Connected(health) => Some(health.server_url.as_str()),
+                EngineStatus::Unreachable(_) => None,
+            },
             width: px(0.),
         }
     }
@@ -534,13 +549,14 @@ impl Render for DesktopApp {
         let picker = self.shell.project_picker(&chrome, cx);
         let slots = Slots {
             list: self.section_list(picker, cx),
-            detail: self.section_detail(actions, cx),
+            detail: self.section_detail(cx),
+            band: self.section_band(cx),
             inspector: match self.shell.section() {
                 Section::Memory => self.memory.inspector(cx),
                 _ => None,
             },
         };
-        let shell = self.shell.render(window, cx, chrome, slots);
+        let shell = self.shell.render(window, cx, chrome, slots, actions);
         // The window's own keys, handled above everything else: F6 moves between
         // the regions and Shift+F6 back, which is the Windows pair for reaching
         // what an editor would otherwise swallow along with Tab; Enter or Space

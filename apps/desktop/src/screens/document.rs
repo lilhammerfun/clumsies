@@ -17,6 +17,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
@@ -242,10 +243,68 @@ impl DocumentPane {
     /// The work itself: the document, read in one of its three modes, with the
     /// window's actions at the end of its header — which is where the macOS
     /// client keeps the same menu, in the detail's toolbar.
+    /// What the window's band shows for this document: which document is open,
+    /// and how to look at it. macOS has the same two things in the same place.
+    pub fn band(
+        &self,
+        target: Option<PaneContext<'_>>,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
+        let Some(target) = target else {
+            return div().into_any_element();
+        };
+        let this = cx.entity();
+        let modes = TabBar::new("document-mode")
+            .segmented()
+            .selected_index(self.mode.index())
+            .on_click({
+                let this = this.clone();
+                move |index, _window, cx| {
+                    let mode = Mode::from_index(*index);
+                    this.update(cx, |app, cx| app.set_document_mode(mode, cx));
+                }
+            })
+            .children([
+                Tab::new().label("Source"),
+                Tab::new().label("Preview"),
+                Tab::new().label("Diff"),
+            ]);
+        div()
+            .h_flex()
+            .gap_3()
+            .items_center()
+            .child(
+                div()
+                    .id("document-tab")
+                    .h_flex()
+                    .gap_2()
+                    .items_center()
+                    .px_3()
+                    .py_1()
+                    .rounded(px(ui::RADIUS))
+                    .bg(cx.theme().background)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Icon::new(IconName::FileText)
+                            .with_size(px(14.))
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(220.))
+                            .truncate()
+                            .text_style(&ui::BODY)
+                            .child(target.document.path.clone()),
+                    ),
+            )
+            .child(modes)
+            .into_any_element()
+    }
+
     pub fn detail(
         &self,
         target: Option<PaneContext<'_>>,
-        actions: AnyElement,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
         let Some(target) = target else {
@@ -262,37 +321,6 @@ impl DocumentPane {
         };
         let text = self.text(cx);
         let this = cx.entity();
-
-        let modes = TabBar::new("document-mode")
-            .segmented()
-            .selected_index(self.mode.index())
-            .on_click({
-                let this = this.clone();
-                move |index, _window, cx| {
-                    let mode = Mode::from_index(*index);
-                    this.update(cx, |app, cx| app.set_document_mode(mode, cx));
-                }
-            })
-            .children([
-                Tab::new().label("Source"),
-                Tab::new().label("Preview"),
-                Tab::new().label("Diff"),
-            ]);
-
-        let header = div()
-            .h_flex()
-            .gap_3()
-            .items_center()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(96.))
-                    .truncate()
-                    .text_style(&ui::BODY)
-                    .child(target.document.path.clone()),
-            )
-            .child(modes)
-            .child(actions);
 
         let body: AnyElement = match self.mode {
             Mode::Source => div()
@@ -354,7 +382,6 @@ impl DocumentPane {
             .min_h(px(0.))
             .p_4()
             .gap_3()
-            .child(header)
             .child(body)
             .child(state_bar)
             .into_any_element()
