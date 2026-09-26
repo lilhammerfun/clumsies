@@ -10,7 +10,6 @@ use gpui_kit::base::Disableable;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{Root, Theme};
 use gpui_kit::*;
 
@@ -18,7 +17,7 @@ use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review}
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::MemoryScreen;
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
-use crate::shell::{Chrome, Section, Shell, Slots};
+use crate::shell::{Chrome, EngineFacts, Section, Shell, Slots};
 use crate::ui::{self, Typography};
 
 pub struct DesktopApp {
@@ -41,9 +40,6 @@ pub struct DesktopApp {
     /// Which debounced store owns the editor. A store that a later keystroke
     /// has superseded must not report its result as the editor's state.
     save_generation: u64,
-    /// Debug-build probe for the platform input method. Not part of the
-    /// product: DESIGN.md keeps development scaffolding out of shipped UI.
-    probe: Entity<InputState>,
     /// Dropping it stops watching the system's light or dark preference.
     _appearance: Subscription,
 }
@@ -57,7 +53,6 @@ impl DesktopApp {
             None => (None, None),
         };
         let memory = MemoryScreen::new(window, cx, checkout, checkout_error);
-        let probe = cx.new(|cx| InputState::new(window, cx).placeholder("用中文输入法打几个字"));
         // A daemon with no session refuses every Server request, and that
         // refusal is the only signed-out signal there is.
         let signed_in = projects_error
@@ -83,7 +78,6 @@ impl DesktopApp {
             sign_in,
             signed_in,
             save_generation: 0,
-            probe,
             _appearance: appearance,
         };
         // A Project that already holds a proposal must show it on the first
@@ -419,69 +413,33 @@ impl DesktopApp {
             .into()
     }
 
-    /// The window's status bar: what the open screen last did, and whether the
-    /// engine is answering.
-    fn status(&self, cx: &mut Context<Self>) -> AnyElement {
-        let section: AnyElement = match self.shell.section() {
-            Section::Memory => self.memory.status(cx),
-            other => ui::message(other.list_note(), cx.theme().muted_foreground),
-        };
-        let (engine_text, engine_color) = self.engine_line(cx);
-        div()
-            .h_flex()
-            .gap_3()
-            .items_center()
-            .child(div().flex_1().min_w(px(0.)).child(section))
-            .children(cfg!(debug_assertions).then(|| {
-                let typed = self.probe.read(cx).value();
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(div().w(px(160.)).child(Input::new(&self.probe)))
-                    .child(
-                        div()
-                            .text_style(&ui::CAPTION)
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("你输入的是：{typed}")),
-                    )
-                    .into_any_element()
-            }))
-            .child(
-                div()
-                    .id("engine-status")
-                    .text_style(&ui::CAPTION)
-                    .text_color(engine_color)
-                    .child(engine_text)
-                    .on_click(cx.listener(|app, _event, _window, cx| {
-                        app.engine = engine::engine_status();
-                        cx.notify();
-                    })),
-            )
-            .into_any_element()
+    /// What the right panel says about the engine this client is talking to.
+    fn engine_facts(&self) -> EngineFacts {
+        match &self.engine {
+            EngineStatus::Connected(health) => EngineFacts {
+                connected: true,
+                version: health.daemon_version.clone(),
+                server: Some(health.server_url.clone()),
+                installation: Some(health.daemon_installation_id.clone()),
+                schema: Some(health.local_db.schema_version),
+                detail: None,
+            },
+            EngineStatus::Unreachable(reason) => EngineFacts {
+                connected: false,
+                version: String::new(),
+                server: None,
+                installation: None,
+                schema: None,
+                detail: Some(reason.clone()),
+            },
+        }
     }
 
-    /// One line for the engine: what it is, where it points, and what it keeps.
-    fn engine_line(&self, cx: &App) -> (String, Hsla) {
-        match &self.engine {
-            EngineStatus::Connected(health) => (
-                format!(
-                    "daemon v{} · {} · install {} · schema {} · click to re-check",
-                    health.daemon_version,
-                    ui::truncate(host_of(&health.server_url), 24),
-                    ui::shorten(&health.daemon_installation_id, 6),
-                    health.local_db.schema_version,
-                ),
-                cx.theme().success,
-            ),
-            EngineStatus::Unreachable(reason) => (
-                format!(
-                    "engine unavailable · click to retry · {}",
-                    ui::truncate(reason, 40)
-                ),
-                cx.theme().danger,
-            ),
-        }
+    /// Asks the engine again, which is what the rail's chip does when the
+    /// client is not talking to anything.
+    pub fn recheck_engine(&mut self, cx: &mut Context<Self>) {
+        self.engine = engine::engine_status();
+        cx.notify();
     }
 
     /// The open section's list column. A section that has no screen yet says so
@@ -514,6 +472,7 @@ impl DesktopApp {
         Chrome {
             project,
             projects: &self.projects,
+            engine: self.engine_facts(),
             width: px(0.),
         }
     }
@@ -570,15 +529,18 @@ impl Render for DesktopApp {
 
         let width = window.viewport_size().width;
         let actions = self.actions(window, cx);
-        let status = self.status(cx);
         let mut chrome = self.chrome();
         chrome.width = width;
         let picker = self.shell.project_picker(&chrome, cx);
         let slots = Slots {
             list: self.section_list(picker, cx),
             detail: self.section_detail(actions, cx),
+            inspector: match self.shell.section() {
+                Section::Memory => self.memory.inspector(cx),
+                _ => None,
+            },
         };
-        let shell = self.shell.render(window, cx, chrome, slots, status);
+        let shell = self.shell.render(window, cx, chrome, slots);
         // The window's own keys, handled above everything else: F6 moves between
         // the regions and Shift+F6 back, which is the Windows pair for reaching
         // what an editor would otherwise swallow along with Tab; Enter or Space
@@ -778,11 +740,4 @@ fn normalize_origin(input: &str) -> Result<String, String> {
         .map(|port| format!(":{port}"))
         .unwrap_or_default();
     Ok(format!("{}://{host}{port}", url.scheme()))
-}
-
-/// The host of a Server URL is the part a reader recognises.
-fn host_of(server_url: &str) -> &str {
-    server_url
-        .split_once("://")
-        .map_or(server_url, |(_, host)| host)
 }

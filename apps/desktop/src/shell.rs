@@ -2,25 +2,28 @@
 //!
 //! Read from the macOS client's WorkspaceView — a NavigationSplitView whose
 //! sidebar is GlobalSidebar, whose content column is the open section's
-//! navigator, and whose detail is the work — and from the shape a reference
-//! window of this kind shows: a strip for the window controls, a rail of
-//! destinations down the left, the open section's list beside it, and the work
-//! filling what is left. Nothing else about a screen's layout is its own
-//! business, which is what keeps the next six screens from each inventing a
-//! window.
+//! navigator, and whose detail is the work — and laid out the way a reference
+//! window of this kind places its regions: a band across the top for the window
+//! controls, a rail of destinations down the left, the open section's list
+//! beside it, the work in the middle under its own header and over its own
+//! action bar, and a panel on the right for what is known about the thing on
+//! screen.
 //!
-//! Three deliberate differences from that reference, each for a reason:
+//! A screen fills three slots: its list, its detail, and — when it has
+//! something to say about what is open — the right panel. Nothing else about a
+//! screen's layout is its own business, which is what keeps the next six
+//! screens from each inventing a window.
 //!
-//! - **The rail is icons only.** Its destinations are named in the list column
-//!   beside it and in a tooltip, so the rail costs 52 points instead of 220 and
-//!   the names stay next to the content they open.
-//! - **The window controls are the platform's**, in a title bar this
-//!   application draws: on Windows and Linux that is minimize, maximize and
-//!   close at the right. The reference window is a macOS window, where the
+//! Three deliberate differences from that reference:
+//!
+//! - **The window controls are the platform's**, at the right of the top band:
+//!   minimize, maximize and close. The reference is a macOS window, where the
 //!   platform puts them at the left; a reader's hands know this platform's.
-//! - **The rail and the title bar are one surface.** The corner above the rail
-//!   carries the rail's own colour, so the navigation reads as one column from
-//!   the window's top edge rather than as a bar stacked on a column.
+//! - **The band and the rail are one surface.** The corner above the rail
+//!   carries the rail's colour, so the navigation reaches the window's top edge.
+//! - **The right panel holds facts, not tools yet.** It names the document and
+//!   its draft, and the engine the client is talking to, all of which the
+//!   client already knows; a panel of empty promises would be worse than none.
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
@@ -32,13 +35,18 @@ use crate::app::DesktopApp;
 use crate::engine::Project;
 use crate::ui::{self, Typography};
 
-/// The rail of destinations, icons only.
-pub const RAIL_WIDTH: f32 = 52.;
-/// The open section's list column, at the width macOS gives its navigator.
-pub const LIST_WIDTH: f32 = 300.;
+/// The rail of destinations: an icon and the name beside it.
+pub const RAIL_WIDTH: f32 = 168.;
+/// The open section's list column.
+pub const LIST_WIDTH: f32 = 240.;
+/// The panel that says what is known about what is open.
+pub const PANEL_WIDTH: f32 = 280.;
 /// Below this the list and the detail stack instead of sitting side by side,
 /// which is the Windows rule for a window this narrow.
 pub const STACK_WIDTH: f32 = 641.;
+/// Below this the right panel folds away: it holds what the client knows, and
+/// the work needs the width more than the facts do.
+pub const PANEL_WIDTH_MIN: f32 = 1000.;
 
 /// The six destinations of the macOS client, in its order.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,10 +80,10 @@ impl Section {
         }
     }
 
-    /// The macOS client's own symbol for this destination, in this client's
-    /// icon set: WorkspaceSection.symbol in MemoryModels.swift. Memory is the
-    /// brain there and the brain here, which is why these are drawn by path
-    /// rather than from the component library's curated names.
+    /// The macOS client's own symbol for this destination, in this client's icon
+    /// set: WorkspaceSection.symbol in MemoryModels.swift. Memory is the brain
+    /// there and the brain here, which is why these are drawn by path rather
+    /// than from the component library's curated names.
     fn symbol(self) -> &'static str {
         match self {
             // chart.bar.xaxis
@@ -131,21 +139,38 @@ impl Section {
     }
 }
 
-/// What the window supplies for its chrome: which Project is open, the list the
-/// picker offers, and the width that decides whether the columns stack.
+/// What the client knows about the engine it is talking to, as the right panel
+/// names it.
+pub struct EngineFacts {
+    pub connected: bool,
+    pub version: String,
+    pub server: Option<String>,
+    pub installation: Option<String>,
+    pub schema: Option<i64>,
+    /// Why it is not connected, when it is not.
+    pub detail: Option<String>,
+}
+
+/// What the window supplies for its own chrome: which Project is open, the list
+/// the picker offers, the engine behind it, and the width that decides whether
+/// the columns stack.
 pub struct Chrome<'a> {
     /// The Project the work belongs to.
     pub project: Option<&'a str>,
     /// The Projects the picker offers.
     pub projects: &'a [Project],
-    /// The window's width, which decides whether the list and detail stack.
+    /// The engine this client is talking to.
+    pub engine: EngineFacts,
+    /// The window's width, which decides whether the columns stack.
     pub width: Pixels,
 }
 
-/// The two slots a screen fills: its list column, and the work itself.
+/// What a screen fills: its list column, its detail, and anything it has to say
+/// about what is open, which the right panel shows.
 pub struct Slots {
     pub list: AnyElement,
     pub detail: AnyElement,
+    pub inspector: Option<AnyElement>,
 }
 
 pub struct Shell {
@@ -201,57 +226,82 @@ impl Shell {
             .text_style(&ui::CAPTION)
             .text_color(cx.theme().muted_foreground)
             .hover(|this| this.bg(cx.theme().list_hover))
-            .child(ui::truncate(&project, 22))
+            .child(ui::truncate(&project, 20))
             .child(Icon::new(IconName::ChevronDown).with_size(px(12.)))
             .on_click(cx.listener(|app, _event, _window, cx| app.toggle_projects(cx)))
             .into_any_element()
     }
 
-    /// The window, in three rows: the title bar, the columns, the status bar.
-    /// A narrow window drops the rail's labels and stacks the list over the
-    /// detail.
+    /// The window: a band across the top, the columns under it.
     pub fn render(
         &self,
         window: &mut Window,
         cx: &mut Context<DesktopApp>,
         chrome: Chrome<'_>,
         slots: Slots,
-        status: AnyElement,
     ) -> AnyElement {
         let narrow = chrome.width < px(STACK_WIDTH);
-        let columns = if narrow {
+        // The panel holds what the client knows, and the work needs the width
+        // more than the facts do, so the panel is the first thing to go.
+        let shows_panel = !narrow && chrome.width >= px(PANEL_WIDTH_MIN);
+        let Slots {
+            list,
+            detail,
+            inspector,
+        } = slots;
+
+        let list_column = div()
+            .v_flex()
+            .w(px(LIST_WIDTH))
+            .h_full()
+            .bg(cx.theme().sidebar)
+            .child(list);
+        let detail_column = div()
+            .v_flex()
+            .flex_1()
+            .min_w(px(0.))
+            .min_h(px(0.))
+            .bg(cx.theme().background)
+            .child(detail);
+        // A narrow window stacks the list over the work rather than squeezing
+        // both, which is the Windows rule for a window this size.
+        let middle = if narrow {
             div()
                 .v_flex()
                 .flex_1()
-                .min_h(px(0.))
-                .child(div().v_flex().h(px(200.)).child(slots.list))
+                .min_w(px(0.))
+                .child(
+                    div()
+                        .v_flex()
+                        .h(px(180.))
+                        .bg(cx.theme().sidebar)
+                        .child(list_column),
+                )
                 .child(divider(false, cx))
-                .child(div().v_flex().flex_1().min_h(px(0.)).child(slots.detail))
+                .child(detail_column)
                 .into_any_element()
         } else {
             div()
                 .h_flex()
                 .items_stretch()
                 .flex_1()
-                .min_h(px(0.))
-                .child(
-                    div()
-                        .v_flex()
-                        .w(px(LIST_WIDTH))
-                        .bg(cx.theme().sidebar)
-                        .child(slots.list),
-                )
+                .min_w(px(0.))
+                .child(list_column)
                 .child(divider(true, cx))
-                .child(
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .bg(cx.theme().background)
-                        .child(slots.detail),
-                )
+                .child(detail_column)
                 .into_any_element()
         };
+
+        let columns = div()
+            .h_flex()
+            .items_stretch()
+            .flex_1()
+            .min_h(px(0.))
+            .child(self.rail(&chrome, cx))
+            .child(divider(true, cx))
+            .child(middle)
+            .children(shows_panel.then(|| divider(true, cx)))
+            .children(shows_panel.then(|| self.inspector(&chrome, inspector, cx)));
 
         let menu_open = self.projects_open;
         let overlay = menu_open.then(|| {
@@ -271,18 +321,7 @@ impl Shell {
             .size_full()
             .bg(cx.theme().background)
             .child(self.title_bar(window, cx))
-            .child(
-                div()
-                    .h_flex()
-                    .items_stretch()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(self.rail(narrow, cx))
-                    .child(divider(true, cx))
-                    .child(columns),
-            )
-            .child(divider(false, cx))
-            .child(self.status_bar(status))
+            .child(columns)
             // The picker needs an overlay under it, and the overlay has to be
             // above the columns, so both come after the content they cover.
             .children(overlay)
@@ -290,7 +329,7 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The strip that carries the window controls. The corner above the rail
+    /// The band that carries the window controls. The corner above the rail
     /// keeps the rail's colour, so the navigation reaches the window's top edge.
     fn title_bar(&self, window: &mut Window, cx: &mut Context<DesktopApp>) -> AnyElement {
         let mut bar = TitleBar::new().pl(px(0.)).child(
@@ -307,8 +346,8 @@ impl Shell {
         bar.into_any_element()
     }
 
-    /// The destinations, icons only, each named in a tooltip.
-    fn rail(&self, narrow: bool, cx: &mut Context<DesktopApp>) -> AnyElement {
+    /// The destinations, each an icon and its name.
+    fn rail(&self, chrome: &Chrome<'_>, cx: &mut Context<DesktopApp>) -> AnyElement {
         let rows = Section::ALL.into_iter().map(|section| {
             let selected = section == self.section;
             let tone = if selected {
@@ -319,14 +358,17 @@ impl Shell {
             let row = div()
                 .id(("section", section as usize))
                 .h_flex()
-                .justify_center()
+                .gap_2()
                 .items_center()
-                .size(px(if narrow { 32. } else { 36. }))
+                .px_2()
+                .py_1()
                 .rounded(px(ui::RADIUS))
+                .child(section.icon().with_size(px(16.)).text_color(tone))
                 .child(
-                    Icon::new(section.icon())
-                        .with_size(px(18.))
-                        .text_color(tone),
+                    div()
+                        .text_style(&ui::BODY)
+                        .text_color(tone)
+                        .child(section.title()),
                 )
                 .tooltip({
                     let title = section.title();
@@ -335,32 +377,107 @@ impl Shell {
             let row = if selected {
                 row.bg(cx.theme().sidebar_accent)
             } else {
-                row.hover(|this| this.bg(cx.theme().sidebar_accent))
+                row.hover(|this| this.bg(cx.theme().list_hover))
             };
             row.on_click(cx.listener(move |app, _event, _window, cx| {
                 app.select_section(section, cx);
             }))
         });
 
+        let engine = div()
+            .id("engine-state")
+            .h_flex()
+            .gap_2()
+            .items_center()
+            .px_2()
+            .py_1()
+            .text_style(&ui::CAPTION)
+            .text_color(cx.theme().muted_foreground)
+            .hover(|this| this.text_color(cx.theme().foreground))
+            .child(engine_dot(chrome, cx))
+            .child(ui::truncate(
+                if chrome.engine.connected {
+                    &chrome.engine.version
+                } else {
+                    "engine unavailable"
+                },
+                18,
+            ))
+            .on_click(cx.listener(|app, _event, _window, cx| app.recheck_engine(cx)));
+
         div()
             .v_flex()
             .w(px(RAIL_WIDTH))
-            .items_center()
-            .py_2()
+            .h_full()
+            .p_2()
             .gap_1()
             .bg(cx.theme().sidebar)
             .children(rows)
+            .child(div().flex_1())
+            .child(engine)
             .into_any_element()
     }
 
-    fn status_bar(&self, status: AnyElement) -> AnyElement {
-        div()
-            .h_flex()
-            .px_3()
-            .py_1()
-            .gap_3()
-            .items_center()
-            .child(div().flex_1().min_w(px(0.)).child(status))
+    /// The right panel: what the client knows about what is open, in small
+    /// labelled groups. Everything in it is a fact the client already holds.
+    fn inspector(
+        &self,
+        chrome: &Chrome<'_>,
+        slot: Option<AnyElement>,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
+        let engine = &chrome.engine;
+        let mut facts = div().v_flex().gap_1().child(row(
+            "state",
+            if engine.connected {
+                "connected".to_owned()
+            } else {
+                "unavailable".to_owned()
+            },
+            cx,
+        ));
+        if engine.connected {
+            facts = facts
+                .child(row("daemon", engine.version.clone(), cx))
+                .children(
+                    engine
+                        .server
+                        .as_ref()
+                        .map(|server| row("server", server.clone(), cx)),
+                )
+                .children(
+                    engine
+                        .installation
+                        .as_ref()
+                        .map(|id| row("install", ui::shorten(id, 8), cx)),
+                )
+                .children(
+                    engine
+                        .schema
+                        .map(|schema| row("schema", schema.to_string(), cx)),
+                );
+        }
+        if let Some(detail) = &engine.detail {
+            facts = facts.child(
+                div()
+                    .text_style(&ui::CAPTION)
+                    .text_color(cx.theme().danger)
+                    .child(ui::truncate(detail, 60)),
+            );
+        }
+
+        let mut panel = div()
+            .v_flex()
+            .w(px(PANEL_WIDTH))
+            .h_full()
+            .p_3()
+            .gap_4()
+            .bg(cx.theme().sidebar);
+        if let Some(slot) = slot {
+            panel = panel.child(group("Open", slot, cx));
+        }
+        panel
+            .child(group("Engine", facts.into_any_element(), cx))
             .into_any_element()
     }
 
@@ -404,15 +521,13 @@ impl Shell {
 /// grounds that the window manager draws a title bar with its own. Some
 /// compositors answer the decoration request with "server" and then draw a
 /// border and nothing else — Hyprland does exactly that — so a client that
-/// leaves the buttons to the platform ends up with none at all. When the
-/// platform claims the decorations but the client still owns the title bar, the
-/// client draws them.
+/// leaves the buttons to the platform ends up with none at all.
 fn draws_own_controls(window: &Window) -> bool {
     cfg!(target_os = "linux") && matches!(window.window_decorations(), Decorations::Server)
 }
 
-/// Minimize, maximize and close, at the right of the title bar, which is where
-/// this platform puts them.
+/// Minimize, maximize and close, at the right of the band, which is where this
+/// platform puts them.
 fn window_controls(cx: &mut Context<DesktopApp>) -> AnyElement {
     div()
         .h_flex()
@@ -456,7 +571,7 @@ fn control(
         .h_flex()
         .justify_center()
         .items_center()
-        .w(px(40.))
+        .w(px(46.))
         .h_full()
         .text_color(cx.theme().foreground)
         .hover(move |this| {
@@ -473,6 +588,53 @@ fn control(
         })
         .on_click(move |_, window, _| act(window))
         .child(Icon::new(icon).with_size(px(14.)))
+        .into_any_element()
+}
+
+/// A labelled group in the right panel: a small muted heading and its rows.
+fn group(label: &str, body: AnyElement, cx: &App) -> AnyElement {
+    div()
+        .v_flex()
+        .gap_2()
+        .child(
+            div()
+                .text_style(&ui::CAPTION)
+                .text_color(cx.theme().muted_foreground)
+                .child(label.to_owned()),
+        )
+        .child(body)
+        .into_any_element()
+}
+
+/// One fact: its name, and its value.
+fn row(label: &str, value: String, cx: &App) -> AnyElement {
+    div()
+        .h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            div()
+                .w(px(64.))
+                .text_style(&ui::CAPTION)
+                .text_color(cx.theme().muted_foreground)
+                .child(label.to_owned()),
+        )
+        .child(div().text_style(&ui::CAPTION).child(value))
+        .into_any_element()
+}
+
+/// A dot in the colour of the engine's state, so a glance says whether the
+/// client is talking to anything.
+fn engine_dot(chrome: &Chrome<'_>, cx: &App) -> AnyElement {
+    let color = if chrome.engine.connected {
+        cx.theme().success
+    } else {
+        cx.theme().danger
+    };
+    div()
+        .size(px(8.))
+        .rounded_full()
+        .bg(color)
         .into_any_element()
 }
 

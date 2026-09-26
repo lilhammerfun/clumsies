@@ -223,28 +223,42 @@ impl MemoryScreen {
         self.pane.detail(Some(target), actions, cx)
     }
 
-    /// The document the reader picked, if the section has one open.
-    pub fn has_document(&self) -> bool {
-        self.selected_document().is_some()
-    }
-
-    /// What the window's status bar says while this section is open.
-    pub fn status(&self, cx: &App) -> AnyElement {
-        if self.has_document() {
-            return self.pane.status(cx);
+    /// What the right panel knows about the open document: where it is, and
+    /// what the daemon holds for it.
+    pub fn inspector(&self, cx: &App) -> Option<AnyElement> {
+        let document = self.selected_document()?;
+        let mut facts = div()
+            .v_flex()
+            .gap_1()
+            .child(row("path", document.path.clone(), cx))
+            .child(row(
+                "resource",
+                crate::ui::shorten(&document.resource_id, 8),
+                cx,
+            ));
+        match self.selected_draft() {
+            Some(draft) => {
+                facts = facts
+                    .child(row("draft", crate::ui::shorten(&draft.draft_id, 8), cx))
+                    .child(row(
+                        "status",
+                        format!("{:?}", draft.status).to_lowercase(),
+                        cx,
+                    ))
+                    .child(row("version", draft.server_version.to_string(), cx))
+                    .child(row(
+                        "uploaded",
+                        if draft.server_draft_id.is_some() {
+                            "yes".to_owned()
+                        } else {
+                            "not yet".to_owned()
+                        },
+                        cx,
+                    ));
+            }
+            None => facts = facts.child(row("draft", "none".to_owned(), cx)),
         }
-        let (text, color) = match &self.error {
-            Some(error) => (error.clone(), cx.theme().danger),
-            None => (
-                "This Project has no Memory yet.".to_owned(),
-                cx.theme().muted_foreground,
-            ),
-        };
-        div()
-            .text_style(&ui::CAPTION)
-            .text_color(color)
-            .child(text)
-            .into_any_element()
+        Some(facts.into_any_element())
     }
 
     /// Rebuilds what the tree draws and points the pane at the right draft.
@@ -294,4 +308,25 @@ impl MemoryScreen {
             .cloned();
         self.pane.set_draft(draft);
     }
+}
+
+/// One fact in the right panel: its name, and its value.
+fn row(label: &str, value: String, cx: &App) -> AnyElement {
+    div()
+        .h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            div()
+                .w(px(64.))
+                .text_style(&ui::CAPTION)
+                .text_color(cx.theme().muted_foreground)
+                .child(label.to_owned()),
+        )
+        .child(
+            div()
+                .text_style(&ui::CAPTION)
+                .child(crate::ui::truncate(&value, 28)),
+        )
+        .into_any_element()
 }

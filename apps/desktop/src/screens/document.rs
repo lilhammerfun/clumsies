@@ -286,7 +286,7 @@ impl DocumentPane {
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(0.))
+                    .min_w(px(96.))
                     .truncate()
                     .text_style(&ui::BODY)
                     .child(target.document.path.clone()),
@@ -329,6 +329,23 @@ impl DocumentPane {
             }
         };
 
+        // The bar under the document, in the shape the reference gives the same
+        // corner: a card rather than the window's edge, saying what this thing
+        // is doing. The actions stay in the header above, which is where macOS
+        // keeps the same menu.
+        let state_bar = div()
+            .h_flex()
+            .gap_3()
+            .items_center()
+            .mx_4()
+            .mb_4()
+            .px_3()
+            .py_2()
+            .rounded(px(ui::RADIUS_LG))
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(div().flex_1().min_w(px(0.)).child(self.status(cx)));
+
         div()
             .v_flex()
             .flex_1()
@@ -339,12 +356,12 @@ impl DocumentPane {
             .gap_3()
             .child(header)
             .child(body)
+            .child(state_bar)
             .into_any_element()
     }
 
-    /// The document's line in the window's status bar: what the engine has done
-    /// with the last edit, and what a Review answered.
-    pub fn status(&self, cx: &App) -> AnyElement {
+    /// What the engine has done with the last edit, and what a Review answered.
+    fn status(&self, cx: &App) -> AnyElement {
         let (text, color) = self.save_line(cx);
         div()
             .h_flex()
