@@ -150,6 +150,36 @@ provider, and the form says so before it happens.
 For this client that means: a discard or destructive confirmation can be a
 dialog, and Escape must dismiss it without doing the destructive thing.
 
+## The window
+
+The window is one shell, and every screen fills two slots in it. macOS draws the
+same shape as a NavigationSplitView in WorkspaceView: a sidebar of six
+destinations, the open section's navigator beside it, and the work itself in the
+detail. This client draws those three columns and two rows that macOS spreads
+across toolbars and its sidebar footer:
+
+- **The context bar** names what the whole window is looking at: the Project, the
+  directory that Project is bound to, where the daemon keeps it, the Project ref
+  the checkout resolved to, and how many documents have a proposal waiting. It is
+  also where the open section's actions live, because an action belongs to the
+  thing it acts on, and a reader should learn one place to look for it.
+- **The status bar** reports the last thing the open screen did, and whether the
+  engine is answering.
+
+A screen owns its list and its detail and nothing else about the layout. A
+section with no screen yet says so in both slots, and names the macOS view it
+will be translated from.
+
+Two rules belong to the shell so that no screen repeats them:
+
+- **A narrow window adapts once.** Below 641 epx the rail drops its labels and
+  the list stacks above the detail. No screen decides this for itself.
+- **The keyboard reaches the window's actions.** F6 moves focus from wherever it
+  is to the context bar's actions, and Shift+F6 moves it back; Enter or Space
+  runs the focused action. F6 is the Windows key for moving between a window's
+  regions, and it is the only way to reach the actions at all, because a document
+  editor consumes Tab.
+
 ## Rules for translating a macOS screen
 
 1. **Read the macOS screen first**, and write down what the user can see and do
@@ -173,7 +203,6 @@ exist yet is not a deviation.
 
 | Gap | Where | Why, and what fixes it |
 | --- | --- | --- |
-| The Request review button has no keyboard path | document pane | The component library's button activates on click only, and a multi-line editor consumes Tab, so nothing moves focus to it. Fix: a focusable wrapper that activates on Enter and Space, and a key that leaves the editor, which the library does not bind today. Rule 5 is violated here and only here. |
 | Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
-| A development input probe in product UI | projects column | It is behind `cfg!(debug_assertions)`, so it ships in no release build. Remove it when the input method has a test. |
+| A development input probe in product UI | status bar | It is behind `cfg!(debug_assertions)`, so it ships in no release build. Remove it when the input method has a test. |

@@ -14,9 +14,6 @@ use crate::engine::{Checkout, MemoryDocument};
 use crate::screens::document::{DocumentPane, Notice, PaneContext};
 use crate::ui::{self, Typography};
 
-/// Width of the Memory tree beside the document.
-const TREE_WIDTH: f32 = 230.;
-
 pub struct MemoryScreen {
     tree: Entity<TreeState>,
     /// The Project the documents belong to, which is what a draft names.
@@ -120,6 +117,12 @@ impl MemoryScreen {
             .and_then(|document| self.draft_for(document))
     }
 
+    /// How many documents have a proposal waiting, which is what the context
+    /// bar reports.
+    pub fn draft_count(&self) -> usize {
+        self.drafts.len()
+    }
+
     pub fn commit_id(&self) -> Option<&str> {
         self.commit_id.as_deref()
     }
@@ -175,8 +178,25 @@ impl MemoryScreen {
         })
     }
 
-    /// The tree the reader picks from, and the document they then read.
-    pub fn render(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+    /// The section's list column: the Project's Memory, as files.
+    pub fn list(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+        div()
+            .v_flex()
+            .h_full()
+            .p_2()
+            .gap_1()
+            .child(section("Memory", cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .child(memory_tree::memory_tree(&self.tree, &self.drafted_paths())),
+            )
+            .into_any_element()
+    }
+
+    /// The section's detail: the document the reader picked.
+    pub fn detail(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
         let Some(target) = self.render_target() else {
             let reason = match &self.error {
                 Some(error) => ui::message(error.clone(), cx.theme().danger),
@@ -194,31 +214,33 @@ impl MemoryScreen {
                 .child(reason)
                 .into_any_element();
         };
-
-        let tree = div()
-            .v_flex()
-            .w(px(TREE_WIDTH))
-            .h_full()
-            .p_2()
-            .gap_1()
-            .child(section("Memory", cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(memory_tree::memory_tree(&self.tree, &self.drafted_paths())),
-            );
-
         // h_flex centers the cross axis, so a column in a row takes its content
         // height unless it asks for h_full(); the scroll regions inside need the
         // row's height to resolve against.
+        self.pane.detail(Some(target), cx)
+    }
+
+    /// The document the reader picked, if the section has one open.
+    pub fn has_document(&self) -> bool {
+        self.selected_document().is_some()
+    }
+
+    /// What the window's status bar says while this section is open.
+    pub fn status(&self, cx: &App) -> AnyElement {
+        if self.has_document() {
+            return self.pane.status(cx);
+        }
+        let (text, color) = match &self.error {
+            Some(error) => (error.clone(), cx.theme().danger),
+            None => (
+                "This Project has no Memory yet.".to_owned(),
+                cx.theme().muted_foreground,
+            ),
+        };
         div()
-            .h_flex()
-            .flex_1()
-            .h_full()
-            .min_w(px(0.))
-            .child(tree)
-            .child(self.pane.render(Some(target), cx))
+            .text_style(&ui::CAPTION)
+            .text_color(color)
+            .child(text)
             .into_any_element()
     }
 

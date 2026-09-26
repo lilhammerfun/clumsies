@@ -64,6 +64,33 @@ pub fn message(text: impl Into<SharedString>, color: Hsla) -> AnyElement {
         .into_any_element()
 }
 
+/// A long value cut to what a bar can hold.
+pub fn truncate(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_owned();
+    }
+    let kept: String = value.chars().take(limit.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
+/// The last segment of a path, which is what a reader recognises a directory
+/// by.
+pub fn last_segment(path: &str) -> Option<String> {
+    path.rsplit('/')
+        .find(|part| !part.is_empty())
+        .map(str::to_owned)
+}
+
+/// The tail of an identity, which is what tells two of them apart.
+pub fn shorten(value: &str, keep: usize) -> String {
+    let characters = value.chars().count();
+    if characters <= keep {
+        return value.to_owned();
+    }
+    let tail: String = value.chars().skip(characters - keep).collect();
+    format!("…{tail}")
+}
+
 /// Applies a ramp entry to any styled element.
 pub trait Typography: Styled + Sized {
     fn text_style(self, style: &TextStyle) -> Self {

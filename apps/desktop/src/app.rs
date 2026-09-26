@@ -1,29 +1,47 @@
-//! The application shell: the Project rail beside the active screen.
+//! The desktop client's window: the shell, and the flows that fill it.
+//!
+//! The window's shape lives in shell.rs; this file owns what the flows are and
+//! what they do to the engine. The macOS client draws the same split: its
+//! WorkspaceView composes the shell, and the models behind each section hold the
+//! work.
 
 use clumsiesd::{DaemonDraftOperationResponse, DaemonDraftSummary};
+use gpui_kit::base::Disableable;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Root;
+use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
 
-use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review};
-use crate::screens::document::{Mode, Notice, SAVE_DELAY, SaveState};
+use crate::engine::{
+    self, Checkout, DocumentEdit, EngineStatus, Project, Review, Storage, Workspace,
+};
+use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::MemoryScreen;
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
+use crate::shell::{Chrome, Section, Shell, Slots};
 use crate::ui::{self, Typography};
 
-/// Width of the Project rail.
-const RAIL_WIDTH: f32 = 200.;
-
 pub struct DesktopApp {
-    /// The engine is asked when the window opens and again when its row is
-    /// clicked. Asking inside a frame would stall the render on a socket read.
+    /// The engine is asked when the window opens and again when its status line
+    /// is clicked. Asking inside a frame would stall the render on a socket read.
     engine: EngineStatus,
     projects: Vec<Project>,
     /// Why the Project list could not be read, when it could not be.
     projects_error: Option<String>,
     selected_project: Option<usize>,
+    /// Where the selected Project lives: the directory it is bound to, and the
+    /// daemon's storage for it. The context bar names both, so the storage is
+    /// put in a reader's terms once, when the Project is read.
+    workspace: Option<Workspace>,
+    storage_label: Option<String>,
     memory: MemoryScreen,
+    shell: Shell,
+    /// The context bar's actions take focus here. F6 is the Windows key for
+    /// moving between a window's regions, and it is the only way out of an
+    /// editor that consumes Tab.
+    actions_focus: FocusHandle,
     /// The form shown while the daemon has no Server session.
     sign_in: SignInScreen,
     signed_in: bool,
@@ -45,9 +63,9 @@ impl DesktopApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
-        let (checkout, checkout_error) = match projects.first() {
-            Some(project) => read_checkout(&project.project_id),
-            None => (None, None),
+        let (checkout, checkout_error, workspace) = match projects.first() {
+            Some(project) => read_project(&project.project_id),
+            None => (None, None, None),
         };
         let memory = MemoryScreen::new(window, cx, checkout, checkout_error);
         let probe = cx.new(|cx| InputState::new(window, cx).placeholder("用中文输入法打几个字"));
@@ -63,14 +81,18 @@ impl DesktopApp {
             selected_project: signed_in.then_some(0),
             projects,
             projects_error,
+            storage_label: workspace.as_ref().map(storage_label),
+            workspace,
             memory,
+            shell: Shell::new(),
+            actions_focus: cx.focus_handle(),
             sign_in,
             signed_in,
             save_generation: 0,
             probe,
         };
         // A Project that already holds a proposal must show it on the first
-        // frame: the tree marks it and the pane offers to review it.
+        // frame: the tree marks it and the context bar offers to review it.
         app.refresh_drafts(cx);
         app
     }
@@ -81,25 +103,90 @@ impl DesktopApp {
         &mut self.memory
     }
 
+    /// The sections are the shell's, so the window only has to be told which one
+    /// is open.
+    pub fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.shell.set_section(section);
+        cx.notify();
+    }
+
+    pub fn toggle_projects(&mut self, cx: &mut Context<Self>) {
+        self.shell.toggle_projects();
+        cx.notify();
+    }
+
+    pub fn close_projects(&mut self, cx: &mut Context<Self>) {
+        self.shell.close_projects();
+        cx.notify();
+    }
+
+    /// A Project was picked from the context bar's panel.
+    pub fn choose_project(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.shell.close_projects();
+        self.select_project(index, cx);
+    }
+
     /// Selecting a Project reads its Memory. That read is a socket call to the
     /// daemon, which is why it happens on the click rather than every frame.
     fn select_project(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected_project = Some(index);
         if let Some(project) = self.projects.get(index) {
-            let (checkout, error) = read_checkout(&project.project_id);
+            let (checkout, error, workspace) = read_project(&project.project_id);
+            self.storage_label = workspace.as_ref().map(storage_label);
+            self.workspace = workspace;
             self.memory.set_checkout(checkout, error, cx);
             self.refresh_drafts(cx);
         }
         cx.notify();
     }
 
+    /// Puts focus on the window's actions, which is what F6 is for.
+    pub fn focus_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.actions_focus, cx);
+        cx.notify();
+    }
+
+    /// Gives the caret back to the open document, which is what Shift+F6 does.
+    pub fn focus_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.pane().focus_editor(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The window's primary action: ask for a Review of the open document. The
+    /// context bar's button and Enter, once the actions have focus, both land
+    /// here, so the mouse and the keyboard cannot drift apart.
+    pub fn run_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_run_primary_action() {
+            return;
+        }
+        let Some(target) = self.memory.render_target() else {
+            return;
+        };
+        let (edit, store) = self.memory.pane().review_edit(&target, cx);
+        document::open_review_sheet(
+            edit,
+            store,
+            self.memory.pane().review_title(),
+            self.memory.pane().review_description(),
+            cx.entity().downgrade(),
+            window,
+            cx,
+        );
+    }
+
+    fn can_run_primary_action(&self) -> bool {
+        self.shell.section() == Section::Memory && self.memory.pane().can_review()
+    }
+
     /// A keystroke landed in the editor. The store waits for a pause in typing,
     /// which is what the macOS client's 600ms debounce is for: every store is a
     /// socket call into the daemon and an upload behind it.
     ///
-    /// The edit is captured now rather than when the pause ends, because by
-    /// then the reader may have opened another document or another Project, and
-    /// this text belongs to the one it was typed in.
+    /// The edit is captured now rather than when the pause ends, because by then
+    /// the reader may have opened another document or another Project, and this
+    /// text belongs to the one it was typed in.
     pub fn document_edited(&mut self, cx: &mut Context<Self>) {
         self.memory.pane_mut().set_save_state(SaveState::Pending);
         self.save_generation += 1;
@@ -147,10 +234,10 @@ impl DesktopApp {
         .detach();
     }
 
-    /// What one store produced. The text is recorded as stored even when a
-    /// later keystroke has already asked for another store, because that is
-    /// what "unsaved" is measured against; only the newest store of the open
-    /// document decides what the pane reports.
+    /// What one store produced. The text is recorded as stored even when a later
+    /// keystroke has already asked for another store, because that is what
+    /// "unsaved" is measured against; only the newest store of the open document
+    /// decides what the window reports.
     fn document_stored(
         &mut self,
         generation: u64,
@@ -159,8 +246,8 @@ impl DesktopApp {
         result: Result<DaemonDraftOperationResponse, String>,
         cx: &mut Context<Self>,
     ) {
-        // A store that landed may have created or advanced a draft, and the
-        // tree marks every document whose draft moved, so the list is re-read
+        // A store that landed may have created or advanced a draft, and the tree
+        // marks every document whose draft moved, so the list is re-read
         // whichever document the reader is now looking at.
         let stored = match &result {
             Ok(response) => Some(response.draft_id.clone()),
@@ -193,10 +280,10 @@ impl DesktopApp {
         cx.notify();
     }
 
-    /// Waits for the daemon to upload a just-stored draft and re-reads the
-    /// list, so the pane stops saying "uploading" the moment that stops being
-    /// true. macOS refreshes the draft after a store for the same reason; the
-    /// daemon pushes no event here, so the client asks once.
+    /// Waits for the daemon to upload a just-stored draft and re-reads the list,
+    /// so the window stops saying "uploading" the moment that stops being true.
+    /// macOS refreshes the draft after a store for the same reason; the daemon
+    /// pushes no event here, so the client asks once.
     fn follow_upload(&mut self, draft_id: String, cx: &mut Context<Self>) {
         let work = cx
             .background_executor()
@@ -218,13 +305,13 @@ impl DesktopApp {
 
     /// A Review was created for the draft the sheet held. The macOS client
     /// switches to its Reviews section here; this client reports the Review and
-    /// leaves the reader in the document, because there is no Reviews screen
-    /// yet.
+    /// leaves the reader in the document, because the Reviews section is not
+    /// built yet.
     pub fn review_requested(&mut self, review: Review, cx: &mut Context<Self>) {
         self.memory.set_notice(Some(Notice {
             text: format!(
                 "Review {} requested · {}",
-                tail_of(&review.review_id),
+                ui::shorten(&review.review_id, 8),
                 review.title
             ),
         }));
@@ -251,8 +338,8 @@ impl DesktopApp {
 
     /// Re-reads the drafts of the selected Project. The daemon is asked in the
     /// background because the answer is a socket call, and a draft list that
-    /// could not be read is not a failed edit: the rail already reports whether
-    /// the engine answers at all.
+    /// could not be read is not a failed edit: the status bar already reports
+    /// whether the engine answers at all.
     fn refresh_drafts(&mut self, cx: &mut Context<Self>) {
         let Some(project_id) = self
             .selected_project
@@ -286,157 +373,189 @@ impl DesktopApp {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
-        let (checkout, checkout_error) = match projects.first() {
-            Some(project) => read_checkout(&project.project_id),
-            None => (None, None),
+        let (checkout, checkout_error, workspace) = match projects.first() {
+            Some(project) => read_project(&project.project_id),
+            None => (None, None, None),
         };
         self.selected_project = (!projects.is_empty()).then_some(0);
         self.projects = projects;
         self.projects_error = projects_error;
+        self.storage_label = workspace.as_ref().map(storage_label);
+        self.workspace = workspace;
         self.memory.set_checkout(checkout, checkout_error, cx);
         self.refresh_drafts(cx);
     }
 
-    /// Returns an owned element on purpose: edition 2024 makes `impl Trait` capture every input lifetime, so returning `impl IntoElement` here would
-    /// hold the borrow of `cx` for the whole render.
-    fn rail(&self, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self.selected_project;
-        let typed = self.probe.read(cx).value();
-
-        let rows = self
-            .projects
-            .iter()
-            .enumerate()
-            .map(|(index, project)| {
-                let row = div()
-                    .id(("project", index))
-                    .px_2()
-                    .py_1()
-                    .rounded(px(ui::RADIUS))
-                    .text_style(&ui::BODY)
-                    .child(project.name.clone());
-                let row = if Some(index) == selected {
-                    row.bg(cx.theme().list_active)
-                } else {
-                    row
-                };
-                row.on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.select_project(index, cx);
-                }))
-            })
-            .collect::<Vec<_>>();
-
-        // An empty account, an unreachable engine and an empty organization are
-        // three different situations and the rail says which one it is in.
-        let projects: AnyElement = match &self.projects_error {
-            Some(error) => ui::message(error.clone(), cx.theme().danger),
-            None if self.projects.is_empty() => {
-                ui::message("No Projects yet.", cx.theme().muted_foreground)
-            }
-            None => div().v_flex().gap_1().children(rows).into_any_element(),
+    /// The context bar's actions: what the window can do to what it names. A
+    /// screen's actions belong here rather than in its own header, so that a
+    /// reader learns one place to look.
+    fn actions(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let focused = self.actions_focus.is_focused(window);
+        let ring = if focused {
+            cx.theme().ring
+        } else {
+            transparent_black()
         };
-
-        let (engine_state, engine_state_color) = match &self.engine {
-            EngineStatus::Connected(health) => (
-                format!("v{} · connected", health.daemon_version),
-                cx.theme().success,
-            ),
-            EngineStatus::Unreachable(_) => {
-                ("unavailable · click to retry".to_owned(), cx.theme().danger)
-            }
+        let enabled = self.can_run_primary_action();
+        let label = if self.shell.section() == Section::Memory {
+            "Request review…"
+        } else {
+            "No action here yet"
         };
-        let engine_detail = match &self.engine {
-            EngineStatus::Connected(health) => format!(
-                "{} · {}",
-                host_of(&health.server_url),
-                if health.project_id.is_some() {
-                    "project bound"
-                } else {
-                    "signed in"
-                },
-            ),
-            EngineStatus::Unreachable(reason) => reason.clone(),
-        };
-        let engine = div()
-            .v_flex()
+        div()
+            .id("window-actions")
+            .h_flex()
             .gap_1()
+            .items_center()
+            .rounded(px(ui::RADIUS))
+            .border_1()
+            .border_color(ring)
+            .p(px(ui::SPACE_XS))
+            .track_focus(&self.actions_focus)
+            .tab_stop(true)
             .child(
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Engine"),
+                Button::new("primary-action")
+                    .primary()
+                    .label(label)
+                    .disabled(!enabled)
+                    .on_click(
+                        cx.listener(|app, _event, window, cx| app.run_primary_action(window, cx)),
+                    ),
             )
+            .into_any_element()
+    }
+
+    /// The window's status bar: what the open screen last did, and whether the
+    /// engine is answering.
+    fn status(&self, cx: &mut Context<Self>) -> AnyElement {
+        let section: AnyElement = match self.shell.section() {
+            Section::Memory => self.memory.status(cx),
+            other => ui::message(other.list_note(), cx.theme().muted_foreground),
+        };
+        let (engine_text, engine_color) = self.engine_line(cx);
+        div()
+            .h_flex()
+            .gap_3()
+            .items_center()
+            .child(div().flex_1().min_w(px(0.)).child(section))
+            .children(cfg!(debug_assertions).then(|| {
+                let typed = self.probe.read(cx).value();
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().w(px(160.)).child(Input::new(&self.probe)))
+                    .child(
+                        div()
+                            .text_style(&ui::CAPTION)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("你输入的是：{typed}")),
+                    )
+                    .into_any_element()
+            }))
             .child(
                 div()
                     .id("engine-status")
-                    .px_2()
-                    .py_1()
-                    .rounded(px(ui::RADIUS))
                     .text_style(&ui::CAPTION)
-                    .text_color(engine_state_color)
-                    .child(engine_state)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.engine = engine::engine_status();
+                    .text_color(engine_color)
+                    .child(engine_text)
+                    .on_click(cx.listener(|app, _event, _window, cx| {
+                        app.engine = engine::engine_status();
                         cx.notify();
                     })),
             )
-            .child(
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(truncate(&engine_detail, 30)),
-            )
-            .children(match &self.engine {
-                EngineStatus::Connected(health) => Some(
-                    div()
-                        .text_style(&ui::CAPTION)
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "install {} · schema {}",
-                            short_installation(&health.daemon_installation_id),
-                            health.local_db.schema_version
-                        ))
-                        .into_any_element(),
-                ),
-                EngineStatus::Unreachable(_) => None,
-            });
-
-        let probe = cfg!(debug_assertions).then(|| {
-            div()
-                .v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .text_style(&ui::CAPTION)
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Input method probe (debug builds only)"),
-                )
-                .child(Input::new(&self.probe))
-                .child(
-                    div()
-                        .text_style(&ui::CAPTION)
-                        .child(format!("你输入的是：{typed}")),
-                )
-                .into_any_element()
-        });
-
-        div()
-            .v_flex()
-            .w(px(RAIL_WIDTH))
-            .h_full()
-            .p_3()
-            .gap_1()
-            .child(
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Projects"),
-            )
-            .child(projects)
-            .child(div().flex_1())
-            .children(probe)
-            .child(engine)
             .into_any_element()
+    }
+
+    /// One line for the engine: what it is, where it points, and what it keeps.
+    fn engine_line(&self, cx: &App) -> (String, Hsla) {
+        match &self.engine {
+            EngineStatus::Connected(health) => (
+                format!(
+                    "daemon v{} · {} · install {} · schema {} · click to re-check",
+                    health.daemon_version,
+                    ui::truncate(host_of(&health.server_url), 24),
+                    ui::shorten(&health.daemon_installation_id, 6),
+                    health.local_db.schema_version,
+                ),
+                cx.theme().success,
+            ),
+            EngineStatus::Unreachable(reason) => (
+                format!(
+                    "engine unavailable · click to retry · {}",
+                    ui::truncate(reason, 40)
+                ),
+                cx.theme().danger,
+            ),
+        }
+    }
+
+    /// The open section's list column. A section that has no screen yet says so
+    /// rather than drawing an empty column with no explanation.
+    fn section_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.shell.section() {
+            Section::Memory => self.memory.list(cx),
+            other => placeholder(other.list_note(), cx),
+        }
+    }
+
+    fn section_detail(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.shell.section() {
+            Section::Memory => self.memory.detail(cx),
+            other => placeholder(other.detail_note(), cx),
+        }
+    }
+
+    /// What the window is looking at, for the context bar.
+    fn chrome(&self) -> Chrome<'_> {
+        let project = self
+            .selected_project
+            .and_then(|index| self.projects.get(index))
+            .map(|project| project.name.as_str());
+        let (workspace, storage) = match &self.workspace {
+            Some(workspace) => (workspace.root.as_deref(), self.storage_label.as_deref()),
+            None => (None, None),
+        };
+        Chrome {
+            project,
+            workspace,
+            storage,
+            commit: self.memory.commit_id(),
+            drafts: self.memory.draft_count(),
+            // Filled in where the window is drawn: the Project list and the
+            // width are the window's own.
+            projects: &[],
+            width: px(0.),
+        }
+    }
+}
+
+/// A slot no screen fills yet: what will live there, taken from the macOS screen
+/// it is translated from.
+fn placeholder(note: &str, cx: &App) -> AnyElement {
+    div()
+        .v_flex()
+        .h_full()
+        .p_4()
+        .gap_2()
+        .child(ui::message("Not built yet.", cx.theme().muted_foreground))
+        .child(
+            div()
+                .text_style(&ui::CAPTION)
+                .text_color(cx.theme().muted_foreground)
+                .child(note.to_owned()),
+        )
+        .into_any_element()
+}
+
+/// The daemon's storage for a Project, in a reader's terms.
+fn storage_label(workspace: &Workspace) -> String {
+    match &workspace.storage {
+        Storage::Default => "daemon storage".to_owned(),
+        Storage::Custom(path) => ui::last_segment(path)
+            .map(|name| format!("storage {name}"))
+            .unwrap_or_else(|| "chosen storage".to_owned()),
+        Storage::Unknown => "storage unknown".to_owned(),
     }
 }
 
@@ -448,21 +567,23 @@ fn read_projects() -> (Vec<Project>, Option<String>) {
     }
 }
 
-/// Reads one Project's checkout, keeping the reason when it cannot.
-fn read_checkout(project_id: &str) -> (Option<Checkout>, Option<String>) {
+/// Reads one Project's checkout and where it lives, keeping the reason when the
+/// checkout cannot be read.
+fn read_project(project_id: &str) -> (Option<Checkout>, Option<String>, Option<Workspace>) {
+    let workspace = engine::workspace(project_id);
     match engine::checkout(project_id) {
-        Ok(checkout) => (Some(checkout), None),
-        Err(error) => (None, Some(error)),
+        Ok(checkout) => (Some(checkout), None, Some(workspace)),
+        Err(error) => (None, Some(error), Some(workspace)),
     }
 }
 
 impl Render for DesktopApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Without a session there is nothing to navigate, so the form owns the
-        // window rather than sitting beside an empty rail.
+        // window rather than sitting inside an empty shell.
         if !self.signed_in {
-            // A staged configuration arrives without a window, so the form
-            // takes it here, before it draws with its fields.
+            // A staged configuration arrives without a window, so the form takes
+            // it here, before it draws with its fields.
             self.sign_in.apply_staged(window, cx);
             return self.sign_in.render(cx);
         }
@@ -470,13 +591,43 @@ impl Render for DesktopApp {
         // the editor takes its new text at the top of a frame, before the pane
         // draws with it.
         self.memory.apply_pending_load(window, cx);
-        let rail = self.rail(cx);
-        let screen = self.memory.render(cx);
+
+        let width = window.viewport_size().width;
+        let actions = self.actions(window, cx);
+        let status = self.status(cx);
+        let slots = Slots {
+            list: self.section_list(cx),
+            detail: self.section_detail(cx),
+        };
+        let mut chrome = self.chrome();
+        chrome.projects = &self.projects;
+        chrome.width = width;
+        let shell = self.shell.render(cx, chrome, slots, actions, status);
+        // The window's own keys, handled above everything else: F6 moves between
+        // the regions and Shift+F6 back, which is the Windows pair for reaching
+        // what an editor would otherwise swallow along with Tab; Enter or Space
+        // then runs whatever the focused region offers.
+        //
+        // They are handled here rather than on the focused element itself
+        // because a key event reaches an ancestor's listener, not the focused
+        // element's own.
         div()
-            .h_flex()
             .size_full()
-            .child(rail)
-            .child(screen)
+            .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "f6" if event.keystroke.modifiers.shift => app.focus_content(window, cx),
+                    "f6" => app.focus_actions(window, cx),
+                    "enter" | "space" if app.actions_focus.is_focused(window) => {
+                        app.run_primary_action(window, cx)
+                    }
+                    _ => {}
+                }
+            }))
+            .child(shell)
+            // A dialog is drawn by Root's own layer, and the framework leaves it
+            // out of the view tree on purpose: an application adds it where the
+            // dialog should sit, which is above everything else here.
+            .children(Root::render_dialog_layer(window, cx))
             .into_any_element()
     }
 }
@@ -653,34 +804,9 @@ fn normalize_origin(input: &str) -> Result<String, String> {
     Ok(format!("{}://{host}{port}", url.scheme()))
 }
 
-/// `https://app.clumsies.ai` is the host the reader recognises.
+/// The host of a Server URL is the part a reader recognises.
 fn host_of(server_url: &str) -> &str {
     server_url
         .split_once("://")
         .map_or(server_url, |(_, host)| host)
-}
-
-/// `daemon_3a4e923421294eab8bc84065ff210644` reads better as its tail.
-fn short_installation(id: &str) -> String {
-    match id.rsplit_once('_') {
-        Some((_, tail)) if tail.len() > 6 => format!("…{}", &tail[tail.len() - 6..]),
-        _ => id.to_owned(),
-    }
-}
-
-/// A Server identity is long and its tail is what tells two apart.
-fn tail_of(id: &str) -> String {
-    match id.rsplit_once('_') {
-        Some((_, tail)) if tail.len() > 6 => format!("…{}", &tail[tail.len() - 6..]),
-        _ => id.to_owned(),
-    }
-}
-
-/// Paths and OS errors are long; a rail line is not.
-fn truncate(value: &str, limit: usize) -> String {
-    if value.chars().count() <= limit {
-        return value.to_owned();
-    }
-    let kept: String = value.chars().take(limit.saturating_sub(1)).collect();
-    format!("{kept}…")
 }

@@ -212,7 +212,7 @@ impl DocumentPane {
     }
 
     /// One line about the last edit, in the color its meaning asks for.
-    fn status(&self, cx: &App) -> (String, Hsla) {
+    fn save_line(&self, cx: &App) -> (String, Hsla) {
         if let SaveState::Failed(error) = &self.save {
             return (error.clone(), cx.theme().danger);
         }
@@ -239,13 +239,25 @@ impl DocumentPane {
         (text, cx.theme().muted_foreground)
     }
 
-    pub fn render(
+    /// The work itself: the document, read in one of its three modes. The
+    /// window's actions live in the shell's context bar, so this pane is only
+    /// ever the document and how to look at it.
+    pub fn detail(
         &self,
         target: Option<PaneContext<'_>>,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
         let Some(target) = target else {
-            return ui::message("Select a document.", cx.theme().muted_foreground);
+            return div()
+                .v_flex()
+                .flex_1()
+                .h_full()
+                .p_4()
+                .child(ui::message(
+                    "Select a document.",
+                    cx.theme().muted_foreground,
+                ))
+                .into_any_element();
         };
         let text = self.text(cx);
         let this = cx.entity();
@@ -266,39 +278,6 @@ impl DocumentPane {
                 Tab::new().label("Diff"),
             ]);
 
-        let submit = Button::new("request-review")
-            .primary()
-            .label("Request review…")
-            .disabled(self.draft.is_none())
-            .on_click({
-                let this = this.clone();
-                let title = self.review_title.clone();
-                let description = self.review_description.clone();
-                let edit = DocumentEdit {
-                    project_id: target.project_id.to_owned(),
-                    base_commit_id: self
-                        .draft
-                        .as_ref()
-                        .and_then(|draft| draft.base_commit_id.clone())
-                        .or_else(|| target.commit_id.map(str::to_owned)),
-                    draft_id: self.draft.as_ref().map(|draft| draft.draft_id.clone()),
-                    resource_id: target.document.resource_id.clone(),
-                    content: text.clone(),
-                };
-                let store = self.dirty(cx);
-                move |_, window, cx| {
-                    open_review_sheet(
-                        edit.clone(),
-                        store,
-                        title.clone(),
-                        description.clone(),
-                        this.downgrade(),
-                        window,
-                        cx,
-                    )
-                }
-            });
-
         let header = div()
             .h_flex()
             .gap_3()
@@ -311,8 +290,7 @@ impl DocumentPane {
                     .text_style(&ui::BODY)
                     .child(target.document.path.clone()),
             )
-            .child(modes)
-            .child(submit);
+            .child(modes);
 
         let body: AnyElement = match self.mode {
             Mode::Source => div()
@@ -349,25 +327,6 @@ impl DocumentPane {
             }
         };
 
-        let (status, status_color) = self.status(cx);
-        let footer = div()
-            .h_flex()
-            .gap_3()
-            .items_center()
-            .child(
-                div()
-                    .flex_1()
-                    .text_style(&ui::CAPTION)
-                    .text_color(status_color)
-                    .child(status),
-            )
-            .children(self.notice.as_ref().map(|notice| {
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().success)
-                    .child(notice.text.clone())
-            }));
-
         div()
             .v_flex()
             .flex_1()
@@ -378,8 +337,56 @@ impl DocumentPane {
             .gap_3()
             .child(header)
             .child(body)
-            .child(footer)
             .into_any_element()
+    }
+
+    /// The document's line in the window's status bar: what the engine has done
+    /// with the last edit, and what a Review answered.
+    pub fn status(&self, cx: &App) -> AnyElement {
+        let (text, color) = self.save_line(cx);
+        div()
+            .h_flex()
+            .gap_3()
+            .items_center()
+            .child(div().text_style(&ui::CAPTION).text_color(color).child(text))
+            .children(self.notice.as_ref().map(|notice| {
+                div()
+                    .text_style(&ui::CAPTION)
+                    .text_color(cx.theme().success)
+                    .child(notice.text.clone())
+            }))
+            .into_any_element()
+    }
+
+    /// The edit this pane would hand the engine for a Review, and whether its
+    /// text still has to be stored first. Both the context bar's action and the
+    /// keyboard action go through here, so they cannot disagree.
+    pub fn review_edit(&self, target: &PaneContext<'_>, cx: &App) -> (DocumentEdit, bool) {
+        let edit = DocumentEdit {
+            project_id: target.project_id.to_owned(),
+            base_commit_id: self
+                .draft
+                .as_ref()
+                .and_then(|draft| draft.base_commit_id.clone())
+                .or_else(|| target.commit_id.map(str::to_owned)),
+            draft_id: self.draft.as_ref().map(|draft| draft.draft_id.clone()),
+            resource_id: target.document.resource_id.clone(),
+            content: self.text(cx),
+        };
+        (edit, self.dirty(cx))
+    }
+
+    pub fn review_title(&self) -> Entity<InputState> {
+        self.review_title.clone()
+    }
+
+    pub fn review_description(&self) -> Entity<TextareaState> {
+        self.review_description.clone()
+    }
+
+    /// Whether a Review can be asked for this document at all.
+    pub fn can_review(&self) -> bool {
+        self.draft.is_some()
     }
 }
 
@@ -387,7 +394,7 @@ impl DocumentPane {
 ///
 /// The request runs in the sheet, so the sheet is the thing that knows whether
 /// it is waiting on the network; this only puts it on screen.
-fn open_review_sheet(
+pub(crate) fn open_review_sheet(
     edit: DocumentEdit,
     store: bool,
     title: Entity<InputState>,
@@ -404,6 +411,7 @@ fn open_review_sheet(
             .w(px(520.))
             .keyboard(true)
             .content(move |content, _window, _cx| content.child(view.clone()))
+            .footer(div())
             .footer(div())
     });
 }

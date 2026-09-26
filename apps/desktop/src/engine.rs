@@ -14,7 +14,8 @@ use clumsiesd::{
     DaemonDraftOperation, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
     DaemonDraftOperationSource, DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary,
     DaemonHealth, DaemonIpcClient, DaemonIpcRequest, DaemonLocalDraftStatus,
-    DaemonProjectCheckoutRequest, DaemonProjectSyncRetryRequest, DaemonRetryResponse,
+    DaemonProjectBindingListRequest, DaemonProjectCheckoutRequest, DaemonProjectStorageMode,
+    DaemonProjectStorageRequest, DaemonProjectSyncRetryRequest, DaemonRetryResponse,
     DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
     DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
@@ -68,6 +69,24 @@ pub struct Checkout {
     /// The commit the documents came from. A new draft is based on it.
     pub commit_id: Option<String>,
     pub documents: Vec<MemoryDocument>,
+}
+
+/// Where a Project's files live on this machine: the local directory a Project
+/// is bound to, and the daemon's own storage for it.
+pub struct Workspace {
+    /// The repository directory the Project is bound to, when it is bound.
+    pub root: Option<String>,
+    /// The daemon's store: its own place, or an owner-chosen one.
+    pub storage: Storage,
+}
+
+pub enum Storage {
+    /// The daemon keeps this Project where it keeps everything.
+    Default,
+    /// The owner chose the directory.
+    Custom(String),
+    /// The daemon could not read the storage state at all.
+    Unknown,
 }
 
 /// The Review the Server created for a draft. Only what this client shows is
@@ -143,6 +162,28 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
         commit_id: checkout.commit_id,
         documents,
     })
+}
+
+/// Where this Project lives: its bound directory and the daemon's storage. Both
+/// are what the context bar names, and neither is fatal to it when missing.
+pub fn workspace(project_id: &str) -> Workspace {
+    let root = client()
+        .list_project_bindings(DaemonProjectBindingListRequest {
+            project_id: project_id.to_owned(),
+        })
+        .ok()
+        .and_then(|response| response.items.into_iter().next())
+        .map(|binding| binding.workspace_root);
+    let storage = match client().project_storage(DaemonProjectStorageRequest {
+        project_id: project_id.to_owned(),
+    }) {
+        Ok(storage) => match storage.mode {
+            DaemonProjectStorageMode::Default => Storage::Default,
+            DaemonProjectStorageMode::Custom => Storage::Custom(storage.selected_root_path),
+        },
+        Err(_) => Storage::Unknown,
+    };
+    Workspace { root, storage }
 }
 
 /// Hands the daemon a session. The client never keeps one: it holds the tokens
