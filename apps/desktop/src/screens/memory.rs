@@ -84,6 +84,8 @@ pub struct MenuTarget {
     pub can_review: bool,
     /// A folder offers a new document rather than the commands a document has.
     pub is_folder: bool,
+    /// Whether anything below a folder has a draft to throw away.
+    pub has_drafts: bool,
 }
 
 /// Where an arrow key moves the list's selection.
@@ -465,6 +467,7 @@ impl MemoryScreen {
                     draft_id: None,
                     can_review: false,
                     is_folder: true,
+                    has_drafts: self.folder_has_drafts(path),
                 });
         };
         let draft = self.draft_for(document);
@@ -472,7 +475,67 @@ impl MemoryScreen {
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             can_review: draft.is_some_and(|draft| draft.status == DaemonLocalDraftStatus::Open),
             is_folder: false,
+            has_drafts: false,
         })
+    }
+
+    /// The documents a folder holds, in path order. A folder is not a thing in
+    /// this Project's Memory — it is the paths that share a prefix — so an
+    /// operation on one is an operation on each of them.
+    pub fn documents_under(&self, folder: &str) -> Vec<&MemoryDocument> {
+        let inside = format!("{folder}/");
+        self.documents
+            .iter()
+            .filter(|document| document.path.starts_with(&inside))
+            .collect()
+    }
+
+    /// What renaming a folder would do: every document below it moves, keeping
+    /// the rest of its path.
+    pub fn folder_rename_plan(&self, folder: &str, name: &str) -> Vec<(DocumentEdit, String)> {
+        let parent = match folder.rsplit_once('/') {
+            Some((parent, _)) => format!("{parent}/{name}"),
+            None => name.to_owned(),
+        };
+        self.documents_under(folder)
+            .into_iter()
+            .filter_map(|document| {
+                let rest = document.path.strip_prefix(folder)?.trim_start_matches('/');
+                let edit = self.edit_for_path(&document.path)?;
+                Some((edit, format!("{parent}/{rest}")))
+            })
+            .collect()
+    }
+
+    /// Every document below a folder, as a deletion proposal each.
+    pub fn folder_delete_plan(&self, folder: &str) -> Vec<(String, DocumentEdit)> {
+        self.documents_under(folder)
+            .into_iter()
+            .filter_map(|document| {
+                Some((document.path.clone(), self.edit_for_path(&document.path)?))
+            })
+            .collect()
+    }
+
+    /// The drafts a folder's documents carry, which are what discarding in a
+    /// folder throws away.
+    pub fn folder_discard_plan(&self, folder: &str) -> Vec<(String, String, String)> {
+        self.documents_under(folder)
+            .into_iter()
+            .filter_map(|document| {
+                let draft = self.draft_for(document)?;
+                Some((
+                    document.path.clone(),
+                    draft.draft_id.clone(),
+                    document.resource_id.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Whether anything below this folder has a draft to throw away.
+    pub fn folder_has_drafts(&self, folder: &str) -> bool {
+        !self.folder_discard_plan(folder).is_empty()
     }
 
     /// What a rename or a deletion is made of: the document, the draft it joins
@@ -992,16 +1055,48 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
         );
     if target.is_folder {
         let creating = this.clone();
-        let folder = path.to_owned();
-        return menu
+        let renaming = this.clone();
+        let deleting = this.clone();
+        let discarding = this.clone();
+        let created = path.to_owned();
+        let renamed = path.to_owned();
+        let deleted = path.to_owned();
+        let discarded = path.to_owned();
+        menu = menu
             .separator()
             .item(
                 PopupMenuItem::new("New file…").on_click(move |_event, window, cx| {
                     creating.update(cx, |app, cx| {
-                        app.open_new_memory_dialog(&folder, window, cx)
+                        app.open_new_memory_dialog(&created, window, cx)
                     });
                 }),
             );
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new("Rename folder…").on_click(move |_event, window, cx| {
+                    renaming.update(cx, |app, cx| {
+                        app.open_rename_folder_dialog(&renamed, window, cx)
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new("Delete folder…").on_click(move |_event, window, cx| {
+                    deleting.update(cx, |app, cx| {
+                        app.open_delete_folder_dialog(&deleted, window, cx)
+                    });
+                }),
+            );
+        if target.has_drafts {
+            menu = menu.item(PopupMenuItem::new("Discard drafts in folder…").on_click(
+                move |_event, window, cx| {
+                    discarding.update(cx, |app, cx| {
+                        app.open_discard_folder_dialog(&discarded, window, cx)
+                    });
+                },
+            ));
+        }
+        return menu;
     }
     // The generic file commands, which any tree offers, then Memory's own: macOS
     // splits its own row menu the same way, and the two sections do not mix.

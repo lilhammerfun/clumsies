@@ -28,6 +28,10 @@ pub enum DialogAction {
     ClearCache { project_id: String, revision: i64 },
     /// Sync the Project's drafts now.
     SyncNow { project_id: String },
+    /// Propose that every document below a folder be deleted.
+    DeleteFolder { folder: String },
+    /// Throw away every draft below a folder.
+    DiscardFolder { folder: String },
 }
 
 pub struct ConfirmDialog {
@@ -103,6 +107,85 @@ impl Render for ConfirmDialog {
     }
 }
 
+/// A dialog with one field, for renaming a folder. The documents below it move
+/// with it, keeping their relative paths.
+pub struct RenameFolderDialog {
+    app: WeakEntity<DesktopApp>,
+    folder: String,
+    name: Entity<InputState>,
+}
+
+impl RenameFolderDialog {
+    pub fn open(
+        app: WeakEntity<DesktopApp>,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<DesktopApp>,
+    ) {
+        let current = folder.rsplit('/').next().unwrap_or(folder).to_owned();
+        let field = cx.new(|cx| InputState::new(window, cx).default_value(current));
+        let folder = folder.to_owned();
+        let view = cx.new(|_| Self {
+            app,
+            folder,
+            name: field,
+        });
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view = view.clone();
+            dialog
+                .title("Rename folder")
+                .w(px(460.))
+                .keyboard(true)
+                .content(move |content, _window, _cx| content.child(view.clone()))
+                .footer(div())
+                .footer(div())
+        });
+    }
+}
+
+impl Render for RenameFolderDialog {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let name = self.name.read(cx).value().trim().to_owned();
+        let valid = !name.is_empty() && name != "." && name != ".." && !name.contains('/');
+        let confirming = self.app.clone();
+        let folder = self.folder.clone();
+        let mut confirm = Button::new("rename-folder-confirm")
+            .primary()
+            .label("Rename");
+        if valid {
+            confirm = confirm.on_click(move |_event, window, cx| {
+                let folder = folder.clone();
+                let name = name.clone();
+                confirming
+                    .update(cx, |app, cx| app.rename_folder(&folder, &name, cx))
+                    .ok();
+                window.close_dialog(cx);
+            });
+        }
+        div()
+            .v_flex()
+            .gap_3()
+            .child(
+                div()
+                    .text_style(&ui::CAPTION)
+                    .text_color(theme.muted_foreground)
+                    .child(format!(
+                        "Every memory in {} moves with the folder, keeping its relative path. Each move is saved as a draft.",
+                        self.folder
+                    )),
+            )
+            .child(Input::new(&self.name))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .justify_end()
+                    .child(Button::new("rename-folder-cancel").label("Cancel"))
+                    .child(confirm),
+            )
+    }
+}
 /// A dialog with one field, for renaming a document.
 pub struct RenameDialog {
     app: WeakEntity<DesktopApp>,

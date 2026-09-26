@@ -14,7 +14,7 @@ use gpui_kit::component::{Icon, Root, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review, ReviewStatus};
-use crate::screens::dialogs::{ConfirmDialog, DialogAction, RenameDialog};
+use crate::screens::dialogs::{ConfirmDialog, DialogAction, RenameDialog, RenameFolderDialog};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::{MemoryScreen, Move};
 use crate::screens::new_memory::NewMemoryDialog;
@@ -280,6 +280,124 @@ impl DesktopApp {
         .detach();
     }
 
+    /// Asks for a new name for a folder, which renames every document below it.
+    pub fn open_rename_folder_dialog(
+        &mut self,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        RenameFolderDialog::open(cx.entity().downgrade(), folder, window, cx);
+    }
+
+    /// Renames a folder by renaming each document below it, in path order, so
+    /// that the relative paths inside the folder survive.
+    pub fn rename_folder(&mut self, folder: &str, name: &str, cx: &mut Context<Self>) {
+        let plan = self.memory.folder_rename_plan(folder, name);
+        if plan.is_empty() {
+            return;
+        }
+        let what = format!("{folder} renamed to {name}");
+        let calls: Vec<_> = plan
+            .into_iter()
+            .map(|(edit, new_path)| {
+                Box::new(move || engine::rename_document(&edit, &new_path).map(|_| ()))
+                    as Box<dyn FnOnce() -> Result<(), String> + Send>
+            })
+            .collect();
+        self.run_folder_plan(what, calls, cx);
+    }
+
+    /// Confirms deleting a folder, which proposes every document below it for
+    /// deletion.
+    pub fn open_delete_folder_dialog(
+        &mut self,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.memory.folder_delete_plan(folder).len();
+        if count == 0 {
+            return;
+        }
+        ConfirmDialog::open(
+            cx.entity().downgrade(),
+            "Delete Folder?",
+            format!(
+                "This proposes that the {count} memories in {folder} be deleted. Each proposal is saved as a draft and takes effect for the Project after review and merge."
+            ),
+            "Delete folder",
+            DialogAction::DeleteFolder {
+                folder: folder.to_owned(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Confirms throwing away every draft a folder's documents carry.
+    pub fn open_discard_folder_dialog(
+        &mut self,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.memory.folder_discard_plan(folder).len();
+        if count == 0 {
+            return;
+        }
+        ConfirmDialog::open(
+            cx.entity().downgrade(),
+            "Discard drafts in this folder?",
+            format!(
+                "This throws away the {count} drafts below {folder}. The published Memory is untouched."
+            ),
+            "Discard drafts",
+            DialogAction::DiscardFolder {
+                folder: folder.to_owned(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Runs one daemon call per item of a plan, in order, and reports how many
+    /// of them it managed before the first refusal.
+    fn run_folder_plan(
+        &mut self,
+        what: String,
+        calls: Vec<Box<dyn FnOnce() -> Result<(), String> + Send>>,
+        cx: &mut Context<Self>,
+    ) {
+        let total = calls.len();
+        let work = cx.background_executor().spawn(async move {
+            let mut done = 0usize;
+            for call in calls {
+                if let Err(error) = call() {
+                    return Err((done, error));
+                }
+                done += 1;
+            }
+            Ok(done)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| {
+                match result {
+                    Ok(done) => crate::logging::info(&format!("{what}: {done} of {total}")),
+                    Err((done, error)) => {
+                        crate::logging::error(&format!("{what}: {done} of {total}, then {error}"))
+                    }
+                }
+                app.refresh_drafts(cx);
+                app.reload_memory(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Asks for a new name for a document. A dialog rather than a field inside
     /// the row: a field that appears in a tree is a field the reader can lose.
     pub fn open_rename_dialog(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -366,6 +484,30 @@ impl DesktopApp {
                     move || engine::clear_project_cache(&project_id, revision),
                     cx,
                 );
+            }
+            DialogAction::DeleteFolder { folder } => {
+                let calls: Vec<_> = self
+                    .memory
+                    .folder_delete_plan(&folder)
+                    .into_iter()
+                    .map(|(_, edit)| {
+                        Box::new(move || engine::delete_document(&edit).map(|_| ()))
+                            as Box<dyn FnOnce() -> Result<(), String> + Send>
+                    })
+                    .collect();
+                self.run_folder_plan(format!("{folder} proposed for deletion"), calls, cx);
+            }
+            DialogAction::DiscardFolder { folder } => {
+                let calls: Vec<_> = self
+                    .memory
+                    .folder_discard_plan(&folder)
+                    .into_iter()
+                    .map(|(_, draft_id, resource_id)| {
+                        Box::new(move || engine::discard_draft(&draft_id, &resource_id).map(|_| ()))
+                            as Box<dyn FnOnce() -> Result<(), String> + Send>
+                    })
+                    .collect();
+                self.run_folder_plan(format!("{folder} drafts discarded"), calls, cx);
             }
             DialogAction::SyncNow { project_id } => {
                 self.storage_action(
