@@ -51,8 +51,17 @@ docs.clumsies.ai {
 	}
 
 	root * /srv/docs
-	try_files {path} {path}/ {path}.html /404.html
+	try_files {path} {path}/ {path}.html
 	file_server
+
+	# Serve the VitePress 404 page with a real 404 status. Rewriting to
+	# /404.html inside try_files would answer 200 and make misses look like
+	# content to crawlers and uptime checks.
+	handle_errors {
+		@not_found expression {err.status_code} == 404
+		rewrite @not_found /404.html
+		file_server
+	}
 }
 
 www.clumsies.ai {

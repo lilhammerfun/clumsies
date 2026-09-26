@@ -43,10 +43,20 @@ ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.ym
 
 echo "==> Verifying locally reachable endpoints"
 ssh "${SSH_TARGET}" <<'EOF'
+set -euo pipefail
 for host in docs.clumsies.ai clumsies.ai www.clumsies.ai app.clumsies.ai; do
   code=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${host}:443:127.0.0.1" "https://${host}/" || true)
   echo "${host} -> ${code}"
 done
+
+# A missing docs path must answer 404. try_files must never rewrite to the 404
+# page with status 200, or crawlers and uptime checks treat misses as content.
+missing=$(curl -s -o /dev/null -w "%{http_code}" --resolve "docs.clumsies.ai:443:127.0.0.1" "https://docs.clumsies.ai/missing-page-check" || true)
+if [[ "${missing}" != "404" ]]; then
+  echo "docs.clumsies.ai missing path -> ${missing} (want 404)"
+  exit 1
+fi
+echo "docs.clumsies.ai missing path -> 404"
 EOF
 
 echo "==> Done. Public DNS must point docs.clumsies.ai and clumsies.ai at the server (see issue notes)."
