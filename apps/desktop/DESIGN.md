@@ -155,30 +155,38 @@ dialog, and Escape must dismiss it without doing the destructive thing.
 The window is one shell, and every screen fills two slots in it. macOS draws the
 same shape as a NavigationSplitView in WorkspaceView: a sidebar of six
 destinations, the open section's navigator beside it, and the work itself in the
-detail. This client draws those three columns and two rows that macOS spreads
-across toolbars and its sidebar footer:
+detail. This client draws, from the top:
 
-- **The context bar** names what the whole window is looking at: the Project, the
-  directory that Project is bound to, where the daemon keeps it, the Project ref
-  the checkout resolved to, and how many documents have a proposal waiting. It is
-  also where the open section's actions live, because an action belongs to the
-  thing it acts on, and a reader should learn one place to look for it.
-- **The status bar** reports the last thing the open screen did, and whether the
-  engine is answering.
+| Region | What it is |
+| --- | --- |
+| Title bar | The window controls at the right, this application's own. The corner above the rail carries the rail's colour, so the navigation reaches the window's top edge. |
+| Rail | The six destinations of the macOS sidebar, **icons only**, each named in a tooltip and in the list column's header beside it. Memory is the brain, as it is in macOS. |
+| List column | The open section's list, under a header that names it and carries its filter — the Project picker here, which macOS calls MemoryProjectFilter and keeps in the same place. |
+| Detail | The work, with its own header: what is open and how to look at it, and the section's actions at the end of that header, which is where macOS keeps its section menus. |
+| Status bar | The last thing the open screen did, and whether the engine is answering. |
 
 A screen owns its list and its detail and nothing else about the layout. A
 section with no screen yet says so in both slots, and names the macOS view it
 will be translated from.
 
-Two rules belong to the shell so that no screen repeats them:
+Three rules belong to the shell so that no screen repeats them:
 
-- **A narrow window adapts once.** Below 641 epx the rail drops its labels and
-  the list stacks above the detail. No screen decides this for itself.
+- **A narrow window adapts once.** Below 641 epx the list stacks above the
+  detail. No screen decides this for itself.
+- **The window controls are drawn when the platform does not.** The component
+  library skips them under server-side decorations; some compositors answer that
+  request with "server" and then draw only a border, Hyprland among them, so the
+  application draws minimize, maximize and close itself in that case.
 - **The keyboard reaches the window's actions.** F6 moves focus from wherever it
-  is to the context bar's actions, and Shift+F6 moves it back; Enter or Space
-  runs the focused action. F6 is the Windows key for moving between a window's
-  regions, and it is the only way to reach the actions at all, because a document
-  editor consumes Tab.
+  is to the actions in the detail's header, and Shift+F6 moves it back; Enter or
+  Space runs the focused action. F6 is the Windows key for moving between a
+  window's regions, and it is the only way to reach the actions at all, because a
+  document editor consumes Tab.
+
+The theme follows the system's light or dark preference, and keeps following it:
+`Theme::sync_system_appearance` is called when the window opens and on every appearance
+change. Tokens come from the theme, so nothing here is a literal in one mode and
+wrong in the other.
 
 ## Rules for translating a macOS screen
 

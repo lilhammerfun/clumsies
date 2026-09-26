@@ -239,12 +239,13 @@ impl DocumentPane {
         (text, cx.theme().muted_foreground)
     }
 
-    /// The work itself: the document, read in one of its three modes. The
-    /// window's actions live in the shell's context bar, so this pane is only
-    /// ever the document and how to look at it.
+    /// The work itself: the document, read in one of its three modes, with the
+    /// window's actions at the end of its header — which is where the macOS
+    /// client keeps the same menu, in the detail's toolbar.
     pub fn detail(
         &self,
         target: Option<PaneContext<'_>>,
+        actions: AnyElement,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
         let Some(target) = target else {
@@ -290,7 +291,8 @@ impl DocumentPane {
                     .text_style(&ui::BODY)
                     .child(target.document.path.clone()),
             )
-            .child(modes);
+            .child(modes)
+            .child(actions);
 
         let body: AnyElement = match self.mode {
             Mode::Source => div()

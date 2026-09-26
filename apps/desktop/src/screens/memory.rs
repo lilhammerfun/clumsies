@@ -117,12 +117,6 @@ impl MemoryScreen {
             .and_then(|document| self.draft_for(document))
     }
 
-    /// How many documents have a proposal waiting, which is what the context
-    /// bar reports.
-    pub fn draft_count(&self) -> usize {
-        self.drafts.len()
-    }
-
     pub fn commit_id(&self) -> Option<&str> {
         self.commit_id.as_deref()
     }
@@ -178,25 +172,34 @@ impl MemoryScreen {
         })
     }
 
-    /// The section's list column: the Project's Memory, as files.
-    pub fn list(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+    /// The section's list column: the Project's Memory, as files, under the
+    /// header that says which Project and offers to change it.
+    pub fn list(&self, project: AnyElement) -> AnyElement {
+        let header = div()
+            .h_flex()
+            .h(px(36.))
+            .px_3()
+            .gap_2()
+            .items_center()
+            .child(div().text_style(&ui::BODY).child("Memory"))
+            .child(project);
+
         div()
             .v_flex()
             .h_full()
-            .p_2()
-            .gap_1()
-            .child(section("Memory", cx))
+            .child(header)
             .child(
                 div()
                     .flex_1()
                     .min_h(px(0.))
+                    .p_2()
                     .child(memory_tree::memory_tree(&self.tree, &self.drafted_paths())),
             )
             .into_any_element()
     }
 
     /// The section's detail: the document the reader picked.
-    pub fn detail(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+    pub fn detail(&self, actions: AnyElement, cx: &mut Context<DesktopApp>) -> AnyElement {
         let Some(target) = self.render_target() else {
             let reason = match &self.error {
                 Some(error) => ui::message(error.clone(), cx.theme().danger),
@@ -217,7 +220,7 @@ impl MemoryScreen {
         // h_flex centers the cross axis, so a column in a row takes its content
         // height unless it asks for h_full(); the scroll regions inside need the
         // row's height to resolve against.
-        self.pane.detail(Some(target), cx)
+        self.pane.detail(Some(target), actions, cx)
     }
 
     /// The document the reader picked, if the section has one open.
@@ -291,11 +294,4 @@ impl MemoryScreen {
             .cloned();
         self.pane.set_draft(draft);
     }
-}
-
-fn section(label: &str, cx: &mut Context<DesktopApp>) -> impl IntoElement {
-    div()
-        .text_style(&ui::CAPTION)
-        .text_color(cx.theme().muted_foreground)
-        .child(label.to_owned())
 }

@@ -9,14 +9,12 @@ use clumsiesd::{DaemonDraftOperationResponse, DaemonDraftSummary};
 use gpui_kit::base::Disableable;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::Root;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::{Root, Theme};
 use gpui_kit::*;
 
-use crate::engine::{
-    self, Checkout, DocumentEdit, EngineStatus, Project, Review, Storage, Workspace,
-};
+use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::MemoryScreen;
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
@@ -31,11 +29,6 @@ pub struct DesktopApp {
     /// Why the Project list could not be read, when it could not be.
     projects_error: Option<String>,
     selected_project: Option<usize>,
-    /// Where the selected Project lives: the directory it is bound to, and the
-    /// daemon's storage for it. The context bar names both, so the storage is
-    /// put in a reader's terms once, when the Project is read.
-    workspace: Option<Workspace>,
-    storage_label: Option<String>,
     memory: MemoryScreen,
     shell: Shell,
     /// The context bar's actions take focus here. F6 is the Windows key for
@@ -51,6 +44,8 @@ pub struct DesktopApp {
     /// Debug-build probe for the platform input method. Not part of the
     /// product: DESIGN.md keeps development scaffolding out of shipped UI.
     probe: Entity<InputState>,
+    /// Dropping it stops watching the system's light or dark preference.
+    _appearance: Subscription,
 }
 
 impl Default for DesktopApp {
@@ -63,9 +58,9 @@ impl DesktopApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
-        let (checkout, checkout_error, workspace) = match projects.first() {
-            Some(project) => read_project(&project.project_id),
-            None => (None, None, None),
+        let (checkout, checkout_error) = match projects.first() {
+            Some(project) => read_checkout(&project.project_id),
+            None => (None, None),
         };
         let memory = MemoryScreen::new(window, cx, checkout, checkout_error);
         let probe = cx.new(|cx| InputState::new(window, cx).placeholder("用中文输入法打几个字"));
@@ -76,13 +71,18 @@ impl DesktopApp {
             .is_none_or(|error| !engine::missing_session(error));
         let server_url = engine::configured_server_url().unwrap_or_default();
         let sign_in = SignInScreen::new(window, cx, &server_url);
+        // The window follows the system's light or dark preference, now and
+        // whenever it changes: a client that stays white on a dark desktop is
+        // a client nobody wants open.
+        Theme::sync_system_appearance(Some(window), cx);
+        let appearance = cx.observe_window_appearance(window, |_app, _window, cx| {
+            Theme::sync_system_appearance(None, cx);
+        });
         let mut app = Self {
             engine,
             selected_project: signed_in.then_some(0),
             projects,
             projects_error,
-            storage_label: workspace.as_ref().map(storage_label),
-            workspace,
             memory,
             shell: Shell::new(),
             actions_focus: cx.focus_handle(),
@@ -90,6 +90,7 @@ impl DesktopApp {
             signed_in,
             save_generation: 0,
             probe,
+            _appearance: appearance,
         };
         // A Project that already holds a proposal must show it on the first
         // frame: the tree marks it and the context bar offers to review it.
@@ -131,9 +132,7 @@ impl DesktopApp {
     fn select_project(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected_project = Some(index);
         if let Some(project) = self.projects.get(index) {
-            let (checkout, error, workspace) = read_project(&project.project_id);
-            self.storage_label = workspace.as_ref().map(storage_label);
-            self.workspace = workspace;
+            let (checkout, error) = read_checkout(&project.project_id);
             self.memory.set_checkout(checkout, error, cx);
             self.refresh_drafts(cx);
         }
@@ -373,15 +372,13 @@ impl DesktopApp {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
-        let (checkout, checkout_error, workspace) = match projects.first() {
-            Some(project) => read_project(&project.project_id),
-            None => (None, None, None),
+        let (checkout, checkout_error) = match projects.first() {
+            Some(project) => read_checkout(&project.project_id),
+            None => (None, None),
         };
         self.selected_project = (!projects.is_empty()).then_some(0);
         self.projects = projects;
         self.projects_error = projects_error;
-        self.storage_label = workspace.as_ref().map(storage_label);
-        self.workspace = workspace;
         self.memory.set_checkout(checkout, checkout_error, cx);
         self.refresh_drafts(cx);
     }
@@ -492,39 +489,32 @@ impl DesktopApp {
 
     /// The open section's list column. A section that has no screen yet says so
     /// rather than drawing an empty column with no explanation.
-    fn section_list(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn section_list(&self, picker: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.list(cx),
+            Section::Memory => self.memory.list(picker),
             other => placeholder(other.list_note(), cx),
         }
     }
 
-    fn section_detail(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Its detail. The window's actions go into it, because that is where the
+    /// macOS client keeps the same menu: in the detail's own toolbar.
+    fn section_detail(&self, actions: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.detail(cx),
+            Section::Memory => self.memory.detail(actions, cx),
             other => placeholder(other.detail_note(), cx),
         }
     }
 
-    /// What the window is looking at, for the context bar.
+    /// What the window's chrome needs: which Project is open, the list the
+    /// picker offers, and the width that decides whether the columns stack.
     fn chrome(&self) -> Chrome<'_> {
         let project = self
             .selected_project
             .and_then(|index| self.projects.get(index))
             .map(|project| project.name.as_str());
-        let (workspace, storage) = match &self.workspace {
-            Some(workspace) => (workspace.root.as_deref(), self.storage_label.as_deref()),
-            None => (None, None),
-        };
         Chrome {
             project,
-            workspace,
-            storage,
-            commit: self.memory.commit_id(),
-            drafts: self.memory.draft_count(),
-            // Filled in where the window is drawn: the Project list and the
-            // width are the window's own.
-            projects: &[],
+            projects: &self.projects,
             width: px(0.),
         }
     }
@@ -548,17 +538,6 @@ fn placeholder(note: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// The daemon's storage for a Project, in a reader's terms.
-fn storage_label(workspace: &Workspace) -> String {
-    match &workspace.storage {
-        Storage::Default => "daemon storage".to_owned(),
-        Storage::Custom(path) => ui::last_segment(path)
-            .map(|name| format!("storage {name}"))
-            .unwrap_or_else(|| "chosen storage".to_owned()),
-        Storage::Unknown => "storage unknown".to_owned(),
-    }
-}
-
 /// Reads the Project list, keeping the reason when it cannot.
 fn read_projects() -> (Vec<Project>, Option<String>) {
     match engine::projects() {
@@ -567,13 +546,11 @@ fn read_projects() -> (Vec<Project>, Option<String>) {
     }
 }
 
-/// Reads one Project's checkout and where it lives, keeping the reason when the
-/// checkout cannot be read.
-fn read_project(project_id: &str) -> (Option<Checkout>, Option<String>, Option<Workspace>) {
-    let workspace = engine::workspace(project_id);
+/// Reads one Project's checkout, keeping the reason when it cannot.
+fn read_checkout(project_id: &str) -> (Option<Checkout>, Option<String>) {
     match engine::checkout(project_id) {
-        Ok(checkout) => (Some(checkout), None, Some(workspace)),
-        Err(error) => (None, Some(error), Some(workspace)),
+        Ok(checkout) => (Some(checkout), None),
+        Err(error) => (None, Some(error)),
     }
 }
 
@@ -595,14 +572,14 @@ impl Render for DesktopApp {
         let width = window.viewport_size().width;
         let actions = self.actions(window, cx);
         let status = self.status(cx);
-        let slots = Slots {
-            list: self.section_list(cx),
-            detail: self.section_detail(cx),
-        };
         let mut chrome = self.chrome();
-        chrome.projects = &self.projects;
         chrome.width = width;
-        let shell = self.shell.render(cx, chrome, slots, actions, status);
+        let picker = self.shell.project_picker(&chrome, cx);
+        let slots = Slots {
+            list: self.section_list(picker, cx),
+            detail: self.section_detail(actions, cx),
+        };
+        let shell = self.shell.render(window, cx, chrome, slots, status);
         // The window's own keys, handled above everything else: F6 moves between
         // the regions and Shift+F6 back, which is the Windows pair for reaching
         // what an editor would otherwise swallow along with Tab; Enter or Space
