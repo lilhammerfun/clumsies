@@ -7,6 +7,7 @@ mod app;
 mod components;
 mod engine;
 mod screens;
+mod sign_in;
 mod ui;
 
 use gpui_kit::component::Root;

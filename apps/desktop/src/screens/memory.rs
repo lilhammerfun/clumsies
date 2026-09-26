@@ -1,18 +1,41 @@
 //! The Memory screen: the Project's file tree beside the selected document.
 
+use std::collections::BTreeSet;
+
+use clumsiesd::{DaemonDraftSummary, DaemonLocalDraftStatus};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tree::TreeState;
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
-use crate::components::{markdown, memory_tree};
-use crate::engine::MemoryDocument;
+use crate::components::memory_tree;
+use crate::engine::{Checkout, MemoryDocument};
+use crate::screens::document::{DocumentPane, Notice, PaneContext};
 use crate::ui::{self, Typography};
+
+/// Width of the Memory tree beside the document.
+const TREE_WIDTH: f32 = 230.;
 
 pub struct MemoryScreen {
     tree: Entity<TreeState>,
+    /// The Project the documents belong to, which is what a draft names.
+    project_id: Option<String>,
     documents: Vec<MemoryDocument>,
+    /// The Project ref the documents resolved from; a new draft is based on it.
+    commit_id: Option<String>,
+    /// The document the pane holds, as an index into the documents.
+    selected: Option<usize>,
+    /// A selection the pane has not been given yet.
+    ///
+    /// A tree click arrives as an entity notification, which carries no window,
+    /// and the editor needs one to take new text. The flag carries the load to
+    /// the next frame, which has a window.
+    pending_load: bool,
+    /// The drafts open in this Project, which is what the tree marks and what
+    /// the pane offers to review.
+    drafts: Vec<DaemonDraftSummary>,
+    pane: DocumentPane,
     /// Why the documents could not be read, when they could not be.
     error: Option<String>,
     /// Dropping a subscription cancels it, so the screen holds it.
@@ -21,65 +44,160 @@ pub struct MemoryScreen {
 
 impl MemoryScreen {
     pub fn new(
+        window: &mut Window,
         cx: &mut Context<DesktopApp>,
-        documents: Vec<MemoryDocument>,
+        checkout: Option<Checkout>,
         error: Option<String>,
     ) -> Self {
-        let tree = cx.new(|cx| {
-            let mut state = TreeState::new(cx).items(memory_tree::items(&documents));
-            select_first(&mut state, &documents, cx);
-            state
-        });
+        let tree = cx.new(|cx| TreeState::new(cx).items(Vec::new()));
+        let pane = DocumentPane::new(window, cx);
         // Selecting an entry notifies the tree state, not this view.
-        let selection = cx.observe(&tree, |_, _, cx| cx.notify());
-        Self {
+        let selection = cx.observe(&tree, |app, _tree, cx| {
+            app.memory().follow_selection(cx);
+            cx.notify();
+        });
+        let mut screen = Self {
             tree,
-            documents,
-            error,
+            project_id: None,
+            documents: Vec::new(),
+            commit_id: None,
+            selected: None,
+            pending_load: false,
+            drafts: Vec::new(),
+            pane,
+            error: None,
             _selection: selection,
-        }
+        };
+        screen.set_checkout(checkout, error, cx);
+        screen
     }
 
-    /// Replaces the tree when the selected Project changes.
-    pub fn set_documents(
+    /// Replaces the documents when the selected Project changes or its checkout
+    /// moves, and selects the first document, which is what opening a Project
+    /// does in the macOS client.
+    pub fn set_checkout(
         &mut self,
-        documents: Vec<MemoryDocument>,
+        checkout: Option<Checkout>,
         error: Option<String>,
         cx: &mut Context<DesktopApp>,
     ) {
+        let (project_id, commit_id, documents) = match checkout {
+            Some(checkout) => (
+                Some(checkout.project_id),
+                checkout.commit_id,
+                checkout.documents,
+            ),
+            None => (None, None, Vec::new()),
+        };
+        self.project_id = project_id;
+        self.commit_id = commit_id;
         self.documents = documents;
         self.error = error;
-        let items = memory_tree::items(&self.documents);
-        let documents = &self.documents;
-        self.tree.update(cx, |state, cx| {
-            state.set_items(items, cx);
-            select_first(state, documents, cx);
-        });
+        self.drafts.clear();
+        self.selected = (!self.documents.is_empty()).then_some(0);
+        self.pending_load = true;
+        self.publish(cx);
     }
 
-    pub fn render(&self, cx: &mut Context<DesktopApp>) -> impl IntoElement {
-        let selected = self
+    /// The open drafts the daemon holds for this Project. It is asked after
+    /// every store, because a store is what creates or advances a draft.
+    pub fn set_drafts(&mut self, drafts: Vec<DaemonDraftSummary>, cx: &mut Context<DesktopApp>) {
+        self.drafts = drafts;
+        self.publish(cx);
+    }
+
+    pub fn set_notice(&mut self, notice: Option<Notice>) {
+        self.pane.set_notice(notice);
+    }
+
+    pub fn selected_document(&self) -> Option<&MemoryDocument> {
+        self.selected.and_then(|index| self.documents.get(index))
+    }
+
+    /// The draft carrying the selected document's edits, when it has one.
+    pub fn selected_draft(&self) -> Option<&DaemonDraftSummary> {
+        self.selected_document()
+            .and_then(|document| self.draft_for(document))
+    }
+
+    pub fn commit_id(&self) -> Option<&str> {
+        self.commit_id.as_deref()
+    }
+
+    pub fn pane(&self) -> &DocumentPane {
+        &self.pane
+    }
+
+    pub fn pane_mut(&mut self) -> &mut DocumentPane {
+        &mut self.pane
+    }
+
+    /// Reads the tree's selection into this screen. The text follows in
+    /// `MemoryScreen::apply_pending_load`, which has the window the editor
+    /// needs to take it.
+    fn follow_selection(&mut self, cx: &App) {
+        let path = self
             .tree
             .read(cx)
             .selected_entry()
             .map(|entry| entry.item().id.to_string());
+        let index = path.and_then(|path| {
+            self.documents
+                .iter()
+                .position(|document| document.path == path)
+        });
+        if index != self.selected {
+            self.selected = index;
+            self.pending_load = true;
+        }
+    }
 
-        let document = selected
-            .as_deref()
-            .and_then(|path| self.documents.iter().find(|document| document.path == path));
+    /// Gives the pane the selected document. This runs at the top of a frame,
+    /// before the pane draws, so the editor already holds the new text.
+    pub fn apply_pending_load(&mut self, window: &mut Window, cx: &mut Context<DesktopApp>) {
+        if !std::mem::take(&mut self.pending_load) {
+            return;
+        }
+        if let Some(document) = self.selected.and_then(|index| self.documents.get(index)) {
+            self.pane.load(document, window, cx);
+            self.pane.focus_editor(window, cx);
+        }
+        self.sync_draft();
+    }
 
-        let body: AnyElement = match (document, &self.error) {
-            (Some(document), _) => {
-                markdown::memory_document("memory-preview", document.content.clone())
-                    .into_any_element()
-            }
-            (None, Some(error)) => ui::message(error.clone(), cx.theme().danger),
-            (None, None) => ui::message("这个项目还没有 Memory。", cx.theme().muted_foreground),
+    /// What the pane needs to name the selected document.
+    pub(crate) fn render_target(&self) -> Option<PaneContext<'_>> {
+        let document = self.selected_document()?;
+        Some(PaneContext {
+            project_id: self.project_id.as_deref().unwrap_or_default(),
+            commit_id: self.commit_id.as_deref(),
+            document,
+        })
+    }
+
+    /// The tree the reader picks from, and the document they then read.
+    pub fn render(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+        let Some(target) = self.render_target() else {
+            let reason = match &self.error {
+                Some(error) => ui::message(error.clone(), cx.theme().danger),
+                None => ui::message(
+                    "This Project has no Memory yet.",
+                    cx.theme().muted_foreground,
+                ),
+            };
+            return div()
+                .v_flex()
+                .flex_1()
+                .h_full()
+                .min_w(px(0.))
+                .p_4()
+                .child(reason)
+                .into_any_element();
         };
 
-        let column = div()
+        let tree = div()
             .v_flex()
-            .w(px(230.))
+            .w(px(TREE_WIDTH))
             .h_full()
             .p_2()
             .gap_1()
@@ -88,39 +206,69 @@ impl MemoryScreen {
                 div()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(memory_tree::memory_tree(&self.tree)),
+                    .child(memory_tree::memory_tree(&self.tree, &self.drafted_paths())),
             );
 
         // h_flex centers the cross axis, so a column in a row takes its content
-        // height unless it asks for h_full(); the scroll region inside needs the
+        // height unless it asks for h_full(); the scroll regions inside need the
         // row's height to resolve against.
-        let preview = div()
-            .v_flex()
-            .flex_1()
-            .h_full()
-            .min_w(px(0.))
-            .min_h(px(0.))
-            .p_4()
-            .gap_2()
-            .child(section(selected.as_deref().unwrap_or_default(), cx))
-            .child(div().flex_1().min_h(px(0.)).child(body));
-
         div()
             .h_flex()
             .flex_1()
             .h_full()
             .min_w(px(0.))
-            .child(column)
-            .child(preview)
+            .child(tree)
+            .child(self.pane.render(Some(target), cx))
+            .into_any_element()
     }
-}
 
-fn select_first(state: &mut TreeState, documents: &[MemoryDocument], cx: &mut Context<TreeState>) {
-    let Some(first) = documents.first() else {
-        return;
-    };
-    let id: SharedString = first.path.clone().into();
-    state.set_selected_index(state.index_of(&id), cx);
+    /// Rebuilds what the tree draws and points the pane at the right draft.
+    ///
+    /// Replacing the items clears the tree's selection, so the selection is
+    /// restored in the same update: the frame after it must not look like a
+    /// reader who selected nothing, which would close the open document.
+    fn publish(&mut self, cx: &mut Context<DesktopApp>) {
+        let items = memory_tree::items(&self.documents);
+        let selected = self
+            .selected_document()
+            .map(|document| SharedString::from(document.path.clone()));
+        self.tree.update(cx, |state, cx| {
+            state.set_items(items, cx);
+            let index = selected.as_ref().and_then(|id| state.index_of(id));
+            state.set_selected_index(index, cx);
+        });
+        self.sync_draft();
+        cx.notify();
+    }
+
+    /// The documents an open draft touches, which is what the tree marks.
+    fn drafted_paths(&self) -> BTreeSet<String> {
+        self.documents
+            .iter()
+            .filter(|document| self.draft_for(document).is_some())
+            .map(|document| document.path.clone())
+            .collect()
+    }
+
+    /// A draft edits a resource, and a document names one, so that pair is what
+    /// ties an edit to a file. A draft being created has no resource yet and is
+    /// matched by path instead.
+    fn draft_for(&self, document: &MemoryDocument) -> Option<&DaemonDraftSummary> {
+        self.drafts.iter().find(|draft| {
+            draft.target_id.as_deref() == Some(document.resource_id.as_str())
+                || draft.path.as_deref() == Some(document.path.as_str())
+        })
+    }
+
+    /// Points the pane at the open draft that carries the selected document,
+    /// which is the one a further edit joins and a Review can name.
+    fn sync_draft(&mut self) {
+        let draft = self
+            .selected_draft()
+            .filter(|draft| draft.status == DaemonLocalDraftStatus::Open)
+            .cloned();
+        self.pane.set_draft(draft);
+    }
 }
 
 fn section(label: &str, cx: &mut Context<DesktopApp>) -> impl IntoElement {

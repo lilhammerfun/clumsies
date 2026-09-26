@@ -1931,11 +1931,15 @@ dependencies = [
 name = "desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clumsiesd",
  "gpui-kit",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "similar",
+ "uuid",
 ]
 
 [[package]]
@@ -7037,7 +7041,9 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
