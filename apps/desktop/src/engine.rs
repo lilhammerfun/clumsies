@@ -10,15 +10,15 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use clumsiesd::{
-    DaemonContentDraftUpdate, DaemonDeleteDraftOperation, DaemonDiscardDraftOperation,
-    DaemonDraftContent, DaemonDraftDetail, DaemonDraftListQuery, DaemonDraftOperation,
-    DaemonDraftOperationRequest, DaemonDraftOperationResponse, DaemonDraftOperationSource,
-    DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary, DaemonHealth, DaemonIpcClient,
-    DaemonIpcRequest, DaemonLocalDraftStatus, DaemonProjectCacheClearRequest,
-    DaemonProjectCheckoutRequest, DaemonProjectStorageAvailability, DaemonProjectStorageRequest,
-    DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest, DaemonRenameDraftOperation,
-    DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
-    DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
+    DaemonContentDraftUpdate, DaemonCreateDraftOperation, DaemonDeleteDraftOperation,
+    DaemonDiscardDraftOperation, DaemonDraftContent, DaemonDraftDetail, DaemonDraftListQuery,
+    DaemonDraftOperation, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
+    DaemonDraftOperationSource, DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary,
+    DaemonHealth, DaemonIpcClient, DaemonIpcRequest, DaemonLocalDraftStatus,
+    DaemonProjectCacheClearRequest, DaemonProjectCheckoutRequest, DaemonProjectStorageAvailability,
+    DaemonProjectStorageRequest, DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest,
+    DaemonRenameDraftOperation, DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse,
+    DaemonUpdateDraftOperation, DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
 use serde::Deserialize;
 
@@ -509,6 +509,40 @@ pub fn configured_server_url() -> Option<String> {
         Ok(health) => Some(health.server_url),
         Err(_) => None,
     }
+}
+
+/// Proposes a new document at a path, which is how a Project's Memory grows.
+/// The file exists once the Review that carries it is merged, which is what
+/// makes a proposal safe to write.
+pub fn create_document(
+    project_id: &str,
+    base_commit_id: Option<&str>,
+    path: &str,
+    content: &str,
+) -> Result<DaemonDraftOperationResponse, String> {
+    draft_operation(&DaemonDraftOperationRequest {
+        draft_id: None,
+        base_commit_id: base_commit_id.map(str::to_owned),
+        project_id: project_id.to_owned(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op: DaemonDraftOperation {
+            create: Some(DaemonCreateDraftOperation {
+                path: path.to_owned(),
+                content: DaemonDraftContent {
+                    org_source: None,
+                    description: None,
+                    content: content.to_owned(),
+                },
+                description: None,
+            }),
+            update: None,
+            rename: None,
+            delete: None,
+            discard: None,
+        },
+        source: Some(DaemonDraftOperationSource::Desktop),
+    })
 }
 
 /// One document edit, in the shape the daemon's draft operation takes. It owns

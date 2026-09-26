@@ -17,6 +17,7 @@ use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review,
 use crate::screens::dialogs::{ConfirmDialog, DialogAction, RenameDialog};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::{MemoryScreen, Move};
+use crate::screens::new_memory::NewMemoryDialog;
 use crate::screens::project_settings::{ProjectSettings, ProjectSettingsDialog};
 use crate::screens::reviews::{ReviewNotice, ReviewsScreen};
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
@@ -228,6 +229,51 @@ impl DesktopApp {
                 app.refresh_drafts(cx);
                 app.reload_memory(cx);
                 cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Starts a new Memory document in a folder, which is the one command the
+    /// tree offers on a folder row.
+    pub fn open_new_memory_dialog(
+        &mut self,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        NewMemoryDialog::open(cx.entity().downgrade(), folder, "untitled.md", window, cx);
+    }
+
+    /// Writes a new document as a draft. The file exists for the Project once
+    /// the Review carrying it is merged.
+    pub fn create_memory(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(project_id) = self
+            .selected_project
+            .and_then(|index| self.projects.get(index))
+            .map(|project| project.project_id.clone())
+        else {
+            return;
+        };
+        let commit = self.memory.commit_id().map(str::to_owned);
+        let path = path.to_owned();
+        // A file with its name in it and nothing else: the reader writes it.
+        let title = path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&path)
+            .trim_end_matches(".md")
+            .to_owned();
+        let content = format!("# {title}\n");
+        let asked = path.clone();
+        let work = cx.background_executor().spawn(async move {
+            engine::create_document(&project_id, commit.as_deref(), &asked, &content).map(|_| ())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| {
+                app.document_changed("created", &path, result, cx)
             })
             .ok();
         })

@@ -82,6 +82,8 @@ pub struct MemoryScreen {
 pub struct MenuTarget {
     pub draft_id: Option<String>,
     pub can_review: bool,
+    /// A folder offers a new document rather than the commands a document has.
+    pub is_folder: bool,
 }
 
 /// Where an arrow key moves the list's selection.
@@ -451,14 +453,25 @@ impl MemoryScreen {
     /// it, and whether that draft is one a Review could be asked for. A folder
     /// is not a document, so it has nothing to offer yet.
     pub fn menu_target(&self, path: &str) -> Option<MenuTarget> {
-        let document = self
-            .documents
-            .iter()
-            .find(|document| document.path == path)?;
+        // A folder is a row without a document: what it can offer is a new
+        // document inside it.
+        let Some(document) = self.documents.iter().find(|document| document.path == path) else {
+            let inside = format!("{path}/");
+            return self
+                .documents
+                .iter()
+                .any(|document| document.path.starts_with(&inside))
+                .then(|| MenuTarget {
+                    draft_id: None,
+                    can_review: false,
+                    is_folder: true,
+                });
+        };
         let draft = self.draft_for(document);
         Some(MenuTarget {
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             can_review: draft.is_some_and(|draft| draft.status == DaemonLocalDraftStatus::Open),
+            is_folder: false,
         })
     }
 
@@ -977,6 +990,19 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
                 });
             }),
         );
+    if target.is_folder {
+        let creating = this.clone();
+        let folder = path.to_owned();
+        return menu
+            .separator()
+            .item(
+                PopupMenuItem::new("New file…").on_click(move |_event, window, cx| {
+                    creating.update(cx, |app, cx| {
+                        app.open_new_memory_dialog(&folder, window, cx)
+                    });
+                }),
+            );
+    }
     // The generic file commands, which any tree offers, then Memory's own: macOS
     // splits its own row menu the same way, and the two sections do not mix.
     let renaming = this.clone();
