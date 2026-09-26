@@ -102,6 +102,9 @@ pub struct MemoryScreen {
     /// The rows the reader has selected, which is what the tree's commands act
     /// on: one row is a document, and a set of rows is a batch of them.
     selection: file_tree::Selection,
+    /// The folders the reader has folded, which is a fact about this view rather
+    /// than about the Project. Everything starts open, as it does in macOS.
+    folded: BTreeSet<String>,
     /// The documents the reader has open, in the order the strip shows them.
     open: Vec<OpenDocument>,
     /// The tab in front: the one the panes draw and the commands act on.
@@ -240,6 +243,7 @@ impl MemoryScreen {
             tree,
             project_id: None,
             selection: file_tree::Selection::default(),
+            folded: BTreeSet::new(),
             documents: Vec::new(),
             commit_id: None,
             open: Vec::new(),
@@ -855,6 +859,76 @@ impl MemoryScreen {
         !self.discard_plan(&[folder.to_owned()]).is_empty()
     }
 
+    /// Whether a path is one of the tree's folders. A folder is not a document:
+    /// it is the paths that share a prefix, which is how the tree draws them.
+    fn is_folder(&self, path: &str) -> bool {
+        let inside = format!("{path}/");
+        !self.documents.iter().any(|document| document.path == path)
+            && self
+                .documents
+                .iter()
+                .any(|document| document.path.starts_with(&inside))
+    }
+
+    /// Opens or closes a folder, which is what its own disclosure control does.
+    /// The rows inside a folded folder are not drawn at all.
+    pub fn toggle_folder(&mut self, path: &str, cx: &mut Context<DesktopApp>) {
+        if !self.folded.remove(path) {
+            self.folded.insert(path.to_owned());
+        }
+        // The folder keeps the selection: opening or closing it must not move
+        // the reader to whatever document happens to be open, which may be one
+        // of the rows that just went away.
+        self.selection.only(path);
+        self.publish(cx);
+        self.show_selection(cx);
+    }
+
+    /// The keyboard's Right, which is what macOS's tree does with it: a folded
+    /// folder opens. A file, and a folder already open, has nothing to open.
+    pub fn expand_selected(&mut self, cx: &mut Context<DesktopApp>) {
+        let Some(path) = self.selected_path(cx) else {
+            return;
+        };
+        if self.folded.remove(&path) {
+            self.publish(cx);
+        }
+    }
+
+    /// The keyboard's Left: an open folder folds, and anything else steps out to
+    /// the folder that holds it, which is the pair macOS's trees use.
+    pub fn collapse_selected(&mut self, cx: &mut Context<DesktopApp>) {
+        let Some(path) = self.selected_path(cx) else {
+            return;
+        };
+        if self.is_folder(&path) && !self.folded.contains(&path) {
+            self.folded.insert(path.clone());
+            self.selection.only(&path);
+            self.publish(cx);
+            self.show_selection(cx);
+            return;
+        }
+        let Some((parent, _)) = path.rsplit_once('/') else {
+            return;
+        };
+        self.selection.only(parent);
+        self.show_selection(cx);
+        if let Some(index) = self.index_of(parent, cx) {
+            self.tree.update(cx, |state, _cx| {
+                state.scroll_to_item(index, ScrollStrategy::Nearest)
+            });
+        }
+    }
+
+    /// The row the tree's keyboard is on, as a path.
+    fn selected_path(&self, cx: &App) -> Option<String> {
+        self.tree
+            .read(cx)
+            .selected_entry()
+            .map(|entry| entry.item().id.to_string())
+            .or_else(|| self.selection.anchor().map(str::to_owned))
+    }
+
     /// The rows the reader has selected, which is what a command about the tree
     /// acts on.
     pub fn selected_paths(&self) -> Vec<String> {
@@ -1311,7 +1385,7 @@ impl MemoryScreen {
             .into_iter()
             .map(|document| document.path.clone())
             .collect();
-        let items = memory_tree::items(&paths);
+        let items = memory_tree::items(&paths, &self.folded);
         self.tree.update(cx, |state, cx| state.set_items(items, cx));
         // A renamed, deleted or filtered-away file is not a selected file.
         self.selection.retain(&self.row_paths(cx));
@@ -1325,8 +1399,17 @@ impl MemoryScreen {
     /// which is why it cannot open a second tab for it.
     fn select_in_tree(&mut self, cx: &mut Context<DesktopApp>) {
         // A set the reader built is not a tab's business: bringing another tab
-        // to the front must not take it apart.
+        // to the front must not take it apart. Neither is a folder, which is not
+        // a document at all: the tab in front belongs to a file, and marking it
+        // would take the reader away from the folder they are on.
         if self.selection.is_batch() {
+            return;
+        }
+        if self
+            .selection
+            .anchor()
+            .is_some_and(|anchor| self.is_folder(anchor))
+        {
             return;
         }
         let path = self
@@ -1478,10 +1561,11 @@ impl MemoryScreen {
 /// What a click on a tree row means here.
 ///
 /// The generic tree hands the click over with the keys it was made with, and
-/// this is where the three gestures become three different things: a plain
-/// click selects a row and opens its document, a modified one builds a set and
-/// opens nothing, and the right button asks for a menu — which, on a row that
-/// is not part of a selection, makes that row the selection first.
+/// this is where the gestures become different things: a folder's own control
+/// opens and closes it and does nothing else, a plain click selects a row and
+/// opens its document, a modified one builds a set and opens nothing, and the
+/// right button asks for a menu — which, on a row that is not part of a
+/// selection, makes that row the selection first.
 fn tree_clicked(click: RowClick, _window: &mut Window, cx: &mut App) {
     let Some(app) = TREE_APP.with(|slot| slot.borrow().as_ref().and_then(|weak| weak.upgrade()))
     else {
@@ -1489,18 +1573,22 @@ fn tree_clicked(click: RowClick, _window: &mut Window, cx: &mut App) {
     };
     app.update(cx, |app, cx| {
         let memory = app.memory();
-        match click.button {
-            MouseButton::Left if !click.extending() => {
+        match (click.button, click.chevron) {
+            (MouseButton::Left, true) => {
+                memory.toggle_folder(&click.path, cx);
+                return;
+            }
+            (MouseButton::Left, false) if !click.extending() => {
                 memory.selection.only(&click.path);
                 memory.ask_for(&click.path);
             }
-            MouseButton::Left => {
+            (MouseButton::Left, false) => {
                 let order = memory.row_paths(cx);
                 memory
                     .selection
                     .clicked(&click.path, click.modifiers, &order);
             }
-            MouseButton::Right if !memory.selection.contains(&click.path) => {
+            (MouseButton::Right, _) if !memory.selection.contains(&click.path) => {
                 memory.selection.only(&click.path);
             }
             _ => return,

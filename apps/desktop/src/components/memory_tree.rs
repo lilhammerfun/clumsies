@@ -14,11 +14,11 @@ use gpui_kit::*;
 use crate::components::file_tree::{self, Decoration, PathEntry, RowClick};
 
 /// The paths a screen wants drawn, as the tree's entries. A screen filters the
-/// Project's documents itself — the tree knows nothing about a filter — and
-/// hands over the paths that survived.
-pub fn items(paths: &[String]) -> Vec<TreeItem> {
+/// Project's documents itself — the tree knows nothing about a filter — hands
+/// over the paths that survived, and says which folders it has folded.
+pub fn items(paths: &[String], folded: &BTreeSet<String>) -> Vec<TreeItem> {
     let entries: Vec<PathEntry> = paths.iter().cloned().map(PathEntry::new).collect();
-    file_tree::items(&entries)
+    file_tree::items(&entries, folded)
 }
 
 /// The tree, with Memory's decoration on every file an open draft touches:

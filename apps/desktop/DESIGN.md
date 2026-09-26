@@ -126,6 +126,14 @@ The Memory screen is side-by-side at every width today; below 641px it should
 stack and grow a back affordance. This is a real gap, not a stylistic
 preference, because the client runs in windows the user resizes.
 
+**A folder is opened by its own control, and by the arrow keys.** The row
+selects; the disclosure control at its left opens and closes it, and Left and
+Right do the same for the row the keyboard is on — a fold steps in, and anything
+else steps out to the folder that holds it. Which folders are folded is the
+screen's state, not the component's, because the component library expands a
+folder in its own row handler and exposes no way to ask it to stop or to do it
+from outside.
+
 **A tree row is selected the platform's way.** A plain click selects one row and
 opens its document; Ctrl-click (Cmd on macOS) adds a row to the selection or
 takes it out, and Shift-click takes everything between it and the row the range
@@ -313,6 +321,4 @@ exist yet is not a deviation.
 
 | Gap | Where | Why, and what fixes it |
 | --- | --- | --- |
-| Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
-| A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
 | A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |

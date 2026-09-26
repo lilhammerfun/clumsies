@@ -147,6 +147,10 @@ pub struct RowClick {
     pub path: String,
     pub button: MouseButton,
     pub modifiers: Modifiers,
+    /// Whether the click landed on the row's own disclosure control, which is
+    /// the part of a folder that opens and closes it. A row click selects a
+    /// row; the control belongs to the folder.
+    pub chevron: bool,
 }
 
 impl RowClick {
@@ -165,13 +169,15 @@ pub struct Decoration {
 }
 
 /// The flat list of paths becomes the directories that imply it: directories
-/// first, then files, both in the order they were given.
-pub fn items(entries: &[PathEntry]) -> Vec<TreeItem> {
+/// first, then files, both in the order they were given. A screen says which
+/// folders it has folded, because whether a folder is open is a fact about the
+/// view rather than about the paths.
+pub fn items(entries: &[PathEntry], folded: &BTreeSet<String>) -> Vec<TreeItem> {
     let mut root = Directory::default();
     for entry in entries {
         root.insert(&entry.path);
     }
-    root.into_items("")
+    root.into_items("", folded)
 }
 
 #[derive(Default)]
@@ -193,14 +199,14 @@ impl Directory {
         }
     }
 
-    fn into_items(self, prefix: &str) -> Vec<TreeItem> {
+    fn into_items(self, prefix: &str, folded: &BTreeSet<String>) -> Vec<TreeItem> {
         let mut items = Vec::new();
         for (name, directory) in self.directories {
             let path = join(prefix, &name);
             items.push(
                 TreeItem::new(path.clone(), name)
-                    .expanded(true)
-                    .children(directory.into_items(&path)),
+                    .expanded(!folded.contains(&path))
+                    .children(directory.into_items(&path, folded)),
             );
         }
         for name in self.files {
@@ -246,12 +252,42 @@ pub fn path_tree(
                 .text_color(cx.theme().primary)
                 .child(label)
         });
+        // A folder's disclosure control is its own: the row selects, and this
+        // opens and closes, which is what macOS's tree does too. A file has the
+        // same width of space so the names line up.
+        let control = if entry.is_folder() {
+            let pressed = clicked.clone();
+            let control_path = path.clone();
+            div()
+                .id(("tree-disclosure", index))
+                .h_flex()
+                .justify_center()
+                .w(px(ui::SPACE_LG))
+                .hover(|style| style.text_color(cx.theme().foreground))
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    cx.stop_propagation();
+                    (*pressed)(
+                        RowClick {
+                            path: control_path.clone(),
+                            button: MouseButton::Left,
+                            modifiers: event.modifiers,
+                            chevron: true,
+                        },
+                        window,
+                        cx,
+                    );
+                })
+                .child(marker)
+                .into_any_element()
+        } else {
+            div().w(px(ui::SPACE_LG)).into_any_element()
+        };
         let item = ListItem::new(index).child(
             div()
                 .h_flex()
                 .gap_2()
                 .pl(px(entry.depth() as f32 * ui::SPACE_MD))
-                .child(div().w(px(ui::SPACE_MD)).child(marker))
+                .child(control)
                 .child(div().text_color(tone).child(entry.item().label.clone()))
                 .children(label),
         );
@@ -268,16 +304,17 @@ pub fn path_tree(
         let menu_path = path.clone();
         let menu_click = clicked.clone();
         item.on_mouse_down(MouseButton::Left, move |event, window, cx| {
-            // A modified click is about the set, not about the single row the
-            // tree keeps as its own selection, so the row underneath keeps it.
-            if event.modifiers.control || event.modifiers.platform || event.modifiers.shift {
-                cx.stop_propagation();
-            }
+            // The row's selection is the screen's, not the component's: this
+            // keeps the two from disagreeing when a folder is opened by its
+            // control rather than by the row, and leaves a folder's click to be
+            // a selection the way macOS leaves it.
+            cx.stop_propagation();
             (*press)(
                 RowClick {
                     path: pressed_path.clone(),
                     button: MouseButton::Left,
                     modifiers: event.modifiers,
+                    chevron: false,
                 },
                 window,
                 cx,
@@ -295,6 +332,7 @@ pub fn path_tree(
                     path: menu_path.clone(),
                     button: MouseButton::Right,
                     modifiers: event.modifiers,
+                    chevron: false,
                 },
                 window,
                 cx,

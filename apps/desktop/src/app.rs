@@ -1738,6 +1738,17 @@ impl Render for DesktopApp {
                     "f6" => app.cycle_focus(1, window, cx),
                     "down" if app.list_focused(window) => app.move_in_list(Move::Step(1), cx),
                     "up" if app.list_focused(window) => app.move_in_list(Move::Step(-1), cx),
+                    // The history keeps Alt+Left and Alt+Right for itself, which
+                    // is why these two say so: inside a tree the bare arrows are
+                    // the ones that open and close what the selection is on.
+                    "right"
+                        if app.memory.list_focused(window) && !event.keystroke.modifiers.alt =>
+                    {
+                        app.memory.expand_selected(cx)
+                    }
+                    "left" if app.memory.list_focused(window) && !event.keystroke.modifiers.alt => {
+                        app.memory.collapse_selected(cx)
+                    }
                     "home" if app.list_focused(window) => app.move_in_list(Move::First, cx),
                     "end" if app.list_focused(window) => app.move_in_list(Move::Last, cx),
                     "down" if app.rail_focus.is_focused(window) => app.move_in_rail(1, cx),
