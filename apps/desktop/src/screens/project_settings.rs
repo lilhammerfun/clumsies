@@ -7,9 +7,12 @@
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::button::*;
 use gpui_kit::*;
 
+use crate::app::DesktopApp;
 use crate::engine::ProjectStorage;
+use crate::screens::dialogs::{ConfirmDialog, DialogAction};
 use crate::ui::{self, Typography};
 
 /// Everything the dialog shows. It is read before the dialog opens, because
@@ -17,6 +20,8 @@ use crate::ui::{self, Typography};
 /// is still loading flickers.
 pub struct ProjectSettings {
     pub project: String,
+    /// The Project the commands act on.
+    pub project_id: String,
     /// Where the Project's Memory is; the daemon's own sentence when it could
     /// not say.
     pub storage: Result<ProjectStorage, String>,
@@ -26,12 +31,14 @@ pub struct ProjectSettings {
 }
 
 pub struct ProjectSettingsDialog {
+    /// The entity the commands talk to.
+    app: WeakEntity<DesktopApp>,
     settings: ProjectSettings,
 }
 
 impl ProjectSettingsDialog {
-    pub fn new(settings: ProjectSettings) -> Self {
-        Self { settings }
+    pub fn new(app: WeakEntity<DesktopApp>, settings: ProjectSettings) -> Self {
+        Self { app, settings }
     }
 }
 
@@ -82,6 +89,78 @@ impl Render for ProjectSettingsDialog {
         rows.push(entry("Daemon", self.settings.daemon.clone(), _cx));
         if let Some(log_dir) = &self.settings.log_dir {
             rows.push(entry("Logs", log_dir.clone(), _cx));
+        }
+
+        // What can be done about it. The two that change where Memory lives ask
+        // first: they move files, and a dialog is the smallest place to say so.
+        if let Ok(storage) = &self.settings.storage {
+            let project_id = self.settings.project_id.clone();
+            let syncing = self.app.clone();
+            let resetting = self.app.clone();
+            let clearing = self.app.clone();
+            let sync_project = project_id.clone();
+            let reset_project = project_id.clone();
+            let clear_project = project_id.clone();
+            let revision = storage.location_revision;
+            rows.push(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .pt(px(ui::SPACE_SM))
+                    .child(
+                        Button::new("storage-sync").label("Sync now").on_click(
+                            move |_event, _window, cx| {
+                                syncing
+                                    .update(cx, |app, cx| {
+                                        app.run_dialog_action(
+                                            DialogAction::SyncNow {
+                                                project_id: sync_project.clone(),
+                                            },
+                                            cx,
+                                        )
+                                    })
+                                    .ok();
+                            },
+                        ),
+                    )
+                    .child(
+                        Button::new("storage-reset").label("Reset location…").on_click(
+                            move |_event, window, cx| {
+                                ConfirmDialog::open(
+                                    resetting.clone(),
+                                    "Reset to the standard location?",
+                                    "Clumsies will move this Project's Memory back to the standard location for this machine.".to_owned(),
+                                    "Reset",
+                                    DialogAction::ResetStorage {
+                                        project_id: reset_project.clone(),
+                                        revision,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            },
+                        ),
+                    )
+                    .child(
+                        Button::new("storage-clear").label("Clear cache…").on_click(
+                            move |_event, window, cx| {
+                                ConfirmDialog::open(
+                                    clearing.clone(),
+                                    "Clear this Project's cache?",
+                                    "Drafts and settings are preserved. Commit generations and the search index will be built again.".to_owned(),
+                                    "Clear cache",
+                                    DialogAction::ClearCache {
+                                        project_id: clear_project.clone(),
+                                        revision,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            },
+                        ),
+                    )
+                    .into_any_element(),
+            );
         }
 
         div().v_flex().w_full().gap_2().children(rows)

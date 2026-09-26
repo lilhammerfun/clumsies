@@ -14,6 +14,7 @@ use gpui_kit::component::{Icon, Root, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review, ReviewStatus};
+use crate::screens::dialogs::{ConfirmDialog, DialogAction, RenameDialog};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::{MemoryScreen, Move};
 use crate::screens::project_settings::{ProjectSettings, ProjectSettingsDialog};
@@ -113,6 +114,10 @@ impl DesktopApp {
         // The pane's tools are a region of the window (F6 walks it), so the
         // window owns the handle and the screen draws from it.
         app.memory.set_tools_focus(app.actions_focus.clone());
+        // Now that the handle is the one the pane tracks, the window gets a
+        // focus: without one it drops every key, and the menu builders and
+        // dialogs below never hear anything.
+        app.memory.focus_open_document(window, cx);
         app
     }
 
@@ -155,6 +160,7 @@ impl DesktopApp {
         };
         let settings = ProjectSettings {
             project: project.name.clone(),
+            project_id: project.project_id.clone(),
             storage: engine::project_storage(&project.project_id),
             server: health.map(|health| health.server_url.clone()),
             daemon: health
@@ -162,7 +168,8 @@ impl DesktopApp {
                 .unwrap_or_else(|| "not answering".to_owned()),
             log_dir: health.map(|health| health.log_dir.clone()),
         };
-        let view = cx.new(|_| ProjectSettingsDialog::new(settings));
+        let app = cx.entity().downgrade();
+        let view = cx.new(|_| ProjectSettingsDialog::new(app, settings));
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let view = view.clone();
             dialog
@@ -225,6 +232,145 @@ impl DesktopApp {
             .ok();
         })
         .detach();
+    }
+
+    /// Asks for a new name for a document. A dialog rather than a field inside
+    /// the row: a field that appears in a tree is a field the reader can lose.
+    pub fn open_rename_dialog(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = self.memory.edit_for_path(path) else {
+            return;
+        };
+        RenameDialog::open(cx.entity().downgrade(), path, edit, window, cx);
+    }
+
+    /// Confirms that a document should be proposed for deletion. The deletion is
+    /// a draft like any other, so this asks once and then lets the Review
+    /// decide.
+    pub fn open_delete_dialog(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = self.memory.edit_for_path(path) else {
+            return;
+        };
+        ConfirmDialog::open(
+            cx.entity().downgrade(),
+            "Delete File?",
+            format!(
+                "This proposes that {path} be deleted. The proposal is saved as a draft and takes effect for the Project after review and merge."
+            ),
+            "Delete",
+            DialogAction::DeleteDocument {
+                edit,
+                path: path.to_owned(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Writes a new path for a document as a draft operation.
+    pub fn rename_document(&mut self, edit: DocumentEdit, new_path: &str, cx: &mut Context<Self>) {
+        let path = new_path.to_owned();
+        let asked = new_path.to_owned();
+        let work = cx
+            .background_executor()
+            .spawn(async move { engine::rename_document(&edit, &asked) });
+        let reported = path.clone();
+        cx.spawn(async move |this, cx| {
+            let result = work.await.map(|_| ());
+            this.update(cx, |app, cx| {
+                app.document_changed("renamed to", &reported, result, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Runs what a confirmed dialog asked for.
+    pub fn run_dialog_action(&mut self, action: DialogAction, cx: &mut Context<Self>) {
+        match action {
+            DialogAction::DeleteDocument { edit, path } => {
+                let reported = path.clone();
+                let work = cx
+                    .background_executor()
+                    .spawn(async move { engine::delete_document(&edit).map(|_| ()) });
+                cx.spawn(async move |this, cx| {
+                    let result = work.await;
+                    this.update(cx, |app, cx| {
+                        app.document_changed("proposed for deletion:", &reported, result, cx)
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+            DialogAction::ResetStorage {
+                project_id,
+                revision,
+            } => {
+                self.storage_action(
+                    "reset the Memory location",
+                    move || engine::reset_project_storage(&project_id, revision),
+                    cx,
+                );
+            }
+            DialogAction::ClearCache {
+                project_id,
+                revision,
+            } => {
+                self.storage_action(
+                    "cleared the Project cache",
+                    move || engine::clear_project_cache(&project_id, revision),
+                    cx,
+                );
+            }
+            DialogAction::SyncNow { project_id } => {
+                self.storage_action(
+                    "asked the daemon to sync",
+                    move || engine::sync_now(&project_id),
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// One command about where the Project's Memory lives, and what it says when
+    /// it is done.
+    fn storage_action(
+        &mut self,
+        what: &'static str,
+        action: impl FnOnce() -> Result<(), String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let work = cx.background_executor().spawn(async move { action() });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| {
+                match result {
+                    Ok(()) => crate::logging::info(what),
+                    Err(error) => crate::logging::error(&format!("{what}: {error}")),
+                }
+                app.reload_memory(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// What a rename or a deletion produced: the Project is read again, because
+    /// both change what its Memory holds.
+    fn document_changed(
+        &mut self,
+        what: &str,
+        path: &str,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(()) => crate::logging::info(&format!("{path} {what}")),
+            Err(error) => crate::logging::error(&format!("could not change {path}: {error}")),
+        }
+        self.refresh_drafts(cx);
+        self.reload_memory(cx);
+        cx.notify();
     }
 
     /// Opens the Review sheet for the document in front, which is what the
@@ -1192,6 +1338,7 @@ impl Render for DesktopApp {
                         app.cycle_tab(step, window, cx)
                     }
                     "w" if event.keystroke.modifiers.control => app.close_active_tab(window, cx),
+
                     _ => {}
                 }
             }))

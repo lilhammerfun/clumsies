@@ -10,13 +10,14 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use clumsiesd::{
-    DaemonContentDraftUpdate, DaemonDiscardDraftOperation, DaemonDraftContent, DaemonDraftDetail,
-    DaemonDraftListQuery, DaemonDraftOperation, DaemonDraftOperationRequest,
-    DaemonDraftOperationResponse, DaemonDraftOperationSource, DaemonDraftResourceKind,
-    DaemonDraftScope, DaemonDraftSummary, DaemonHealth, DaemonIpcClient, DaemonIpcRequest,
-    DaemonLocalDraftStatus, DaemonProjectCheckoutRequest, DaemonProjectStorageAvailability,
-    DaemonProjectStorageRequest, DaemonProjectSyncRetryRequest, DaemonRetryResponse,
-    DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
+    DaemonContentDraftUpdate, DaemonDeleteDraftOperation, DaemonDiscardDraftOperation,
+    DaemonDraftContent, DaemonDraftDetail, DaemonDraftListQuery, DaemonDraftOperation,
+    DaemonDraftOperationRequest, DaemonDraftOperationResponse, DaemonDraftOperationSource,
+    DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary, DaemonHealth, DaemonIpcClient,
+    DaemonIpcRequest, DaemonLocalDraftStatus, DaemonProjectCacheClearRequest,
+    DaemonProjectCheckoutRequest, DaemonProjectStorageAvailability, DaemonProjectStorageRequest,
+    DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest, DaemonRenameDraftOperation,
+    DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
     DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
 use serde::Deserialize;
@@ -390,6 +391,9 @@ pub fn engine_status() -> EngineStatus {
 pub struct ProjectStorage {
     /// Where this Project's Memory is held.
     pub location: String,
+    /// Which revision of that location this is, which the commands that change
+    /// it have to name.
+    pub location_revision: i64,
     /// How much of it is there.
     pub used_bytes: u64,
     pub status: &'static str,
@@ -405,6 +409,7 @@ pub fn project_storage(project_id: &str) -> Result<ProjectStorage, String> {
         .map_err(|error| error.to_string())?;
     Ok(ProjectStorage {
         location: storage.selected_root_path,
+        location_revision: storage.location_revision,
         used_bytes: storage.size_bytes,
         status: match storage.availability {
             DaemonProjectStorageAvailability::Ready => "Ready",
@@ -517,6 +522,84 @@ pub struct DocumentEdit {
     pub draft_id: Option<String>,
     pub resource_id: String,
     pub content: String,
+}
+
+/// Proposes a new path for a document. A rename is a draft like any other, so
+/// it is reviewed and published the way an edit is.
+pub fn rename_document(
+    document: &DocumentEdit,
+    new_path: &str,
+) -> Result<DaemonDraftOperationResponse, String> {
+    draft_operation(&DaemonDraftOperationRequest {
+        draft_id: document.draft_id.clone(),
+        base_commit_id: document.base_commit_id.clone(),
+        project_id: document.project_id.clone(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op: DaemonDraftOperation {
+            create: None,
+            update: None,
+            rename: Some(DaemonRenameDraftOperation {
+                id: document.resource_id.clone(),
+                new_path: new_path.to_owned(),
+                description: None,
+            }),
+            delete: None,
+            discard: None,
+        },
+        source: Some(DaemonDraftOperationSource::Desktop),
+    })
+}
+
+/// Proposes that a document be deleted. The deletion takes effect when the
+/// Review carrying it is merged, which is what makes it safe to offer.
+pub fn delete_document(document: &DocumentEdit) -> Result<DaemonDraftOperationResponse, String> {
+    draft_operation(&DaemonDraftOperationRequest {
+        draft_id: document.draft_id.clone(),
+        base_commit_id: document.base_commit_id.clone(),
+        project_id: document.project_id.clone(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op: DaemonDraftOperation {
+            create: None,
+            update: None,
+            rename: None,
+            delete: Some(DaemonDeleteDraftOperation {
+                id: document.resource_id.clone(),
+                description: None,
+            }),
+            discard: None,
+        },
+        source: Some(DaemonDraftOperationSource::Desktop),
+    })
+}
+
+/// Moves this Project's Memory back to the standard location.
+pub fn reset_project_storage(project_id: &str, revision: i64) -> Result<(), String> {
+    client()
+        .reset_project_storage(DaemonProjectStorageResetRequest {
+            project_id: project_id.to_owned(),
+            expected_location_revision: revision,
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Builds again what the Project's cache holds. Drafts and settings stay.
+pub fn clear_project_cache(project_id: &str, revision: i64) -> Result<(), String> {
+    client()
+        .clear_project_cache(DaemonProjectCacheClearRequest {
+            project_id: project_id.to_owned(),
+            expected_location_revision: revision,
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Asks the daemon to sync this Project's drafts now instead of on its next
+/// tick, which is the one command about the engine's own work.
+pub fn sync_now(project_id: &str) -> Result<(), String> {
+    nudge_drafts(&client(), project_id)
 }
 
 /// Writes a document's new text as a draft operation.

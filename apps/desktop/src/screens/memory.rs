@@ -20,7 +20,7 @@ use gpui_kit::*;
 
 use crate::app::DesktopApp;
 use crate::components::memory_tree;
-use crate::engine::{Checkout, MemoryDocument};
+use crate::engine::{Checkout, DocumentEdit, MemoryDocument};
 use crate::screens::document::{DocumentPane, Mode, Notice, PANE_HEADER, PaneContext};
 use crate::ui::{self, Typography};
 
@@ -459,6 +459,28 @@ impl MemoryScreen {
         Some(MenuTarget {
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             can_review: draft.is_some_and(|draft| draft.status == DaemonLocalDraftStatus::Open),
+        })
+    }
+
+    /// What a rename or a deletion is made of: the document, the draft it joins
+    /// when it has one, and the base the daemon should record.
+    pub fn edit_for_path(&self, path: &str) -> Option<DocumentEdit> {
+        let document = self
+            .documents
+            .iter()
+            .find(|document| document.path == path)?;
+        let draft = self.draft_for(document);
+        Some(DocumentEdit {
+            project_id: self.project_id.clone().unwrap_or_default(),
+            base_commit_id: draft
+                .and_then(|draft| draft.base_commit_id.clone())
+                .or_else(|| self.commit_id.clone()),
+            draft_id: draft.map(|draft| draft.draft_id.clone()),
+            resource_id: document.resource_id.clone(),
+            content: document
+                .draft_content
+                .clone()
+                .unwrap_or_else(|| document.content.clone()),
         })
     }
 
@@ -908,6 +930,10 @@ impl MemoryScreen {
     /// document opens to be read, and the editor exists only while it is being
     /// edited, so the pane's tools take the keyboard in every other mode — a
     /// window with nothing focused is a window that drops every key.
+    pub fn focus_open_document(&self, window: &mut Window, cx: &mut App) {
+        self.focus_active_editor(window, cx);
+    }
+
     fn focus_active_editor(&self, window: &mut Window, cx: &mut App) {
         match self.active_pane() {
             Some(pane) if pane.mode() == Mode::Edit => pane.focus_editor(window, cx),
@@ -948,6 +974,28 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
             PopupMenuItem::new("Edit").on_click(move |_event, window, cx| {
                 editing.update(cx, |app, cx| {
                     app.open_document(&editing_path, Mode::Edit, window, cx)
+                });
+            }),
+        );
+    // The generic file commands, which any tree offers, then Memory's own: macOS
+    // splits its own row menu the same way, and the two sections do not mix.
+    let renaming = this.clone();
+    let deleting = this.clone();
+    let rename_path = path.to_owned();
+    let delete_path = path.to_owned();
+    menu = menu
+        .separator()
+        .item(
+            PopupMenuItem::new("Rename…").on_click(move |_event, window, cx| {
+                renaming.update(cx, |app, cx| {
+                    app.open_rename_dialog(&rename_path, window, cx)
+                });
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Delete…").on_click(move |_event, window, cx| {
+                deleting.update(cx, |app, cx| {
+                    app.open_delete_dialog(&delete_path, window, cx)
                 });
             }),
         );

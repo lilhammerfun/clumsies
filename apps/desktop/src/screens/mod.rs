@@ -1,3 +1,4 @@
+pub mod dialogs;
 pub mod document;
 pub mod memory;
 pub mod project_settings;
