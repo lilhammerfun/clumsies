@@ -8,6 +8,8 @@
 //! belongs to. Where this client differs, the difference is stated where it
 //! happens rather than left for a reader to find.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use clumsiesd::DaemonDraftSummary;
@@ -20,7 +22,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
-use crate::components::{diff, markdown};
+use crate::components::{diff, fill, markdown};
 use crate::engine::{self, DocumentEdit, MemoryDocument};
 use crate::ui::{self, Typography};
 
@@ -102,6 +104,10 @@ pub struct DocumentPane {
     /// The debounced store this pane's text belongs to, so that a store which
     /// lands after a later keystroke is not reported as the current state.
     generation: u64,
+    /// How tall the editor's box turned out, which is what the editor is told:
+    /// it cannot ask for a percentage inside a column sized by flex, so the
+    /// pane measures the box and hands the number back. See `components::fill`.
+    editor_height: Rc<Cell<Pixels>>,
     /// The open draft carrying this document's edits, when it has one.
     draft: Option<DaemonDraftSummary>,
     notice: Option<Notice>,
@@ -114,7 +120,12 @@ pub struct DocumentPane {
 impl DocumentPane {
     pub fn new(window: &mut Window, cx: &mut Context<DesktopApp>) -> Self {
         let editor = cx.new(|cx| {
-            TextareaState::new(window, cx).placeholder("Write what this Project should remember.")
+            TextareaState::new(window, cx)
+                .placeholder("Write what this Project should remember.")
+                // A document wraps. The component wraps by default, and this
+                // says so where the editor is made: a horizontal scrollbar in
+                // the middle of prose is how a reader loses their place.
+                .soft_wrap(true)
         });
         let review_title =
             cx.new(|cx| InputState::new(window, cx).placeholder("What this change does"));
@@ -135,6 +146,7 @@ impl DocumentPane {
             saved_text: String::new(),
             save: SaveState::Clean,
             generation: 0,
+            editor_height: Rc::new(Cell::new(px(0.))),
             draft: None,
             notice: None,
             review_title,
@@ -279,11 +291,24 @@ impl DocumentPane {
         let text = self.text(cx);
 
         let body: AnyElement = match self.mode {
-            Mode::Source => div()
-                .flex_1()
-                .min_h(px(0.))
-                .child(Textarea::new(&self.editor).h(relative(1.)))
-                .into_any_element(),
+            // The pane is the surface, so the field draws no box of its own:
+            // the document is the whole of what a reader sees here. Its height
+            // is the box the pane measured, because the editor's own element
+            // asks for a percentage, which nothing in a flex column resolves.
+            Mode::Source => {
+                let height = self.editor_height.clone();
+                let this = cx.entity().downgrade();
+                let editor = Textarea::new(&self.editor)
+                    .appearance(false)
+                    .bordered(false)
+                    .h(height.get().max(px(1.)));
+                fill::Fill::new(height)
+                    .on_measure(move |cx| {
+                        this.update(cx, |_app, cx| cx.notify()).ok();
+                    })
+                    .child(editor)
+                    .into_any_element()
+            }
             Mode::Preview => div()
                 .flex_1()
                 .min_h(px(0.))
@@ -320,7 +345,10 @@ impl DocumentPane {
             .min_h(px(0.))
             .child(self.header(actions, cx))
             .child(ui::rule(cx))
-            .child(div().flex_1().min_h(px(0.)).p_4().child(body))
+            // The body is a flex column of its own: a percentage or a flex
+            // share only reaches a control whose parent lays out as flex, and
+            // the editor needs one of the two.
+            .child(div().v_flex().flex_1().min_h(px(0.)).p_4().child(body))
             .into_any_element()
     }
 
