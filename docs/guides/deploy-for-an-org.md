@@ -298,7 +298,7 @@ deploy/site.sh my-host  # or pass an explicit ssh target
 
 The script builds the VitePress site, syncs both static roots with `rsync`,
 updates `deploy/Caddyfile` and `compose.production.yml` on the target, and
-recreates the Caddy container to pick up new mounts. DNS for
+reloads Caddy so the synced configuration takes effect. DNS for
 `docs.clumsies.ai` and `clumsies.ai` must point at the server; Caddy provisions
 TLS certificates automatically.
 
