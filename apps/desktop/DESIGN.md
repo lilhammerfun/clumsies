@@ -305,7 +305,6 @@ exist yet is not a deviation.
 
 | Gap | Where | Why, and what fixes it |
 | --- | --- | --- |
-| Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
 | A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
 | A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |

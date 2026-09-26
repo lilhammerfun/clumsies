@@ -327,7 +327,7 @@ impl DocumentPane {
 
     /// The work itself, under the toolbar: the document, read the way the pane
     /// is set to read it.
-    pub fn body(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+    pub fn body(&self, window: &Window, cx: &mut Context<DesktopApp>) -> AnyElement {
         let text = self.text(cx);
 
         let body: AnyElement = match self.mode {
@@ -372,6 +372,7 @@ impl DocumentPane {
                             rows,
                             cx.theme().mono_font_family.clone(),
                             diff::DiffPalette::from_theme(cx.theme()),
+                            window,
                         ))
                         .into_any_element()
                 }

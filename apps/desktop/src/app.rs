@@ -1599,10 +1599,15 @@ impl DesktopApp {
 
     /// Its detail: the work itself. The actions the open screen offers are drawn
     /// in the detail pane's own header, beside what they act on.
-    fn section_detail(&self, actions: Option<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
+    fn section_detail(
+        &self,
+        actions: Option<AnyElement>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.detail(&self.actions_focus, cx),
-            Section::Reviews => self.reviews.detail(actions, cx),
+            Section::Memory => self.memory.detail(&self.actions_focus, window, cx),
+            Section::Reviews => self.reviews.detail(actions, window, cx),
             other => placeholder(other.detail_note(), cx),
         }
     }
@@ -1702,7 +1707,7 @@ impl Render for DesktopApp {
         let picker = self.shell.project_picker(&chrome, cx);
         let slots = Slots {
             list: self.section_list(picker, window, cx),
-            detail: self.section_detail(actions, cx),
+            detail: self.section_detail(actions, window, cx),
         };
         let shell = self.shell.render(window, cx, chrome, slots);
         // The window's own keys, handled above everything else: F6 moves between

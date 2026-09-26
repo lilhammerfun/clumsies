@@ -521,7 +521,12 @@ impl ReviewsScreen {
     }
 
     /// The section's detail: the open Review, or what stands in its place.
-    pub fn detail(&self, actions: Option<AnyElement>, cx: &mut Context<DesktopApp>) -> AnyElement {
+    pub fn detail(
+        &self,
+        actions: Option<AnyElement>,
+        window: &Window,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
         let Some(detail) = &self.detail else {
             let reason = if let Some(error) = &self.detail_error {
                 ui::message(error.clone(), cx.theme().danger)
@@ -649,7 +654,7 @@ impl ReviewsScreen {
                             .flex_1()
                             .min_w(px(0.))
                             .min_h(px(0.))
-                            .child(self.content(cx)),
+                            .child(self.content(window, cx)),
                     ),
             )
             .into_any_element()
@@ -741,7 +746,7 @@ impl ReviewsScreen {
 
     /// The text of the document being read: the proposal against what the
     /// Project publishes today.
-    fn content(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+    fn content(&self, window: &Window, cx: &mut Context<DesktopApp>) -> AnyElement {
         let Some(detail) = &self.detail else {
             return div().into_any_element();
         };
@@ -770,6 +775,7 @@ impl ReviewsScreen {
                 rows,
                 cx.theme().mono_font_family.clone(),
                 diff::DiffPalette::from_theme(cx.theme()),
+                window,
             ))
             .into_any_element()
     }
