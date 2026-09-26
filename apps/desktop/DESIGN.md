@@ -165,17 +165,15 @@ dialog, and Escape must dismiss it without doing the destructive thing.
 5. **Write the keyboard path.** Anything reachable by mouse is reachable by
    keyboard, and the shortcut appears next to the command that has one.
 
-## What the first pass violates
+## Known gaps
 
-The prototype predates this document. Its known deviations, to fix as screens
-are rebuilt:
+Places where the client does not yet meet the rules above, with the reason and
+the fix. Anything that is merely unbuilt is not listed: a screen that does not
+exist yet is not a deviation.
 
-| Deviation | Where | Fix |
+| Gap | Where | Why, and what fixes it |
 | --- | --- | --- |
-| Selected row painted with `rgb(0x2f3542)` | project list, tree tabs | `theme().list_active` / `list_hover` |
-| Diff colors as literals | `components/diff.rs` | success / danger tokens, so dark mode works |
-| Ad-hoc padding and gaps | every screen | `ui::` spacing steps |
-| Ad-hoc text sizes | every screen | the type ramp |
-| A development input probe in product UI | projects column | move behind a debug flag |
-| Single click both selects and expands a tree folder | memory tree | chevron toggles, row selects — but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row |
-| No dark mode, no keyboard path, no empty states | all | part of each screen's rebuild |
+| The Request review button has no keyboard path | document pane | The component library's button activates on click only, and a multi-line editor consumes Tab, so nothing moves focus to it. Fix: a focusable wrapper that activates on Enter and Space, and a key that leaves the editor, which the library does not bind today. Rule 5 is violated here and only here. |
+| Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
+| Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
+| A development input probe in product UI | projects column | It is behind `cfg!(debug_assertions)`, so it ships in no release build. Remove it when the input method has a test. |
