@@ -1256,18 +1256,25 @@ impl DesktopApp {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
-        let (checkout, checkout_error) = match projects.first() {
+        // The Project the reader was in last time, when it is still there:
+        // macOS reopens the workspace it left rather than the first Project in
+        // the list.
+        let remembered = self.memory.remembered_project().map(str::to_owned);
+        let selected = projects
+            .iter()
+            .position(|project| Some(project.project_id.as_str()) == remembered.as_deref())
+            .or((!projects.is_empty()).then_some(0));
+        let project = selected.and_then(|index| projects.get(index));
+        let (checkout, checkout_error) = match project {
             Some(project) => read_checkout(&project.project_id),
             None => (None, None),
         };
-        self.selected_project = (!projects.is_empty()).then_some(0);
+        self.selected_project = selected;
         if let Some(checkout) = &checkout {
             self.reviews.set_published(checkout);
         }
-        self.reviews.set_project(
-            projects.first().map(|project| project.project_id.clone()),
-            cx,
-        );
+        self.reviews
+            .set_project(project.map(|project| project.project_id.clone()), cx);
         self.projects = projects;
         self.projects_error = projects_error;
         self.memory.set_checkout(checkout, checkout_error, cx);

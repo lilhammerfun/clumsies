@@ -243,6 +243,14 @@ after it even when the tab it was typed in is gone, and a window that closes
 flushes every pane whose store was still waiting. There is no question to ask,
 and no pause to lose.
 
+**The window reopens where it was left.** The Project the reader was in, the
+documents they had open and the one in front are remembered in a state file under
+the state directory — state rather than configuration, and not the daemon's
+business, because a Project's Memory belongs to the daemon while a window's tabs
+belong to the window. macOS restores the same three from its workspace model. A
+document the Project no longer holds is left out of the restore, and anything
+unreadable in that file is simply no memory at all.
+
 The window's arrows walk the reader's history, which is macOS's
 `navigationBackStack` and `navigationForwardStack`: opening or picking a tab
 pushes where the reader came from and empties the forward stack, closing a tab
@@ -308,4 +316,3 @@ exist yet is not a deviation.
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
 | A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
 | A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |
-| Tabs are not restored between runs | document strip | macOS keeps its tabs in the workspace model, which this client does not have yet. Fix: remember the open documents with the selected Project. |

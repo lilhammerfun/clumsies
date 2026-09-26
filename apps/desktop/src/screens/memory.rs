@@ -117,6 +117,12 @@ pub struct MemoryScreen {
     /// and a new tab's editor needs one. The request carries to the next frame,
     /// which has a window.
     pending_open: Option<String>,
+    /// The documents the last run had open, and whether this one has put them
+    /// back yet. macOS restores the same thing from its workspace model.
+    remembered: crate::state::WindowState,
+    restored: bool,
+    /// A restore that has been asked for and is waiting for a window.
+    pending_restore: Option<crate::state::WindowState>,
     /// A document the reader asked for by path, with the mode to open it in.
     ///
     /// A file a dialog has just proposed is a row only once the Project has
@@ -241,6 +247,9 @@ impl MemoryScreen {
             back: Vec::new(),
             forward: Vec::new(),
             pending_open: None,
+            remembered: crate::state::load(),
+            restored: false,
+            pending_restore: None,
             pending_path: None,
             pending_mode: None,
             query: String::new(),
@@ -294,12 +303,30 @@ impl MemoryScreen {
         self.drafts.clear();
         self.prune();
         if another_project {
-            self.pending_open = self
-                .documents
-                .first()
-                .map(|document| document.resource_id.clone());
+            // What the reader had open in this Project last time, or the first
+            // document of a Project they have not opened before. macOS restores
+            // its workspace the same way; a Project with nothing remembered has
+            // nothing else to show.
+            let remembered = self.remembered.clone();
+            if !self.restored
+                && remembered.project_id == self.project_id
+                && !remembered.open.is_empty()
+            {
+                self.restored = true;
+                self.pending_restore = Some(remembered);
+            } else {
+                self.pending_open = self
+                    .documents
+                    .first()
+                    .map(|document| document.resource_id.clone());
+            }
         }
         self.publish(cx);
+        if another_project {
+            // The Project a reader is in is part of what the next run reopens,
+            // even before they open a document in it.
+            self.remember(cx);
+        }
     }
 
     /// Closes the tabs whose document the checkout no longer holds. A checkout
@@ -467,6 +494,9 @@ impl MemoryScreen {
         // A menu built inside the tree talks to the application, so the screen
         // leaves itself where that builder can find it.
         TREE_APP.with(|slot| *slot.borrow_mut() = Some(cx.entity().downgrade()));
+        // What the last run had open goes back before anything else, so the tab
+        // in front is the one the reader left.
+        self.restore(window, cx);
         // A request that names a path becomes a request for the document that
         // path is, once the read that carries it has happened.
         if let Some((path, mode)) = self.pending_path.clone()
@@ -506,6 +536,79 @@ impl MemoryScreen {
         let typing = self.keyboard_in_editor(window, cx) || mode == Some(Mode::Edit);
         self.activate(index, cx);
         self.follow_editor_focus(typing, window, cx);
+    }
+
+    /// Puts back the documents the last run had open, in the order it had them,
+    /// with the same one in front. A path the Project no longer holds is left
+    /// out: a tab is a document, and a document that is gone has no tab.
+    fn restore(&mut self, window: &mut Window, cx: &mut Context<DesktopApp>) {
+        let Some(state) = self.pending_restore.take() else {
+            return;
+        };
+        let mut last = None;
+        for path in &state.open {
+            let Some(document) = self
+                .documents
+                .iter()
+                .find(|document| &document.path == path)
+                .cloned()
+            else {
+                continue;
+            };
+            if self.tab_index(&document.resource_id).is_some() {
+                continue;
+            }
+            let mut pane = DocumentPane::new(window, cx);
+            pane.load(&document, window, cx);
+            self.open.push(OpenDocument {
+                resource_id: document.resource_id.clone(),
+                pane,
+            });
+            last = Some(self.open.len() - 1);
+        }
+        let index = state
+            .active
+            .as_deref()
+            .and_then(|path| self.documents.iter().find(|document| document.path == path))
+            .and_then(|document| self.tab_index(&document.resource_id))
+            .or(last);
+        if let Some(index) = index {
+            self.set_active(Some(index), cx);
+        }
+        if !self.open.is_empty() {
+            crate::logging::info(&format!("reopened {} documents", self.open.len()));
+            self.focus_active_editor(window, cx);
+        }
+    }
+
+    /// Writes what this window has open, so the next run can put it back. The
+    /// write is small and goes to the background: a reader who opens a tab does
+    /// not wait for a disk.
+    fn remember(&self, cx: &mut Context<DesktopApp>) {
+        let path_of = |resource_id: &str| {
+            self.document_for_resource(resource_id)
+                .map(|document| document.path.clone())
+        };
+        let state = crate::state::WindowState {
+            project_id: self.project_id.clone(),
+            open: self
+                .open
+                .iter()
+                .filter_map(|tab| path_of(&tab.resource_id))
+                .collect(),
+            active: self
+                .active
+                .and_then(|index| self.open.get(index))
+                .and_then(|tab| path_of(&tab.resource_id)),
+        };
+        cx.background_executor()
+            .spawn(async move { crate::state::save(&state) })
+            .detach();
+    }
+
+    /// The Project the last run was in, when the window remembers one.
+    pub fn remembered_project(&self) -> Option<&str> {
+        self.remembered.project_id.as_deref()
     }
 
     /// Opens a document the Project may not have been read with yet: a file a
@@ -577,6 +680,7 @@ impl MemoryScreen {
         self.active = active_id.as_deref().and_then(|id| self.tab_index(id));
         self.sync_draft();
         self.select_in_tree(cx);
+        self.remember(cx);
         cx.notify();
     }
 
@@ -1336,6 +1440,8 @@ impl MemoryScreen {
         self.active = index;
         self.sync_draft();
         self.select_in_tree(cx);
+        // What is open is what the next run puts back.
+        self.remember(cx);
         cx.notify();
     }
 
