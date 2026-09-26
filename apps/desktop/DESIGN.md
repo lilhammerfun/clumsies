@@ -162,7 +162,7 @@ detail. This client draws, from the top:
 | Title bar | The window's, not a screen's: the page navigation at the left and the window controls at the right, and nothing else. |
 | Rail | The six destinations of the macOS sidebar, **icons only**, each named in a tooltip. Memory is the brain, as it is in macOS. |
 | List column | The open section's list, under a header row that names it and carries its filter — the Project picker here, which macOS calls MemoryProjectFilter and keeps in the same place. |
-| Detail | The work, under a header row of its own: what is open, how to look at it, and the section's actions at the end of that row, which is where macOS keeps its section menus. |
+| Detail | The work, in two rows: the strip of open documents, then a header row with how the document in front is read and the section's actions at the end of it, which is where macOS keeps its section menus. |
 
 **Every pane carries its own header row.** A pane header — WinUI calls the
 control a command bar, VS Code a view header — holds the commands and the facts
@@ -172,6 +172,21 @@ reader looking at the tree or at the text finds the commands for it directly
 above what they are looking at. macOS keeps the document's name and its view
 switch in the window toolbar instead; that is the one place this client
 deliberately differs, for the reason above.
+
+**Documents are tabs.** Memory's detail opens one tab per document — macOS's
+`DocumentTabStrip`, which macOS draws at the top of its main pane in the same
+place — and each tab holds the whole session: its own text, its view mode, its
+draft, and what the engine has done with it. A tab the reader has left keeps its
+text, so switching between two documents never loses an edit. The tab in front
+is the one the tree marks, the header commands act on, and a keystroke is stored
+against; an editor reports each keystroke itself, so a store follows the tab it
+was typed in rather than whichever tab is in front by the time the pause ends.
+
+The window's arrows walk the reader's history, which is macOS's
+`navigationBackStack` and `navigationForwardStack`: opening or picking a tab
+pushes where the reader came from and empties the forward stack, closing a tab
+drops it from both, and an arrow with nowhere to go is drawn disabled. The two
+stacks hold tabs, so the arrows only ever move between documents that are open.
 
 A screen owns its list and its detail and nothing else about the layout. A
 section with no screen yet says so in both slots, and names the macOS view it
@@ -185,11 +200,15 @@ Three rules belong to the shell so that no screen repeats them:
   library skips them under server-side decorations; some compositors answer that
   request with "server" and then draw only a border, Hyprland among them, so the
   application draws minimize, maximize and close itself in that case.
-- **The keyboard reaches a pane's actions.** F6 moves focus from wherever it is
-  to the actions in the detail pane's header, and Shift+F6 moves it back; Enter
-  or Space runs the focused action. F6 is the Windows key for moving between a
-  window's regions, and it is the only way to reach the actions at all, because a
-  document editor consumes Tab.
+- **The keyboard reaches every region.** F6 moves the keyboard to the next
+  region of Memory's window — the list, the work, the actions over it — and
+  Shift+F6 to the previous one; the focused region shows a ring. Enter or Space
+  runs the focused action. F6 is the Windows key for moving between a window's
+  regions, and it is the only way into the list and the actions at all, because a
+  document editor consumes Tab. Inside the list the arrow keys move the
+  selection, which is what opens a document; the document keys are this
+  platform's — Alt+Left and Alt+Right for the history, Ctrl+Tab to cycle the open
+  documents, Ctrl+W to close the one in front.
 
 The theme follows the system's light or dark preference, and keeps following it:
 `Theme::sync_system_appearance` is called when the window opens and on every appearance
@@ -221,4 +240,6 @@ exist yet is not a deviation.
 | --- | --- | --- |
 | Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
-| Only one document can be open | detail pane | macOS keeps a tab strip of open documents with back and forward through the reader's history; this client shows the one document the tree has selected, and the band's navigation arrows are drawn disabled. Fix: a document list in the screen, and the arrows walking it. |
+| A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
+| Closing a tab discards unsaved text without asking | document strip | macOS asks before closing a tab whose text the Server has not accepted. This client stores after a 600ms pause and closes straight away, which loses at most that pause. Fix: a confirmation when the pane is dirty. |
+| Tabs are not restored between runs | document strip | macOS keeps its tabs in the workspace model, which this client does not have yet. Fix: remember the open documents with the selected Project. |

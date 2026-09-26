@@ -15,10 +15,20 @@ use gpui_kit::*;
 
 use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
-use crate::screens::memory::MemoryScreen;
+use crate::screens::memory::{MemoryScreen, Move};
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
 use crate::shell::{Chrome, EngineFacts, Section, Shell, Slots};
 use crate::ui::{self, Typography};
+
+/// Which region of the window the keyboard is in. F6 walks these in this
+/// order, which is the order the platform's Tab would visit them in if a
+/// document editor did not consume Tab.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Region {
+    List,
+    Detail,
+    Actions,
+}
 
 pub struct DesktopApp {
     /// The engine is asked when the window opens and again when its status line
@@ -30,7 +40,7 @@ pub struct DesktopApp {
     selected_project: Option<usize>,
     memory: MemoryScreen,
     shell: Shell,
-    /// The context bar's actions take focus here. F6 is the Windows key for
+    /// The pane header's actions take focus here. F6 is the Windows key for
     /// moving between a window's regions, and it is the only way out of an
     /// editor that consumes Tab.
     actions_focus: FocusHandle,
@@ -81,7 +91,7 @@ impl DesktopApp {
             _appearance: appearance,
         };
         // A Project that already holds a proposal must show it on the first
-        // frame: the tree marks it and the context bar offers to review it.
+        // frame: the tree marks it and the pane header offers to review it.
         app.refresh_drafts(cx);
         app
     }
@@ -109,7 +119,7 @@ impl DesktopApp {
         cx.notify();
     }
 
-    /// A Project was picked from the context bar's panel.
+    /// A Project was picked from the list header's panel.
     pub fn choose_project(&mut self, index: usize, cx: &mut Context<Self>) {
         self.shell.close_projects();
         self.select_project(index, cx);
@@ -127,7 +137,43 @@ impl DesktopApp {
         cx.notify();
     }
 
-    /// Puts focus on the window's actions, which is what F6 is for.
+    /// Moves the keyboard to the next region, which is what F6 is for on this
+    /// platform. The order is the one a reader walks the window in: the list,
+    /// the work, and the actions over it.
+    pub fn cycle_focus(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        const REGIONS: [Region; 3] = [Region::List, Region::Detail, Region::Actions];
+        let current = if self.shell.section() == Section::Memory && self.memory.list_focused(window)
+        {
+            Region::List
+        } else if self.actions_focus.is_focused(window) {
+            Region::Actions
+        } else {
+            Region::Detail
+        };
+        let index = REGIONS
+            .iter()
+            .position(|region| *region == current)
+            .unwrap_or(Region::Detail as usize);
+        let next = REGIONS[(index as isize + step).rem_euclid(REGIONS.len() as isize) as usize];
+        match next {
+            Region::List => self.memory.focus_list(window, cx),
+            Region::Detail => self.focus_content(window, cx),
+            Region::Actions => self.focus_actions(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// Moves the file tree's selection, which is what the arrow keys do in a
+    /// list. The keys are handled here rather than on the tree because the tree
+    /// component gives a click its own focus handle; this one is what F6 gives
+    /// the keyboard to, and both arrive at the same selection.
+    pub fn move_in_list(&mut self, movement: Move, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.move_selection(movement, cx);
+        }
+    }
+
+    /// Puts focus on the window's actions, which is where F6 ends up.
     pub fn focus_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.actions_focus, cx);
         cx.notify();
@@ -135,14 +181,60 @@ impl DesktopApp {
 
     /// Gives the caret back to the open document, which is what Shift+F6 does.
     pub fn focus_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shell.section() == Section::Memory {
-            self.memory.pane().focus_editor(window, cx);
+        if self.shell.section() == Section::Memory
+            && let Some(pane) = self.memory.active_pane()
+        {
+            pane.focus_editor(window, cx);
             cx.notify();
         }
     }
 
+    /// A tab was picked from the strip of open documents.
+    pub fn select_tab(&mut self, resource_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.select_tab(resource_id, window, cx);
+        }
+    }
+
+    /// A tab's close button, or Ctrl+W on the tab in front. macOS closes the
+    /// active tab with Command-W, so the same act takes this platform's
+    /// Command key.
+    pub fn close_tab(&mut self, resource_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.close_tab(resource_id, window, cx);
+        }
+    }
+
+    pub fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.close_active_tab(window, cx);
+        }
+    }
+
+    /// Ctrl+Tab walks the open documents, which is this platform's key for it.
+    pub fn cycle_tab(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.cycle_tab(step, window, cx);
+        }
+    }
+
+    /// The band's back arrow, and Alt+Left with it: the document the reader
+    /// came from. macOS walks the same stacks with the arrow beside its
+    /// document's name.
+    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.go_back(window, cx);
+        }
+    }
+
+    pub fn go_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shell.section() == Section::Memory {
+            self.memory.go_forward(window, cx);
+        }
+    }
+
     /// The window's primary action: ask for a Review of the open document. The
-    /// context bar's button and Enter, once the actions have focus, both land
+    /// pane header's button and Enter, once the actions have focus, both land
     /// here, so the mouse and the keyboard cannot drift apart.
     pub fn run_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_run_primary_action() {
@@ -151,12 +243,15 @@ impl DesktopApp {
         let Some(target) = self.memory.render_target() else {
             return;
         };
-        let (edit, store) = self.memory.pane().review_edit(&target, cx);
+        let Some(pane) = self.memory.active_pane() else {
+            return;
+        };
+        let (edit, store) = pane.review_edit(&target, cx);
         document::open_review_sheet(
             edit,
             store,
-            self.memory.pane().review_title(),
-            self.memory.pane().review_description(),
+            pane.review_title(),
+            pane.review_description(),
             cx.entity().downgrade(),
             window,
             cx,
@@ -164,7 +259,7 @@ impl DesktopApp {
     }
 
     fn can_run_primary_action(&self) -> bool {
-        self.shell.section() == Section::Memory && self.memory.pane().can_review()
+        self.shell.section() == Section::Memory && self.memory.can_review()
     }
 
     /// A keystroke landed in the editor. The store waits for a pause in typing,
@@ -174,11 +269,17 @@ impl DesktopApp {
     /// The edit is captured now rather than when the pause ends, because by then
     /// the reader may have opened another document or another Project, and this
     /// text belongs to the one it was typed in.
-    pub fn document_edited(&mut self, cx: &mut Context<Self>) {
-        self.memory.pane_mut().set_save_state(SaveState::Pending);
+    pub fn document_edited(&mut self, editor: EntityId, cx: &mut Context<Self>) {
+        let Some(resource_id) = self.memory.resource_for_editor(editor) else {
+            return;
+        };
         self.save_generation += 1;
         let generation = self.save_generation;
-        let Some(edit) = self.document_edit(cx) else {
+        if let Some(pane) = self.memory.pane_for_resource_mut(&resource_id) {
+            pane.set_save_state(SaveState::Pending);
+            pane.set_generation(generation);
+        }
+        let Some(edit) = self.document_edit(&resource_id, cx) else {
             return;
         };
         let pause = cx.background_executor().timer(SAVE_DELAY);
@@ -195,15 +296,17 @@ impl DesktopApp {
     /// operation and uploads it, so this returns before the Server has it; the
     /// Review request is what waits for the upload.
     fn save_document(&mut self, generation: u64, edit: DocumentEdit, cx: &mut Context<Self>) {
-        if generation != self.save_generation {
+        // A later keystroke in the same document has already asked for a newer
+        // store, and that one carries the newer text. A document whose tab has
+        // closed has no pane to ask, and its last edit still belongs to the
+        // engine, so it goes.
+        if let Some(pane) = self.memory.pane_for_resource(&edit.resource_id)
+            && pane.generation() != generation
+        {
             return;
         }
-        let opens_the_written_document = self
-            .memory
-            .selected_document()
-            .is_some_and(|document| document.resource_id == edit.resource_id);
-        if opens_the_written_document {
-            self.memory.pane_mut().set_save_state(SaveState::Saving);
+        if let Some(pane) = self.memory.pane_for_resource_mut(&edit.resource_id) {
+            pane.set_save_state(SaveState::Saving);
             cx.notify();
         }
         let content = edit.content.clone();
@@ -253,24 +356,17 @@ impl DesktopApp {
             self.refresh_drafts(cx);
             self.follow_upload(draft_id, cx);
         }
-        // The rest is the pane's, and a store may finish after the reader has
-        // opened another document. The engine has the text either way; the pane
-        // only speaks for what it is showing.
-        if !self
-            .memory
-            .selected_document()
-            .is_some_and(|document| document.resource_id == resource_id)
-        {
+        // The rest is the document's own pane, and a store may finish after the
+        // reader has left it or closed it. The engine has the text either way;
+        // a pane reports only what it is showing.
+        let Some(pane) = self.memory.pane_for_resource_mut(resource_id) else {
             return;
-        }
-        self.memory.pane_mut().accept_text(content.to_owned());
-        if generation == self.save_generation {
+        };
+        pane.accept_text(content.to_owned());
+        if pane.generation() == generation {
             match result {
-                Ok(_) => self.memory.pane_mut().set_save_state(SaveState::Saved),
-                Err(error) => self
-                    .memory
-                    .pane_mut()
-                    .set_save_state(SaveState::Failed(error)),
+                Ok(_) => pane.set_save_state(SaveState::Saved),
+                Err(error) => pane.set_save_state(SaveState::Failed(error)),
             }
         }
         cx.notify();
@@ -295,7 +391,9 @@ impl DesktopApp {
     }
 
     pub fn set_document_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
-        self.memory.pane_mut().set_mode(mode);
+        if let Some(pane) = self.memory.active_pane_mut() {
+            pane.set_mode(mode);
+        }
         cx.notify();
     }
 
@@ -321,10 +419,11 @@ impl DesktopApp {
 
     /// The edit the pane would store: its text, the document it belongs to, and
     /// the draft that already carries it when there is one.
-    fn document_edit(&self, cx: &App) -> Option<DocumentEdit> {
+    fn document_edit(&self, resource_id: &str, cx: &App) -> Option<DocumentEdit> {
         let project = self.projects.get(self.selected_project?)?;
-        let document = self.memory.selected_document()?;
-        let draft = self.memory.selected_draft();
+        let document = self.memory.document_for_resource(resource_id)?;
+        let draft = self.memory.draft_for_resource(resource_id);
+        let pane = self.memory.pane_for_resource(resource_id)?;
         Some(DocumentEdit {
             project_id: project.project_id.clone(),
             base_commit_id: draft
@@ -332,7 +431,7 @@ impl DesktopApp {
                 .or_else(|| self.memory.commit_id().map(str::to_owned)),
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             resource_id: document.resource_id.clone(),
-            content: self.memory.pane().text(cx),
+            content: pane.text(cx),
         })
     }
 
@@ -459,9 +558,14 @@ impl DesktopApp {
 
     /// The open section's list column. A section that has no screen yet says so
     /// rather than drawing an empty column with no explanation.
-    fn section_list(&self, picker: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+    fn section_list(
+        &self,
+        picker: AnyElement,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.list(picker, cx),
+            Section::Memory => self.memory.list(picker, window, cx),
             other => placeholder(other.list_note(), cx),
         }
     }
@@ -492,6 +596,10 @@ impl DesktopApp {
                 EngineStatus::Connected(health) => Some(health.server_url.as_str()),
                 EngineStatus::Unreachable(_) => None,
             },
+            // Only Memory keeps a history so far; the arrows stay drawn but
+            // disabled in a section that has nowhere to go.
+            can_go_back: self.shell.section() == Section::Memory && self.memory.can_go_back(),
+            can_go_forward: self.shell.section() == Section::Memory && self.memory.can_go_forward(),
             width: px(0.),
         }
     }
@@ -544,7 +652,7 @@ impl Render for DesktopApp {
         // A tree click arrives as a notification, which carries no window, so
         // the editor takes its new text at the top of a frame, before the pane
         // draws with it.
-        self.memory.apply_pending_load(window, cx);
+        self.memory.apply_pending_open(window, cx);
 
         let width = window.viewport_size().width;
         let actions = self.actions(window, cx);
@@ -552,7 +660,7 @@ impl Render for DesktopApp {
         chrome.width = width;
         let picker = self.shell.project_picker(&chrome, cx);
         let slots = Slots {
-            list: self.section_list(picker, cx),
+            list: self.section_list(picker, window, cx),
             detail: self.section_detail(actions, cx),
         };
         let shell = self.shell.render(window, cx, chrome, slots);
@@ -561,6 +669,11 @@ impl Render for DesktopApp {
         // what an editor would otherwise swallow along with Tab; Enter or Space
         // then runs whatever the focused region offers.
         //
+        // The document keys are this platform's: Alt+Left and Alt+Right walk the
+        // history the way a browser does, Ctrl+Tab cycles the open documents,
+        // and Ctrl+W closes the one in front, which is what the tab strip's own
+        // close button does.
+        //
         // They are handled here rather than on the focused element itself
         // because a key event reaches an ancestor's listener, not the focused
         // element's own.
@@ -568,11 +681,28 @@ impl Render for DesktopApp {
             .size_full()
             .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "f6" if event.keystroke.modifiers.shift => app.focus_content(window, cx),
-                    "f6" => app.focus_actions(window, cx),
+                    "f6" if event.keystroke.modifiers.shift => app.cycle_focus(-1, window, cx),
+                    "f6" => app.cycle_focus(1, window, cx),
+                    "down" if app.memory.list_focused(window) => {
+                        app.move_in_list(Move::Step(1), cx)
+                    }
+                    "up" if app.memory.list_focused(window) => app.move_in_list(Move::Step(-1), cx),
+                    "home" if app.memory.list_focused(window) => app.move_in_list(Move::First, cx),
+                    "end" if app.memory.list_focused(window) => app.move_in_list(Move::Last, cx),
                     "enter" | "space" if app.actions_focus.is_focused(window) => {
                         app.run_primary_action(window, cx)
                     }
+                    "left" if event.keystroke.modifiers.alt => app.go_back(window, cx),
+                    "right" if event.keystroke.modifiers.alt => app.go_forward(window, cx),
+                    "tab" if event.keystroke.modifiers.control => {
+                        let step = if event.keystroke.modifiers.shift {
+                            -1
+                        } else {
+                            1
+                        };
+                        app.cycle_tab(step, window, cx)
+                    }
+                    "w" if event.keystroke.modifiers.control => app.close_active_tab(window, cx),
                     _ => {}
                 }
             }))

@@ -17,7 +17,6 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
@@ -100,6 +99,9 @@ pub struct DocumentPane {
     saved_text: String,
     /// What the engine has done with the text in the editor.
     save: SaveState,
+    /// The debounced store this pane's text belongs to, so that a store which
+    /// lands after a later keystroke is not reported as the current state.
+    generation: u64,
     /// The open draft carrying this document's edits, when it has one.
     draft: Option<DaemonDraftSummary>,
     notice: Option<Notice>,
@@ -121,9 +123,9 @@ impl DocumentPane {
         });
         // The editor reports every keystroke; the application decides when a
         // pause is long enough to store the text.
-        let edits = cx.subscribe(&editor, |app, _editor, event, cx| {
+        let edits = cx.subscribe(&editor, |app, editor, event, cx| {
             if matches!(event, InputEvent::Change) {
-                app.document_edited(cx);
+                app.document_edited(editor.entity_id(), cx);
             }
         });
         Self {
@@ -132,6 +134,7 @@ impl DocumentPane {
             base_text: String::new(),
             saved_text: String::new(),
             save: SaveState::Clean,
+            generation: 0,
             draft: None,
             notice: None,
             review_title,
@@ -175,6 +178,14 @@ impl DocumentPane {
         window.focus(&handle, cx);
     }
 
+    /// Whether the keyboard is in this pane's text. Which region holds it is
+    /// what decides whether changing the tab in front moves it: a reader
+    /// arrowing through the tree is browsing and stays there, while a reader
+    /// typing follows the text to the tab that took its place.
+    pub fn editor_focused(&self, window: &Window, cx: &App) -> bool {
+        self.editor.read(cx).focus_handle(cx).is_focused(window)
+    }
+
     pub fn text(&self, cx: &App) -> String {
         self.editor.read(cx).value().to_string()
     }
@@ -198,6 +209,27 @@ impl DocumentPane {
         self.mode = mode;
     }
 
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// The editor this pane owns, which is how a keystroke finds the tab it was
+    /// typed in rather than the tab that happens to be in front.
+    pub fn editor_id(&self) -> EntityId {
+        self.editor.entity_id()
+    }
+
+    /// Which store owns this pane's text. A screen with several panes open
+    /// counts stores per document, so a store in one tab cannot report itself
+    /// as another tab's state.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
     pub fn set_notice(&mut self, notice: Option<Notice>) {
         self.notice = notice;
     }
@@ -210,12 +242,7 @@ impl DocumentPane {
     /// it, what it has to say about itself, and what the screen can do with it.
     /// macOS keeps the first two in the window toolbar; here they sit on the
     /// pane they act on, above the text.
-    pub fn header(
-        &self,
-        target: &PaneContext<'_>,
-        actions: Option<AnyElement>,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
+    pub fn header(&self, actions: Option<AnyElement>, cx: &mut Context<DesktopApp>) -> AnyElement {
         let this = cx.entity();
         let modes = TabBar::new("document-mode")
             .segmented()
@@ -238,35 +265,9 @@ impl DocumentPane {
             .px_4()
             .gap_3()
             .items_center()
-            .child(
-                div()
-                    .id("document-tab")
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
-                    .px_3()
-                    .py_1()
-                    .rounded(px(ui::RADIUS))
-                    .bg(cx.theme().background)
-                    .flex_shrink_0()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Icon::new(IconName::FileText)
-                            .with_size(px(14.))
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .child(
-                        div()
-                            .max_w(px(220.))
-                            .truncate()
-                            .text_style(&ui::BODY)
-                            .child(target.document.path.clone()),
-                    ),
-            )
             .child(modes)
-            .children(self.band_status(cx))
-            .children(self.notice_line(cx))
+            .children(self.header_status(cx))
+            .children(self.header_notice(cx))
             .child(div().flex_1().min_w(px(0.)))
             .children(actions)
             .into_any_element()
@@ -274,24 +275,7 @@ impl DocumentPane {
 
     /// The work itself: the document, read in one of its three modes, under the
     /// pane's header.
-    pub fn detail(
-        &self,
-        target: Option<PaneContext<'_>>,
-        actions: Option<AnyElement>,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
-        let Some(target) = target else {
-            return div()
-                .v_flex()
-                .flex_1()
-                .h_full()
-                .p_4()
-                .child(ui::message(
-                    "Select a document.",
-                    cx.theme().muted_foreground,
-                ))
-                .into_any_element();
-        };
+    pub fn detail(&self, actions: Option<AnyElement>, cx: &mut Context<DesktopApp>) -> AnyElement {
         let text = self.text(cx);
 
         let body: AnyElement = match self.mode {
@@ -332,20 +316,19 @@ impl DocumentPane {
         div()
             .v_flex()
             .flex_1()
-            .h_full()
             .min_w(px(0.))
             .min_h(px(0.))
-            .child(self.header(&target, actions, cx))
+            .child(self.header(actions, cx))
             .child(ui::rule(cx))
             .child(div().flex_1().min_h(px(0.)).p_4().child(body))
             .into_any_element()
     }
 
-    /// What the band says about the document beyond its name: only what a reader
-    /// has to act on. A document that is saved says nothing — the version the
-    /// Server holds is not news — while a document that is being written, or
-    /// that failed to write, says so where the eye already is.
-    pub fn band_status(&self, cx: &App) -> Option<AnyElement> {
+    /// What the pane's header says beyond the document's name: only what a
+    /// reader has to act on. A document that is saved says nothing — the
+    /// version the Server holds is not news — while a document that is being
+    /// written, or that failed to write, says so where the eye already is.
+    pub fn header_status(&self, cx: &App) -> Option<AnyElement> {
         let (text, color) = match &self.save {
             SaveState::Pending => ("Unsaved changes".to_owned(), cx.theme().muted_foreground),
             SaveState::Saving => ("Saving…".to_owned(), cx.theme().muted_foreground),
@@ -361,8 +344,9 @@ impl DocumentPane {
         )
     }
 
-    /// What a Review answered, which the band keeps until the document changes.
-    pub fn notice_line(&self, cx: &App) -> Option<AnyElement> {
+    /// What a Review answered, which the pane keeps until the document it was
+    /// asked for changes.
+    pub fn header_notice(&self, cx: &App) -> Option<AnyElement> {
         let notice = self.notice.as_ref()?;
         Some(
             div()
@@ -374,7 +358,7 @@ impl DocumentPane {
     }
 
     /// The edit this pane would hand the engine for a Review, and whether its
-    /// text still has to be stored first. Both the context bar's action and the
+    /// text still has to be stored first. Both the header's action and the
     /// keyboard action go through here, so they cannot disagree.
     pub fn review_edit(&self, target: &PaneContext<'_>, cx: &App) -> (DocumentEdit, bool) {
         let edit = DocumentEdit {

@@ -156,6 +156,10 @@ pub struct Chrome<'a> {
     pub engine: EngineFacts,
     /// What the account is called, for the foot of the rail.
     pub account: Option<&'a str>,
+    /// Whether the open screen has somewhere to go back to, and forward to.
+    /// The band's arrows are drawn from these two.
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
     /// The window's width, which decides what folds away.
     pub width: Pixels,
 }
@@ -299,7 +303,7 @@ impl Shell {
             .relative()
             .size_full()
             .bg(cx.theme().background)
-            .child(self.band(window, cx))
+            .child(self.band(window, &chrome, cx))
             .child(
                 div()
                     .h_flex()
@@ -318,7 +322,12 @@ impl Shell {
     /// navigation on the left, the window controls on the right, and nothing
     /// else. Commands a screen offers are drawn in that screen's own panes, next
     /// to what they act on.
-    fn band(&self, window: &mut Window, cx: &mut Context<DesktopApp>) -> AnyElement {
+    fn band(
+        &self,
+        window: &mut Window,
+        chrome: &Chrome<'_>,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
         // The band is the page: no surface of its own, no rule under it, so the
         // window reads as one surface with a card floating on it.
         let band = TitleBar::new()
@@ -333,8 +342,20 @@ impl Shell {
                     .items_center()
                     .gap_2()
                     .child(div().w(px(RAIL_WIDTH)).h_full())
-                    .child(nav_button("page-back", IconName::ArrowLeft, true, cx))
-                    .child(nav_button("page-forward", IconName::ArrowRight, true, cx))
+                    .child(nav_button(
+                        "page-back",
+                        IconName::ArrowLeft,
+                        chrome.can_go_back,
+                        |app, _event, window, cx| app.go_back(window, cx),
+                        cx,
+                    ))
+                    .child(nav_button(
+                        "page-forward",
+                        IconName::ArrowRight,
+                        chrome.can_go_forward,
+                        |app, _event, window, cx| app.go_forward(window, cx),
+                        cx,
+                    ))
                     .child(div().flex_1().min_w(px(0.))),
             );
         let band = if draws_own_controls(window) {
@@ -514,26 +535,37 @@ fn draws_own_controls(window: &Window) -> bool {
 /// One page navigation button. The history itself arrives with the tab strip:
 /// the buttons are here so the band reads the way the reference reads, and they
 /// are disabled rather than pretending.
+/// One of the band's page arrows. An arrow with nowhere to go is drawn faint
+/// and takes no clicks, which is how the platform draws a disabled control.
 fn nav_button(
     id: &'static str,
     icon: IconName,
-    disabled: bool,
+    enabled: bool,
+    action: impl Fn(&mut DesktopApp, &ClickEvent, &mut Window, &mut Context<DesktopApp>) + 'static,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
-    let tone = if disabled {
-        cx.theme().muted_foreground.opacity(0.5)
-    } else {
+    let tone = if enabled {
         cx.theme().foreground
+    } else {
+        cx.theme().muted_foreground.opacity(0.5)
     };
-    div()
+    let button = div()
         .id(id)
         .h_flex()
         .justify_center()
         .items_center()
         .size(px(24.))
         .rounded(px(ui::RADIUS))
-        .child(Icon::new(icon).with_size(px(14.)).text_color(tone))
-        .into_any_element()
+        .child(Icon::new(icon).with_size(px(14.)).text_color(tone));
+    let button = if enabled {
+        button
+            .hover(|style| style.bg(cx.theme().secondary_hover))
+            .cursor_pointer()
+            .on_click(cx.listener(action))
+    } else {
+        button
+    };
+    button.into_any_element()
 }
 
 /// Minimize, maximize and close, at the right of the band, which is where this
