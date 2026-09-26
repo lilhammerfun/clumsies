@@ -1,8 +1,9 @@
 {
-  "uid": "clumsies-overview",
-  "title": "Clumsies Overview",
+  "uid": "clumsies-overview-zh",
+  "title": "Clumsies \u603b\u89c8\uff08\u4e2d\u6587\uff09",
   "tags": [
-    "clumsies"
+    "clumsies",
+    "zh"
   ],
   "timezone": "browser",
   "editable": true,
@@ -15,7 +16,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Objectives",
+      "title": "\u76ee\u6807",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -27,7 +28,7 @@
     },
     {
       "type": "stat",
-      "title": "Endpoints answering",
+      "title": "\u7aef\u70b9\u53ef\u7528\u6570",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -79,7 +80,7 @@
     },
     {
       "type": "stat",
-      "title": "Backup age",
+      "title": "\u5907\u4efd\u5e74\u9f84",
       "fieldConfig": {
         "defaults": {
           "unit": "h",
@@ -135,7 +136,7 @@
     },
     {
       "type": "stat",
-      "title": "Certificate days left",
+      "title": "\u8bc1\u4e66\u5269\u4f59\u5929\u6570",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
@@ -191,7 +192,7 @@
     },
     {
       "type": "stat",
-      "title": "Disk free /",
+      "title": "\u6839\u5206\u533a\u5269\u4f59",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -247,7 +248,7 @@
     },
     {
       "type": "stat",
-      "title": "Server error rate",
+      "title": "\u670d\u52a1\u7aef\u9519\u8bef\u7387",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -299,7 +300,7 @@
     },
     {
       "type": "stat",
-      "title": "Request p95",
+      "title": "\u8bf7\u6c42 p95",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -351,7 +352,7 @@
     },
     {
       "type": "row",
-      "title": "Traffic",
+      "title": "\u6d41\u91cf",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -363,7 +364,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Requests by status code",
+      "title": "\u6309\u72b6\u6001\u7801\u7684\u8bf7\u6c42\u6570",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -405,7 +406,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Request latency",
+      "title": "\u8bf7\u6c42\u5ef6\u8fdf",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -457,7 +458,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Requests in flight",
+      "title": "\u8fdb\u884c\u4e2d\u8bf7\u6c42",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -499,7 +500,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Busiest routes (top 8)",
+      "title": "\u6700\u5fd9\u7684\u8def\u7531\uff08\u524d 8\uff09",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -541,7 +542,7 @@
     },
     {
       "type": "row",
-      "title": "Business",
+      "title": "\u4e1a\u52a1",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -553,7 +554,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Commits per hour",
+      "title": "\u6bcf\u5c0f\u65f6\u63d0\u4ea4\u6570",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -595,7 +596,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Drafts created per hour",
+      "title": "\u6bcf\u5c0f\u65f6\u65b0\u5efa\u8349\u7a3f",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -637,7 +638,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Reviews created per hour",
+      "title": "\u6bcf\u5c0f\u65f6\u65b0\u5efa\u8bc4\u5ba1",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -679,7 +680,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Draft backlog by state",
+      "title": "\u8349\u7a3f\u79ef\u538b\uff08\u6309\u72b6\u6001\uff09",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -721,7 +722,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Open draft growth",
+      "title": "\u672a\u5b8c\u6210\u8349\u7a3f\u589e\u957f",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -763,7 +764,7 @@
     },
     {
       "type": "row",
-      "title": "Queueing",
+      "title": "\u6392\u961f",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -775,7 +776,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Reconciliation conflicts",
+      "title": "\u5bf9\u8d26\u51b2\u7a81",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -817,7 +818,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Unread notifications",
+      "title": "\u672a\u8bfb\u901a\u77e5",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -859,7 +860,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Oldest open draft (days)",
+      "title": "\u6700\u8001\u672a\u5b8c\u6210\u8349\u7a3f\uff08\u5929\uff09",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
@@ -902,7 +903,7 @@
     },
     {
       "type": "row",
-      "title": "Saturation",
+      "title": "\u9971\u548c",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -914,7 +915,7 @@
     },
     {
       "type": "timeseries",
-      "title": "PostgreSQL connections",
+      "title": "PostgreSQL \u8fde\u63a5\u6570",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -956,7 +957,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Longest running query",
+      "title": "\u6700\u957f\u67e5\u8be2\u8017\u65f6",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -998,7 +999,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Server connection pool",
+      "title": "\u670d\u52a1\u7aef\u8fde\u63a5\u6c60",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -1040,7 +1041,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Database size",
+      "title": "\u6570\u636e\u5e93\u5927\u5c0f",
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
@@ -1082,7 +1083,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Server requests by status",
+      "title": "\u670d\u52a1\u7aef\u8bf7\u6c42\uff08\u6309\u72b6\u6001\u7801\uff09",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -1124,7 +1125,7 @@
     },
     {
       "type": "row",
-      "title": "Resources",
+      "title": "\u8d44\u6e90",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1136,7 +1137,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Host CPU",
+      "title": "\u4e3b\u673a CPU",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -1178,7 +1179,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Host memory used",
+      "title": "\u4e3b\u673a\u5185\u5b58\u5360\u7528",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -1220,7 +1221,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Container memory",
+      "title": "\u5bb9\u5668\u5185\u5b58",
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
@@ -1262,7 +1263,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Container CPU",
+      "title": "\u5bb9\u5668 CPU",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -1304,7 +1305,7 @@
     },
     {
       "type": "row",
-      "title": "Probes",
+      "title": "\u63a2\u6d4b",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1316,7 +1317,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Probe duration",
+      "title": "\u63a2\u6d4b\u8017\u65f6",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -1358,7 +1359,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Scrape targets up",
+      "title": "\u6293\u53d6\u76ee\u6807\u72b6\u6001",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -1400,7 +1401,7 @@
     },
     {
       "type": "row",
-      "title": "Logs",
+      "title": "\u65e5\u5fd7",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1412,7 +1413,7 @@
     },
     {
       "type": "logs",
-      "title": "Server log by request id",
+      "title": "\u670d\u52a1\u7aef\u65e5\u5fd7\uff08\u6309 request id\uff09",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1444,7 +1445,7 @@
     },
     {
       "type": "logs",
-      "title": "Edge log by request id",
+      "title": "\u8fb9\u7f18\u65e5\u5fd7\uff08\u6309 request id\uff09",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1476,7 +1477,7 @@
     },
     {
       "type": "logs",
-      "title": "Server errors and warnings",
+      "title": "\u670d\u52a1\u7aef\u9519\u8bef\u4e0e\u8b66\u544a",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1519,7 +1520,7 @@
           "value": ""
         },
         "options": [],
-        "description": "Paste an x-request-id value to follow one request through the edge and the Server."
+        "description": "\u7c98\u8d34 x-request-id \u7684\u503c\uff0c\u5373\u53ef\u5728\u8fb9\u7f18\u548c\u670d\u52a1\u7aef\u65e5\u5fd7\u91cc\u8ddf\u540c\u4e00\u6761\u8bf7\u6c42\u3002"
       }
     ]
   }

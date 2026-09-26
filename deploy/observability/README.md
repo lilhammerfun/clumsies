@@ -8,11 +8,13 @@ interface only.
 |---|---|
 | `prometheus` | Scrape, rule evaluation, and 90-day retention |
 | `alertmanager` | Email delivery of firing alerts |
-| `grafana` | Provisioned Prometheus datasource and the *Clumsies Overview* dashboard |
+| `grafana` | Provisioned Prometheus and Loki datasources, and the *Clumsies Overview* dashboards in English and Chinese |
 | `node-exporter` | Host CPU, memory, filesystem, and the textfile metrics below |
 | `cadvisor` | Per-container CPU, memory, and restart activity |
 | `postgres-exporter` | Connections, transactions, and database size |
 | `blackbox-exporter` | Public HTTPS probes for the app, docs, official site, and the `www` alias |
+| `loki` | Container logs, 14-day retention |
+| `alloy` | Ships container logs from the Docker socket into Loki |
 | `server` (scrape target) | Request rate, latency histogram, in-flight gauge, and database pool gauges from the Server itself |
 | `clumsies-observability-metrics.timer` | Backup, restore-drill, and release freshness |
 
@@ -72,6 +74,22 @@ the same tunnel can forward all three:
 ```bash
 ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 <installation-host>
 ```
+
+## Logs
+
+Both dashboards carry a *Logs* row with a `request id` text box. Every response
+from the Server returns the edge request id in the `x-request-id` header, so one
+value follows a request through the whole installation:
+
+1. paste the header value into `request id`; the edge panel and the Server panel
+   then show every line for that request, from both containers;
+2. a client that sends `x-clumsies-request-id` appears as `client_request_id` in
+   the Server log, which links a user report to the same request.
+
+Labels stay low-cardinality (`project`, `service`, `container`). Request ids live
+inside the log lines and are matched with a line filter, never used as a label.
+The existing logging invariant still holds: no bodies and no credentials are
+recorded, and Caddy already drops request headers and query strings.
 
 ## Alert delivery
 
