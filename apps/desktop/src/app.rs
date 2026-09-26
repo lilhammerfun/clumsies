@@ -318,6 +318,20 @@ impl DesktopApp {
         self.run_plan(what, calls, cx);
     }
 
+    /// Asks the daemon to try this Project's draft uploads again, which is what a
+    /// row offers when its draft could not be uploaded. macOS makes the same
+    /// daemon call and calls it "Retry Draft Sync".
+    pub fn retry_draft_sync(&mut self, cx: &mut Context<Self>) {
+        let Some(project_id) = self.memory.project_id().map(str::to_owned) else {
+            return;
+        };
+        self.storage_action(
+            "asked the daemon to retry this Project's drafts",
+            move || engine::sync_now(&project_id),
+            cx,
+        );
+    }
+
     /// Opens several documents at once, which is what the menu on a set of rows
     /// offers. Each becomes its own tab, so a batch is the same tabs a reader
     /// would have opened one by one.

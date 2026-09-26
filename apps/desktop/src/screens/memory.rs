@@ -10,7 +10,10 @@
 
 use std::collections::BTreeSet;
 
-use clumsiesd::{DaemonDraftSummary, DaemonLocalDraftStatus};
+use clumsiesd::{
+    DaemonDraftFreshness, DaemonDraftReconciliationStatus, DaemonDraftSummary,
+    DaemonLocalDraftStatus,
+};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -115,6 +118,41 @@ pub struct MenuTarget {
     /// A document that only exists as a proposal: the Project does not hold it
     /// yet, so there is nothing to delete and only a draft to throw away.
     pub proposal: bool,
+    /// Where the draft that carries this document stands with the Server.
+    pub draft: Option<DraftState>,
+}
+
+/// Where a draft stands with the Server, which is what a row's menu reports.
+///
+/// macOS reads the same things out of its draft store: whether the upload is
+/// still in flight, whether it failed, whether the Server has seen the draft at
+/// all, whether the published document has moved on since the draft was written,
+/// and whether the two disagree.
+pub struct DraftState {
+    /// Operations the daemon has queued and not uploaded yet.
+    pub uploading: bool,
+    /// Operations it could not upload, which a retry is for.
+    pub failed: bool,
+    /// Whether the Server has seen this draft.
+    pub uploaded: bool,
+    /// Whether the document it edits has been published past the draft's base.
+    pub behind: bool,
+    /// Whether the draft and the published document disagree.
+    pub conflicts: bool,
+}
+
+impl DraftState {
+    /// What the daemon says about one draft.
+    fn of(draft: &DaemonDraftSummary) -> Self {
+        Self {
+            uploading: draft.pending_operation_count > 0,
+            failed: draft.failed_operation_count > 0,
+            uploaded: draft.server_draft_id.is_some(),
+            behind: draft.freshness == DaemonDraftFreshness::Behind
+                || draft.has_upstream_resource_changes,
+            conflicts: draft.reconciliation == DaemonDraftReconciliationStatus::Conflicts,
+        }
+    }
 }
 
 /// Where an arrow key moves the list's selection.
@@ -560,6 +598,7 @@ impl MemoryScreen {
                     is_folder: true,
                     has_drafts: self.folder_has_drafts(path),
                     proposal: false,
+                    draft: None,
                 });
         };
         let draft = self.draft_for(document);
@@ -569,6 +608,7 @@ impl MemoryScreen {
             is_folder: false,
             has_drafts: false,
             proposal: !document.published,
+            draft: draft.map(DraftState::of),
         })
     }
 
@@ -1432,6 +1472,29 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
                     });
                 }),
             );
+    }
+    // What the engine is doing with the draft, and the one command it takes
+    // when the upload failed. macOS puts the same lines in its own row menu,
+    // and takes the same daemon call for its retry.
+    if let Some(state) = &target.draft {
+        menu = menu.separator();
+        if state.failed {
+            let retrying = this.clone();
+            menu = menu.item(PopupMenuItem::new("Retry draft sync").on_click(
+                move |_event, _window, cx| {
+                    retrying.update(cx, |app, cx| app.retry_draft_sync(cx));
+                },
+            ));
+        } else if state.uploading {
+            menu = menu.item(PopupMenuItem::new("Uploading draft changes…").disabled(true));
+        } else if !state.uploaded {
+            menu = menu.item(PopupMenuItem::new("Draft not ready").disabled(true));
+        }
+        if state.conflicts {
+            menu = menu.item(PopupMenuItem::new("Draft needs reconciling").disabled(true));
+        } else if state.behind {
+            menu = menu.item(PopupMenuItem::new("Behind the remote version").disabled(true));
+        }
     }
     if target.draft_id.is_some() {
         // A proposal is the draft: throwing it away throws the document away,

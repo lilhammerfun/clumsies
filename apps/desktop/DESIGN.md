@@ -146,6 +146,14 @@ already on screen. A query that names nothing says so where the list was, which
 is macOS's own empty state for a search with no results, and a row the filter
 takes away is no longer selected.
 
+**A row says what the engine is doing with its draft.** macOS's row menu
+carries the draft's synchronization, and this client's carries the same, read
+from the same daemon fields: `Retry draft sync` when operations could not be
+uploaded, `Uploading draft changes…` while they are going, `Draft not ready`
+when the Server has not seen the draft at all, and the one fact a reader needs
+before asking for a Review — that the draft disagrees with what is published, or
+has fallen behind it.
+
 **A document the Project does not hold yet is still a row.** A draft that creates
 a file proposes one, so the tree draws it — marked `new` rather than `draft` —
 with the text the proposal carries behind it. Editing it writes through the
@@ -285,5 +293,6 @@ exist yet is not a deviation.
 | Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
 | A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
+| A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |
 | Closing a tab discards unsaved text without asking | document strip | macOS asks before closing a tab whose text the Server has not accepted. This client stores after a 600ms pause and closes straight away, which loses at most that pause. Fix: a confirmation when the pane is dirty. |
 | Tabs are not restored between runs | document strip | macOS keeps its tabs in the workspace model, which this client does not have yet. Fix: remember the open documents with the selected Project. |
