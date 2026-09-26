@@ -5,8 +5,8 @@ MCP 是 Coding Agent 使用当前 Project Memory 的接口。
 `project_id`：受管集成把当前工作目录解析为 Project，
 daemon 负责本地数据和带认证的同步。
 
-通常的调用顺序是 **activate → 按需 load → 用户要求维护 Memory
-时才 store**。`activate` 帮你发现相关上下文，
+通常的调用顺序是 **activate → 按需 load → 用户要求维护 Memory 时才 store**。
+`activate` 帮你发现相关上下文，
 `load` 提供完整且准确的资源，`store` 提出变更。它与 Desktop XPC、
 Server HTTP 的区别见[领域接口](/zh/reference/domain-api)。
 
@@ -81,8 +81,8 @@ MCP 提示的配置路径不同时，使用那个确切路径。同一任务中�
 并依据用户指令和现有约定完成要求明确、已获授权的修改；只有依赖缺失规范的决定才需要澄清。
 不要自动创建规范、替换为本地文件，或从缺失的自定义路径回退到默认路径。
 
-用户希望设置规范时，可在 App 的空项目 Memory 页面选择 **Set Up
-Guidelines** 或 **Use Team Guidelines**。
+用户希望设置规范时，可在 App 的空项目 Memory 页面选择
+**Set Up Guidelines** 或 **Use Team Guidelines**。
 后者选择组织已有资源，需要项目管理员权限。采用规范是可选操作；
 内置模板只有在用户采用后才成为 Memory。概念、
 预览和研究出处见[记忆维护规范](/zh/guides/memory-guidelines)。

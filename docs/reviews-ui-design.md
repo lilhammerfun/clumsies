@@ -131,8 +131,8 @@ The main pane contains only information needed to make the decision:
 5. decision result and audit metadata after a decision;
 6. unified diff.
 
-Do not show a `Changes` heading or summaries such as `Create path · 20 changed
-lines`. The file navigator already communicates the path and the diff directly
+Do not show a `Changes` heading or summaries such as
+`Create path · 20 changed lines`. The file navigator already communicates the path and the diff directly
 communicates insertions/removals. Delete-only and metadata-only Reviews retain a
 short explicit empty state because the diff cannot communicate those outcomes.
 

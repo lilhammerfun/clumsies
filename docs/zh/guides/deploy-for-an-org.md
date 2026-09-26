@@ -78,8 +78,8 @@ Server 的 Admin API 只接受 bearer；
 `/api/v1/admin/health` 保留用于部署诊断，
 `/api/v1/admin/memory-export` 保留为需要认证的迁移导出。
 
-如果 daemon 启动失败，在 App 中选择 **Administrator Recover
-y**。它会直接登录同一个受信任的 Server 来源，并只在 App 内存里保留临时会话，
+如果 daemon 启动失败，在 App 中选择 **Administrator Recovery**。
+它会直接登录同一个受信任的 Server 来源，并只在 App 内存里保留临时会话，
 让管理员先检查健康、修复成员访问或吊销 token，再重试正常启动。
 
 ## GitHub 交付
@@ -111,7 +111,7 @@ GHCR 包通过 OCI source 标签与本仓库关联。把该包设为公开一次
 | `DEPLOY_SSH_KEY` | 仅供 Actions 使用的专用 Ed25519 私钥 |
 | `DEPLOY_KNOWN_HOSTS` | `DEPLOY_HOST` 固定的 SSH 主机密钥行 |
 
-引导阶段把仓库变量 `SERVER_AUTO_DEPLOY_ENABLED` 设为 `false`。等镜像包公开、受限部署身份验证通过后，再设为 `true`；
+引导阶段把仓库变量 `SERVER_AUTO_DEPLOY_ENABLED=false`。等镜像包公开、受限部署身份验证通过后，再设为 `true`；
 此后 `main` 上的绿色提交会自动部署。
 
 不要上传个人或 root 的 SSH 密钥。生成专用密钥，把公钥复制到主机，

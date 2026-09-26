@@ -32,8 +32,7 @@ revision 冲突、离线状态与同步失败保持可见，而不会表现为�
 后台状态不再在文件树尾部追加徽标或全局同步工具栏按钮。
 
 文档没有额外的 Draft、Review 或远端更新状态条。**View Review**、
-**Review Remote Changes** 与 **Update from
-Remote Version** 仍在适用的既有文档与文件菜单中提供。
+**Review Remote Changes** 与 **Update from Remote Version** 仍在适用的既有文档与文件菜单中提供。
 删除 Draft 会在文档内容中说明待处理的删除。冲突解决与保存失败停留在操作位置；
 读取或归档通知不会发布、对账或丢弃内容。
 
