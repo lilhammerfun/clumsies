@@ -430,6 +430,8 @@ impl DocumentPane {
                 .or_else(|| target.commit_id.map(str::to_owned)),
             draft_id: self.draft.as_ref().map(|draft| draft.draft_id.clone()),
             resource_id: target.document.resource_id.clone(),
+            published: target.document.published,
+            path: target.document.path.clone(),
             content: self.text(cx),
         };
         (edit, self.dirty(cx))

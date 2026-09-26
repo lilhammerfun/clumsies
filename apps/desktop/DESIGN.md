@@ -137,6 +137,14 @@ after a divider, the ones only Memory knows, a Review and a discard. A command
 that would change several documents at once says how many it would change, and
 the ones that cannot be undone name the documents in the dialog they ask with.
 
+**A document the Project does not hold yet is still a row.** A draft that creates
+a file proposes one, so the tree draws it — marked `new` rather than `draft` —
+with the text the proposal carries behind it. Editing it writes through the
+create operation instead of an update, because there is no resource for an
+update to name; renaming it proposes the same file at another path; and throwing
+it away is a discard, because there is nothing published to delete. The row
+leaves the tree when the proposal does, and its tab leaves the strip with it.
+
 ## Forms
 
 Windows is specific about forms, and the sign-in screen is one:
@@ -268,6 +276,5 @@ exist yet is not a deviation.
 | Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
 | A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
-| A document that exists only as a proposal is not in the tree | memory tree | `project_checkout` lists published resources, and a draft that creates a file has no resource yet, so `New file…` writes a draft the tree never shows. Fix: build the row from the draft — `list_drafts` carries the path it would be created at — and send the create operation for its later edits, so that discarding it is what deleting it means. |
 | Closing a tab discards unsaved text without asking | document strip | macOS asks before closing a tab whose text the Server has not accepted. This client stores after a 600ms pause and closes straight away, which loses at most that pause. Fix: a confirmation when the pane is dirty. |
 | Tabs are not restored between runs | document strip | macOS keeps its tabs in the workspace model, which this client does not have yet. Fix: remember the open documents with the selected Project. |

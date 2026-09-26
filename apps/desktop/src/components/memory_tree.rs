@@ -23,21 +23,30 @@ pub fn items(documents: &[MemoryDocument]) -> Vec<TreeItem> {
     file_tree::items(&entries)
 }
 
-/// The tree, with Memory's decoration on every file an open draft touches.
+/// The tree, with Memory's decoration on every file an open draft touches:
+/// `draft` for a document a proposal rewrites, `new` for one it would create.
 pub fn memory_tree(
     state: &Entity<TreeState>,
     selection: &file_tree::Selection,
     drafted: &BTreeSet<String>,
+    proposed: &BTreeSet<String>,
     on_click: impl Fn(RowClick, &mut Window, &mut App) + 'static,
     menu: impl Fn(&str, PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
 ) -> impl IntoElement {
     let drafted = drafted.clone();
+    let proposed = proposed.clone();
     file_tree::path_tree(
         state,
         selection,
         move |path| Decoration {
             tone: None,
-            label: drafted.contains(path).then_some("draft"),
+            label: if proposed.contains(path) {
+                Some("new")
+            } else if drafted.contains(path) {
+                Some("draft")
+            } else {
+                None
+            },
         },
         on_click,
         menu,

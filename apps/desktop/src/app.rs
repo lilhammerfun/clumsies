@@ -210,10 +210,13 @@ impl DesktopApp {
         let Some((draft_id, resource_id)) = self.memory.draft_for_path(path) else {
             return;
         };
+        let Some(project_id) = self.memory.project_id().map(str::to_owned) else {
+            return;
+        };
         let discarded = resource_id.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { engine::discard_draft(&draft_id, &resource_id) });
+            .spawn(async move { engine::discard_draft(&project_id, &draft_id, &resource_id) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |app, cx| {
@@ -272,8 +275,15 @@ impl DesktopApp {
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
+            let created = result.is_ok();
             this.update(cx, |app, cx| {
-                app.document_changed("created", &path, result, cx)
+                app.document_changed("created", &path, result, cx);
+                // The file is a draft until a Review carries it, so it arrives
+                // as a proposal row on the read above and opens to be written
+                // in, which is what macOS does with a new Memory document.
+                if created {
+                    app.memory.open_when_loaded(&path, Some(Mode::Edit));
+                }
             })
             .ok();
         })
@@ -363,7 +373,15 @@ impl DesktopApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let documents = self.memory.targets(paths);
+        // Deleting is about what the Project holds: a document that only exists
+        // as a proposal is thrown away by a discard, which is the dialog its own
+        // row offers.
+        let documents: Vec<String> = self
+            .memory
+            .delete_plan(paths)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
         if documents.is_empty() {
             return;
         }
@@ -575,11 +593,14 @@ impl DesktopApp {
                     return;
                 }
                 let what = self.batch_name(&paths, plan.len());
+                let project_id = self.memory.project_id().unwrap_or_default().to_owned();
                 let calls: Vec<_> = plan
                     .into_iter()
                     .map(|(_, draft_id, resource_id)| {
-                        Box::new(move || engine::discard_draft(&draft_id, &resource_id).map(|_| ()))
-                            as Box<dyn FnOnce() -> Result<(), String> + Send>
+                        let project_id = project_id.clone();
+                        Box::new(move || {
+                            engine::discard_draft(&project_id, &draft_id, &resource_id).map(|_| ())
+                        }) as Box<dyn FnOnce() -> Result<(), String> + Send>
                     })
                     .collect();
                 self.run_plan(format!("drafts discarded in {what}"), calls, cx);
@@ -1082,6 +1103,8 @@ impl DesktopApp {
                 .or_else(|| self.memory.commit_id().map(str::to_owned)),
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             resource_id: document.resource_id.clone(),
+            published: document.published,
+            path: document.path.clone(),
             content: pane.text(cx),
         })
     }

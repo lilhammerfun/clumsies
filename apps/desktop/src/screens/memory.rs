@@ -64,6 +64,14 @@ pub struct MemoryScreen {
     /// and a new tab's editor needs one. The request carries to the next frame,
     /// which has a window.
     pending_open: Option<String>,
+    /// A document the reader asked for by path, with the mode to open it in.
+    ///
+    /// A file a dialog has just proposed is a row only once the Project has
+    /// been read again, so a request that arrives before its row waits for that
+    /// read instead of failing.
+    pending_path: Option<(String, Option<Mode>)>,
+    /// The mode the document the last request resolved to should open in.
+    pending_mode: Option<Mode>,
     /// The drafts open in this Project, which is what the tree marks and what
     /// the pane offers to review.
     drafts: Vec<DaemonDraftSummary>,
@@ -90,6 +98,9 @@ pub struct MenuTarget {
     pub is_folder: bool,
     /// Whether anything below a folder has a draft to throw away.
     pub has_drafts: bool,
+    /// A document that only exists as a proposal: the Project does not hold it
+    /// yet, so there is nothing to delete and only a draft to throw away.
+    pub proposal: bool,
 }
 
 /// Where an arrow key moves the list's selection.
@@ -123,6 +134,8 @@ impl MemoryScreen {
             back: Vec::new(),
             forward: Vec::new(),
             pending_open: None,
+            pending_path: None,
+            pending_mode: None,
             drafts: Vec::new(),
             error: None,
             tools_focus: cx.focus_handle(),
@@ -251,6 +264,11 @@ impl MemoryScreen {
         self.commit_id.as_deref()
     }
 
+    /// The Project the documents belong to, which every draft operation names.
+    pub fn project_id(&self) -> Option<&str> {
+        self.project_id.as_deref()
+    }
+
     /// The tab in front's editor.
     pub fn active_pane(&self) -> Option<&DocumentPane> {
         let index = self.active?;
@@ -339,6 +357,15 @@ impl MemoryScreen {
         // A menu built inside the tree talks to the application, so the screen
         // leaves itself where that builder can find it.
         TREE_APP.with(|slot| *slot.borrow_mut() = Some(cx.entity().downgrade()));
+        // A request that names a path becomes a request for the document that
+        // path is, once the read that carries it has happened.
+        if let Some((path, mode)) = self.pending_path.clone()
+            && let Some(document) = self.documents.iter().find(|document| document.path == path)
+        {
+            self.pending_path = None;
+            self.pending_mode = mode;
+            self.pending_open = Some(document.resource_id.clone());
+        }
         let Some(resource_id) = self.pending_open.take() else {
             return;
         };
@@ -358,9 +385,24 @@ impl MemoryScreen {
                 self.open.len() - 1
             }
         };
-        let typing = self.keyboard_in_editor(window, cx);
+        // A document a dialog proposed opens to be written in, which is what
+        // macOS does with a new Memory document.
+        let mode = self.pending_mode.take();
+        if let Some(mode) = mode
+            && let Some(tab) = self.open.get_mut(index)
+        {
+            tab.pane.set_mode(mode);
+        }
+        let typing = self.keyboard_in_editor(window, cx) || mode == Some(Mode::Edit);
         self.activate(index, cx);
         self.follow_editor_focus(typing, window, cx);
+    }
+
+    /// Opens a document the Project may not have been read with yet: a file a
+    /// dialog has just proposed is a row only on the next read, so the request
+    /// waits for it.
+    pub fn open_when_loaded(&mut self, path: &str, mode: Option<Mode>) {
+        self.pending_path = Some((path.to_owned(), mode));
     }
 
     /// Brings up the tab at an index, which is what a click on one does.
@@ -489,6 +531,7 @@ impl MemoryScreen {
                     can_review: false,
                     is_folder: true,
                     has_drafts: self.folder_has_drafts(path),
+                    proposal: false,
                 });
         };
         let draft = self.draft_for(document);
@@ -497,6 +540,7 @@ impl MemoryScreen {
             can_review: draft.is_some_and(|draft| draft.status == DaemonLocalDraftStatus::Open),
             is_folder: false,
             has_drafts: false,
+            proposal: !document.published,
         })
     }
 
@@ -545,10 +589,18 @@ impl MemoryScreen {
             .collect()
     }
 
-    /// Every document of a set, as a deletion proposal each.
+    /// Every published document of a set, as a deletion proposal each. A
+    /// document that only exists as a proposal has nothing to delete: throwing
+    /// it away is a discard, which is what the daemon turns a deletion of one
+    /// into anyway.
     pub fn delete_plan(&self, paths: &[String]) -> Vec<(String, DocumentEdit)> {
         self.targets(paths)
             .into_iter()
+            .filter(|path| {
+                self.documents
+                    .iter()
+                    .any(|document| &document.path == path && document.published)
+            })
             .filter_map(|path| Some((path.clone(), self.edit_for_path(&path)?)))
             .collect()
     }
@@ -608,6 +660,8 @@ impl MemoryScreen {
                 .or_else(|| self.commit_id.clone()),
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             resource_id: document.resource_id.clone(),
+            published: document.published,
+            path: document.path.clone(),
             content: document
                 .draft_content
                 .clone()
@@ -813,6 +867,7 @@ impl MemoryScreen {
                         &self.tree,
                         &self.selection,
                         &self.drafted_paths(),
+                        &self.proposal_paths(),
                         tree_clicked,
                         tree_menu,
                     )),
@@ -1016,6 +1071,16 @@ impl MemoryScreen {
             .update(cx, |state, cx| state.set_selected_index(index, cx));
     }
 
+    /// The documents that only exist as a proposal, which the tree calls new:
+    /// the Project does not hold them until a Review carries them.
+    fn proposal_paths(&self) -> BTreeSet<String> {
+        self.documents
+            .iter()
+            .filter(|document| !document.published)
+            .map(|document| document.path.clone())
+            .collect()
+    }
+
     /// The documents an open draft touches, which is what the tree marks.
     fn drafted_paths(&self) -> BTreeSet<String> {
         self.documents
@@ -1158,7 +1223,7 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
     else {
         return menu;
     };
-    let (target, targets, drafts, discards) = this.read_with(cx, |app, _| {
+    let (target, targets, deletes, drafts, discards) = this.read_with(cx, |app, _| {
         let memory = app.memory_ref();
         // The menu is about the selection when the row is part of one, and
         // about the row itself when it is not: the same rule the click above
@@ -1170,6 +1235,7 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
         (
             memory.menu_target(path),
             memory.targets(&rows),
+            memory.delete_plan(&rows).len(),
             memory.review_plan(&rows).len(),
             memory.discard_plan(&rows).len(),
         )
@@ -1178,7 +1244,7 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
         return menu;
     };
     if targets.len() > 1 {
-        return batch_menu(&targets, drafts, discards, menu, &this, cx);
+        return batch_menu(&targets, deletes, drafts, discards, menu, &this, cx);
     }
     let opening = this.clone();
     let editing = this.clone();
@@ -1249,25 +1315,28 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
     // The generic file commands, which any tree offers, then Memory's own: macOS
     // splits its own row menu the same way, and the two sections do not mix.
     let renaming = this.clone();
-    let deleting = this.clone();
     let rename_path = path.to_owned();
-    let delete_paths = vec![path.to_owned()];
-    menu = menu
-        .separator()
-        .item(
+    menu =
+        menu.separator().item(
             PopupMenuItem::new("Rename…").on_click(move |_event, window, cx| {
                 renaming.update(cx, |app, cx| {
                     app.open_rename_dialog(&rename_path, window, cx)
                 });
             }),
-        )
-        .item(
+        );
+    // A document the Project does not hold yet has nothing to delete: the draft
+    // that proposes it is what a discard throws away.
+    if !target.proposal {
+        let deleting = this.clone();
+        let delete_paths = vec![path.to_owned()];
+        menu = menu.item(
             PopupMenuItem::new("Delete…").on_click(move |_event, window, cx| {
                 deleting.update(cx, |app, cx| {
                     app.open_delete_dialog(&delete_paths, window, cx)
                 });
             }),
         );
+    }
     if target.can_review {
         menu = menu
             .separator()
@@ -1280,11 +1349,18 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
             );
     }
     if target.draft_id.is_some() {
-        menu = menu.item(PopupMenuItem::new("Discard draft").on_click(
-            move |_event, _window, cx| {
+        // A proposal is the draft: throwing it away throws the document away,
+        // and the label says so.
+        let label = if target.proposal {
+            "Discard proposal"
+        } else {
+            "Discard draft"
+        };
+        menu = menu.item(
+            PopupMenuItem::new(label).on_click(move |_event, _window, cx| {
                 discarding.update(cx, |app, cx| app.discard_draft_for(&discarding_path, cx));
-            },
-        ));
+            }),
+        );
     }
     menu
 }
@@ -1295,13 +1371,13 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
 /// act on, so a batch is never a surprise.
 fn batch_menu(
     targets: &[String],
+    deletes: usize,
     drafts: usize,
     discards: usize,
     menu: PopupMenu,
     app: &Entity<DesktopApp>,
     _cx: &mut App,
 ) -> PopupMenu {
-    let count = targets.len();
     let opening = app.clone();
     let opening_paths = targets.to_vec();
     let mut menu = menu.item(
@@ -1309,15 +1385,24 @@ fn batch_menu(
             opening.update(cx, |app, cx| app.open_documents(&opening_paths, window, cx));
         }),
     );
-    let deleting = app.clone();
-    let deleting_paths = targets.to_vec();
-    menu = menu.separator().item(
-        PopupMenuItem::new(format!("Delete {count} Files…")).on_click(move |_event, window, cx| {
-            deleting.update(cx, |app, cx| {
-                app.open_delete_dialog(&deleting_paths, window, cx)
-            });
-        }),
-    );
+    // A selection of nothing but proposals has nothing to delete: the drafts
+    // they are is what a discard throws away.
+    if deletes > 0 {
+        let deleting = app.clone();
+        let deleting_paths = targets.to_vec();
+        let label = if deletes == 1 {
+            "Delete…".to_owned()
+        } else {
+            format!("Delete {deletes} Files…")
+        };
+        menu = menu.separator().item(PopupMenuItem::new(label).on_click(
+            move |_event, window, cx| {
+                deleting.update(cx, |app, cx| {
+                    app.open_delete_dialog(&deleting_paths, window, cx)
+                });
+            },
+        ));
+    }
     if drafts == 0 && discards == 0 {
         return menu;
     }

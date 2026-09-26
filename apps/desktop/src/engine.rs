@@ -55,7 +55,14 @@ struct ProjectPage {
 /// identity is what a draft operation updates, so it travels with the text.
 #[derive(Clone)]
 pub struct MemoryDocument {
+    /// The Memory resource, as the daemon and the Server name it. A document
+    /// that only exists as a proposal has no resource yet, so this is the draft
+    /// that proposes it.
     pub resource_id: String,
+    /// Whether the Project already holds this document. A proposal is written
+    /// with the create operation, and throwing it away is what deleting it
+    /// means.
+    pub published: bool,
     pub path: String,
     /// What the Project publishes today.
     pub content: String,
@@ -446,15 +453,16 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
         .into_iter()
         .map(|resource| MemoryDocument {
             resource_id: resource.resource_id,
+            published: true,
             path: resource.path,
             content: resource.content.content,
             draft_content: None,
         })
         .collect();
-    documents.sort_by(|left, right| left.path.cmp(&right.path));
+    let drafts = drafts(project_id)?;
     // A document with a proposal is opened as the proposal has it, which is
     // what the macOS client's catalog does when it builds a Project's list.
-    for draft in drafts(project_id)? {
+    for draft in &drafts {
         let Some(target) = draft.target_id.as_deref() else {
             continue;
         };
@@ -464,10 +472,28 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
         else {
             continue;
         };
-        if let Ok(detail) = client().get_draft(&draft.draft_id) {
-            document.draft_content = proposed_text(&detail);
-        }
+        document.draft_content = proposed_text_of(draft);
     }
+    // A draft that creates a file proposes a document the Project does not hold
+    // yet, and that document is a row like any other: the reader can open it,
+    // edit it, rename it, ask for a Review of it and throw it away. Nothing is
+    // published behind it, which is what `published` says.
+    for draft in &drafts {
+        let Some(path) = draft.path.clone() else {
+            continue;
+        };
+        if documents.iter().any(|document| document.path == path) {
+            continue;
+        }
+        documents.push(MemoryDocument {
+            resource_id: draft.draft_id.clone(),
+            published: false,
+            path,
+            content: String::new(),
+            draft_content: proposed_text_of(draft),
+        });
+    }
+    documents.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(Checkout {
         project_id: checkout.project_id,
         commit_id: checkout.commit_id,
@@ -554,7 +580,14 @@ pub struct DocumentEdit {
     /// The draft's own base when one is already open; the Project ref otherwise.
     pub base_commit_id: Option<String>,
     pub draft_id: Option<String>,
+    /// The Memory resource, or — for a document that only exists as a proposal
+    /// — the draft that proposes it.
     pub resource_id: String,
+    /// Whether the Project already holds this document. A proposal is written
+    /// with the create operation, and has nothing to delete.
+    pub published: bool,
+    /// Where the document is, which is the path the create operation names.
+    pub path: String,
     pub content: String,
 }
 
@@ -564,23 +597,31 @@ pub fn rename_document(
     document: &DocumentEdit,
     new_path: &str,
 ) -> Result<DaemonDraftOperationResponse, String> {
+    // A proposal is renamed by proposing to create it somewhere else: there is
+    // no resource for a rename to move, and the daemon records the path the
+    // file would be created at.
+    let op = DaemonDraftOperation {
+        create: (!document.published).then(|| DaemonCreateDraftOperation {
+            path: new_path.to_owned(),
+            content: content_of(document),
+            description: None,
+        }),
+        update: None,
+        rename: document.published.then(|| DaemonRenameDraftOperation {
+            id: document.resource_id.clone(),
+            new_path: new_path.to_owned(),
+            description: None,
+        }),
+        delete: None,
+        discard: None,
+    };
     draft_operation(&DaemonDraftOperationRequest {
         draft_id: document.draft_id.clone(),
         base_commit_id: document.base_commit_id.clone(),
         project_id: document.project_id.clone(),
         scope: DaemonDraftScope::Project,
         resource: DaemonDraftResourceKind::Memory,
-        op: DaemonDraftOperation {
-            create: None,
-            update: None,
-            rename: Some(DaemonRenameDraftOperation {
-                id: document.resource_id.clone(),
-                new_path: new_path.to_owned(),
-                description: None,
-            }),
-            delete: None,
-            discard: None,
-        },
+        op,
         source: Some(DaemonDraftOperationSource::Desktop),
     })
 }
@@ -639,13 +680,16 @@ pub fn sync_now(project_id: &str) -> Result<(), String> {
 /// Throws a proposal away, which is what a reader does with an edit they no
 /// longer want. The published document is untouched.
 pub fn discard_draft(
+    project_id: &str,
     draft_id: &str,
     resource_id: &str,
 ) -> Result<DaemonDraftOperationResponse, String> {
     let request = DaemonDraftOperationRequest {
         draft_id: Some(draft_id.to_owned()),
         base_commit_id: None,
-        project_id: String::new(),
+        // The daemon resolves a draft by its id and checks that it belongs to
+        // the Project the request names, so an empty one is refused.
+        project_id: project_id.to_owned(),
         scope: DaemonDraftScope::Project,
         resource: DaemonDraftResourceKind::Memory,
         op: DaemonDraftOperation {
@@ -691,41 +735,45 @@ fn draft_operation(
 /// daemon reserves that spelling for Agent protocol proxies, which prove their
 /// identity, and refuses a request that arrives without one.
 pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationResponse, String> {
-    let request = DaemonDraftOperationRequest {
+    // A document that only exists as a proposal is written with the create
+    // operation: there is no resource yet for an update to name, and the path
+    // is what says which file the draft proposes. The daemon keeps one draft
+    // per path, so writing again is what a further edit to a proposal is.
+    let op = DaemonDraftOperation {
+        create: (!edit.published).then(|| DaemonCreateDraftOperation {
+            path: edit.path.clone(),
+            content: content_of(edit),
+            description: None,
+        }),
+        update: edit.published.then(|| {
+            DaemonUpdateDraftOperation::Content(DaemonContentDraftUpdate {
+                id: edit.resource_id.clone(),
+                content: content_of(edit),
+                description: None,
+            })
+        }),
+        rename: None,
+        delete: None,
+        discard: None,
+    };
+    draft_operation(&DaemonDraftOperationRequest {
         draft_id: edit.draft_id.clone(),
         base_commit_id: edit.base_commit_id.clone(),
         project_id: edit.project_id.clone(),
         scope: DaemonDraftScope::Project,
         resource: DaemonDraftResourceKind::Memory,
-        op: DaemonDraftOperation {
-            create: None,
-            update: Some(DaemonUpdateDraftOperation::Content(
-                DaemonContentDraftUpdate {
-                    id: edit.resource_id.clone(),
-                    content: DaemonDraftContent {
-                        org_source: None,
-                        description: None,
-                        content: edit.content.clone(),
-                    },
-                    description: None,
-                },
-            )),
-            rename: None,
-            delete: None,
-            discard: None,
-        },
+        op,
         source: Some(DaemonDraftOperationSource::Desktop),
-    };
-    let payload = serde_json::to_value(request)
-        .map_err(|error| format!("unreadable draft operation: {error}"))?;
-    client()
-        .call(DaemonIpcRequest::new(
-            "desktop_store_draft_operation",
-            payload,
-        ))
-        .map_err(|error| error.to_string())?
-        .into_payload()
-        .map_err(|error| error.to_string())
+    })
+}
+
+/// The document's text as a draft carries it.
+fn content_of(edit: &DocumentEdit) -> DaemonDraftContent {
+    DaemonDraftContent {
+        org_source: None,
+        description: None,
+        content: edit.content.clone(),
+    }
 }
 
 /// One edit, or several, through to a Review: each is stored when the caller
@@ -760,9 +808,10 @@ pub fn submit_documents_review(
     request_reviews(&drafts, title, description)
 }
 
-/// The text a draft proposes for its document, taken from the last full
-/// content update it holds. An update always carries the whole document, which
-/// is what this client stores.
+/// The text a draft proposes for its document, taken from the last full content
+/// it holds — whether that is the update that rewrote a published document or
+/// the create that would write a new one. Either way the operation carries the
+/// whole document, which is what this client stores.
 fn proposed_text(detail: &DaemonDraftDetail) -> Option<String> {
     detail.operations.iter().rev().find_map(|operation| {
         operation
@@ -770,8 +819,25 @@ fn proposed_text(detail: &DaemonDraftDetail) -> Option<String> {
             .update
             .as_ref()
             .and_then(|update| update.content())
+            .or_else(|| {
+                operation
+                    .operation
+                    .create
+                    .as_ref()
+                    .map(|create| &create.content)
+            })
             .map(|content| content.content.clone())
     })
+}
+
+/// What a draft proposes for its document, read from the daemon. Reading it is
+/// one daemon call per draft, and a draft whose text cannot be read leaves the
+/// document showing what the Project publishes.
+fn proposed_text_of(draft: &DaemonDraftSummary) -> Option<String> {
+    client()
+        .get_draft(&draft.draft_id)
+        .ok()
+        .and_then(|detail| proposed_text(&detail))
 }
 
 /// The drafts of one Project that are still proposals: an open one takes
