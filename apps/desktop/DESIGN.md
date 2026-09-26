@@ -4,6 +4,10 @@ The macOS client is the reference for *what* each screen does. This document is
 about *how* the Windows and Linux client looks and behaves while we translate
 it, so that every screen does not invent its own numbers.
 
+COMPONENTS.md is the companion for *what to build it out of*: the framework's
+layers, the rule for choosing between them, and where every reusable piece of
+the macOS client stands here.
+
 ## Where the rules come from
 
 | Platform | Reference |
