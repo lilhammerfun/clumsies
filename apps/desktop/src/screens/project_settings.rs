@@ -46,7 +46,7 @@ impl Render for ProjectSettingsDialog {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = _cx.theme();
         let mut rows: Vec<AnyElement> = Vec::new();
-        let mut heading = |text: &str, rows: &mut Vec<AnyElement>, cx: &App| {
+        let heading = |text: &str, rows: &mut Vec<AnyElement>, cx: &App| {
             rows.push(
                 div()
                     .pt(px(ui::SPACE_SM))

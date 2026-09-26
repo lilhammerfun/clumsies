@@ -114,11 +114,7 @@ impl DocumentPane {
                 // the middle of prose is how a reader loses their place.
                 .soft_wrap(true)
         });
-        let review_title =
-            cx.new(|cx| InputState::new(window, cx).placeholder("What this change does"));
-        let review_description = cx.new(|cx| {
-            TextareaState::new(window, cx).placeholder("Why, and anything a reviewer should check.")
-        });
+        let (review_title, review_description) = review_fields(String::new(), window, cx);
         // The editor reports every keystroke; the application decides when a
         // pause is long enough to store the text.
         let edits = cx.subscribe(&editor, |app, editor, event, cx| {
@@ -261,7 +257,7 @@ impl DocumentPane {
                 .toggled(selected)
                 .rounded(px(999.))
                 .on_click(move |_event, _window, cx| {
-                    this.update(cx, |app, cx| action(app, cx));
+                    this.update(cx, action);
                 })
         };
         let can_review = self.can_review();
@@ -453,12 +449,35 @@ impl DocumentPane {
     }
 }
 
-/// Opens the sheet that requests a Review for one stored edit.
+/// The two fields a Review is asked for with: what the change does, and why.
+///
+/// A pane keeps its own pair for the document it holds; a Review of several
+/// documents starts from a pair of its own, which is why this is a function
+/// rather than three lines inside the pane.
+pub(crate) fn review_fields(
+    title: String,
+    window: &mut Window,
+    cx: &mut Context<DesktopApp>,
+) -> (Entity<InputState>, Entity<TextareaState>) {
+    let title = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("What this change does")
+            .default_value(title)
+    });
+    let description = cx.new(|cx| {
+        TextareaState::new(window, cx).placeholder("Why, and anything a reviewer should check.")
+    });
+    (title, description)
+}
+
+/// Opens the sheet that requests a Review for one stored edit, or for several:
+/// one Review can name every draft a reader selected, and macOS asks for a
+/// folder's worth of them the same way.
 ///
 /// The request runs in the sheet, so the sheet is the thing that knows whether
 /// it is waiting on the network; this only puts it on screen.
 pub(crate) fn open_review_sheet(
-    edit: DocumentEdit,
+    edits: Vec<DocumentEdit>,
     store: bool,
     title: Entity<InputState>,
     description: Entity<TextareaState>,
@@ -466,7 +485,7 @@ pub(crate) fn open_review_sheet(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let view = cx.new(|cx| ReviewDialog::new(cx, title, description, edit, store, app));
+    let view = cx.new(|cx| ReviewDialog::new(cx, title, description, edits, store, app));
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let view = view.clone();
         dialog
@@ -511,8 +530,8 @@ fn document_title(content: &str, path: &str) -> String {
 struct ReviewDialog {
     title: Entity<InputState>,
     description: Entity<TextareaState>,
-    /// The edit this Review is requested for, captured when the sheet opened.
-    edit: DocumentEdit,
+    /// The edits this Review is requested for, captured when the sheet opened.
+    edits: Vec<DocumentEdit>,
     /// Whether the editor's text still has to be stored before the request.
     store: bool,
     busy: bool,
@@ -528,7 +547,7 @@ impl ReviewDialog {
         cx: &mut Context<Self>,
         title: Entity<InputState>,
         description: Entity<TextareaState>,
-        edit: DocumentEdit,
+        edits: Vec<DocumentEdit>,
         store: bool,
         app: WeakEntity<DesktopApp>,
     ) -> Self {
@@ -539,7 +558,7 @@ impl ReviewDialog {
         Self {
             title,
             description,
-            edit,
+            edits,
             store,
             busy: false,
             error: None,
@@ -568,11 +587,11 @@ impl ReviewDialog {
         self.error = None;
         cx.notify();
 
-        let edit = self.edit.clone();
+        let edits = self.edits.clone();
         let store = self.store;
         let app = self.app.clone();
         let work = cx.background_executor().spawn(async move {
-            engine::submit_document_review(&edit, store, &title, &description)
+            engine::submit_documents_review(&edits, store, &title, &description)
         });
         // Spawned in the window rather than the application: closing the sheet
         // needs the window, and a closed sheet is what a successful request

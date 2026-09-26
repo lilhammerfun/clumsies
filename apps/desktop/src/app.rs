@@ -305,65 +305,168 @@ impl DesktopApp {
                     as Box<dyn FnOnce() -> Result<(), String> + Send>
             })
             .collect();
-        self.run_folder_plan(what, calls, cx);
+        self.run_plan(what, calls, cx);
     }
 
-    /// Confirms deleting a folder, which proposes every document below it for
-    /// deletion.
-    pub fn open_delete_folder_dialog(
+    /// Opens several documents at once, which is what the menu on a set of rows
+    /// offers. Each becomes its own tab, so a batch is the same tabs a reader
+    /// would have opened one by one.
+    pub fn open_documents(
         &mut self,
-        folder: &str,
+        paths: &[String],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let count = self.memory.folder_delete_plan(folder).len();
-        if count == 0 {
+        for path in paths {
+            self.memory.open_now(path, None, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Asks for one Review of every draft a set of rows carries, which is what
+    /// macOS calls "Request Review for N Changes": the Review names each draft,
+    /// and the Server decides them together.
+    pub fn request_review_for_selection(
+        &mut self,
+        paths: &[String],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let edits = self.memory.review_plan(paths);
+        if edits.is_empty() {
             return;
         }
+        // The sheet starts from a title about the batch, which is what macOS's
+        // "Update memory" / "Update N memories" does.
+        let title = match edits.len() {
+            1 => "Update memory".to_owned(),
+            count => format!("Update {count} memories"),
+        };
+        let (title, description) = document::review_fields(title, window, cx);
+        document::open_review_sheet(
+            edits,
+            false,
+            title,
+            description,
+            cx.entity().downgrade(),
+            window,
+            cx,
+        );
+    }
+
+    /// Confirms that a set of rows should be proposed for deletion — one
+    /// document, a folder, or a batch the reader selected. A deletion is a draft
+    /// like any other, so this asks once and then lets the Review decide.
+    pub fn open_delete_dialog(
+        &mut self,
+        paths: &[String],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let documents = self.memory.targets(paths);
+        if documents.is_empty() {
+            return;
+        }
+        let (title, message, confirm) = match (self.folder_row(paths), documents.len()) {
+            (Some(folder), count) => (
+                "Delete Folder?",
+                format!(
+                    "This proposes that the {count} memories in {folder} be deleted. Each proposal is saved as a draft and takes effect for the Project after review and merge."
+                ),
+                "Delete folder",
+            ),
+            (None, 1) => (
+                "Delete File?",
+                format!(
+                    "This proposes that {} be deleted. The proposal is saved as a draft and takes effect for the Project after review and merge.",
+                    documents[0]
+                ),
+                "Delete",
+            ),
+            (None, count) => (
+                "Delete Files?",
+                format!(
+                    "This proposes that these {count} memories be deleted. Each proposal is saved as a draft and takes effect for the Project after review and merge.\n\n{}",
+                    listing(&documents)
+                ),
+                "Delete files",
+            ),
+        };
         ConfirmDialog::open(
             cx.entity().downgrade(),
-            "Delete Folder?",
-            format!(
-                "This proposes that the {count} memories in {folder} be deleted. Each proposal is saved as a draft and takes effect for the Project after review and merge."
-            ),
-            "Delete folder",
-            DialogAction::DeleteFolder {
-                folder: folder.to_owned(),
+            title,
+            message,
+            confirm,
+            DialogAction::DeleteDocuments {
+                paths: paths.to_vec(),
             },
             window,
             cx,
         );
     }
 
-    /// Confirms throwing away every draft a folder's documents carry.
-    pub fn open_discard_folder_dialog(
+    /// Confirms throwing away every draft a set of rows carries.
+    pub fn open_discard_dialog(
         &mut self,
-        folder: &str,
+        paths: &[String],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let count = self.memory.folder_discard_plan(folder).len();
+        let count = self.memory.discard_plan(paths).len();
         if count == 0 {
             return;
         }
+        let (title, message) = match self.folder_row(paths) {
+            Some(folder) => (
+                "Discard drafts in this folder?",
+                format!(
+                    "This throws away the {count} drafts below {folder}. The published Memory is untouched."
+                ),
+            ),
+            None => (
+                "Discard drafts?",
+                format!(
+                    "This throws away the {count} drafts the selection carries. The published Memory is untouched."
+                ),
+            ),
+        };
         ConfirmDialog::open(
             cx.entity().downgrade(),
-            "Discard drafts in this folder?",
-            format!(
-                "This throws away the {count} drafts below {folder}. The published Memory is untouched."
-            ),
+            title,
+            message,
             "Discard drafts",
-            DialogAction::DiscardFolder {
-                folder: folder.to_owned(),
+            DialogAction::DiscardDrafts {
+                paths: paths.to_vec(),
             },
             window,
             cx,
         );
+    }
+
+    /// What a log line calls a set of rows: a folder by name, a batch by how
+    /// many documents it turned out to hold.
+    fn batch_name(&self, paths: &[String], documents: usize) -> String {
+        match self.folder_row(paths) {
+            Some(folder) => folder,
+            None => format!("{documents} documents"),
+        }
+    }
+
+    /// The folder a set of rows is, when it is exactly one folder. A command
+    /// about a folder names it, which is what this client's dialogs have said
+    /// since before a batch could be selected at all.
+    fn folder_row(&self, paths: &[String]) -> Option<String> {
+        let [path] = paths else { return None };
+        self.memory
+            .menu_target(path)
+            .is_some_and(|target| target.is_folder)
+            .then(|| path.clone())
     }
 
     /// Runs one daemon call per item of a plan, in order, and reports how many
-    /// of them it managed before the first refusal.
-    fn run_folder_plan(
+    /// of them it managed before the first refusal. A folder's documents, a
+    /// batch the reader selected, and a Review's several drafts are all plans.
+    fn run_plan(
         &mut self,
         what: String,
         calls: Vec<Box<dyn FnOnce() -> Result<(), String> + Send>>,
@@ -410,26 +513,6 @@ impl DesktopApp {
     /// Confirms that a document should be proposed for deletion. The deletion is
     /// a draft like any other, so this asks once and then lets the Review
     /// decide.
-    pub fn open_delete_dialog(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(edit) = self.memory.edit_for_path(path) else {
-            return;
-        };
-        ConfirmDialog::open(
-            cx.entity().downgrade(),
-            "Delete File?",
-            format!(
-                "This proposes that {path} be deleted. The proposal is saved as a draft and takes effect for the Project after review and merge."
-            ),
-            "Delete",
-            DialogAction::DeleteDocument {
-                edit,
-                path: path.to_owned(),
-            },
-            window,
-            cx,
-        );
-    }
-
     /// Writes a new path for a document as a draft operation.
     pub fn rename_document(&mut self, edit: DocumentEdit, new_path: &str, cx: &mut Context<Self>) {
         let path = new_path.to_owned();
@@ -451,20 +534,6 @@ impl DesktopApp {
     /// Runs what a confirmed dialog asked for.
     pub fn run_dialog_action(&mut self, action: DialogAction, cx: &mut Context<Self>) {
         match action {
-            DialogAction::DeleteDocument { edit, path } => {
-                let reported = path.clone();
-                let work = cx
-                    .background_executor()
-                    .spawn(async move { engine::delete_document(&edit).map(|_| ()) });
-                cx.spawn(async move |this, cx| {
-                    let result = work.await;
-                    this.update(cx, |app, cx| {
-                        app.document_changed("proposed for deletion:", &reported, result, cx)
-                    })
-                    .ok();
-                })
-                .detach();
-            }
             DialogAction::ResetStorage {
                 project_id,
                 revision,
@@ -485,29 +554,35 @@ impl DesktopApp {
                     cx,
                 );
             }
-            DialogAction::DeleteFolder { folder } => {
-                let calls: Vec<_> = self
-                    .memory
-                    .folder_delete_plan(&folder)
+            DialogAction::DeleteDocuments { paths } => {
+                let plan = self.memory.delete_plan(&paths);
+                if plan.is_empty() {
+                    return;
+                }
+                let what = self.batch_name(&paths, plan.len());
+                let calls: Vec<_> = plan
                     .into_iter()
                     .map(|(_, edit)| {
                         Box::new(move || engine::delete_document(&edit).map(|_| ()))
                             as Box<dyn FnOnce() -> Result<(), String> + Send>
                     })
                     .collect();
-                self.run_folder_plan(format!("{folder} proposed for deletion"), calls, cx);
+                self.run_plan(format!("{what} proposed for deletion"), calls, cx);
             }
-            DialogAction::DiscardFolder { folder } => {
-                let calls: Vec<_> = self
-                    .memory
-                    .folder_discard_plan(&folder)
+            DialogAction::DiscardDrafts { paths } => {
+                let plan = self.memory.discard_plan(&paths);
+                if plan.is_empty() {
+                    return;
+                }
+                let what = self.batch_name(&paths, plan.len());
+                let calls: Vec<_> = plan
                     .into_iter()
                     .map(|(_, draft_id, resource_id)| {
                         Box::new(move || engine::discard_draft(&draft_id, &resource_id).map(|_| ()))
                             as Box<dyn FnOnce() -> Result<(), String> + Send>
                     })
                     .collect();
-                self.run_folder_plan(format!("{folder} drafts discarded"), calls, cx);
+                self.run_plan(format!("drafts discarded in {what}"), calls, cx);
             }
             DialogAction::SyncNow { project_id } => {
                 self.storage_action(
@@ -572,7 +647,7 @@ impl DesktopApp {
         };
         let (edit, store) = pane.review_edit(&target, cx);
         document::open_review_sheet(
-            edit,
+            vec![edit],
             store,
             pane.review_title(),
             pane.review_description(),
@@ -798,7 +873,7 @@ impl DesktopApp {
         };
         let (edit, store) = pane.review_edit(&target, cx);
         document::open_review_sheet(
-            edit,
+            vec![edit],
             store,
             pane.review_title(),
             pane.review_description(),
@@ -1444,6 +1519,17 @@ fn placeholder(note: &str, cx: &App) -> AnyElement {
                 .child(note.to_owned()),
         )
         .into_any_element()
+}
+
+/// How a dialog names a batch: the documents it is about, up to the point where
+/// the list stops being readable.
+fn listing(paths: &[String]) -> String {
+    const SHOWN: usize = 8;
+    let mut lines: Vec<String> = paths.iter().take(SHOWN).cloned().collect();
+    if paths.len() > SHOWN {
+        lines.push(format!("…and {} more", paths.len() - SHOWN));
+    }
+    lines.join("\n")
 }
 
 /// Reads the Project list, keeping the reason when it cannot.

@@ -11,7 +11,7 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::tree::{TreeItem, TreeState};
 use gpui_kit::*;
 
-use crate::components::file_tree::{self, Decoration, PathEntry};
+use crate::components::file_tree::{self, Decoration, PathEntry, RowClick};
 use crate::engine::MemoryDocument;
 
 /// The Project's documents, as the tree's entries.
@@ -26,16 +26,20 @@ pub fn items(documents: &[MemoryDocument]) -> Vec<TreeItem> {
 /// The tree, with Memory's decoration on every file an open draft touches.
 pub fn memory_tree(
     state: &Entity<TreeState>,
+    selection: &file_tree::Selection,
     drafted: &BTreeSet<String>,
+    on_click: impl Fn(RowClick, &mut Window, &mut App) + 'static,
     menu: impl Fn(&str, PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
 ) -> impl IntoElement {
     let drafted = drafted.clone();
     file_tree::path_tree(
         state,
+        selection,
         move |path| Decoration {
             tone: None,
             label: drafted.contains(path).then_some("draft"),
         },
+        on_click,
         menu,
     )
 }

@@ -19,6 +19,7 @@ use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
+use crate::components::file_tree::{self, RowClick};
 use crate::components::memory_tree;
 use crate::engine::{Checkout, DocumentEdit, MemoryDocument};
 use crate::screens::document::{DocumentPane, Mode, Notice, PANE_HEADER, PaneContext};
@@ -45,6 +46,9 @@ pub struct MemoryScreen {
     documents: Vec<MemoryDocument>,
     /// The Project ref the documents resolved from; a new draft is based on it.
     commit_id: Option<String>,
+    /// The rows the reader has selected, which is what the tree's commands act
+    /// on: one row is a document, and a set of rows is a batch of them.
+    selection: file_tree::Selection,
     /// The documents the reader has open, in the order the strip shows them.
     open: Vec<OpenDocument>,
     /// The tab in front: the one the panes draw and the commands act on.
@@ -111,6 +115,7 @@ impl MemoryScreen {
         let mut screen = Self {
             tree,
             project_id: None,
+            selection: file_tree::Selection::default(),
             documents: Vec::new(),
             commit_id: None,
             open: Vec::new(),
@@ -292,22 +297,38 @@ impl MemoryScreen {
         self.forward.iter().any(|id| self.tab_index(id).is_some())
     }
 
-    /// Reads the tree's selection into this screen. A folder is not a document,
-    /// so selecting one leaves the open tabs alone, which is what macOS does.
+    /// Reads the tree's own selection into this screen.
+    ///
+    /// The component moves that selection on a plain click and on its own
+    /// keyboard, and both are a reader asking for that one row. A set the reader
+    /// built is this screen's own click handler, which has already put it here
+    /// by the time this runs; that is why a row that is in the set is left
+    /// alone. A folder is not a document, so landing on one leaves the open tabs
+    /// as they were, which is what macOS does.
     fn follow_selection(&mut self, cx: &App) {
-        let path = self
+        let Some(path) = self
             .tree
             .read(cx)
             .selected_entry()
-            .map(|entry| entry.item().id.to_string());
-        let Some(resource_id) = path
-            .and_then(|path| self.documents.iter().find(|document| document.path == path))
-            .map(|document| document.resource_id.clone())
+            .map(|entry| entry.item().id.to_string())
         else {
             return;
         };
-        if self.active_id() != Some(resource_id.as_str()) {
-            self.pending_open = Some(resource_id);
+        if self.selection.contains(&path) {
+            return;
+        }
+        self.selection.only(&path);
+        self.ask_for(&path);
+    }
+
+    /// Opens the document under a row the reader asked for, unless its tab is
+    /// already the one in front. A folder is not a document: clicking one
+    /// expands it and nothing else happens.
+    fn ask_for(&mut self, path: &str) {
+        if let Some(document) = self.documents.iter().find(|document| document.path == path)
+            && self.active_id() != Some(document.resource_id.as_str())
+        {
+            self.pending_open = Some(document.resource_id.clone());
         }
     }
 
@@ -507,35 +528,69 @@ impl MemoryScreen {
             .collect()
     }
 
-    /// Every document below a folder, as a deletion proposal each.
-    pub fn folder_delete_plan(&self, folder: &str) -> Vec<(String, DocumentEdit)> {
-        self.documents_under(folder)
+    /// The documents a set of rows stands for: a document is itself, and a
+    /// folder is every document below it. That is what lets one command work on
+    /// a document, on a folder, and on a batch of either.
+    pub fn targets(&self, paths: &[String]) -> Vec<String> {
+        let inside: Vec<String> = paths.iter().map(|path| format!("{path}/")).collect();
+        self.documents
+            .iter()
+            .filter(|document| {
+                paths.contains(&document.path)
+                    || inside
+                        .iter()
+                        .any(|prefix| document.path.starts_with(prefix))
+            })
+            .map(|document| document.path.clone())
+            .collect()
+    }
+
+    /// Every document of a set, as a deletion proposal each.
+    pub fn delete_plan(&self, paths: &[String]) -> Vec<(String, DocumentEdit)> {
+        self.targets(paths)
             .into_iter()
-            .filter_map(|document| {
-                Some((document.path.clone(), self.edit_for_path(&document.path)?))
+            .filter_map(|path| Some((path.clone(), self.edit_for_path(&path)?)))
+            .collect()
+    }
+
+    /// The drafts a set of rows carries, which are what discarding throws away.
+    pub fn discard_plan(&self, paths: &[String]) -> Vec<(String, String, String)> {
+        self.targets(paths)
+            .into_iter()
+            .filter_map(|path| {
+                let (draft_id, resource_id) = self.draft_for_path(&path)?;
+                Some((path, draft_id, resource_id))
             })
             .collect()
     }
 
-    /// The drafts a folder's documents carry, which are what discarding in a
-    /// folder throws away.
-    pub fn folder_discard_plan(&self, folder: &str) -> Vec<(String, String, String)> {
-        self.documents_under(folder)
+    /// The documents of a set that one Review could carry, which are the ones
+    /// whose draft is still open. Both halves come from the daemon: a document
+    /// with no draft has nothing to propose, and a submitted one is already in
+    /// a Review of its own.
+    pub fn review_plan(&self, paths: &[String]) -> Vec<DocumentEdit> {
+        self.targets(paths)
             .into_iter()
-            .filter_map(|document| {
+            .filter_map(|path| {
+                let document = self
+                    .documents
+                    .iter()
+                    .find(|document| document.path == path)?;
                 let draft = self.draft_for(document)?;
-                Some((
-                    document.path.clone(),
-                    draft.draft_id.clone(),
-                    document.resource_id.clone(),
-                ))
+                (draft.status == DaemonLocalDraftStatus::Open).then(|| self.edit_for_path(&path))?
             })
             .collect()
     }
 
     /// Whether anything below this folder has a draft to throw away.
     pub fn folder_has_drafts(&self, folder: &str) -> bool {
-        !self.folder_discard_plan(folder).is_empty()
+        !self.discard_plan(&[folder.to_owned()]).is_empty()
+    }
+
+    /// The rows the reader has selected, which is what a command about the tree
+    /// acts on.
+    pub fn selected_paths(&self) -> Vec<String> {
+        self.selection.paths().cloned().collect()
     }
 
     /// What a rename or a deletion is made of: the document, the draft it joins
@@ -657,15 +712,42 @@ impl MemoryScreen {
         cx.notify();
     }
 
-    /// How many rows the tree is showing. The component keeps its flattened
+    /// The rows the tree is showing, in the order it shows them, which is what
+    /// a shift-click measures a range against. The component keeps its flattened
     /// list to itself, so asking it row by row until it stops answering is the
-    /// count there is; a Project's Memory is small enough that walking it is
+    /// list there is; a Project's Memory is small enough that walking it is
     /// cheaper than keeping a second copy of the same walk.
-    fn rows(&self, cx: &App) -> usize {
+    fn row_paths(&self, cx: &App) -> Vec<String> {
         let state = self.tree.read(cx);
         (0..)
-            .take_while(|index| state.entry(*index).is_some())
-            .count()
+            .map_while(|index| state.entry(index).map(|entry| entry.item().id.to_string()))
+            .collect()
+    }
+
+    /// How many rows the tree is showing.
+    fn rows(&self, cx: &App) -> usize {
+        self.row_paths(cx).len()
+    }
+
+    /// The row a path is drawn on.
+    fn index_of(&self, path: &str, cx: &App) -> Option<usize> {
+        self.tree
+            .read(cx)
+            .index_of(&SharedString::from(path.to_owned()))
+    }
+
+    /// Points the tree's own idea of the selected row at this screen's
+    /// selection: one row is the row the component library highlights, and a set
+    /// of several is painted by the tree from this selection. With several rows
+    /// the library is given none, so its highlight cannot disagree with the set.
+    fn show_selection(&mut self, cx: &mut Context<DesktopApp>) {
+        let index = (!self.selection.is_batch())
+            .then(|| self.selection.anchor().map(str::to_owned))
+            .flatten()
+            .and_then(|path| self.index_of(&path, cx));
+        self.tree
+            .update(cx, |state, cx| state.set_selected_index(index, cx));
+        cx.notify();
     }
 
     /// What the pane needs to name the document in front.
@@ -729,8 +811,10 @@ impl MemoryScreen {
                     .tab_stop(true)
                     .child(memory_tree::memory_tree(
                         &self.tree,
+                        &self.selection,
                         &self.drafted_paths(),
-                        |path, menu, window, cx| tree_menu(path, menu, window, cx),
+                        tree_clicked,
+                        tree_menu,
                     )),
             )
             .into_any_element()
@@ -904,6 +988,8 @@ impl MemoryScreen {
     fn publish(&mut self, cx: &mut Context<DesktopApp>) {
         let items = memory_tree::items(&self.documents);
         self.tree.update(cx, |state, cx| state.set_items(items, cx));
+        // A renamed or deleted file is not a selected file.
+        self.selection.retain(&self.row_paths(cx));
         self.select_in_tree(cx);
         self.sync_draft();
         cx.notify();
@@ -913,13 +999,21 @@ impl MemoryScreen {
     /// draws. The tree's own notification reads this back as the same document,
     /// which is why it cannot open a second tab for it.
     fn select_in_tree(&mut self, cx: &mut Context<DesktopApp>) {
-        let selected = self
+        // A set the reader built is not a tab's business: bringing another tab
+        // to the front must not take it apart.
+        if self.selection.is_batch() {
+            return;
+        }
+        let path = self
             .selected_document()
-            .map(|document| SharedString::from(document.path.clone()));
-        self.tree.update(cx, |state, cx| {
-            let index = selected.as_ref().and_then(|id| state.index_of(id));
-            state.set_selected_index(index, cx);
-        });
+            .map(|document| document.path.clone());
+        match &path {
+            Some(path) => self.selection.only(path),
+            None => self.selection.clear(),
+        }
+        let index = path.as_deref().and_then(|path| self.index_of(path, cx));
+        self.tree
+            .update(cx, |state, cx| state.set_selected_index(index, cx));
     }
 
     /// The documents an open draft touches, which is what the tree marks.
@@ -1018,18 +1112,74 @@ impl MemoryScreen {
     }
 }
 
-/// What the tree offers for one row, which is what the Project's drafts say
-/// about that document. macOS puts the same commands in its row context menu;
-/// the menu itself is the component library's, so arrows move, Enter chooses
-/// and Escape closes the way they do everywhere else on this platform.
+/// What a click on a tree row means here.
+///
+/// The generic tree hands the click over with the keys it was made with, and
+/// this is where the three gestures become three different things: a plain
+/// click selects a row and opens its document, a modified one builds a set and
+/// opens nothing, and the right button asks for a menu — which, on a row that
+/// is not part of a selection, makes that row the selection first.
+fn tree_clicked(click: RowClick, _window: &mut Window, cx: &mut App) {
+    let Some(app) = TREE_APP.with(|slot| slot.borrow().as_ref().and_then(|weak| weak.upgrade()))
+    else {
+        return;
+    };
+    app.update(cx, |app, cx| {
+        let memory = app.memory();
+        match click.button {
+            MouseButton::Left if !click.extending() => {
+                memory.selection.only(&click.path);
+                memory.ask_for(&click.path);
+            }
+            MouseButton::Left => {
+                let order = memory.row_paths(cx);
+                memory
+                    .selection
+                    .clicked(&click.path, click.modifiers, &order);
+            }
+            MouseButton::Right if !memory.selection.contains(&click.path) => {
+                memory.selection.only(&click.path);
+            }
+            _ => return,
+        }
+        memory.show_selection(cx);
+    });
+}
+
+/// What the tree offers the rows a menu was opened on.
+///
+/// One row is the document's own commands, which is what macOS puts in its row
+/// context menu. Several rows are the commands that work on all of them at once
+/// — opening, deleting, and the drafts a Review or a discard could take. The
+/// menu itself is the component library's, so arrows move, Enter chooses and
+/// Escape closes the way they do everywhere else on this platform.
 fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) -> PopupMenu {
     let Some(this) = TREE_APP.with(|slot| slot.borrow().as_ref().and_then(|weak| weak.upgrade()))
     else {
         return menu;
     };
-    let Some(target) = this.read_with(cx, |app, _| app.memory_ref().menu_target(path)) else {
+    let (target, targets, drafts, discards) = this.read_with(cx, |app, _| {
+        let memory = app.memory_ref();
+        // The menu is about the selection when the row is part of one, and
+        // about the row itself when it is not: the same rule the click above
+        // keeps when it is what built the selection.
+        let mut rows = memory.selected_paths();
+        if !rows.iter().any(|row| row == path) {
+            rows = vec![path.to_owned()];
+        }
+        (
+            memory.menu_target(path),
+            memory.targets(&rows),
+            memory.review_plan(&rows).len(),
+            memory.discard_plan(&rows).len(),
+        )
+    });
+    let Some(target) = target else {
         return menu;
     };
+    if targets.len() > 1 {
+        return batch_menu(&targets, drafts, discards, menu, &this, cx);
+    }
     let opening = this.clone();
     let editing = this.clone();
     let reviewing = this.clone();
@@ -1060,8 +1210,8 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
         let discarding = this.clone();
         let created = path.to_owned();
         let renamed = path.to_owned();
-        let deleted = path.to_owned();
-        let discarded = path.to_owned();
+        let deleted = vec![path.to_owned()];
+        let discarded = vec![path.to_owned()];
         menu = menu
             .separator()
             .item(
@@ -1082,16 +1232,14 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
             )
             .item(
                 PopupMenuItem::new("Delete folder…").on_click(move |_event, window, cx| {
-                    deleting.update(cx, |app, cx| {
-                        app.open_delete_folder_dialog(&deleted, window, cx)
-                    });
+                    deleting.update(cx, |app, cx| app.open_delete_dialog(&deleted, window, cx));
                 }),
             );
         if target.has_drafts {
             menu = menu.item(PopupMenuItem::new("Discard drafts in folder…").on_click(
                 move |_event, window, cx| {
                     discarding.update(cx, |app, cx| {
-                        app.open_discard_folder_dialog(&discarded, window, cx)
+                        app.open_discard_dialog(&discarded, window, cx)
                     });
                 },
             ));
@@ -1103,7 +1251,7 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
     let renaming = this.clone();
     let deleting = this.clone();
     let rename_path = path.to_owned();
-    let delete_path = path.to_owned();
+    let delete_paths = vec![path.to_owned()];
     menu = menu
         .separator()
         .item(
@@ -1116,7 +1264,7 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
         .item(
             PopupMenuItem::new("Delete…").on_click(move |_event, window, cx| {
                 deleting.update(cx, |app, cx| {
-                    app.open_delete_dialog(&delete_path, window, cx)
+                    app.open_delete_dialog(&delete_paths, window, cx)
                 });
             }),
         );
@@ -1137,6 +1285,74 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
                 discarding.update(cx, |app, cx| app.discard_draft_for(&discarding_path, cx));
             },
         ));
+    }
+    menu
+}
+
+/// What a set of rows offers: one command applied to every document the rows
+/// stand for. macOS splits its own menu the same way — the commands every file
+/// list has, then the ones only Memory knows — and a label counts what it would
+/// act on, so a batch is never a surprise.
+fn batch_menu(
+    targets: &[String],
+    drafts: usize,
+    discards: usize,
+    menu: PopupMenu,
+    app: &Entity<DesktopApp>,
+    _cx: &mut App,
+) -> PopupMenu {
+    let count = targets.len();
+    let opening = app.clone();
+    let opening_paths = targets.to_vec();
+    let mut menu = menu.item(
+        PopupMenuItem::new("Open").on_click(move |_event, window, cx| {
+            opening.update(cx, |app, cx| app.open_documents(&opening_paths, window, cx));
+        }),
+    );
+    let deleting = app.clone();
+    let deleting_paths = targets.to_vec();
+    menu = menu.separator().item(
+        PopupMenuItem::new(format!("Delete {count} Files…")).on_click(move |_event, window, cx| {
+            deleting.update(cx, |app, cx| {
+                app.open_delete_dialog(&deleting_paths, window, cx)
+            });
+        }),
+    );
+    if drafts == 0 && discards == 0 {
+        return menu;
+    }
+    menu = menu.separator();
+    if drafts > 0 {
+        let reviewing = app.clone();
+        let reviewing_paths = targets.to_vec();
+        let label = if drafts == 1 {
+            "Request review…".to_owned()
+        } else {
+            format!("Request review for {drafts} changes…")
+        };
+        menu = menu.item(
+            PopupMenuItem::new(label).on_click(move |_event, window, cx| {
+                reviewing.update(cx, |app, cx| {
+                    app.request_review_for_selection(&reviewing_paths, window, cx)
+                });
+            }),
+        );
+    }
+    if discards > 0 {
+        let discarding = app.clone();
+        let discarding_paths = targets.to_vec();
+        let label = if discards == 1 {
+            "Discard draft…".to_owned()
+        } else {
+            format!("Discard {discards} drafts…")
+        };
+        menu = menu.item(
+            PopupMenuItem::new(label).on_click(move |_event, window, cx| {
+                discarding.update(cx, |app, cx| {
+                    app.open_discard_dialog(&discarding_paths, window, cx)
+                });
+            }),
+        );
     }
     menu
 }

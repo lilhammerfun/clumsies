@@ -636,18 +636,6 @@ pub fn sync_now(project_id: &str) -> Result<(), String> {
     nudge_drafts(&client(), project_id)
 }
 
-/// Writes a document's new text as a draft operation.
-///
-/// The daemon queues the operation and uploads it in the background, which is
-/// why this returns as soon as it is stored: the caller waits separately with
-/// `wait_for_upload` when it needs the Server to have seen the draft. The
-/// operation updates the document's resource identity, which is the same
-/// operation the macOS client stores from its editor.
-///
-/// The method is the desktop alias and not the plain store_draft_operation: the
-/// daemon reserves that spelling for Agent protocol proxies, which prove their
-/// identity, and refuses a request that arrives without one.
-
 /// Throws a proposal away, which is what a reader does with an edit they no
 /// longer want. The published document is untouched.
 pub fn discard_draft(
@@ -691,6 +679,17 @@ fn draft_operation(
         .map_err(|error| error.to_string())
 }
 
+/// Writes a document's new text as a draft operation.
+///
+/// The daemon queues the operation and uploads it in the background, which is
+/// why this returns as soon as it is stored: the caller waits separately with
+/// `wait_for_upload` when it needs the Server to have seen the draft. The
+/// operation updates the document's resource identity, which is the same
+/// operation the macOS client stores from its editor.
+///
+/// The method is the desktop alias and not the plain store_draft_operation: the
+/// daemon reserves that spelling for Agent protocol proxies, which prove their
+/// identity, and refuses a request that arrives without one.
 pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationResponse, String> {
     let request = DaemonDraftOperationRequest {
         draft_id: edit.draft_id.clone(),
@@ -729,28 +728,36 @@ pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationRespons
         .map_err(|error| error.to_string())
 }
 
-/// One edit through to a Review: the text is stored when the editor still
-/// holds something the engine has not accepted, the daemon uploads the draft,
-/// and the Server turns it into a Review.
+/// One edit, or several, through to a Review: each is stored when the caller
+/// still holds text the engine has not accepted, each is waited for until the
+/// daemon has uploaded its draft, and one Review then names every one of them —
+/// which is what the Server's request is shaped for, and what macOS does with a
+/// folder's worth of drafts.
 ///
-/// The three steps are one function because the last two are only meaningful on
-/// the result of the first: the Server identifies a draft by the identity the
-/// upload assigns, and a Review cannot name a draft the Server has not seen.
-pub fn submit_document_review(
-    edit: &DocumentEdit,
+/// The steps are one function because the last two are only meaningful on the
+/// result of the first: the Server identifies a draft by the identity the upload
+/// assigns, and a Review cannot name a draft the Server has not seen.
+pub fn submit_documents_review(
+    edits: &[DocumentEdit],
     store: bool,
     title: &str,
     description: &str,
 ) -> Result<Review, String> {
-    let draft_id = if store {
-        store_document(edit)?.draft_id
-    } else {
-        edit.draft_id
-            .clone()
-            .ok_or_else(|| "this document has no draft to review yet".to_owned())?
-    };
-    let draft = wait_for_upload(&draft_id)?;
-    request_review(&draft, title, description)
+    if edits.is_empty() {
+        return Err("there is nothing to review".to_owned());
+    }
+    let mut drafts = Vec::new();
+    for edit in edits {
+        let draft_id = if store {
+            store_document(edit)?.draft_id
+        } else {
+            edit.draft_id
+                .clone()
+                .ok_or_else(|| "this document has no draft to review yet".to_owned())?
+        };
+        drafts.push(wait_for_upload(&draft_id)?);
+    }
+    request_reviews(&drafts, title, description)
 }
 
 /// The text a draft proposes for its document, taken from the last full
@@ -857,28 +864,32 @@ fn nudge_drafts(client: &DaemonIpcClient, project_id: &str) -> Result<(), String
 /// The Server guards the Project ref with `If-Match`, so the request carries the
 /// ref the draft was rebased onto; a ref that moved under the draft is refused
 /// rather than reviewed against the wrong base.
-pub fn request_review(
-    draft: &DaemonDraftSummary,
+pub fn request_reviews(
+    drafts: &[DaemonDraftSummary],
     title: &str,
     description: &str,
 ) -> Result<Review, String> {
-    let Some(server_draft_id) = draft.server_draft_id.clone() else {
-        return Err("the engine has not uploaded this draft yet".to_owned());
-    };
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "If-Match".to_owned(),
-        format!(
-            "\"{}\"",
-            draft.current_commit_id.as_deref().unwrap_or("ref-none")
-        ),
-    );
-    headers.insert("content-type".to_owned(), "application/json".to_owned());
-    let body = serde_json::json!({
-        "drafts": [{
+    let mut named = Vec::new();
+    for draft in drafts {
+        let Some(server_draft_id) = draft.server_draft_id.clone() else {
+            return Err("the engine has not uploaded this draft yet".to_owned());
+        };
+        named.push(serde_json::json!({
             "draft_id": server_draft_id,
             "expected_draft_version": draft.server_version,
-        }],
+        }));
+    }
+    // Every draft of one selection was written against the same checkout, so the
+    // first one names the commit the whole request is decided against.
+    let base = drafts
+        .first()
+        .and_then(|draft| draft.current_commit_id.as_deref())
+        .unwrap_or("ref-none");
+    let mut headers = BTreeMap::new();
+    headers.insert("If-Match".to_owned(), format!("\"{base}\""));
+    headers.insert("content-type".to_owned(), "application/json".to_owned());
+    let body = serde_json::json!({
+        "drafts": named,
         "title": title,
         "description": description,
     });

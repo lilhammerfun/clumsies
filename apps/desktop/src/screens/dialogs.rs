@@ -20,18 +20,17 @@ use crate::ui::{self, Typography};
 /// it makes.
 #[derive(Clone)]
 pub enum DialogAction {
-    /// Propose that a document be deleted.
-    DeleteDocument { edit: DocumentEdit, path: String },
+    /// Propose that every document a set of rows stands for be deleted: one
+    /// document is a set of one, and a folder is every document below it.
+    DeleteDocuments { paths: Vec<String> },
+    /// Throw away every draft a set of rows carries.
+    DiscardDrafts { paths: Vec<String> },
     /// Move the Project's Memory back to the standard location.
     ResetStorage { project_id: String, revision: i64 },
     /// Build the Project's cache again.
     ClearCache { project_id: String, revision: i64 },
     /// Sync the Project's drafts now.
     SyncNow { project_id: String },
-    /// Propose that every document below a folder be deleted.
-    DeleteFolder { folder: String },
-    /// Throw away every draft below a folder.
-    DiscardFolder { folder: String },
 }
 
 pub struct ConfirmDialog {

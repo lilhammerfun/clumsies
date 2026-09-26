@@ -126,6 +126,17 @@ The Memory screen is side-by-side at every width today; below 641px it should
 stack and grow a back affordance. This is a real gap, not a stylistic
 preference, because the client runs in windows the user resizes.
 
+**A tree row is selected the platform's way.** A plain click selects one row and
+opens its document; Ctrl-click (Cmd on macOS) adds a row to the selection or
+takes it out, and Shift-click takes everything between it and the row the range
+grew from. Right-clicking a row outside the selection makes that row the
+selection first, and right-clicking one inside it keeps the selection, so the
+menu always acts on what the reader can see selected. The menu splits the way
+macOS's does: the commands every file list has — open, rename, delete — and then,
+after a divider, the ones only Memory knows, a Review and a discard. A command
+that would change several documents at once says how many it would change, and
+the ones that cannot be undone name the documents in the dialog they ask with.
+
 ## Forms
 
 Windows is specific about forms, and the sign-in screen is one:
@@ -257,5 +268,6 @@ exist yet is not a deviation.
 | Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
 | A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
+| A document that exists only as a proposal is not in the tree | memory tree | `project_checkout` lists published resources, and a draft that creates a file has no resource yet, so `New file…` writes a draft the tree never shows. Fix: build the row from the draft — `list_drafts` carries the path it would be created at — and send the create operation for its later edits, so that discarding it is what deleting it means. |
 | Closing a tab discards unsaved text without asking | document strip | macOS asks before closing a tab whose text the Server has not accepted. This client stores after a 600ms pause and closes straight away, which loses at most that pause. Fix: a confirmation when the pane is dirty. |
 | Tabs are not restored between runs | document strip | macOS keeps its tabs in the workspace model, which this client does not have yet. Fix: remember the open documents with the selected Project. |
