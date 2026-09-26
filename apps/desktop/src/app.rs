@@ -13,9 +13,10 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::{Root, Theme};
 use gpui_kit::*;
 
-use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review};
+use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review, ReviewStatus};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::{MemoryScreen, Move};
+use crate::screens::reviews::{ReviewNotice, ReviewsScreen};
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
 use crate::shell::{Chrome, EngineFacts, Section, Shell, Slots};
 use crate::ui::{self, Typography};
@@ -25,6 +26,7 @@ use crate::ui::{self, Typography};
 /// document editor did not consume Tab.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Region {
+    Rail,
     List,
     Detail,
     Actions,
@@ -39,11 +41,15 @@ pub struct DesktopApp {
     projects_error: Option<String>,
     selected_project: Option<usize>,
     memory: MemoryScreen,
+    reviews: ReviewsScreen,
     shell: Shell,
     /// The pane header's actions take focus here. F6 is the Windows key for
     /// moving between a window's regions, and it is the only way out of an
     /// editor that consumes Tab.
     actions_focus: FocusHandle,
+    /// The destinations, which are a region of their own: a rail that only a
+    /// pointer can reach is a rail half the readers cannot use.
+    rail_focus: FocusHandle,
     /// The form shown while the daemon has no Server session.
     sign_in: SignInScreen,
     signed_in: bool,
@@ -62,6 +68,14 @@ impl DesktopApp {
             Some(project) => read_checkout(&project.project_id),
             None => (None, None),
         };
+        let mut reviews = ReviewsScreen::new(cx);
+        reviews.set_project(
+            projects.first().map(|project| project.project_id.clone()),
+            cx,
+        );
+        if let Some(checkout) = &checkout {
+            reviews.set_published(checkout);
+        }
         let memory = MemoryScreen::new(window, cx, checkout, checkout_error);
         // A daemon with no session refuses every Server request, and that
         // refusal is the only signed-out signal there is.
@@ -83,8 +97,10 @@ impl DesktopApp {
             projects,
             projects_error,
             memory,
+            reviews,
             shell: Shell::new(),
             actions_focus: cx.focus_handle(),
+            rail_focus: cx.focus_handle(),
             sign_in,
             signed_in,
             save_generation: 0,
@@ -106,6 +122,12 @@ impl DesktopApp {
     /// is open.
     pub fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.shell.set_section(section);
+        // The Reviews queue is read when the section is first opened, not at
+        // every switch: the Server is asked, and its answer does not change by
+        // being looked at again.
+        if section == Section::Reviews && self.reviews.needs_reading() {
+            self.refresh_reviews(cx);
+        }
         cx.notify();
     }
 
@@ -131,8 +153,19 @@ impl DesktopApp {
         self.selected_project = Some(index);
         if let Some(project) = self.projects.get(index) {
             let (checkout, error) = read_checkout(&project.project_id);
+            // Another Project is another queue, so the Reviews screen is told
+            // before its list is read — and before the new checkout replaces
+            // the old Project's documents.
+            self.reviews
+                .set_project(Some(project.project_id.clone()), cx);
+            if let Some(checkout) = &checkout {
+                self.reviews.set_published(checkout);
+            }
             self.memory.set_checkout(checkout, error, cx);
             self.refresh_drafts(cx);
+            if self.shell.section() == Section::Reviews {
+                self.refresh_reviews(cx);
+            }
         }
         cx.notify();
     }
@@ -141,9 +174,10 @@ impl DesktopApp {
     /// platform. The order is the one a reader walks the window in: the list,
     /// the work, and the actions over it.
     pub fn cycle_focus(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
-        const REGIONS: [Region; 3] = [Region::List, Region::Detail, Region::Actions];
-        let current = if self.shell.section() == Section::Memory && self.memory.list_focused(window)
-        {
+        const REGIONS: [Region; 4] = [Region::Rail, Region::List, Region::Detail, Region::Actions];
+        let current = if self.rail_focus.is_focused(window) {
+            Region::Rail
+        } else if self.list_focused(window) {
             Region::List
         } else if self.actions_focus.is_focused(window) {
             Region::Actions
@@ -156,6 +190,10 @@ impl DesktopApp {
             .unwrap_or(Region::Detail as usize);
         let next = REGIONS[(index as isize + step).rem_euclid(REGIONS.len() as isize) as usize];
         match next {
+            Region::Rail => window.focus(&self.rail_focus, cx),
+            Region::List if self.shell.section() == Section::Reviews => {
+                self.reviews.focus_list(window, cx)
+            }
             Region::List => self.memory.focus_list(window, cx),
             Region::Detail => self.focus_content(window, cx),
             Region::Actions => self.focus_actions(window, cx),
@@ -170,6 +208,45 @@ impl DesktopApp {
     pub fn move_in_list(&mut self, movement: Move, cx: &mut Context<Self>) {
         if self.shell.section() == Section::Memory {
             self.memory.move_selection(movement, cx);
+            return;
+        }
+        if self.shell.section() == Section::Reviews {
+            // Selecting a Review is what opens it, the same way selecting a
+            // document in Memory opens that.
+            let step = match movement {
+                Move::Step(step) => step,
+                Move::First => isize::MIN,
+                Move::Last => isize::MAX,
+            };
+            if let Some(review_id) = self.reviews.selection_after(step) {
+                self.open_review(&review_id, cx);
+            }
+        }
+    }
+
+    /// Moves between the destinations, which is what the arrows do once the
+    /// rail has the keyboard. Moving is choosing: a rail row is the section it
+    /// opens, the same way a list row is the document it opens.
+    pub fn move_in_rail(&mut self, step: isize, cx: &mut Context<Self>) {
+        let sections = Section::ALL;
+        let current = sections
+            .iter()
+            .position(|section| *section == self.shell.section())
+            .unwrap_or(0);
+        let index = (current as isize + step).clamp(0, sections.len() as isize - 1) as usize;
+        let section = sections[index];
+        if section != self.shell.section() {
+            self.select_section(section, cx);
+        }
+    }
+
+    /// Whether the open section's list has the keyboard, which is what tells
+    /// F6 where it is and the arrow keys where they are.
+    fn list_focused(&self, window: &Window) -> bool {
+        match self.shell.section() {
+            Section::Memory => self.memory.list_focused(window),
+            Section::Reviews => self.reviews.list_focused(window),
+            _ => false,
         }
     }
 
@@ -240,6 +317,10 @@ impl DesktopApp {
         if !self.can_run_primary_action() {
             return;
         }
+        if self.shell.section() == Section::Reviews {
+            self.merge_review(cx);
+            return;
+        }
         let Some(target) = self.memory.render_target() else {
             return;
         };
@@ -259,7 +340,11 @@ impl DesktopApp {
     }
 
     fn can_run_primary_action(&self) -> bool {
-        self.shell.section() == Section::Memory && self.memory.can_review()
+        match self.shell.section() {
+            Section::Memory => self.memory.can_review(),
+            Section::Reviews => self.reviews.can_approve() || self.reviews.can_merge(),
+            _ => false,
+        }
     }
 
     /// A keystroke landed in the editor. The store waits for a pause in typing,
@@ -478,10 +563,193 @@ impl DesktopApp {
             None => (None, None),
         };
         self.selected_project = (!projects.is_empty()).then_some(0);
+        if let Some(checkout) = &checkout {
+            self.reviews.set_published(checkout);
+        }
+        self.reviews.set_project(
+            projects.first().map(|project| project.project_id.clone()),
+            cx,
+        );
         self.projects = projects;
         self.projects_error = projects_error;
         self.memory.set_checkout(checkout, checkout_error, cx);
         self.refresh_drafts(cx);
+        if self.shell.section() == Section::Reviews {
+            self.refresh_reviews(cx);
+        }
+    }
+
+    /// Reads the Project's Reviews. The daemon holds the session, so this is a
+    /// socket call, and it happens on the click that opens the section rather
+    /// than every frame.
+    fn refresh_reviews(&mut self, cx: &mut Context<Self>) {
+        let Some(project_id) = self.reviews.project_id().map(str::to_owned) else {
+            return;
+        };
+        self.reviews.begin_list_read();
+        cx.notify();
+        let work = cx
+            .background_executor()
+            .spawn(async move { engine::reviews(&project_id) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| app.reviews_loaded(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn reviews_loaded(
+        &mut self,
+        result: Result<Vec<engine::Review>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(reviews) => {
+                crate::logging::info(&format!("read {} Reviews", reviews.len()));
+                self.reviews.set_reviews(reviews, None, cx);
+            }
+            Err(error) => {
+                crate::logging::error(&format!("could not read the Reviews: {error}"));
+                self.reviews.set_list_error(error, cx);
+            }
+        }
+    }
+
+    /// Opens one Review: the queue's selection and the read that fills its
+    /// detail both start here, whether a click or the keyboard asked.
+    pub fn open_review(&mut self, review_id: &str, cx: &mut Context<Self>) {
+        if self.reviews.open_id() == Some(review_id) {
+            return;
+        }
+        self.reviews.begin_detail_read(review_id.to_owned());
+        self.refresh_review(cx);
+        cx.notify();
+    }
+
+    fn refresh_review(&mut self, cx: &mut Context<Self>) {
+        let Some(review_id) = self.reviews.open_id().map(str::to_owned) else {
+            return;
+        };
+        let work = cx
+            .background_executor()
+            .spawn(async move { engine::review(&review_id) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| app.review_loaded(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn review_loaded(
+        &mut self,
+        result: Result<engine::ReviewDetail, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(detail) => {
+                crate::logging::info(&format!(
+                    "read Review {} with {} documents",
+                    detail.review.review_id,
+                    detail.documents.len()
+                ));
+                self.reviews.set_detail(detail, None, cx);
+            }
+            Err(error) => {
+                crate::logging::error(&format!("could not read a Review: {error}"));
+                self.reviews.set_detail_error(error, cx);
+            }
+        }
+    }
+
+    /// Reads one of the open Review's documents, which is what its navigator is
+    /// for.
+    pub fn show_review_document(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.reviews.show_document(index, cx);
+    }
+
+    /// Rejects the Review in front. macOS sends no note with a rejection, and
+    /// neither does this.
+    pub fn reject_review(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = self.reviews.open_review().cloned() else {
+            return;
+        };
+        self.run_review_action(
+            "rejected",
+            move || engine::decide_review(&review, ReviewStatus::Rejected, ""),
+            cx,
+        );
+    }
+
+    /// Approves and publishes the Review in front, which is one transaction on
+    /// the Server: an approval that cannot be published is not an approval.
+    pub fn merge_review(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = self.reviews.open_review().cloned() else {
+            return;
+        };
+        self.run_review_action("merged", move || engine::merge_review(&review), cx);
+    }
+
+    fn run_review_action(
+        &mut self,
+        what: &'static str,
+        action: impl FnOnce() -> Result<(), String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let work = cx.background_executor().spawn(async move { action() });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| app.review_action_finished(what, result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// What a decision answered. A publication changes the Project's Memory as
+    /// well as the Review, so both are read again; a refusal is the Server's own
+    /// sentence, which is what the reader sees.
+    fn review_action_finished(
+        &mut self,
+        what: &str,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let notice = match result {
+            Ok(()) => {
+                crate::logging::info(&format!("Review {what}"));
+                ReviewNotice {
+                    text: format!("This Review is {what}."),
+                    failed: false,
+                }
+            }
+            Err(error) => {
+                crate::logging::error(&format!("could not {what} a Review: {error}"));
+                ReviewNotice {
+                    text: error,
+                    failed: true,
+                }
+            }
+        };
+        self.reviews.set_notice(Some(notice), cx);
+        self.refresh_review(cx);
+        self.refresh_reviews(cx);
+        self.reload_memory(cx);
+    }
+
+    /// Re-reads the Project's Memory, which a publication changes.
+    fn reload_memory(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self
+            .selected_project
+            .and_then(|index| self.projects.get(index))
+        else {
+            return;
+        };
+        let (checkout, checkout_error) = read_checkout(&project.project_id);
+        if let Some(checkout) = &checkout {
+            self.reviews.set_published(checkout);
+        }
+        self.memory.set_checkout(checkout, checkout_error, cx);
     }
 
     /// The open screen's actions, for the end of its detail header. A screen
@@ -492,6 +760,9 @@ impl DesktopApp {
     /// it is the section that has it: a screen with no actions returns nothing
     /// here rather than a button that says so.
     fn actions(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.shell.section() == Section::Reviews {
+            return self.review_actions(window, cx);
+        }
         if self.shell.section() != Section::Memory {
             return None;
         }
@@ -524,6 +795,60 @@ impl DesktopApp {
             )
             .into_any_element()
             .into()
+    }
+
+    /// What the open Review can be decided as. macOS keeps the same two
+    /// commands in its window toolbar; a command lives in this client's pane
+    /// header, and the Server is still the one that decides whether this account
+    /// may, so a refusal is reported rather than pre-empted.
+    fn review_actions(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.reviews.open_review()?;
+        let focused = self.actions_focus.is_focused(window);
+        let ring = if focused {
+            cx.theme().ring
+        } else {
+            transparent_black()
+        };
+        let (can_reject, can_approve, can_merge) = (
+            self.reviews.can_reject(),
+            self.reviews.can_approve(),
+            self.reviews.can_merge(),
+        );
+        let mut row = div()
+            .id("review-actions")
+            .h_flex()
+            .gap_1()
+            .items_center()
+            .rounded(px(ui::RADIUS))
+            .border_1()
+            .border_color(ring)
+            .p(px(ui::SPACE_XS))
+            .track_focus(&self.actions_focus)
+            .tab_stop(true);
+        if can_reject {
+            row = row.child(
+                Button::new("review-reject")
+                    .label("Reject…")
+                    .on_click(cx.listener(|app, _event, _window, cx| app.reject_review(cx))),
+            );
+        }
+        if can_approve {
+            row = row.child(
+                Button::new("review-approve")
+                    .primary()
+                    .label("Approve and merge…")
+                    .on_click(cx.listener(|app, _event, _window, cx| app.merge_review(cx))),
+            );
+        }
+        if can_merge {
+            row = row.child(
+                Button::new("review-merge")
+                    .primary()
+                    .label("Merge…")
+                    .on_click(cx.listener(|app, _event, _window, cx| app.merge_review(cx))),
+            );
+        }
+        Some(row.into_any_element())
     }
 
     /// What the rail's foot says about the engine this client is talking to.
@@ -566,6 +891,7 @@ impl DesktopApp {
     ) -> AnyElement {
         match self.shell.section() {
             Section::Memory => self.memory.list(picker, window, cx),
+            Section::Reviews => self.reviews.list(picker, window, cx),
             other => placeholder(other.list_note(), cx),
         }
     }
@@ -575,13 +901,14 @@ impl DesktopApp {
     fn section_detail(&self, actions: Option<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
         match self.shell.section() {
             Section::Memory => self.memory.detail(actions, cx),
+            Section::Reviews => self.reviews.detail(actions, cx),
             other => placeholder(other.detail_note(), cx),
         }
     }
 
     /// What the window's chrome needs: which Project is open, the list the
     /// picker offers, and the width that decides whether the columns stack.
-    fn chrome(&self) -> Chrome<'_> {
+    fn chrome(&self, window: &Window) -> Chrome<'_> {
         let project = self
             .selected_project
             .and_then(|index| self.projects.get(index))
@@ -600,6 +927,8 @@ impl DesktopApp {
             // disabled in a section that has nowhere to go.
             can_go_back: self.shell.section() == Section::Memory && self.memory.can_go_back(),
             can_go_forward: self.shell.section() == Section::Memory && self.memory.can_go_forward(),
+            rail_focus: &self.rail_focus,
+            rail_focused: self.rail_focus.is_focused(window),
             width: px(0.),
         }
     }
@@ -656,7 +985,7 @@ impl Render for DesktopApp {
 
         let width = window.viewport_size().width;
         let actions = self.actions(window, cx);
-        let mut chrome = self.chrome();
+        let mut chrome = self.chrome(window);
         chrome.width = width;
         let picker = self.shell.project_picker(&chrome, cx);
         let slots = Slots {
@@ -683,12 +1012,12 @@ impl Render for DesktopApp {
                 match event.keystroke.key.as_str() {
                     "f6" if event.keystroke.modifiers.shift => app.cycle_focus(-1, window, cx),
                     "f6" => app.cycle_focus(1, window, cx),
-                    "down" if app.memory.list_focused(window) => {
-                        app.move_in_list(Move::Step(1), cx)
-                    }
-                    "up" if app.memory.list_focused(window) => app.move_in_list(Move::Step(-1), cx),
-                    "home" if app.memory.list_focused(window) => app.move_in_list(Move::First, cx),
-                    "end" if app.memory.list_focused(window) => app.move_in_list(Move::Last, cx),
+                    "down" if app.list_focused(window) => app.move_in_list(Move::Step(1), cx),
+                    "up" if app.list_focused(window) => app.move_in_list(Move::Step(-1), cx),
+                    "home" if app.list_focused(window) => app.move_in_list(Move::First, cx),
+                    "end" if app.list_focused(window) => app.move_in_list(Move::Last, cx),
+                    "down" if app.rail_focus.is_focused(window) => app.move_in_rail(1, cx),
+                    "up" if app.rail_focus.is_focused(window) => app.move_in_rail(-1, cx),
                     "enter" | "space" if app.actions_focus.is_focused(window) => {
                         app.run_primary_action(window, cx)
                     }

@@ -51,6 +51,7 @@ struct ProjectPage {
 
 /// One Memory document in the Project's current Effective Memory. The resource
 /// identity is what a draft operation updates, so it travels with the text.
+#[derive(Clone)]
 pub struct MemoryDocument {
     pub resource_id: String,
     pub path: String,
@@ -70,17 +71,309 @@ pub struct Checkout {
     pub documents: Vec<MemoryDocument>,
 }
 
-/// The Review the Server created for a draft. Only what this client shows is
-/// modelled; the Server's answer carries much more for a Reviews screen.
-#[derive(Deserialize)]
+/// Where a Review stands, which is what decides whether it can still be
+/// decided or published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStatus {
+    /// Waiting for a decision.
+    Open,
+    /// Accepted, and waiting to be published.
+    Approved,
+    /// Sent back to its author, who may revise and resubmit it.
+    Rejected,
+    /// Published. The Review is complete.
+    Merged,
+}
+
+impl ReviewStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::Approved => "Approved",
+            Self::Rejected => "Rejected",
+            Self::Merged => "Merged",
+        }
+    }
+}
+
+/// Someone the Server names: the author of a proposal or a decision. Their
+/// identity is not read yet, which is what telling the reader's own Reviews
+/// apart will need.
+#[derive(Clone, Debug, Deserialize)]
+pub struct UserRef {
+    pub email: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+impl UserRef {
+    /// What to call this person: their name when the identity provider has one,
+    /// and their address when it does not.
+    pub fn name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.email)
+    }
+}
+
+/// The Review the Server created for a draft, and what a reader deciding it
+/// needs to know.
+#[derive(Clone, Debug, Deserialize)]
 pub struct Review {
     pub review_id: String,
     pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub author: UserRef,
+    pub status: ReviewStatus,
+    /// Which Memory this would publish to. macOS defaults a missing scope to the
+    /// Organization's, and so does this.
+    #[serde(default = "Scope::org")]
+    pub scope: Scope,
+    /// The revision a decision or a merge has to name, so that two reviewers
+    /// deciding at once cannot both win.
+    pub version: i64,
+    /// What the last decision said.
+    #[serde(default)]
+    pub decision_body: Option<String>,
+    #[serde(default)]
+    pub decided_by: Option<UserRef>,
+    /// When the last decision was recorded, as the Server writes it.
+    #[serde(default)]
+    pub decided_at: Option<String>,
+    pub updated_at: String,
+    /// How the proposal stands against the reference it would publish to.
+    pub coordination: Coordination,
+}
+
+impl Review {
+    /// Whether a reader may approve or reject this Review now.
+    pub fn can_decide(&self) -> bool {
+        self.status == ReviewStatus::Open
+    }
+
+    /// Whether approving it would publish it. Approval is the merge transaction
+    /// on the Server, so it waits on the same thing merging does: a base that is
+    /// still the reference's head.
+    pub fn can_approve(&self) -> bool {
+        self.status == ReviewStatus::Open && self.coordination.is_current()
+    }
+
+    /// Whether an already approved Review may be published. A proposal whose
+    /// base has moved on has to be reconciled first.
+    pub fn can_merge(&self) -> bool {
+        self.status == ReviewStatus::Approved && self.coordination.is_current()
+    }
+}
+
+/// Which Memory a proposal publishes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    Org,
+    Project,
+}
+
+impl Scope {
+    fn org() -> Self {
+        Self::Org
+    }
+}
+
+/// A proposal's relationship to the reference it would publish to.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Coordination {
+    /// The reference's head when the Server answered. A merge names it, so the
+    /// publication cannot land on a head nobody reviewed.
+    #[serde(default)]
+    pub current_commit_id: Option<String>,
+    #[serde(default)]
+    pub freshness: Freshness,
+    /// Whether upstream changed this resource since the proposal's base.
+    #[serde(default)]
+    pub has_upstream_resource_changes: bool,
+    /// Whether reconciling with the current reference would need a choice from
+    /// the author.
+    #[serde(default)]
+    pub reconciliation: Reconciliation,
+}
+
+impl Coordination {
+    /// Whether the proposal's base is still the reference's head.
+    pub fn is_current(&self) -> bool {
+        self.freshness == Freshness::Current && !self.has_upstream_resource_changes
+    }
+
+    /// Whether the reference moved on in a way that conflicts with this
+    /// proposal, which is the one state that stops a decision being honest.
+    pub fn has_conflicts(&self) -> bool {
+        self.freshness == Freshness::Behind && self.reconciliation == Reconciliation::Conflicts
+    }
+}
+
+/// Whether the reference can be merged into a proposal without a choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reconciliation {
+    Clean,
+    Conflicts,
+    /// Nothing has been computed yet, which is not a conflict. A state this
+    /// client does not know lands here too, and is treated as no conflict
+    /// rather than as one.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Freshness {
+    Current,
+    Behind,
+    /// The Server names a state this client does not know, which it treats as
+    /// "not current": publishing is the one thing that must not guess.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a Review proposes for one document.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAction {
+    Create,
+    Update,
+    Rename,
+    Delete,
+}
+
+/// One document a Review would publish, with the text it proposes.
+#[derive(Clone, Debug)]
+pub struct ReviewedDocument {
+    /// The resource the proposal targets. An update names this and not the
+    /// path, so this is what ties a proposal to the document it changes.
+    pub resource_id: Option<String>,
+    /// The path the document would have, when the proposal names one.
+    pub path: Option<String>,
+    /// The text the proposal would publish. A rename or a delete carries none.
+    pub content: Option<String>,
+    pub action: ReviewAction,
+}
+
+impl ReviewedDocument {
+    pub fn action_label(&self) -> &'static str {
+        match self.action {
+            ReviewAction::Create => "Added",
+            ReviewAction::Update => "Changed",
+            ReviewAction::Rename => "Renamed",
+            ReviewAction::Delete => "Deleted",
+        }
+    }
+}
+
+/// A Review with everything a reader needs to decide it.
+#[derive(Clone, Debug)]
+pub struct ReviewDetail {
+    pub review: Review,
+    pub documents: Vec<ReviewedDocument>,
+}
+
+/// What the Server sends for a Review: the review, its proposals in either of
+/// the two spellings it uses, and the discussion.
+#[derive(Deserialize)]
+struct ReviewDetailResponse {
+    review: Review,
+    /// The single-proposal spelling.
+    #[serde(default)]
+    draft: Option<DraftResponse>,
+    #[serde(default)]
+    operations: Vec<OperationResponse>,
+    /// The batch spelling, which repeats the pair per proposal.
+    #[serde(default)]
+    drafts: Vec<DraftDetailResponse>,
 }
 
 #[derive(Deserialize)]
-struct ReviewDetail {
-    review: Review,
+struct DraftDetailResponse {
+    draft: DraftResponse,
+    #[serde(default)]
+    operations: Vec<OperationResponse>,
+}
+
+#[derive(Deserialize)]
+struct DraftResponse {
+    #[serde(default)]
+    resource: Option<ResourceRefResponse>,
+}
+
+#[derive(Deserialize)]
+struct ResourceRefResponse {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// One mutation in a proposal. Only what the diff needs is modelled: what the
+/// operation does, to which resource, and the text it would publish.
+#[derive(Deserialize)]
+struct OperationResponse {
+    action: ReviewAction,
+    #[serde(default)]
+    resource: Option<ResourceRefResponse>,
+    #[serde(default)]
+    content: Option<ContentResponse>,
+    #[serde(default)]
+    new_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ContentResponse {
+    content: String,
+}
+
+/// The documents a Review proposes, in the order the Server listed them.
+fn reviewed_documents(
+    draft: Option<DraftResponse>,
+    operations: Vec<OperationResponse>,
+    drafts: Vec<DraftDetailResponse>,
+) -> Vec<ReviewedDocument> {
+    let mut pairs: Vec<(Option<DraftResponse>, Vec<OperationResponse>)> = Vec::new();
+    if !drafts.is_empty() {
+        pairs.extend(
+            drafts
+                .into_iter()
+                .map(|entry| (Some(entry.draft), entry.operations)),
+        );
+    } else if !operations.is_empty() {
+        pairs.push((draft, operations));
+    }
+    pairs
+        .into_iter()
+        .flat_map(|(draft, operations)| {
+            let fallback_path = draft
+                .as_ref()
+                .and_then(|draft| draft.resource.as_ref())
+                .and_then(|resource| resource.path.clone());
+            let fallback_id = draft
+                .and_then(|draft| draft.resource)
+                .and_then(|resource| resource.id);
+            operations.into_iter().map(move |operation| {
+                let resource = operation.resource.unwrap_or(ResourceRefResponse {
+                    id: None,
+                    path: None,
+                });
+                ReviewedDocument {
+                    resource_id: resource.id.or_else(|| fallback_id.clone()),
+                    path: operation
+                        .new_path
+                        .or(resource.path)
+                        .or_else(|| fallback_path.clone()),
+                    content: operation.content.map(|content| content.content),
+                    action: operation.action,
+                }
+            })
+        })
+        .collect()
 }
 
 pub fn engine_status() -> EngineStatus {
@@ -400,9 +693,108 @@ pub fn request_review(
     if response.status != 200 {
         return Err(server_error(&response));
     }
-    let detail: ReviewDetail = serde_json::from_str(&response.body)
+    let detail: ReviewDetailResponse = serde_json::from_str(&response.body)
         .map_err(|error| format!("unreadable Review: {error}"))?;
     Ok(detail.review)
+}
+
+/// The Reviews of one Project, newest first, which is the order the Server
+/// answers in and the order macOS lists them.
+pub fn reviews(project_id: &str) -> Result<Vec<Review>, String> {
+    let response = server(
+        "GET",
+        &format!("/api/v1/reviews?project_id={project_id}"),
+        BTreeMap::new(),
+        None,
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    serde_json::from_str::<ReviewPage>(&response.body)
+        .map(|page| page.items)
+        .map_err(|error| format!("unreadable Review list: {error}"))
+}
+
+/// One Review with its proposals and its discussion.
+pub fn review(review_id: &str) -> Result<ReviewDetail, String> {
+    let response = server(
+        "GET",
+        &format!("/api/v1/reviews/{review_id}"),
+        BTreeMap::new(),
+        None,
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    let response: ReviewDetailResponse = serde_json::from_str(&response.body)
+        .map_err(|error| format!("unreadable Review: {error}"))?;
+    let documents = reviewed_documents(response.draft, response.operations, response.drafts);
+    Ok(ReviewDetail {
+        review: response.review,
+        documents,
+    })
+}
+
+/// Records an approval or a rejection. The note is what the author will read,
+/// so an empty one is sent as nothing rather than as an empty string.
+pub fn decide_review(review: &Review, decision: ReviewStatus, note: &str) -> Result<(), String> {
+    let mut headers = BTreeMap::new();
+    headers.insert("content-type".to_owned(), "application/json".to_owned());
+    let decision = match decision {
+        ReviewStatus::Approved => "approved",
+        ReviewStatus::Rejected => "rejected",
+        other => return Err(format!("a Review cannot be decided as {}", other.label())),
+    };
+    let body = serde_json::json!({
+        "decision": decision,
+        "expected_review_version": review.version,
+        "body": (!note.trim().is_empty()).then_some(note),
+    });
+    let response = server(
+        "POST",
+        &format!("/api/v1/reviews/{}/decisions", review.review_id),
+        headers,
+        Some(body.to_string()),
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    Ok(())
+}
+
+/// Publishes an approved Review. The reference it publishes to must be the one
+/// the approval covered, which is what the If-Match header says.
+pub fn merge_review(review: &Review) -> Result<(), String> {
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "If-Match".to_owned(),
+        format!(
+            "\"{}\"",
+            review
+                .coordination
+                .current_commit_id
+                .as_deref()
+                .unwrap_or("ref-none")
+        ),
+    );
+    headers.insert("content-type".to_owned(), "application/json".to_owned());
+    let body = serde_json::json!({ "expected_review_version": review.version });
+    let response = server(
+        "POST",
+        &format!("/api/v1/reviews/{}/merges", review.review_id),
+        headers,
+        Some(body.to_string()),
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    Ok(())
+}
+
+/// What the Server answers for a list of Reviews.
+#[derive(Deserialize)]
+struct ReviewPage {
+    items: Vec<Review>,
 }
 
 /// One request through the daemon, which is the only party holding a session.

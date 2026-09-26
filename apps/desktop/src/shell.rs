@@ -160,6 +160,10 @@ pub struct Chrome<'a> {
     /// The band's arrows are drawn from these two.
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    /// Where the rail takes the keyboard, and whether it has it: the rail is a
+    /// region F6 walks, and the section it is on says so with a ring.
+    pub rail_focus: &'a FocusHandle,
+    pub rail_focused: bool,
     /// The window's width, which decides what folds away.
     pub width: Pixels,
 }
@@ -389,7 +393,12 @@ impl Shell {
                     move |window, cx| Tooltip::new(title).build(window, cx)
                 });
             let row = if selected {
-                row.bg(cx.theme().sidebar_accent)
+                let row = row.bg(cx.theme().sidebar_accent);
+                if chrome.rail_focused {
+                    row.border_1().border_color(cx.theme().ring)
+                } else {
+                    row
+                }
             } else {
                 row.hover(|this| this.bg(cx.theme().list_hover))
             };
@@ -414,6 +423,7 @@ impl Shell {
         });
 
         div()
+            .id("rail")
             .v_flex()
             .relative()
             .w(px(RAIL_WIDTH))
@@ -421,6 +431,8 @@ impl Shell {
             .py_2()
             .gap_1()
             .items_center()
+            .track_focus(chrome.rail_focus)
+            .tab_stop(true)
             .children(rows)
             .child(div().flex_1())
             .child(self.rail_foot(chrome, cx))
