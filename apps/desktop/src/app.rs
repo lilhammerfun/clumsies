@@ -132,6 +132,7 @@ impl DesktopApp {
     /// settings. Anything more is more than a reader needs above the work.
     fn settings_button(&self, cx: &mut Context<Self>) -> AnyElement {
         Button::new("project-settings")
+            .ghost()
             .icon(Icon::default().path("icons/settings.svg"))
             .tooltip("Project settings")
             .on_click(cx.listener(|app, _event, window, cx| app.open_project_settings(window, cx)))

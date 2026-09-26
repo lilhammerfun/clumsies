@@ -19,7 +19,7 @@ use gpui_kit::component::Icon;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
@@ -251,11 +251,6 @@ impl DocumentPane {
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
         let this = cx.entity();
-        let ring = if focus.is_focused(window) {
-            cx.theme().ring
-        } else {
-            transparent_black()
-        };
         let tool = |id: &'static str,
                     icon: Icon,
                     tooltip: &'static str,
@@ -263,11 +258,12 @@ impl DocumentPane {
                     this: Entity<DesktopApp>,
                     action: fn(&mut DesktopApp, &mut Context<DesktopApp>)| {
             Button::new(id)
+                // No frame: the pill around the group is the only shape the
+                // tools need, and a box inside a box is what that avoids.
+                .ghost()
                 .icon(icon)
                 .tooltip(tooltip)
                 .toggled(selected)
-                // The group is a pill, so a button in it is round: one shape
-                // for the tools, another for the pane around them.
                 .rounded(px(999.))
                 .on_click(move |_event, _window, cx| {
                     this.update(cx, |app, cx| action(app, cx));
@@ -276,15 +272,16 @@ impl DocumentPane {
         let can_review = self.can_review();
         let more = {
             let this = this.clone();
-            DropdownButton::new("document-more")
-                .button(
-                    Button::new("document-more-button")
-                        .icon(Icon::default().path("icons/ellipsis.svg"))
-                        .tooltip("More")
-                        .rounded(px(999.))
-                        .dropdown_caret(false),
-                )
-                .dropdown_menu(move |menu, _window, _cx| {
+            // A plain button that opens the menu: the library's dropdown button
+            // adds a caret and a divider of its own, which squares off the end
+            // of the pill for a mark the reader does not need.
+            Button::new("document-more")
+                .ghost()
+                .bg(transparent_black())
+                .icon(Icon::default().path("icons/ellipsis.svg"))
+                .tooltip("More")
+                .rounded(px(999.))
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
                     let this = this.clone();
                     menu.item(
                         PopupMenuItem::new("Request review…")
@@ -304,10 +301,9 @@ impl DocumentPane {
             .py_1()
             // The tools are a surface of their own with fully rounded ends, so
             // the group does not read as another square panel inside the pane.
+            // No border and no ring: the fill is the shape.
             .rounded_full()
             .bg(ui::surface(cx))
-            .border_1()
-            .border_color(ring)
             .track_focus(focus)
             .tab_stop(true)
             .children(self.header_status(cx))

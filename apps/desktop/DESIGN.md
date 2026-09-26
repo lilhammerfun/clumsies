@@ -237,8 +237,14 @@ wrong in the other.
    disagree about how a control behaves — a tree row, a context menu, a
    keyboard shortcut — follow the platform, because that is what the user's
    hands already know.
-5. **Write the keyboard path.** Anything reachable by mouse is reachable by
-   keyboard, and the shortcut appears next to the command that has one.
+5. **Write the keyboard path where it earns its place.** Anything a reader does
+   all day is reachable by keyboard, and the shortcut appears next to the command
+   that has one. Not every command needs one: the ones a reader uses rarely, and
+   the ones whose keyboard form would mean inventing a widget the component
+   library does not have, wait until they are asked for. The product owner's call
+   (2026-09-26) is that the keyboard is not a priority for this client yet, so
+   what exists stays — it is also how this client gets tested on a machine that
+   cannot synthesize pointer events — and nothing new is added for its own sake.
 
 ## Known gaps
 
