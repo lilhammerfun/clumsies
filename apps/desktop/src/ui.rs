@@ -73,14 +73,6 @@ pub fn truncate(value: &str, limit: usize) -> String {
     format!("{kept}…")
 }
 
-/// The last segment of a path, which is what a reader recognises a directory
-/// by.
-pub fn last_segment(path: &str) -> Option<String> {
-    path.rsplit('/')
-        .find(|part| !part.is_empty())
-        .map(str::to_owned)
-}
-
 /// The tail of an identity, which is what tells two of them apart.
 pub fn shorten(value: &str, keep: usize) -> String {
     let characters = value.chars().count();

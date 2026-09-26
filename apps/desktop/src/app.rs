@@ -48,12 +48,6 @@ pub struct DesktopApp {
     _appearance: Subscription,
 }
 
-impl Default for DesktopApp {
-    fn default() -> Self {
-        unreachable!("DesktopApp is built with a window")
-    }
-}
-
 impl DesktopApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let engine = engine::engine_status();
@@ -383,10 +377,17 @@ impl DesktopApp {
         self.refresh_drafts(cx);
     }
 
-    /// The context bar's actions: what the window can do to what it names. A
-    /// screen's actions belong here rather than in its own header, so that a
-    /// reader learns one place to look.
-    fn actions(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The open screen's actions, for the end of its detail header. A screen
+    /// hands them to the shell rather than drawing its own, so that a reader
+    /// learns one place to look for what the window can do.
+    ///
+    /// The one action so far belongs to Memory, and the section that would draw
+    /// it is the section that has it: a screen with no actions returns nothing
+    /// here rather than a button that says so.
+    fn actions(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.shell.section() != Section::Memory {
+            return None;
+        }
         let focused = self.actions_focus.is_focused(window);
         let ring = if focused {
             cx.theme().ring
@@ -394,11 +395,6 @@ impl DesktopApp {
             transparent_black()
         };
         let enabled = self.can_run_primary_action();
-        let label = if self.shell.section() == Section::Memory {
-            "Request review…"
-        } else {
-            "No action here yet"
-        };
         div()
             .id("window-actions")
             .h_flex()
@@ -413,13 +409,14 @@ impl DesktopApp {
             .child(
                 Button::new("primary-action")
                     .primary()
-                    .label(label)
+                    .label("Request review…")
                     .disabled(!enabled)
                     .on_click(
                         cx.listener(|app, _event, window, cx| app.run_primary_action(window, cx)),
                     ),
             )
             .into_any_element()
+            .into()
     }
 
     /// The window's status bar: what the open screen last did, and whether the
@@ -498,9 +495,11 @@ impl DesktopApp {
 
     /// Its detail. The window's actions go into it, because that is where the
     /// macOS client keeps the same menu: in the detail's own toolbar.
-    fn section_detail(&self, actions: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+    fn section_detail(&self, actions: Option<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.detail(actions, cx),
+            Section::Memory => self
+                .memory
+                .detail(actions.unwrap_or_else(|| div().into_any_element()), cx),
             other => placeholder(other.detail_note(), cx),
         }
     }
