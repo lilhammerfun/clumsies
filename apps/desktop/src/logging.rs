@@ -29,7 +29,7 @@ static LOG: OnceLock<Log> = OnceLock::new();
 pub fn init() {
     let log = Log {
         started: Instant::now(),
-        file: log_file().map(|file| Mutex::new(file)),
+        file: log_file().map(Mutex::new),
     };
     let _ = LOG.set(log);
 
@@ -65,13 +65,11 @@ fn write(level: &str, message: &str) {
         None => format!("clumsies-desktop {level:5} {message}"),
     };
     eprintln!("{line}");
-    if let Some(log) = LOG.get() {
-        if let Some(file) = &log.file {
-            if let Ok(mut file) = file.lock() {
-                let _ = writeln!(file, "{line}");
-                let _ = file.flush();
-            }
-        }
+    if let Some(Some(file)) = LOG.get().map(|log| log.file.as_ref())
+        && let Ok(mut file) = file.lock()
+    {
+        let _ = writeln!(file, "{line}");
+        let _ = file.flush();
     }
 }
 

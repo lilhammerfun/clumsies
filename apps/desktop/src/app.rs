@@ -427,24 +427,16 @@ impl DesktopApp {
             .into()
     }
 
-    /// What the right panel says about the engine this client is talking to.
+    /// What the rail's foot says about the engine this client is talking to.
     fn engine_facts(&self) -> EngineFacts {
         match &self.engine {
             EngineStatus::Connected(health) => EngineFacts {
                 connected: true,
                 version: health.daemon_version.clone(),
-                server: Some(health.server_url.clone()),
-                installation: Some(health.daemon_installation_id.clone()),
-                schema: Some(health.local_db.schema_version),
-                detail: None,
             },
-            EngineStatus::Unreachable(reason) => EngineFacts {
+            EngineStatus::Unreachable(_) => EngineFacts {
                 connected: false,
                 version: String::new(),
-                server: None,
-                installation: None,
-                schema: None,
-                detail: Some(reason.clone()),
             },
         }
     }
@@ -469,28 +461,17 @@ impl DesktopApp {
     /// rather than drawing an empty column with no explanation.
     fn section_list(&self, picker: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.list(picker),
+            Section::Memory => self.memory.list(picker, cx),
             other => placeholder(other.list_note(), cx),
         }
     }
 
-    /// Its detail: the work itself.
-    fn section_detail(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Its detail: the work itself. The actions the open screen offers are drawn
+    /// in the detail pane's own header, beside what they act on.
+    fn section_detail(&self, actions: Option<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.detail(cx),
+            Section::Memory => self.memory.detail(actions, cx),
             other => placeholder(other.detail_note(), cx),
-        }
-    }
-
-    /// What the open screen puts in the window's band: the document it has open
-    /// and how to look at it, which is where macOS keeps the same two things.
-    fn section_band(&self, cx: &mut Context<Self>) -> AnyElement {
-        match self.shell.section() {
-            Section::Memory => self.memory.band(cx),
-            other => div()
-                .text_style(&ui::BODY)
-                .child(other.title())
-                .into_any_element(),
         }
     }
 
@@ -572,10 +553,9 @@ impl Render for DesktopApp {
         let picker = self.shell.project_picker(&chrome, cx);
         let slots = Slots {
             list: self.section_list(picker, cx),
-            detail: self.section_detail(cx),
-            band: self.section_band(cx),
+            detail: self.section_detail(actions, cx),
         };
-        let shell = self.shell.render(window, cx, chrome, slots, actions);
+        let shell = self.shell.render(window, cx, chrome, slots);
         // The window's own keys, handled above everything else: F6 moves between
         // the regions and Shift+F6 back, which is the Windows pair for reaching
         // what an editor would otherwise swallow along with Tab; Enter or Space

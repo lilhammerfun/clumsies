@@ -69,6 +69,17 @@ pub fn surface(cx: &App) -> Hsla {
 
 /// A line of text in a semantic color. Every empty state and every failure the
 /// screens draw has this shape.
+/// A hairline rule across a pane, under a header row. Screens use this rather
+/// than a border on one edge, which this framework does not offer.
+pub fn rule(cx: &App) -> AnyElement {
+    div()
+        .h(px(1.))
+        .w_full()
+        .flex_shrink_0()
+        .bg(cx.theme().border)
+        .into_any_element()
+}
+
 pub fn message(text: impl Into<SharedString>, color: Hsla) -> AnyElement {
     div()
         .text_style(&BODY)

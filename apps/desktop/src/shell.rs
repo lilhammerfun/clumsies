@@ -8,23 +8,23 @@
 //! - a rail of destinations down the left, icons only, with a badge where a
 //!   destination has something waiting and the help and account affordances at
 //!   the foot;
-//! - a band across the top holding the page navigation, the open document as a
-//!   tab, that document's view switch and its actions, and the window controls;
+//! - a band across the top belonging to the window alone: the page navigation
+//!   and the window controls, and nothing a screen owns;
 //! - the section's list and the work itself inside one floating card: rounded,
 //!   bordered, a lighter colour than the page, and inset from the page's right
-//!   and bottom edges;
-//! - a panel to the right of the card saying what the client knows about what
-//!   is open.
+//!   and bottom edges. Each of those two panes carries a header row of its own
+//!   for the commands and facts that act on that pane — the list's header, and
+//!   the document's header — which is where a screen puts what it offers, and
+//!   why the band stays empty of them.
 //!
-//! A screen fills four slots: its list, its detail, its band, and — when it has
-//! facts to offer — the right panel. Nothing else about a screen's layout is its
-//! own business, which is what keeps the next six screens from each inventing a
-//! window.
+//! A screen fills two slots: its list and its detail. Nothing else about a
+//! screen's layout is its own business, which is what keeps the next six screens
+//! from each inventing a window.
 //!
 //! Two deliberate differences from that reference: the window controls are this
 //! platform's, at the right of the band rather than traffic lights at the left;
-//! and the right panel holds facts, not tools, because the client has no tools
-//! to offer there yet.
+//! and the commands macOS keeps in the window toolbar are drawn in each pane's
+//! header instead, because a command belongs beside the region it acts on.
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
@@ -137,16 +137,11 @@ impl Section {
     }
 }
 
-/// What the client knows about the engine it is talking to, as the right panel
-/// names it.
+/// What the rail's foot says about the engine it is talking to: whether it is
+/// there, and which daemon it is.
 pub struct EngineFacts {
     pub connected: bool,
     pub version: String,
-    pub server: Option<String>,
-    pub installation: Option<String>,
-    pub schema: Option<i64>,
-    /// Why it is not connected, when it is not.
-    pub detail: Option<String>,
 }
 
 /// What the window supplies for its own chrome: which Project is open, the list
@@ -165,13 +160,12 @@ pub struct Chrome<'a> {
     pub width: Pixels,
 }
 
-/// What a screen fills: its list column, its detail, its part of the top band,
-/// and anything it has to say about what is open, which the right panel shows.
+/// What a screen fills: its list column and its detail. Everything a screen
+/// has to show or offer belongs to one of the two panes, each of which carries
+/// its own header; the band above them belongs to the window.
 pub struct Slots {
     pub list: AnyElement,
     pub detail: AnyElement,
-    /// The band's own content: what the screen adds beside the page navigation.
-    pub band: AnyElement,
 }
 
 pub struct Shell {
@@ -240,10 +234,9 @@ impl Shell {
         cx: &mut Context<DesktopApp>,
         chrome: Chrome<'_>,
         slots: Slots,
-        actions: Option<AnyElement>,
     ) -> AnyElement {
         let narrow = chrome.width < px(STACK_WIDTH);
-        let Slots { list, detail, band } = slots;
+        let Slots { list, detail } = slots;
 
         let list_column = div().v_flex().w(px(LIST_WIDTH)).h_full().child(list);
         let detail_column = div()
@@ -306,7 +299,7 @@ impl Shell {
             .relative()
             .size_full()
             .bg(cx.theme().background)
-            .child(self.band(window, &chrome, band, actions, cx))
+            .child(self.band(window, cx))
             .child(
                 div()
                     .h_flex()
@@ -321,16 +314,11 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The band across the top: the window controls, the page navigation beside
-    /// them, then whatever the open screen puts there and the window's actions.
-    fn band(
-        &self,
-        window: &mut Window,
-        chrome: &Chrome<'_>,
-        band: AnyElement,
-        actions: Option<AnyElement>,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
+    /// The band across the top belongs to the window, not to a screen: the page
+    /// navigation on the left, the window controls on the right, and nothing
+    /// else. Commands a screen offers are drawn in that screen's own panes, next
+    /// to what they act on.
+    fn band(&self, window: &mut Window, cx: &mut Context<DesktopApp>) -> AnyElement {
         // The band is the page: no surface of its own, no rule under it, so the
         // window reads as one surface with a card floating on it.
         let band = TitleBar::new()
@@ -347,16 +335,7 @@ impl Shell {
                     .child(div().w(px(RAIL_WIDTH)).h_full())
                     .child(nav_button("page-back", IconName::ArrowLeft, true, cx))
                     .child(nav_button("page-forward", IconName::ArrowRight, true, cx))
-                    .child(div().w(px(ui::SPACE_SM)))
-                    .child(
-                        div()
-                            .h_flex()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .items_center()
-                            .child(band),
-                    )
-                    .children(actions),
+                    .child(div().flex_1().min_w(px(0.))),
             );
         let band = if draws_own_controls(window) {
             band.child(window_controls(cx))

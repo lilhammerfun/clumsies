@@ -29,6 +29,10 @@ use crate::ui::{self, Typography};
 /// at 600ms because the store is a socket call, not an in-process write.
 pub const SAVE_DELAY: Duration = Duration::from_millis(600);
 
+/// The height of a pane's header row. The list column and the document pane use
+/// the same one, so the two headers line up across the card.
+pub const PANE_HEADER: f32 = 44.;
+
 /// The three ways a document can be read, which are the macOS tab modes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -202,16 +206,16 @@ impl DocumentPane {
         self.save = save;
     }
 
-    /// What the window's band shows for this document: which document is open,
-    /// and how to look at it. macOS has the same two things in the same place.
-    pub fn band(
+    /// The document pane's own header: which document is open, how to look at
+    /// it, what it has to say about itself, and what the screen can do with it.
+    /// macOS keeps the first two in the window toolbar; here they sit on the
+    /// pane they act on, above the text.
+    pub fn header(
         &self,
-        target: Option<PaneContext<'_>>,
+        target: &PaneContext<'_>,
+        actions: Option<AnyElement>,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
-        let Some(target) = target else {
-            return div().into_any_element();
-        };
         let this = cx.entity();
         let modes = TabBar::new("document-mode")
             .segmented()
@@ -230,6 +234,8 @@ impl DocumentPane {
             ]);
         div()
             .h_flex()
+            .h(px(PANE_HEADER))
+            .px_4()
             .gap_3()
             .items_center()
             .child(
@@ -242,6 +248,7 @@ impl DocumentPane {
                     .py_1()
                     .rounded(px(ui::RADIUS))
                     .bg(cx.theme().background)
+                    .flex_shrink_0()
                     .border_1()
                     .border_color(cx.theme().border)
                     .child(
@@ -260,16 +267,20 @@ impl DocumentPane {
             .child(modes)
             .children(self.band_status(cx))
             .children(self.notice_line(cx))
+            .child(div().flex_1().min_w(px(0.)))
+            .children(actions)
             .into_any_element()
     }
 
-    /// The work itself: the document, read in one of its three modes.
+    /// The work itself: the document, read in one of its three modes, under the
+    /// pane's header.
     pub fn detail(
         &self,
         target: Option<PaneContext<'_>>,
+        actions: Option<AnyElement>,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
-        if target.is_none() {
+        let Some(target) = target else {
             return div()
                 .v_flex()
                 .flex_1()
@@ -280,7 +291,7 @@ impl DocumentPane {
                     cx.theme().muted_foreground,
                 ))
                 .into_any_element();
-        }
+        };
         let text = self.text(cx);
 
         let body: AnyElement = match self.mode {
@@ -324,8 +335,9 @@ impl DocumentPane {
             .h_full()
             .min_w(px(0.))
             .min_h(px(0.))
-            .p_4()
-            .child(body)
+            .child(self.header(&target, actions, cx))
+            .child(ui::rule(cx))
+            .child(div().flex_1().min_h(px(0.)).p_4().child(body))
             .into_any_element()
     }
 

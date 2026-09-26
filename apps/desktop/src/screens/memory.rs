@@ -11,7 +11,7 @@ use gpui_kit::*;
 use crate::app::DesktopApp;
 use crate::components::memory_tree;
 use crate::engine::{Checkout, MemoryDocument};
-use crate::screens::document::{DocumentPane, Notice, PaneContext};
+use crate::screens::document::{DocumentPane, Notice, PANE_HEADER, PaneContext};
 use crate::ui::{self, Typography};
 
 pub struct MemoryScreen {
@@ -172,12 +172,13 @@ impl MemoryScreen {
         })
     }
 
-    /// The section's list column: the Project's Memory, as files, under the
-    /// header that says which Project and offers to change it.
-    pub fn list(&self, project: AnyElement) -> AnyElement {
+    /// The section's list column: the Project's Memory, as files, under a header
+    /// row of its own saying which Project and offering to change it. Every pane
+    /// carries its own header; this is the list's.
+    pub fn list(&self, project: AnyElement, cx: &App) -> AnyElement {
         let header = div()
             .h_flex()
-            .h(px(36.))
+            .h(px(PANE_HEADER))
             .px_3()
             .gap_2()
             .items_center()
@@ -188,6 +189,7 @@ impl MemoryScreen {
             .v_flex()
             .h_full()
             .child(header)
+            .child(ui::rule(cx))
             .child(
                 div()
                     .flex_1()
@@ -198,14 +200,9 @@ impl MemoryScreen {
             .into_any_element()
     }
 
-    /// What the window's band shows while this section is open: the document the
-    /// reader picked, and how to look at it.
-    pub fn band(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
-        self.pane.band(self.render_target(), cx)
-    }
-
-    /// The section's detail: the work itself.
-    pub fn detail(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
+    /// The section's detail: the work itself, under the document pane's own
+    /// header.
+    pub fn detail(&self, actions: Option<AnyElement>, cx: &mut Context<DesktopApp>) -> AnyElement {
         let Some(target) = self.render_target() else {
             let reason = match &self.error {
                 Some(error) => ui::message(error.clone(), cx.theme().danger),
@@ -226,7 +223,7 @@ impl MemoryScreen {
         // h_flex centers the cross axis, so a column in a row takes its content
         // height unless it asks for h_full(); the scroll regions inside need the
         // row's height to resolve against.
-        self.pane.detail(Some(target), cx)
+        self.pane.detail(Some(target), actions, cx)
     }
 
     /// Rebuilds what the tree draws and points the pane at the right draft.
