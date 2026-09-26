@@ -1,6 +1,5 @@
 ---
-description: 在 App 中提交 Codex 修改后的草稿，
-由人检查差异并发布到项目 Memory。
+description: 在 App 中提交 Codex 修改后的草稿，由人检查差异并发布到项目 Memory。
 prev:
   text: 让 Codex 修改 Memory
   link: /zh/quickstart/update-memory
