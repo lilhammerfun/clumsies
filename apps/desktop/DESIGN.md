@@ -74,6 +74,82 @@ Spacing comes from a 4px grid, stepped 4 / 8 / 12 / 16 / 24 / 32. Named steps
 live in `src/ui.rs`; screens use those names rather than picking a padding
 per call site.
 
+## Motion
+
+Windows states the timing and easing rather than leaving them to taste, and
+adjusts both to the purpose. The two we need:
+
+| Purpose | Easing | Duration | Used for |
+| --- | --- | --- | --- |
+| Bare minimum | Linear | 83ms | Opacity |
+| Direct entrance | cubic-bezier(0, 0, 0, 1) | 167ms | Position, scale, rotation |
+| Direct exit | cubic-bezier(0, 0, 0, 1) | 167ms | The same, **always combined with a fade** |
+| Existing elements | cubic-bezier(0.55, 0.55, 0, 1) | 167–333ms | Point-to-point movement |
+
+So: hover and press feedback is a 83ms opacity change; a panel or overlay
+enters at 167ms and leaves at 167ms with a fade. Nothing in this client should
+animate for longer than a third of a second.
+
+## Navigation structures
+
+Windows names two and says when each fits: **flat/lateral** when the pages are
+peers with no parent-child relationship and there are fewer than eight, and
+**hierarchical** when pages have a parent and there are more. Two rules come
+with it:
+
+- **Do not go deeper than two levels** without a breadcrumb, or the user is
+  stranded in a hierarchy they cannot leave.
+- **Avoid "pogo-sticking"**: needing to go up a level and back down to reach
+  related content means the structure is wrong.
+
+Where this client sits: the rail is the flat level (Projects, and later
+Reviews, Inbox, Settings as peers). The Memory screen is a **list/details**
+pair, which is a second level but not a hierarchy to descend — the tree beside
+the document. Adding a third pane of *navigation* would need a breadcrumb, so
+the rule to keep is: no more than one navigable level inside a screen.
+
+## List and details
+
+Windows describes the pattern, and — the part worth copying — when it changes
+shape. The two panes are side by side only while there is room for both:
+
+| Available width | Style |
+| --- | --- |
+| 320–640 epx | **Stacked**: one pane at a time, selecting an item drills into it |
+| 641 epx or wider | **Side by side**: the list keeps a selection visual and the detail pane follows it |
+
+The Memory screen is side-by-side at every width today; below 641px it should
+stack and grow a back affordance. This is a real gap, not a stylistic
+preference, because the client runs in windows the user resizes.
+
+## Forms
+
+Windows is specific about forms, and the sign-in screen is one:
+
+- **Mark required input with an asterisk on the label.**
+- **Disable the submit action until the required input is filled.** A form that
+  can be submitted invalid is a form that will be.
+- Use the right control so invalid input is impossible, and a placeholder to
+  show the expected shape.
+- When a value is rejected, **mark the field and keep the user on the form**;
+  do not clear what they typed.
+- **Errors belong where they happened.** A field's problem is shown at the
+  field; a connection problem is a message in the form. Windows says explicitly
+  not to use a dialog for contextual errors.
+
+The one step that leaves the app is the browser round trip to the identity
+provider, and the form says so before it happens.
+
+## Dialogs
+
+- The title is the instruction and is optional; the content is the description
+  and is required; there is always at least one button.
+- **Escape maps to the safe action**, always, and the safe action is the
+  rightmost button. The primary action is leftmost.
+
+For this client that means: a discard or destructive confirmation can be a
+dialog, and Escape must dismiss it without doing the destructive thing.
+
 ## Rules for translating a macOS screen
 
 1. **Read the macOS screen first**, and write down what the user can see and do
