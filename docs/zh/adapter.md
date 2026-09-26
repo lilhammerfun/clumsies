@@ -114,12 +114,12 @@ LaunchAgent 和宿主配置。
 
 | 关注点 | 当前路径 |
 | --- | --- |
-| 全局开关、安装与仓库配置迁移 | `crates/daemon/src/agent_adapter/global.rs` |
-| direct-file 安装、合并与 legacy 发现 | `crates/daemon/src/agent_adapter.rs` |
-| Codex Plugin 物化和 CLI reconciliation | `crates/daemon/src/agent_adapter/codex_plugin.rs` |
+| 全局开关、安装与仓库配置迁移 | `crates/clumsiesd/src/agent_adapter/global.rs` |
+| direct-file 安装、合并与 legacy 发现 | `crates/clumsiesd/src/agent_adapter.rs` |
+| Codex Plugin 物化和 CLI reconciliation | `crates/clumsiesd/src/agent_adapter/codex_plugin.rs` |
 | Codex Plugin 源包 | `packages/clumsies/` |
-| MCP proxy | `crates/daemon/src/main.rs` |
-| typed MCP contract | `crates/daemon/src/agent_runtime/mcp_contract.rs` |
+| MCP proxy | `crates/clumsiesd/src/main.rs` |
+| typed MCP contract | `crates/clumsiesd/src/agent_runtime/mcp_contract.rs` |
 
 退役 Zig Adapter 的最后一份活动源码可从 Git commit
 `4b18f7947a977dbc6b62f560b698dc992597f19d` 恢复，不保留在当前构建、安装或运行路径中。

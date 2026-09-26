@@ -2,7 +2,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use daemon::{DaemonConfig, DaemonIpcRequest, DaemonIpcService};
+use clumsiesd::{DaemonConfig, DaemonIpcRequest, DaemonIpcService};
 use serde_json::json;
 use tokio::io::AsyncReadExt;
 
@@ -100,7 +100,7 @@ async fn batch_timeout_preserves_cause_correlation_and_safe_logs() {
     }
     let preserved = response.into_payload::<serde_json::Value>().unwrap_err();
     match preserved {
-        daemon::DaemonError::Remote(error) => {
+        clumsiesd::DaemonError::Remote(error) => {
             assert_eq!(error.request_id, request_id);
             assert_eq!(error.details["timeout"], true);
         }

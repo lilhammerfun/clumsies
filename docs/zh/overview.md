@@ -82,4 +82,4 @@ Agent 调用 `memory.store` 成功，只表示**本地已受理**，不能作为
 
 详细字段约定和已知实现差异放在[数据模型](/zh/data-model)与[接口参考](/zh/reference/domain-api)中。入门页先解释正常工作流程。
 
-实现入口：[MCP 契约](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/agent_runtime/mcp_contract.rs)、[本地 Draft 持久化](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/state.rs)、[Review 发布](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs)。
+实现入口：[MCP 契约](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/agent_runtime/mcp_contract.rs)、[本地 Draft 持久化](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/state.rs)、[Review 发布](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs)。

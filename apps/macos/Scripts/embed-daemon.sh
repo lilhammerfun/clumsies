@@ -14,17 +14,17 @@ daemon_identifier="ai.clumsies.daemon"
 mkdir -p "$(dirname "$destination")"
 
 if [ "$CONFIGURATION" = "Release" ] && [ "${CLUMSIES_UNIVERSAL_BUILD:-0}" = "1" ]; then
-  cargo build -p daemon --bin clumsiesd --release --target aarch64-apple-darwin
-  cargo build -p daemon --bin clumsiesd --release --target x86_64-apple-darwin
+  cargo build -p clumsiesd --bin clumsiesd --release --target aarch64-apple-darwin
+  cargo build -p clumsiesd --bin clumsiesd --release --target x86_64-apple-darwin
   lipo -create \
     "$repo_root/target/aarch64-apple-darwin/release/clumsiesd" \
     "$repo_root/target/x86_64-apple-darwin/release/clumsiesd" \
     -output "$destination"
 elif [ "$CONFIGURATION" = "Release" ]; then
-  cargo build -p daemon --bin clumsiesd --release
+  cargo build -p clumsiesd --bin clumsiesd --release
   cp "$repo_root/target/release/clumsiesd" "$destination"
 else
-  cargo build -p daemon --bin clumsiesd
+  cargo build -p clumsiesd --bin clumsiesd
   cp "$repo_root/target/debug/clumsiesd" "$destination"
 fi
 

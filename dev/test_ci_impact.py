@@ -28,8 +28,8 @@ class ImpactTests(unittest.TestCase):
             "crates/server/migrations/new.sql": {"server", "daemon", "server_image", "server_delivery"},
             "crates/server/openapi/api.yaml": {"server", "daemon", "macos", "server_image", "server_delivery"},
             "crates/server/tests/health.rs": {"server"},
-            "crates/daemon/src/ipc.rs": {"daemon", "runtime", "macos", "package", "scripts"},
-            "crates/daemon/tests/server_integration.rs": {"daemon", "runtime"},
+            "crates/clumsiesd/src/ipc.rs": {"daemon", "runtime", "macos", "package", "scripts"},
+            "crates/clumsiesd/tests/server_integration.rs": {"daemon", "runtime"},
             "apps/macos/Sources/App/AppDelegate.swift": {"macos", "package", "scripts"},
             "apps/macos/Tests/App/Test.swift": {"macos"},
             "apps/macos/Scripts/test.sh": {"macos", "scripts"},
@@ -47,7 +47,7 @@ class ImpactTests(unittest.TestCase):
                 self.assertTrue({"macos", "package"} <= self.selected(path))
 
     def test_shared_build_configuration_reaches_all_consumers(self):
-        for path in ("Cargo.lock", "Cargo.toml", "crates/server/Cargo.toml", "crates/daemon/Cargo.toml", "rust-toolchain.toml", ".cargo/config.toml"):
+        for path in ("Cargo.lock", "Cargo.toml", "crates/server/Cargo.toml", "crates/clumsiesd/Cargo.toml", "rust-toolchain.toml", ".cargo/config.toml"):
             with self.subTest(path=path):
                 self.assertTrue({"server", "daemon", "runtime", "macos", "package", "server_image", "server_delivery"} <= self.selected(path))
         for path in ("crates/server/Dockerfile", ".dockerignore"):

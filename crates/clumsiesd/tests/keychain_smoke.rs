@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use daemon::{CredentialStore, IDENTIFIER_NAMESPACE, ServerCredentials, SystemCredentialStore};
+use clumsiesd::{CredentialStore, IDENTIFIER_NAMESPACE, ServerCredentials, SystemCredentialStore};
 use uuid::Uuid;
 
 #[test]

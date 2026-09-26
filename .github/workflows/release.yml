@@ -67,7 +67,7 @@ jobs:
         env:
           CLUMSIES_TEST_PACKAGED_DAEMON: ${{ github.workspace }}/build/macos-preview-derived/Build/Products/Debug/Clumsies.app/Contents/Resources/clumsiesd
           CARGO_PROFILE_DEV_DEBUG: '0'
-        run: cargo test --locked -p daemon --test agent_runtime_xpc_e2e -- --nocapture
+        run: cargo test --locked -p clumsiesd --test agent_runtime_xpc_e2e -- --nocapture
 
       - name: Sign the Preview in-app update
         env:

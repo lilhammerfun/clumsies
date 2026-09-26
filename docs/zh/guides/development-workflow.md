@@ -130,7 +130,7 @@ Preview descriptor 只是连接凭据，不负责部署当前 worktree，也不�
 
 | 改动层级 | 至少运行 |
 | --- | --- |
-| daemon 库与生命周期 | `cargo test -p daemon --lib`、`cargo test -p daemon --test daemon_lifecycle` |
+| daemon 库与生命周期 | `cargo test -p clumsiesd --lib`、`cargo test -p clumsiesd --test daemon_lifecycle` |
 | macOS App | `just test-macos` |
 | Dev Instance 脚本或身份 | `just test-dev-macos` |
 | 已运行实例的端到端路径 | `just test-macos-live` |

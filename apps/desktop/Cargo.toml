@@ -1,0 +1,22 @@
+[package]
+name = "desktop"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Clumsies desktop client for Windows and Linux."
+
+[[bin]]
+name = "clumsies-desktop"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = "0.6.6"
+# Line-level diffing for the draft and review views.
+similar = "2"
+# The daemon owns the local wire protocol. Depending on it keeps one
+# definition of that contract instead of a copy that drifts.
+clumsiesd = { path = "../../crates/clumsiesd" }
+# The Server's API is not the daemon's, so the fields this client reads from it
+# are described here, not shared.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

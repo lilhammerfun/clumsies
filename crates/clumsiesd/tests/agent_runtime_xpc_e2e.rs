@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use daemon::{DaemonHealth, DaemonIpcClient, DaemonProjectBindingResolveRequest};
+use clumsiesd::{DaemonHealth, DaemonIpcClient, DaemonProjectBindingResolveRequest};
 use serde_json::Value;
 use uuid::Uuid;
 

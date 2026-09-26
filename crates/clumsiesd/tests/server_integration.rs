@@ -1,6 +1,6 @@
 //! Daemon synchronization and publication against the production server over real TCP.
 
-use daemon::{
+use clumsiesd::{
     DaemonConfig, DaemonContentDraftUpdate, DaemonCreateDraftOperation, DaemonDeleteDraftOperation,
     DaemonDraftContent, DaemonDraftListQuery, DaemonDraftOperation,
     DaemonDraftOperationRecordSource, DaemonDraftOperationRequest, DaemonDraftOperationSource,
@@ -69,12 +69,12 @@ fn directory_handoff_bookmark(path: &std::path::Path) -> String {
 
 #[cfg(target_os = "macos")]
 async fn wait_for_storage_move(
-    state: &daemon::DaemonState,
+    state: &clumsiesd::DaemonState,
     move_id: &str,
-) -> daemon::DaemonProjectStorageMove {
+) -> clumsiesd::DaemonProjectStorageMove {
     for _ in 0..100 {
         let current = state
-            .project_storage_move(daemon::DaemonProjectStorageMoveRequest {
+            .project_storage_move(clumsiesd::DaemonProjectStorageMoveRequest {
                 move_id: move_id.to_owned(),
             })
             .await
@@ -1105,7 +1105,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
         .unwrap();
 
     service
-        .replace_project_config(daemon::DaemonProjectConfigUpdateRequest {
+        .replace_project_config(clumsiesd::DaemonProjectConfigUpdateRequest {
             server_url: "http://127.0.0.1:1".to_owned(),
             project_id: Some(bootstrap.project_id.clone()),
             access_token: Some(access_token.to_owned()),
@@ -1210,7 +1210,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     }
 
     service
-        .replace_project_config(daemon::DaemonProjectConfigUpdateRequest {
+        .replace_project_config(clumsiesd::DaemonProjectConfigUpdateRequest {
             server_url: server_url.clone(),
             project_id: Some(bootstrap.project_id.clone()),
             access_token: Some(access_token.to_owned()),
@@ -1277,7 +1277,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     );
 
     service
-        .replace_project_config(daemon::DaemonProjectConfigUpdateRequest {
+        .replace_project_config(clumsiesd::DaemonProjectConfigUpdateRequest {
             server_url: "http://127.0.0.1:1".to_owned(),
             project_id: Some(bootstrap.project_id.clone()),
             access_token: Some(access_token.to_owned()),
@@ -1333,7 +1333,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     );
 
     service
-        .replace_project_config(daemon::DaemonProjectConfigUpdateRequest {
+        .replace_project_config(clumsiesd::DaemonProjectConfigUpdateRequest {
             server_url,
             project_id: Some(bootstrap.project_id.clone()),
             access_token: Some(access_token.to_owned()),
@@ -1360,7 +1360,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     );
     assert_eq!(
         projected_behind.draft.freshness,
-        daemon::DaemonDraftFreshness::Behind
+        clumsiesd::DaemonDraftFreshness::Behind
     );
     assert!(!projected_behind.draft.has_upstream_resource_changes);
     let synced_offline_operation = projected_behind
@@ -1494,7 +1494,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
     );
     assert_eq!(
         projected_resolution.draft.freshness,
-        daemon::DaemonDraftFreshness::Current
+        clumsiesd::DaemonDraftFreshness::Current
     );
     assert_eq!(projected_resolution.operations.len(), 1);
     assert_eq!(

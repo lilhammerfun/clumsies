@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use daemon::{
+use clumsiesd::{
     ActivateMemoryRequest, CURRENT_LOCAL_SCHEMA_VERSION, DAEMON_AGENT_LABEL,
     DAEMON_MACH_SERVICE_NAME, DaemonConfig, DaemonContentDraftUpdate, DaemonCreateDraftOperation,
     DaemonDeleteDraftOperation, DaemonDiscardDraftOperation, DaemonDraftContent,
@@ -102,10 +102,10 @@ fn directory_security_bookmark(path: &Path) -> String {
 async fn wait_for_storage_move(
     state: &DaemonState,
     move_id: &str,
-) -> daemon::DaemonProjectStorageMove {
+) -> clumsiesd::DaemonProjectStorageMove {
     for _ in 0..100 {
         let current = state
-            .project_storage_move(daemon::DaemonProjectStorageMoveRequest {
+            .project_storage_move(clumsiesd::DaemonProjectStorageMoveRequest {
                 move_id: move_id.to_owned(),
             })
             .await
@@ -309,7 +309,7 @@ async fn project_storage_is_local_per_project_and_moves_managed_cache_safely() {
         .unwrap();
     assert_eq!(
         invalid_authorization.availability,
-        daemon::DaemonProjectStorageAvailability::Unavailable
+        clumsiesd::DaemonProjectStorageAvailability::Unavailable
     );
     assert_eq!(
         invalid_authorization.issue_code.as_deref(),
@@ -337,7 +337,7 @@ async fn project_storage_is_local_per_project_and_moves_managed_cache_safely() {
         .unwrap();
     assert_eq!(
         refreshed_status_a.availability,
-        daemon::DaemonProjectStorageAvailability::Ready
+        clumsiesd::DaemonProjectStorageAvailability::Ready
     );
     assert_eq!(refreshed_status_a.location_revision, 3);
 
@@ -350,7 +350,7 @@ async fn project_storage_is_local_per_project_and_moves_managed_cache_safely() {
         .unwrap();
     assert_eq!(
         unavailable.availability,
-        daemon::DaemonProjectStorageAvailability::Unavailable
+        clumsiesd::DaemonProjectStorageAvailability::Unavailable
     );
     assert_eq!(
         unavailable.issue_code.as_deref(),
@@ -389,7 +389,7 @@ async fn project_storage_is_local_per_project_and_moves_managed_cache_safely() {
             .await
             .unwrap()
             .availability,
-        daemon::DaemonProjectStorageAvailability::Ready
+        clumsiesd::DaemonProjectStorageAvailability::Ready
     );
 
     let default_b = state
@@ -546,7 +546,7 @@ async fn stale_bookmark_is_repaired_from_the_selected_path() {
         .unwrap();
     assert_eq!(
         repaired.availability,
-        daemon::DaemonProjectStorageAvailability::Ready
+        clumsiesd::DaemonProjectStorageAvailability::Ready
     );
     let refreshed_bookmark: Option<String> = sqlx::query_scalar(
         "SELECT bookmark_data FROM project_storage_locations WHERE project_id = 'prj_stale'",
@@ -575,7 +575,7 @@ async fn stale_bookmark_is_repaired_from_the_selected_path() {
         .unwrap();
     assert_eq!(
         again.availability,
-        daemon::DaemonProjectStorageAvailability::Ready
+        clumsiesd::DaemonProjectStorageAvailability::Ready
     );
 }
 
@@ -633,7 +633,7 @@ async fn stale_bookmark_with_unreachable_selected_path_reports_volume_missing() 
         .unwrap();
     assert_eq!(
         unavailable.availability,
-        daemon::DaemonProjectStorageAvailability::Unavailable
+        clumsiesd::DaemonProjectStorageAvailability::Unavailable
     );
     assert_eq!(unavailable.issue_code.as_deref(), Some("volume_missing"));
 }
@@ -898,7 +898,7 @@ async fn cleanup_failure_keeps_the_switched_location_active_and_reports_a_warnin
     assert_eq!(status.managed_root_path, destination.managed_root_path);
     assert_eq!(
         status.availability,
-        daemon::DaemonProjectStorageAvailability::Ready
+        clumsiesd::DaemonProjectStorageAvailability::Ready
     );
     assert_eq!(status.issue_code.as_deref(), Some("storage_cleanup_failed"));
     assert!(source_root.exists());
@@ -951,7 +951,7 @@ async fn default_project_storage_is_authority_scoped_and_refuses_marker_reassign
         .unwrap();
     assert_eq!(
         unavailable.availability,
-        daemon::DaemonProjectStorageAvailability::Unavailable
+        clumsiesd::DaemonProjectStorageAvailability::Unavailable
     );
     assert_eq!(unavailable.issue_code.as_deref(), Some("marker_mismatch"));
     assert_eq!(unavailable.managed_root_path, storage_b.managed_root_path);
@@ -1837,7 +1837,7 @@ async fn desktop_memory_draft_batch_is_atomic_and_preserves_existing_paths() {
         ]))
         .await;
     assert!(completed.ok, "{:?}", completed.error);
-    let responses: Vec<daemon::DaemonDraftOperationResponse> = completed.into_payload().unwrap();
+    let responses: Vec<clumsiesd::DaemonDraftOperationResponse> = completed.into_payload().unwrap();
     assert_eq!(responses.len(), 3);
     let drafts = service
         .list_drafts(DaemonDraftListQuery::default())
@@ -2523,7 +2523,7 @@ async fn ipc_dispatch_routes_the_complete_daemon_api() {
         ))
         .await;
     assert!(list.ok);
-    let list: daemon::DaemonDraftListResponse = list.into_payload().unwrap();
+    let list: clumsiesd::DaemonDraftListResponse = list.into_payload().unwrap();
     assert_eq!(list.items.len(), 1);
 
     let detail = service
@@ -3974,7 +3974,7 @@ async fn global_adapter_migrates_repository_files_and_persists_disabled_choice_o
         .install_project_agent_adapter(old_request.clone())
         .await
         .unwrap();
-    let mut request = daemon::DaemonSetAgentAdapterRequest {
+    let mut request = clumsiesd::DaemonSetAgentAdapterRequest {
         adapter: ProjectAgentAdapterKind::Opencode,
         enabled: true,
         runtime_binary_path: runtime.display().to_string(),
@@ -4019,7 +4019,7 @@ async fn global_adapter_migrates_repository_files_and_persists_disabled_choice_o
     assert!(!global_config.exists());
     for enabled in [true, true, false] {
         let settings = state
-            .set_agent_adapter(daemon::DaemonSetAgentAdapterRequest {
+            .set_agent_adapter(clumsiesd::DaemonSetAgentAdapterRequest {
                 adapter: ProjectAgentAdapterKind::Dsh,
                 enabled,
                 runtime_binary_path: runtime.display().to_string(),
@@ -5297,11 +5297,11 @@ async fn server_reconciliation_projection_keeps_lifecycle_separate_from_coordina
     assert_eq!(draft.status, DaemonLocalDraftStatus::Submitted);
     assert_eq!(draft.base_commit_id.as_deref(), Some(COMMIT_A));
     assert_eq!(draft.current_commit_id.as_deref(), Some(COMMIT_B));
-    assert_eq!(draft.freshness, daemon::DaemonDraftFreshness::Behind);
+    assert_eq!(draft.freshness, clumsiesd::DaemonDraftFreshness::Behind);
     assert!(draft.has_upstream_resource_changes);
     assert_eq!(
         draft.reconciliation,
-        daemon::DaemonDraftReconciliationStatus::Conflicts
+        clumsiesd::DaemonDraftReconciliationStatus::Conflicts
     );
     assert_eq!(
         draft.reconciliation_candidate_id.as_deref(),
@@ -5328,11 +5328,11 @@ async fn server_reconciliation_projection_keeps_lifecycle_separate_from_coordina
     assert_eq!(resolved.draft.current_commit_id.as_deref(), Some(COMMIT_B));
     assert_eq!(
         resolved.draft.freshness,
-        daemon::DaemonDraftFreshness::Current
+        clumsiesd::DaemonDraftFreshness::Current
     );
     assert_eq!(
         resolved.draft.reconciliation,
-        daemon::DaemonDraftReconciliationStatus::Unknown
+        clumsiesd::DaemonDraftReconciliationStatus::Unknown
     );
     assert_eq!(resolved.draft.reconciliation_candidate_id, None);
     assert_eq!(resolved.operations.len(), 1);
@@ -6418,7 +6418,7 @@ async fn wait_for_create_request(server: &FakeServer) {
     panic!("timed out waiting for fake Server create request");
 }
 
-async fn wait_for_draft_sync_idle(service: &DaemonIpcService) -> daemon::DaemonSyncStatus {
+async fn wait_for_draft_sync_idle(service: &DaemonIpcService) -> clumsiesd::DaemonSyncStatus {
     for _ in 0..50 {
         let status = service.sync_status().await.unwrap();
         if status.pending_operation_count == 0 {
@@ -6433,7 +6433,7 @@ async fn wait_for_operation_status(
     service: &DaemonIpcService,
     draft_id: &str,
     expected: DraftOperationSyncStatus,
-) -> daemon::DaemonDraftDetail {
+) -> clumsiesd::DaemonDraftDetail {
     for _ in 0..100 {
         let detail = service.get_draft(draft_id).await.unwrap();
         if detail

@@ -191,9 +191,9 @@ This walkthrough is based on the checked-in implementation at `5d038ff`; it does
 
 | Behavior | Source or executable coverage |
 | --- | --- |
-| MCP validation and operation shapes | [MCP contract](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/agent_runtime/mcp_contract.rs) |
-| Hash-checked updates and durable queue acknowledgment | [Daemon state](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/state.rs) |
-| Local Draft overlays in retrieval | [Search overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/search/overlay.rs) |
+| MCP validation and operation shapes | [MCP contract](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/agent_runtime/mcp_contract.rs) |
+| Hash-checked updates and durable queue acknowledgment | [Daemon state](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/state.rs) |
+| Local Draft overlays in retrieval | [Search overlay](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/search/overlay.rs) |
 | Candidate checks, Review creation, and atomic publication | [Review persistence](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs) |
 | Multi-Draft merge preserves operation order | [Draft operation ordering tests](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/tests/draft_operation_ordering.rs) |
-| Published changes reach two daemons and survive restart | [Server integration tests](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/tests/server_integration.rs) |
+| Published changes reach two daemons and survive restart | [Server integration tests](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/tests/server_integration.rs) |

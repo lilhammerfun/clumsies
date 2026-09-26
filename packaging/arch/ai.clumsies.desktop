@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Clumsies
+GenericName=Shared memory for coding agents
+Comment=Keep shared Markdown guidance for coding agents
+Exec=clumsies-desktop
+Icon=ai.clumsies.desktop
+Terminal=false
+Categories=Development;
+Keywords=memory;agent;markdown;guidance;clumsies;
+StartupNotify=true
+# Must match the app id the window sets, or the launcher shows a second entry.
+StartupWMClass=ai.clumsies.desktop

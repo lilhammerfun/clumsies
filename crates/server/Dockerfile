@@ -5,7 +5,10 @@ FROM rust:1.92-slim-bookworm AS builder
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates/server ./crates/server
-COPY crates/daemon ./crates/daemon
+COPY crates/clumsiesd ./crates/clumsiesd
+# The workspace resolves every member's manifest, so the desktop client's
+# manifest has to be present even though this image only builds the Server.
+COPY apps/desktop ./apps/desktop
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/workspace/target \

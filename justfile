@@ -61,3 +61,9 @@ dev-macos-preview descriptor:
 # Run the worktree Dev Instance lifecycle contract.
 test-dev-macos:
     sh dev/dev-instance-test.sh
+
+# Manage the Linux Dev Instance. The argument is the script's command, so
+# "up" (default) | sign-in | status | logs | down | reset all fit here, and
+# "up --seed-memory" publishes starter Memory for the client to show.
+dev-linux command="up":
+    python3 dev/dev-instance-linux.py {{command}}

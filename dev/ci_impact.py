@@ -40,7 +40,7 @@ def classify(paths):
             selected.update({"docs", "scripts", "site_delivery"})
         elif path == ".github/workflows/release.yml":
             selected.update(NATIVE | {"scripts"})
-        elif path in {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "crates/server/Cargo.toml", "crates/daemon/Cargo.toml"} or path.startswith(".cargo/"):
+        elif path in {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "crates/server/Cargo.toml", "crates/clumsiesd/Cargo.toml"} or path.startswith(".cargo/"):
             selected.update(RUST)
         elif path in {"crates/server/Dockerfile", ".dockerignore"}:
             selected.update(SERVER | {"scripts"})
@@ -50,9 +50,9 @@ def classify(paths):
             selected.update(SERVER)
             if path.startswith("crates/server/openapi/"):
                 selected.add("macos")
-        elif path.startswith("crates/daemon/tests/"):
+        elif path.startswith("crates/clumsiesd/tests/"):
             selected.update({"daemon", "runtime"})
-        elif path.startswith(("crates/daemon/", "packages/clumsies/")):
+        elif path.startswith(("crates/clumsiesd/", "packages/clumsies/")):
             selected.update(NATIVE | {"daemon", "scripts"})
         elif path.startswith("apps/macos/Tests/"):
             selected.add("macos")

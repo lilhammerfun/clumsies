@@ -106,7 +106,7 @@ cargo fmt --all --check
 cargo clippy -p server --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc -p server --no-deps --document-private-items
 cargo test -p server
-cargo test -p daemon --test server_integration
+cargo test -p clumsiesd --test server_integration
 cargo test --workspace
 ```
 

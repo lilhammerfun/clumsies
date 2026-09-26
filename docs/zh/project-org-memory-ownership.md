@@ -73,7 +73,7 @@ flowchart LR
 | --- | --- | --- |
 | 1. 归属与迁移 | `crates/server/` 下的 `migrations/`、`src/app/memory/`、`src/app/commit/`、`src/maintenance/project_authority.rs` | 通过新迁移解除 Project 权威禁令；项目快照包含自有与选用资源；保留既有组织身份、历史及归档项目数据。 |
 | 2. 单目标发布 | Server 的 `src/app/draft/`、`src/app/review/`、项目授权与 OpenAPI | Project 合并不改变 Org 资源或 Org Ref；Org 合并检查组织权限；拒绝混合目标 Review 和跨项目写入；项目维护者合并项目 Review 无需组织发布权限。 |
-| 3. 编辑、同步与检索 | `crates/daemon/src/agent_runtime/`、`draft.rs`、`commit_sync.rs`、`search/`；macOS Memory、Review 功能及服务 | 项目编辑默认 Project scope，包括创建适配；store 仍只保存 Draft；验证双成员合并后同步、无冲突协调、冲突、离线重试、批准失效及索引版本一致。 |
+| 3. 编辑、同步与检索 | `crates/clumsiesd/src/agent_runtime/`、`draft.rs`、`commit_sync.rs`、`search/`；macOS Memory、Review 功能及服务 | 项目编辑默认 Project scope，包括创建适配；store 仍只保存 Draft；验证双成员合并后同步、无冲突协调、冲突、离线重试、批准失效及索引版本一致。 |
 | 4. 关联贡献与通知 | Review DTO/service、现有 inbox/同步机制、macOS Review 界面 | 重试只生成一个引用确定版本的 Org 提案；Org 拒绝不撤销项目合并；通知限定在对应项目，需要处理冲突时通知相关作者。 |
 | 5. 契约与用户文档 | Server OpenAPI、daemon MCP 合同、集成说明、中英文模型页及指南 | 归属、草稿预览、引用、适配、贡献目标和实际发布状态全链路一致；与实现同步替换现有行为文档。 |
 

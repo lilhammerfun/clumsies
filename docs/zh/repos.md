@@ -2,7 +2,7 @@
 
 这个仓库包含 macOS App、常驻 daemon、负责共享数据的 Server，以及当前文档站。建议先读[系统架构](/zh/architecture)和[完整流程](/zh/flows)，再按具体问题进入源码。
 
-Rust workspace 有两个成员：`crates/server` 和 `crates/daemon`。Swift 负责原生界面，Bun 运行 VitePress 文档工具。
+Rust workspace 有两个成员：`crates/server` 和 `crates/clumsiesd`。Swift 负责原生界面，Bun 运行 VitePress 文档工具。
 
 ## 目录地图
 
@@ -12,10 +12,10 @@ Rust workspace 有两个成员：`crates/server` 和 `crates/daemon`。Swift 负
 | `apps/macos/Sources/Features/` | 按产品功能聚合视图、状态和操作 | 想找到一个页面的完整流程 |
 | `apps/macos/Sources/Services/` | 共享工作区协调、保存操作和平台客户端 | 想追踪共享状态与 I/O |
 | `apps/macos/Sources/Libraries/` | 共享数据、Diff 算法、日志和 UI 基础组件 | 想复用一个明确用途的组件 |
-| `crates/daemon/src/agent_runtime/` | MCP 契约和短时 Agent 代理 | 想理解 Agent 工具的边界 |
-| `crates/daemon/src/state.rs`、`draft.rs` | 本地状态、Draft 持久化与同步 | 想知道 queued 具体意味着什么 |
-| `crates/daemon/src/commit_sync.rs`、`project_storage.rs` | Commit 安装、本地 generation 和缓存位置 | 想追踪已发布数据怎样到达 Mac |
-| `crates/daemon/src/search/` | Effective Memory、分块、索引和检索 | 想知道相关片段怎样被选出来 |
+| `crates/clumsiesd/src/agent_runtime/` | MCP 契约和短时 Agent 代理 | 想理解 Agent 工具的边界 |
+| `crates/clumsiesd/src/state.rs`、`draft.rs` | 本地状态、Draft 持久化与同步 | 想知道 queued 具体意味着什么 |
+| `crates/clumsiesd/src/commit_sync.rs`、`project_storage.rs` | Commit 安装、本地 generation 和缓存位置 | 想追踪已发布数据怎样到达 Mac |
+| `crates/clumsiesd/src/search/` | Effective Memory、分块、索引和检索 | 想知道相关片段怎样被选出来 |
 | `crates/server/src/` | HTTP 路由与领域模块 | 想理解共享数据和权限 |
 | `crates/server/migrations/` | PostgreSQL schema 演进 | 想检查持久化记录和约束 |
 | `crates/server/openapi/` | Public 与 Admin HTTP 契约 | 想查请求和响应结构 |
@@ -37,7 +37,7 @@ Rust workspace 有两个成员：`crates/server` 和 `crates/daemon`。Swift 负
 | 发布怎样到达选择了文档的 Project？ | Server `memory/postgres.rs` → daemon `commit_sync.rs` → `search/` |
 | 怎样确定当前仓库所属的 Project？ | daemon `main.rs` → Project binding XPC 方法 → daemon 状态 |
 
-第一行路径相对于 `apps/macos/Sources/`，其余 daemon 路径相对于 `crates/daemon/src/`。
+第一行路径相对于 `apps/macos/Sources/`，其余 daemon 路径相对于 `crates/clumsiesd/src/`。
 
 Server 的分层有明确作用：HTTP handler 解码请求并检查权限，service 协调领域操作，PostgreSQL 代码执行状态转换和事务。修改一个公开操作时，需要同时确认这三层。
 
@@ -46,15 +46,15 @@ Server 的分层有明确作用：HTTP handler 解码请求并检查权限，ser
 | 行为 | 可执行例子所在位置 |
 | --- | --- |
 | 多文件 Review 的顺序与原子发布 | `crates/server/tests/draft_operation_ordering.rs` |
-| Draft 上传、合并、投影更新和两个 daemon 收敛 | `crates/daemon/tests/server_integration.rs` |
-| 本地持久化与进程重启 | `crates/daemon/tests/daemon_lifecycle.rs` |
-| Agent 代理与真实 XPC 边界 | `crates/daemon/tests/agent_runtime_xpc_e2e.rs` |
+| Draft 上传、合并、投影更新和两个 daemon 收敛 | `crates/clumsiesd/tests/server_integration.rs` |
+| 本地持久化与进程重启 | `crates/clumsiesd/tests/daemon_lifecycle.rs` |
+| Agent 代理与真实 XPC 边界 | `crates/clumsiesd/tests/agent_runtime_xpc_e2e.rs` |
 | Desktop daemon 契约和状态映射 | `apps/macos/Tests/Services/DaemonContractTests.swift` |
 
 测试说明代码承诺了哪些行为，不自动构成生产延迟指标。性能测量及适用范围见[性能文档](/zh/performance/)。
 
 ## 直接打开主要入口
 
-[Desktop 工作区](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/apps/macos/Sources/Domain/WorkspaceStore.swift) · [MCP 契约](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/agent_runtime/mcp_contract.rs) · [daemon 状态](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/daemon/src/state.rs) · [Server 路由](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/http.rs) · [Review 事务](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs)
+[Desktop 工作区](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/apps/macos/Sources/Domain/WorkspaceStore.swift) · [MCP 契约](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/agent_runtime/mcp_contract.rs) · [daemon 状态](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/clumsiesd/src/state.rs) · [Server 路由](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/http.rs) · [Review 事务](https://github.com/lilhammerfun/clumsies/blob/5d038ffb0ad6e170680618a8fcd0e1ff3d760f77/crates/server/src/changes/postgres.rs)
 
 准备运行和修改项目时，继续读[开发流程](/zh/guides/development-workflow)；想先理解接口含义，再看实现，可以从[领域接口地图](/zh/reference/domain-api)开始。

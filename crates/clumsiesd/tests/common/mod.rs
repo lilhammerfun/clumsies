@@ -1,6 +1,6 @@
 //! Isolated database, credential, and HTTP server fixtures for daemon integration scenarios.
 
-use daemon::{
+use clumsiesd::{
     CredentialStore, CredentialStoreError, DaemonConfig, DaemonIpcService, DaemonState,
     ServerCredentials,
 };

@@ -170,9 +170,9 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Check daemon formatting
-        run: cargo fmt -p daemon --check
+        run: cargo fmt -p clumsiesd --check
       - name: Run daemon unit, lifecycle, and real Server integration tests
-        run: cargo test --locked -p daemon
+        run: cargo test --locked -p clumsiesd
 
   macos:
     needs: changes
@@ -214,9 +214,9 @@ jobs:
       - name: Check worktree Dev lifecycle
         run: sh dev/dev-instance-test.sh
       - name: Lint macOS daemon
-        run: cargo clippy --locked -p daemon -- -D warnings
+        run: cargo clippy --locked -p clumsiesd -- -D warnings
       - name: Run Agent runtime process and XPC integration
-        run: cargo test --locked -p daemon --test agent_runtime_xpc_e2e -- --nocapture
+        run: cargo test --locked -p clumsiesd --test agent_runtime_xpc_e2e -- --nocapture
 
   package:
     needs: changes

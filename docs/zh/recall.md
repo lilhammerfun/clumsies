@@ -145,11 +145,11 @@ Activity 不会为了生成视图把本地会话日志上传到 Server，也不�
 
 | 关注点 | 路径 |
 |---|---|
-| 共享投影、绑定过滤与 DSH reader | `crates/daemon/src/recall.rs` |
-| 摘要快照与任务分页 | `crates/daemon/src/recall/paging.rs` |
-| Codex rollout discovery 与 parser | `crates/daemon/src/recall/codex.rs` |
-| 历史片段与 Project 边界 | `crates/daemon/src/retrieval_history.rs` |
-| XPC dispatch | `crates/daemon/src/state.rs`（`list_recalls`、`get_recall_session`、`get_recall_fragment`） |
+| 共享投影、绑定过滤与 DSH reader | `crates/clumsiesd/src/recall.rs` |
+| 摘要快照与任务分页 | `crates/clumsiesd/src/recall/paging.rs` |
+| Codex rollout discovery 与 parser | `crates/clumsiesd/src/recall/codex.rs` |
+| 历史片段与 Project 边界 | `crates/clumsiesd/src/retrieval_history.rs` |
+| XPC dispatch | `crates/clumsiesd/src/state.rs`（`list_recalls`、`get_recall_session`、`get_recall_fragment`） |
 | XPC client 与模型 | `apps/macos/Sources/Services/Daemon/DaemonXPCClient.swift`、`apps/macos/Sources/Libraries/Models/DaemonModels.swift` |
 | Activity UI 与 host badge | `apps/macos/Sources/Features/Activity/ActivityView.swift`、`ActivityModel.swift` |
 | Workspace 接线 | `apps/macos/Sources/Features/Workspace/WorkspaceView.swift` |
