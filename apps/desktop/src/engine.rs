@@ -722,11 +722,6 @@ pub fn wait_for_upload(draft_id: &str) -> Result<DaemonDraftSummary, String> {
 }
 
 /// Asks the daemon to sync the drafts channel now instead of on its next tick.
-/// Asks the daemon to sync a Project's drafts now instead of on its next tick.
-pub fn sync_now(project_id: &str) -> Result<(), String> {
-    nudge_drafts(&client(), project_id)
-}
-
 fn nudge_drafts(client: &DaemonIpcClient, project_id: &str) -> Result<(), String> {
     let payload = serde_json::to_value(DaemonProjectSyncRetryRequest {
         project_id: project_id.to_owned(),

@@ -640,12 +640,7 @@ impl MemoryScreen {
 
     /// The section's detail: the strip of open documents over the tab in front,
     /// which draws under the pane's own header.
-    pub fn detail(
-        &self,
-        focus: &FocusHandle,
-        window: &Window,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
+    pub fn detail(&self, focus: &FocusHandle, cx: &mut Context<DesktopApp>) -> AnyElement {
         let Some(pane) = self.active_pane() else {
             // Three ways to have nothing to show: a Project that could not be
             // read, one with no Memory at all, and one whose tabs the reader
@@ -687,7 +682,7 @@ impl MemoryScreen {
                     .overflow_hidden()
                     .children(self.tabs(cx)),
             )
-            .child(pane.tools(focus, window, cx));
+            .child(pane.tools(focus, cx));
         let body = pane.body(cx);
         div()
             .v_flex()

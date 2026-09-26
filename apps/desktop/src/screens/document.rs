@@ -244,12 +244,7 @@ impl DocumentPane {
     ///
     /// macOS keeps the same commands in its window toolbar; this is the pane
     /// they act on.
-    pub fn tools(
-        &self,
-        focus: &FocusHandle,
-        window: &Window,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
+    pub fn tools(&self, focus: &FocusHandle, cx: &mut Context<DesktopApp>) -> AnyElement {
         let this = cx.entity();
         let tool = |id: &'static str,
                     icon: Icon,
