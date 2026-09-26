@@ -74,8 +74,8 @@ enough ownership metadata to remove exact legacy `.codex/config.toml`,
 removed. Direct-file update paths likewise delete previously managed retired
 skill files without touching user-owned content.
 
-The Codex plugin executes the pinned binary as `mcp serve --host codex
---delivery host-plugin`. The marker identifies the global plugin delivery; it
+The Codex plugin executes the pinned binary as
+`mcp serve --host codex --delivery host-plugin`. The marker identifies the global plugin delivery; it
 does not select or authorize a Project. At startup and again before every
 `tools/call`, daemon resolves the repository's canonical Project binding and
 requires it to remain the same Project. A missing or changed binding therefore
