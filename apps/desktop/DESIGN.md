@@ -236,6 +236,13 @@ is the one the tree marks, the header commands act on, and a keystroke is stored
 against; an editor reports each keystroke itself, so a store follows the tab it
 was typed in rather than whichever tab is in front by the time the pause ends.
 
+**Nothing typed is lost to a close.** macOS asks before closing a tab whose text
+the Server has not accepted, because its text is not stored until the reader says
+so. This client's model is the pause: the edit a keystroke captured is stored
+after it even when the tab it was typed in is gone, and a window that closes
+flushes every pane whose store was still waiting. There is no question to ask,
+and no pause to lose.
+
 The window's arrows walk the reader's history, which is macOS's
 `navigationBackStack` and `navigationForwardStack`: opening or picking a tab
 pushes where the reader came from and empties the forward stack, closing a tab
@@ -302,5 +309,4 @@ exist yet is not a deviation.
 | Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
 | A folder cannot be expanded from the keyboard | memory tree | The arrow keys move the selection, and Enter on a folder does nothing: the tree component expands a folder in its own click handler and exposes no command for it. Fix: a component change, or a custom row that toggles. |
 | A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |
-| Closing a tab discards unsaved text without asking | document strip | macOS asks before closing a tab whose text the Server has not accepted. This client stores after a 600ms pause and closes straight away, which loses at most that pause. Fix: a confirmation when the pane is dirty. |
 | Tabs are not restored between runs | document strip | macOS keeps its tabs in the workspace model, which this client does not have yet. Fix: remember the open documents with the selected Project. |

@@ -120,6 +120,16 @@ impl DesktopApp {
         // focus: without one it drops every key, and the menu builders and
         // dialogs below never hear anything.
         app.memory.focus_open_document(window, cx);
+        // The band's own close control flushes what the panes still hold; a
+        // window the compositor closes goes through here instead, and the same
+        // flush runs before it is allowed to go. It is registered once, as the
+        // window opens: the platform refuses a callback registered while it is
+        // drawing.
+        let flushing = cx.entity();
+        window.on_window_should_close(cx, move |_window, cx| {
+            flushing.update(cx, |app, cx| app.flush_pending_saves(cx));
+            true
+        });
         app
     }
 
@@ -378,6 +388,43 @@ impl DesktopApp {
             move || engine::sync_now(&project_id),
             cx,
         );
+    }
+
+    /// Stores what every open pane still holds before the window goes.
+    ///
+    /// A pane whose store is waiting for the pause has an edit the engine has not
+    /// seen, and the pause will not come: the window is closing. macOS asks about
+    /// that text; this client's model is a store after a pause, so the same edit
+    /// goes now instead of being asked about.
+    pub fn flush_pending_saves(&mut self, cx: &mut Context<Self>) {
+        for resource_id in self.memory.pending_saves() {
+            let Some(edit) = self.document_edit(&resource_id, cx) else {
+                continue;
+            };
+            // The store the pane is still waiting for carries an older text and
+            // is cancelled by the generation it was asked with.
+            if let Some(pane) = self.memory.pane_for_resource_mut(&resource_id) {
+                self.save_generation += 1;
+                pane.set_generation(self.save_generation);
+                pane.set_save_state(SaveState::Saving);
+            }
+            let result = engine::store_document(&edit);
+            match &result {
+                Ok(_) => {
+                    crate::logging::info(&format!("stored {} as the window closed", edit.path))
+                }
+                Err(error) => crate::logging::error(&format!(
+                    "could not store {} as the window closed: {error}",
+                    edit.path
+                )),
+            }
+            if let Some(pane) = self.memory.pane_for_resource_mut(&resource_id) {
+                pane.set_save_state(match &result {
+                    Ok(_) => SaveState::Saved,
+                    Err(error) => SaveState::Failed(error.clone()),
+                });
+            }
+        }
     }
 
     /// Opens several documents at once, which is what the menu on a set of rows

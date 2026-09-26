@@ -583,6 +583,7 @@ fn nav_button(
 /// Minimize, maximize and close, at the right of the band, which is where this
 /// platform puts them.
 fn window_controls(cx: &mut Context<DesktopApp>) -> AnyElement {
+    let app = cx.entity();
     div()
         .h_flex()
         .h_full()
@@ -591,21 +592,26 @@ fn window_controls(cx: &mut Context<DesktopApp>) -> AnyElement {
             "window-minimize",
             IconName::WindowMinimize,
             false,
-            |window| window.minimize_window(),
+            |window, _cx| window.minimize_window(),
             cx,
         ))
         .child(control(
             "window-maximize",
             IconName::WindowMaximize,
             false,
-            |window| window.zoom_window(),
+            |window, _cx| window.zoom_window(),
             cx,
         ))
         .child(control(
             "window-close",
             IconName::WindowClose,
             true,
-            |window| window.remove_window(),
+            // What the reader typed in the last pause belongs to the engine
+            // before the window goes, and this is the last moment it can.
+            move |window, cx| {
+                app.update(cx, |app, cx| app.flush_pending_saves(cx));
+                window.remove_window();
+            },
             cx,
         ))
         .into_any_element()
@@ -617,7 +623,7 @@ fn control(
     id: &'static str,
     icon: IconName,
     danger: bool,
-    act: fn(&mut Window),
+    act: impl Fn(&mut Window, &mut App) + 'static,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
     div()
@@ -640,7 +646,7 @@ fn control(
             window.prevent_default();
             cx.stop_propagation();
         })
-        .on_click(move |_, window, _| act(window))
+        .on_click(move |_, window, cx| act(window, cx))
         .child(Icon::new(icon).with_size(px(14.)))
         .into_any_element()
 }

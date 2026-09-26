@@ -217,6 +217,12 @@ impl DocumentPane {
     /// Which store owns this pane's text. A screen with several panes open
     /// counts stores per document, so a store in one tab cannot report itself
     /// as another tab's state.
+    /// Whether this pane holds text the engine has not accepted, whether the
+    /// pause is still running or a store is on its way.
+    pub fn pending_save(&self) -> bool {
+        matches!(self.save, SaveState::Pending | SaveState::Saving)
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }

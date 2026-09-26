@@ -757,6 +757,15 @@ impl MemoryScreen {
         self.selection.paths().cloned().collect()
     }
 
+    /// The documents whose pane holds text the engine has not accepted yet.
+    pub fn pending_saves(&self) -> Vec<String> {
+        self.open
+            .iter()
+            .filter(|tab| tab.pane.pending_save())
+            .map(|tab| tab.resource_id.clone())
+            .collect()
+    }
+
     /// Every path the Project's Memory holds, which is what a starting point has
     /// to avoid treading on.
     pub fn paths(&self) -> Vec<String> {
