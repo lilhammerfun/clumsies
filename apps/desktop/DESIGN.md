@@ -4,6 +4,10 @@ The macOS client is the reference for *what* each screen does. This document is
 about *how* the Windows and Linux client looks and behaves while we translate
 it, so that every screen does not invent its own numbers.
 
+COMPONENTS.md is the companion for *what to build it out of*: the framework's
+layers, the rule for choosing between them, and where every reusable piece of
+the macOS client stands here.
+
 ## Where the rules come from
 
 | Platform | Reference |
@@ -122,6 +126,58 @@ The Memory screen is side-by-side at every width today; below 641px it should
 stack and grow a back affordance. This is a real gap, not a stylistic
 preference, because the client runs in windows the user resizes.
 
+**A folder is opened by its own control, and by the arrow keys.** The row
+selects; the disclosure control at its left opens and closes it, and Left and
+Right do the same for the row the keyboard is on — a fold steps in, and anything
+else steps out to the folder that holds it. Which folders are folded is the
+screen's state, not the component's, because the component library expands a
+folder in its own row handler and exposes no way to ask it to stop or to do it
+from outside.
+
+**A tree row is selected the platform's way.** A plain click selects one row and
+opens its document; Ctrl-click (Cmd on macOS) adds a row to the selection or
+takes it out, and Shift-click takes everything between it and the row the range
+grew from. Right-clicking a row outside the selection makes that row the
+selection first, and right-clicking one inside it keeps the selection, so the
+menu always acts on what the reader can see selected. The menu splits the way
+macOS's does: the commands every file list has — open, rename, delete — and then,
+after a divider, the ones only Memory knows, a Review and a discard. A command
+that would change several documents at once says how many it would change, and
+the ones that cannot be undone name the documents in the dialog they ask with.
+
+**The list is filtered by words rather than searched.** What the reader types
+filters the documents the screen already holds — a path, a title, or any word of
+the text, which is what macOS's Memory list matches — and the tree is rebuilt
+from what survives, so a folder whose contents all fall out goes with them.
+Nothing is asked of the Server for it: the filter is a projection of what is
+already on screen. A query that names nothing says so where the list was, which
+is macOS's own empty state for a search with no results, and a row the filter
+takes away is no longer selected.
+
+**An empty Memory offers a starting point rather than a sentence.** macOS's
+empty Memory is where its guidelines are set up, and this client's is the same:
+the guidelines file, which tells agents what is worth remembering and how to keep
+it useful, and one folder for each kind of knowledge — knowledge, procedures,
+lessons — each with a README that says what belongs there. All four are proposed
+as drafts, because a Project's Memory changes through review, and the reader
+lands in the guidelines, which is what they came there to write.
+
+**A row says what the engine is doing with its draft.** macOS's row menu
+carries the draft's synchronization, and this client's carries the same, read
+from the same daemon fields: `Retry draft sync` when operations could not be
+uploaded, `Uploading draft changes…` while they are going, `Draft not ready`
+when the Server has not seen the draft at all, and the one fact a reader needs
+before asking for a Review — that the draft disagrees with what is published, or
+has fallen behind it.
+
+**A document the Project does not hold yet is still a row.** A draft that creates
+a file proposes one, so the tree draws it — marked `new` rather than `draft` —
+with the text the proposal carries behind it. Editing it writes through the
+create operation instead of an update, because there is no resource for an
+update to name; renaming it proposes the same file at another path; and throwing
+it away is a discard, because there is nothing published to delete. The row
+leaves the tree when the proposal does, and its tab leaves the strip with it.
+
 ## Forms
 
 Windows is specific about forms, and the sign-in screen is one:
@@ -150,6 +206,92 @@ provider, and the form says so before it happens.
 For this client that means: a discard or destructive confirmation can be a
 dialog, and Escape must dismiss it without doing the destructive thing.
 
+## The window
+
+The window is one shell, and every screen fills two slots in it. macOS draws the
+same shape as a NavigationSplitView in WorkspaceView: a sidebar of six
+destinations, the open section's navigator beside it, and the work itself in the
+detail. This client draws, from the top:
+
+| Region | What it is |
+| --- | --- |
+| Title bar | The window's, not a screen's: the page navigation at the left and the window controls at the right, and nothing else. |
+| Rail | The six destinations of the macOS sidebar, **icons only**, each named in a tooltip. Memory is the brain, as it is in macOS. |
+| List column | The open section's list, under a header row carrying its two filters — the Project picker, which macOS calls MemoryProjectFilter and keeps in the same place, and the field the reader types in, which filters the same list macOS's searchable field filters — and, at the far right, at most one command rarer than the work itself. No heading: the rail already says which section this is. |
+| Detail | The work, under **one** header row: the open documents as tabs on the left, the tools for the one in front on the right. |
+
+**A document opens to be read.** The pane's default is the prose, and editing
+and diffing are tools a reader turns on rather than a mode switch they start in;
+turning one off returns to reading. The rare commands (request a review, and
+whatever joins it) live behind the overflow at the end of that row, which is
+where macOS keeps its Memory Actions menu.
+
+**Every pane carries its own header row.** A pane header — WinUI calls the
+control a command bar, VS Code a view header — holds the commands and the facts
+that act on that pane, at the top of it. The window's title bar therefore stays
+empty of screen content: a command belongs beside the region it acts on, and a
+reader looking at the tree or at the text finds the commands for it directly
+above what they are looking at. macOS keeps the document's name and its view
+switch in the window toolbar instead; that is the one place this client
+deliberately differs, for the reason above.
+
+**Documents are tabs.** Memory's detail opens one tab per document — macOS's
+`DocumentTabStrip`, which macOS draws at the top of its main pane in the same
+place — and each tab holds the whole session: its own text, its view mode, its
+draft, and what the engine has done with it. A tab the reader has left keeps its
+text, so switching between two documents never loses an edit. The tab in front
+is the one the tree marks, the header commands act on, and a keystroke is stored
+against; an editor reports each keystroke itself, so a store follows the tab it
+was typed in rather than whichever tab is in front by the time the pause ends.
+
+**Nothing typed is lost to a close.** macOS asks before closing a tab whose text
+the Server has not accepted, because its text is not stored until the reader says
+so. This client's model is the pause: the edit a keystroke captured is stored
+after it even when the tab it was typed in is gone, and a window that closes
+flushes every pane whose store was still waiting. There is no question to ask,
+and no pause to lose.
+
+**The window reopens where it was left.** The Project the reader was in, the
+documents they had open and the one in front are remembered in a state file under
+the state directory — state rather than configuration, and not the daemon's
+business, because a Project's Memory belongs to the daemon while a window's tabs
+belong to the window. macOS restores the same three from its workspace model. A
+document the Project no longer holds is left out of the restore, and anything
+unreadable in that file is simply no memory at all.
+
+The window's arrows walk the reader's history, which is macOS's
+`navigationBackStack` and `navigationForwardStack`: opening or picking a tab
+pushes where the reader came from and empties the forward stack, closing a tab
+drops it from both, and an arrow with nowhere to go is drawn disabled. The two
+stacks hold tabs, so the arrows only ever move between documents that are open.
+
+A screen owns its list and its detail and nothing else about the layout. A
+section with no screen yet says so in both slots, and names the macOS view it
+will be translated from.
+
+Three rules belong to the shell so that no screen repeats them:
+
+- **A narrow window adapts once.** Below 641 epx the list stacks above the
+  detail. No screen decides this for itself.
+- **The window controls are drawn when the platform does not.** The component
+  library skips them under server-side decorations; some compositors answer that
+  request with "server" and then draw only a border, Hyprland among them, so the
+  application draws minimize, maximize and close itself in that case.
+- **The keyboard reaches every region.** F6 moves the keyboard to the next
+  region of Memory's window — the list, the work, the actions over it — and
+  Shift+F6 to the previous one; the focused region shows a ring. Enter or Space
+  runs the focused action. F6 is the Windows key for moving between a window's
+  regions, and it is the only way into the list and the actions at all, because a
+  document editor consumes Tab. Inside the list the arrow keys move the
+  selection, which is what opens a document; the document keys are this
+  platform's — Alt+Left and Alt+Right for the history, Ctrl+Tab to cycle the open
+  documents, Ctrl+W to close the one in front.
+
+The theme follows the system's light or dark preference, and keeps following it:
+`Theme::sync_system_appearance` is called when the window opens and on every appearance
+change. Tokens come from the theme, so nothing here is a literal in one mode and
+wrong in the other.
+
 ## Rules for translating a macOS screen
 
 1. **Read the macOS screen first**, and write down what the user can see and do
@@ -162,8 +304,14 @@ dialog, and Escape must dismiss it without doing the destructive thing.
    disagree about how a control behaves — a tree row, a context menu, a
    keyboard shortcut — follow the platform, because that is what the user's
    hands already know.
-5. **Write the keyboard path.** Anything reachable by mouse is reachable by
-   keyboard, and the shortcut appears next to the command that has one.
+5. **Write the keyboard path where it earns its place.** Anything a reader does
+   all day is reachable by keyboard, and the shortcut appears next to the command
+   that has one. Not every command needs one: the ones a reader uses rarely, and
+   the ones whose keyboard form would mean inventing a widget the component
+   library does not have, wait until they are asked for. The product owner's call
+   (2026-09-26) is that the keyboard is not a priority for this client yet, so
+   what exists stays — it is also how this client gets tested on a machine that
+   cannot synthesize pointer events — and nothing new is added for its own sake.
 
 ## Known gaps
 
@@ -173,7 +321,4 @@ exist yet is not a deviation.
 
 | Gap | Where | Why, and what fixes it |
 | --- | --- | --- |
-| The Request review button has no keyboard path | document pane | The component library's button activates on click only, and a multi-line editor consumes Tab, so nothing moves focus to it. Fix: a focusable wrapper that activates on Enter and Space, and a key that leaves the editor, which the library does not bind today. Rule 5 is violated here and only here. |
-| Long diff lines are clipped, not wrapped | Diff tab | The rows are virtualized, so a variable-height row would break the window. Fix: a horizontal scroll region sized to the longest line. |
-| Single click both selects and expands a tree folder | memory tree | The chevron should toggle while the row selects, but the tree element owns that handler and exposes no separate toggle, so this waits on a component change or a custom row. |
-| A development input probe in product UI | projects column | It is behind `cfg!(debug_assertions)`, so it ships in no release build. Remove it when the input method has a test. |
+| A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |

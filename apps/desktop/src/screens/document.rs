@@ -8,19 +8,22 @@
 //! belongs to. Where this client differs, the difference is stated where it
 //! happens rather than left for a reader to find.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use clumsiesd::DaemonDraftSummary;
 use gpui_kit::base::{Disableable, StyledExt};
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Icon;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
-use crate::components::{diff, markdown};
+use crate::components::{diff, fill, markdown};
 use crate::engine::{self, DocumentEdit, MemoryDocument};
 use crate::ui::{self, Typography};
 
@@ -28,31 +31,21 @@ use crate::ui::{self, Typography};
 /// at 600ms because the store is a socket call, not an in-process write.
 pub const SAVE_DELAY: Duration = Duration::from_millis(600);
 
-/// The three ways a document can be read, which are the macOS tab modes.
+/// The height of a pane's header row. The list column and the document pane use
+/// the same one, so the two headers line up across the card.
+pub const PANE_HEADER: f32 = 44.;
+
+/// What the pane is doing with a document. Reading it as prose is what a
+/// document is for, so that is what a reader gets without asking; editing and
+/// diffing are tools they turn on, and turning one off returns to reading.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    Source,
+    /// Read as prose. The default, and the state a tool returns to.
     Preview,
+    /// Edit the text, which is what a proposal is made of.
+    Edit,
     /// What this edit changes against the version the checkout holds.
     Diff,
-}
-
-impl Mode {
-    fn index(self) -> usize {
-        match self {
-            Mode::Source => 0,
-            Mode::Preview => 1,
-            Mode::Diff => 2,
-        }
-    }
-
-    fn from_index(index: usize) -> Self {
-        match index {
-            1 => Mode::Preview,
-            2 => Mode::Diff,
-            _ => Mode::Source,
-        }
-    }
 }
 
 /// What the engine has done with the text in the editor.
@@ -95,6 +88,13 @@ pub struct DocumentPane {
     saved_text: String,
     /// What the engine has done with the text in the editor.
     save: SaveState,
+    /// The debounced store this pane's text belongs to, so that a store which
+    /// lands after a later keystroke is not reported as the current state.
+    generation: u64,
+    /// How tall the editor's box turned out, which is what the editor is told:
+    /// it cannot ask for a percentage inside a column sized by flex, so the
+    /// pane measures the box and hands the number back. See `components::fill`.
+    editor_height: Rc<Cell<Pixels>>,
     /// The open draft carrying this document's edits, when it has one.
     draft: Option<DaemonDraftSummary>,
     notice: Option<Notice>,
@@ -107,26 +107,29 @@ pub struct DocumentPane {
 impl DocumentPane {
     pub fn new(window: &mut Window, cx: &mut Context<DesktopApp>) -> Self {
         let editor = cx.new(|cx| {
-            TextareaState::new(window, cx).placeholder("Write what this Project should remember.")
+            TextareaState::new(window, cx)
+                .placeholder("Write what this Project should remember.")
+                // A document wraps. The component wraps by default, and this
+                // says so where the editor is made: a horizontal scrollbar in
+                // the middle of prose is how a reader loses their place.
+                .soft_wrap(true)
         });
-        let review_title =
-            cx.new(|cx| InputState::new(window, cx).placeholder("What this change does"));
-        let review_description = cx.new(|cx| {
-            TextareaState::new(window, cx).placeholder("Why, and anything a reviewer should check.")
-        });
+        let (review_title, review_description) = review_fields(String::new(), window, cx);
         // The editor reports every keystroke; the application decides when a
         // pause is long enough to store the text.
-        let edits = cx.subscribe(&editor, |app, _editor, event, cx| {
+        let edits = cx.subscribe(&editor, |app, editor, event, cx| {
             if matches!(event, InputEvent::Change) {
-                app.document_edited(cx);
+                app.document_edited(editor.entity_id(), cx);
             }
         });
         Self {
             editor,
-            mode: Mode::Source,
+            mode: Mode::Preview,
             base_text: String::new(),
             saved_text: String::new(),
             save: SaveState::Clean,
+            generation: 0,
+            editor_height: Rc::new(Cell::new(px(0.))),
             draft: None,
             notice: None,
             review_title,
@@ -170,6 +173,14 @@ impl DocumentPane {
         window.focus(&handle, cx);
     }
 
+    /// Whether the keyboard is in this pane's text. Which region holds it is
+    /// what decides whether changing the tab in front moves it: a reader
+    /// arrowing through the tree is browsing and stays there, while a reader
+    /// typing follows the text to the tab that took its place.
+    pub fn editor_focused(&self, window: &Window, cx: &App) -> bool {
+        self.editor.read(cx).focus_handle(cx).is_focused(window)
+    }
+
     pub fn text(&self, cx: &App) -> String {
         self.editor.read(cx).value().to_string()
     }
@@ -193,6 +204,33 @@ impl DocumentPane {
         self.mode = mode;
     }
 
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// The editor this pane owns, which is how a keystroke finds the tab it was
+    /// typed in rather than the tab that happens to be in front.
+    pub fn editor_id(&self) -> EntityId {
+        self.editor.entity_id()
+    }
+
+    /// Which store owns this pane's text. A screen with several panes open
+    /// counts stores per document, so a store in one tab cannot report itself
+    /// as another tab's state.
+    /// Whether this pane holds text the engine has not accepted, whether the
+    /// pause is still running or a store is on its way.
+    pub fn pending_save(&self) -> bool {
+        matches!(self.save, SaveState::Pending | SaveState::Saving)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
     pub fn set_notice(&mut self, notice: Option<Notice>) {
         self.notice = notice;
     }
@@ -201,125 +239,116 @@ impl DocumentPane {
         self.save = save;
     }
 
-    /// Whether the draft this document edits has reached the Server, which is
-    /// what a Review needs.
-    fn uploaded(&self) -> bool {
-        self.draft.as_ref().is_some_and(|draft| {
-            draft.server_draft_id.is_some()
-                && draft.pending_operation_count == 0
-                && draft.failed_operation_count == 0
-        })
-    }
-
-    /// One line about the last edit, in the color its meaning asks for.
-    fn status(&self, cx: &App) -> (String, Hsla) {
-        if let SaveState::Failed(error) = &self.save {
-            return (error.clone(), cx.theme().danger);
-        }
-        let draft = match &self.draft {
-            Some(draft) if self.uploaded() => {
-                Some(format!("draft v{} on the Server", draft.server_version))
-            }
-            Some(_) => Some("draft uploading".to_owned()),
-            None => None,
-        };
-        let text = match (&self.save, &draft) {
-            (SaveState::Pending, _) => "Unsaved changes".to_owned(),
-            (SaveState::Saving, _) => "Saving…".to_owned(),
-            (SaveState::Saved, Some(draft)) => format!("Saved · {draft}"),
-            (SaveState::Saved, None) => "Saved".to_owned(),
-            (SaveState::Clean, Some(draft)) => {
-                let mut line = draft.clone();
-                line[..1].make_ascii_uppercase();
-                line
-            }
-            (SaveState::Clean, None) => "No local changes".to_owned(),
-            (SaveState::Failed(error), _) => error.clone(),
-        };
-        (text, cx.theme().muted_foreground)
-    }
-
-    pub fn render(
-        &self,
-        target: Option<PaneContext<'_>>,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
-        let Some(target) = target else {
-            return ui::message("Select a document.", cx.theme().muted_foreground);
-        };
-        let text = self.text(cx);
+    /// The pane's tools, at the right of the toolbar row: what the engine is
+    /// doing with the document, then what a reader can do with it. Editing and
+    /// diffing are tools rather than a mode switch — a document opens to be
+    /// read — and everything rarer lives behind the overflow.
+    ///
+    /// macOS keeps the same commands in its window toolbar; this is the pane
+    /// they act on.
+    pub fn tools(&self, focus: &FocusHandle, cx: &mut Context<DesktopApp>) -> AnyElement {
         let this = cx.entity();
-
-        let modes = TabBar::new("document-mode")
-            .segmented()
-            .selected_index(self.mode.index())
-            .on_click({
-                let this = this.clone();
-                move |index, _window, cx| {
-                    let mode = Mode::from_index(*index);
-                    this.update(cx, |app, cx| app.set_document_mode(mode, cx));
-                }
-            })
-            .children([
-                Tab::new().label("Source"),
-                Tab::new().label("Preview"),
-                Tab::new().label("Diff"),
-            ]);
-
-        let submit = Button::new("request-review")
-            .primary()
-            .label("Request review…")
-            .disabled(self.draft.is_none())
-            .on_click({
-                let this = this.clone();
-                let title = self.review_title.clone();
-                let description = self.review_description.clone();
-                let edit = DocumentEdit {
-                    project_id: target.project_id.to_owned(),
-                    base_commit_id: self
-                        .draft
-                        .as_ref()
-                        .and_then(|draft| draft.base_commit_id.clone())
-                        .or_else(|| target.commit_id.map(str::to_owned)),
-                    draft_id: self.draft.as_ref().map(|draft| draft.draft_id.clone()),
-                    resource_id: target.document.resource_id.clone(),
-                    content: text.clone(),
-                };
-                let store = self.dirty(cx);
-                move |_, window, cx| {
-                    open_review_sheet(
-                        edit.clone(),
-                        store,
-                        title.clone(),
-                        description.clone(),
-                        this.downgrade(),
-                        window,
-                        cx,
+        let tool = |id: &'static str,
+                    icon: Icon,
+                    tooltip: &'static str,
+                    selected: bool,
+                    this: Entity<DesktopApp>,
+                    action: fn(&mut DesktopApp, &mut Context<DesktopApp>)| {
+            Button::new(id)
+                // No frame: the pill around the group is the only shape the
+                // tools need, and a box inside a box is what that avoids.
+                .ghost()
+                .icon(icon)
+                .tooltip(tooltip)
+                .toggled(selected)
+                .rounded(px(999.))
+                .on_click(move |_event, _window, cx| {
+                    this.update(cx, action);
+                })
+        };
+        let can_review = self.can_review();
+        let more = {
+            let this = this.clone();
+            // A plain button that opens the menu: the library's dropdown button
+            // adds a caret and a divider of its own, which squares off the end
+            // of the pill for a mark the reader does not need.
+            Button::new("document-more")
+                .ghost()
+                .bg(transparent_black())
+                .icon(Icon::default().path("icons/ellipsis.svg"))
+                .tooltip("More")
+                .rounded(px(999.))
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                    let this = this.clone();
+                    menu.item(
+                        PopupMenuItem::new("Request review…")
+                            .disabled(!can_review)
+                            .on_click(move |_event, window, cx| {
+                                this.update(cx, |app, cx| app.request_review(window, cx));
+                            }),
                     )
-                }
-            });
-
-        let header = div()
+                })
+        };
+        div()
+            .id("document-tools")
             .h_flex()
-            .gap_3()
             .items_center()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .truncate()
-                    .text_style(&ui::BODY)
-                    .child(target.document.path.clone()),
-            )
-            .child(modes)
-            .child(submit);
+            .gap_1()
+            .px_2()
+            .py_1()
+            // The tools are a surface of their own with fully rounded ends, so
+            // the group does not read as another square panel inside the pane.
+            // No border and no ring: the fill is the shape.
+            .rounded_full()
+            .bg(ui::surface(cx))
+            .track_focus(focus)
+            .tab_stop(true)
+            .children(self.header_status(cx))
+            .children(self.header_notice(cx))
+            .child(tool(
+                "document-edit",
+                Icon::default().path("icons/pencil.svg"),
+                "Edit this document",
+                self.mode == Mode::Edit,
+                this.clone(),
+                DesktopApp::toggle_document_edit,
+            ))
+            .child(tool(
+                "document-diff",
+                Icon::default().path("icons/file-diff.svg"),
+                "What this edit changes",
+                self.mode == Mode::Diff,
+                this,
+                DesktopApp::show_document_diff,
+            ))
+            .child(more)
+            .into_any_element()
+    }
+
+    /// The work itself, under the toolbar: the document, read the way the pane
+    /// is set to read it.
+    pub fn body(&self, window: &Window, cx: &mut Context<DesktopApp>) -> AnyElement {
+        let text = self.text(cx);
 
         let body: AnyElement = match self.mode {
-            Mode::Source => div()
-                .flex_1()
-                .min_h(px(0.))
-                .child(Textarea::new(&self.editor).h(relative(1.)))
-                .into_any_element(),
+            // The pane is the surface, so the field draws no box of its own:
+            // the document is the whole of what a reader sees here. Its height
+            // is the box the pane measured, because the editor's own element
+            // asks for a percentage, which nothing in a flex column resolves.
+            Mode::Edit => {
+                let height = self.editor_height.clone();
+                let this = cx.entity().downgrade();
+                let editor = Textarea::new(&self.editor)
+                    .appearance(false)
+                    .bordered(false)
+                    .h(height.get().max(px(1.)));
+                fill::Fill::new(height)
+                    .on_measure(move |cx| {
+                        this.update(cx, |_app, cx| cx.notify()).ok();
+                    })
+                    .child(editor)
+                    .into_any_element()
+            }
             Mode::Preview => div()
                 .flex_1()
                 .min_h(px(0.))
@@ -343,52 +372,121 @@ impl DocumentPane {
                             rows,
                             cx.theme().mono_font_family.clone(),
                             diff::DiffPalette::from_theme(cx.theme()),
+                            window,
                         ))
                         .into_any_element()
                 }
             }
         };
 
-        let (status, status_color) = self.status(cx);
-        let footer = div()
-            .h_flex()
-            .gap_3()
-            .items_center()
-            .child(
-                div()
-                    .flex_1()
-                    .text_style(&ui::CAPTION)
-                    .text_color(status_color)
-                    .child(status),
-            )
-            .children(self.notice.as_ref().map(|notice| {
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().success)
-                    .child(notice.text.clone())
-            }));
-
+        // The body is a flex column of its own: a percentage or a flex share
+        // only reaches a control whose parent lays out as flex, and the editor
+        // needs one of the two.
         div()
             .v_flex()
             .flex_1()
-            .h_full()
             .min_w(px(0.))
             .min_h(px(0.))
-            .p_4()
-            .gap_3()
-            .child(header)
-            .child(body)
-            .child(footer)
+            .child(div().v_flex().flex_1().min_h(px(0.)).p_4().child(body))
             .into_any_element()
+    }
+
+    /// What the pane's header says beyond the document's name: only what a
+    /// reader has to act on. A document that is saved says nothing — the
+    /// version the Server holds is not news — while a document that is being
+    /// written, or that failed to write, says so where the eye already is.
+    pub fn header_status(&self, cx: &App) -> Option<AnyElement> {
+        let (text, color) = match &self.save {
+            SaveState::Pending => ("Unsaved changes".to_owned(), cx.theme().muted_foreground),
+            SaveState::Saving => ("Saving…".to_owned(), cx.theme().muted_foreground),
+            SaveState::Failed(error) => (error.clone(), cx.theme().danger),
+            SaveState::Clean | SaveState::Saved => return None,
+        };
+        Some(
+            div()
+                .text_style(&ui::CAPTION)
+                .text_color(color)
+                .child(text)
+                .into_any_element(),
+        )
+    }
+
+    /// What a Review answered, which the pane keeps until the document it was
+    /// asked for changes.
+    pub fn header_notice(&self, cx: &App) -> Option<AnyElement> {
+        let notice = self.notice.as_ref()?;
+        Some(
+            div()
+                .text_style(&ui::CAPTION)
+                .text_color(cx.theme().success)
+                .child(notice.text.clone())
+                .into_any_element(),
+        )
+    }
+
+    /// The edit this pane would hand the engine for a Review, and whether its
+    /// text still has to be stored first. Both the header's action and the
+    /// keyboard action go through here, so they cannot disagree.
+    pub fn review_edit(&self, target: &PaneContext<'_>, cx: &App) -> (DocumentEdit, bool) {
+        let edit = DocumentEdit {
+            project_id: target.project_id.to_owned(),
+            base_commit_id: self
+                .draft
+                .as_ref()
+                .and_then(|draft| draft.base_commit_id.clone())
+                .or_else(|| target.commit_id.map(str::to_owned)),
+            draft_id: self.draft.as_ref().map(|draft| draft.draft_id.clone()),
+            resource_id: target.document.resource_id.clone(),
+            published: target.document.published,
+            path: target.document.path.clone(),
+            content: self.text(cx),
+        };
+        (edit, self.dirty(cx))
+    }
+
+    pub fn review_title(&self) -> Entity<InputState> {
+        self.review_title.clone()
+    }
+
+    pub fn review_description(&self) -> Entity<TextareaState> {
+        self.review_description.clone()
+    }
+
+    /// Whether a Review can be asked for this document at all.
+    pub fn can_review(&self) -> bool {
+        self.draft.is_some()
     }
 }
 
-/// Opens the sheet that requests a Review for one stored edit.
+/// The two fields a Review is asked for with: what the change does, and why.
+///
+/// A pane keeps its own pair for the document it holds; a Review of several
+/// documents starts from a pair of its own, which is why this is a function
+/// rather than three lines inside the pane.
+pub(crate) fn review_fields(
+    title: String,
+    window: &mut Window,
+    cx: &mut Context<DesktopApp>,
+) -> (Entity<InputState>, Entity<TextareaState>) {
+    let title = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("What this change does")
+            .default_value(title)
+    });
+    let description = cx.new(|cx| {
+        TextareaState::new(window, cx).placeholder("Why, and anything a reviewer should check.")
+    });
+    (title, description)
+}
+
+/// Opens the sheet that requests a Review for one stored edit, or for several:
+/// one Review can name every draft a reader selected, and macOS asks for a
+/// folder's worth of them the same way.
 ///
 /// The request runs in the sheet, so the sheet is the thing that knows whether
 /// it is waiting on the network; this only puts it on screen.
-fn open_review_sheet(
-    edit: DocumentEdit,
+pub(crate) fn open_review_sheet(
+    edits: Vec<DocumentEdit>,
     store: bool,
     title: Entity<InputState>,
     description: Entity<TextareaState>,
@@ -396,7 +494,7 @@ fn open_review_sheet(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let view = cx.new(|cx| ReviewDialog::new(cx, title, description, edit, store, app));
+    let view = cx.new(|cx| ReviewDialog::new(cx, title, description, edits, store, app));
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let view = view.clone();
         dialog
@@ -404,6 +502,7 @@ fn open_review_sheet(
             .w(px(520.))
             .keyboard(true)
             .content(move |content, _window, _cx| content.child(view.clone()))
+            .footer(div())
             .footer(div())
     });
 }
@@ -440,8 +539,8 @@ fn document_title(content: &str, path: &str) -> String {
 struct ReviewDialog {
     title: Entity<InputState>,
     description: Entity<TextareaState>,
-    /// The edit this Review is requested for, captured when the sheet opened.
-    edit: DocumentEdit,
+    /// The edits this Review is requested for, captured when the sheet opened.
+    edits: Vec<DocumentEdit>,
     /// Whether the editor's text still has to be stored before the request.
     store: bool,
     busy: bool,
@@ -457,7 +556,7 @@ impl ReviewDialog {
         cx: &mut Context<Self>,
         title: Entity<InputState>,
         description: Entity<TextareaState>,
-        edit: DocumentEdit,
+        edits: Vec<DocumentEdit>,
         store: bool,
         app: WeakEntity<DesktopApp>,
     ) -> Self {
@@ -468,7 +567,7 @@ impl ReviewDialog {
         Self {
             title,
             description,
-            edit,
+            edits,
             store,
             busy: false,
             error: None,
@@ -497,11 +596,11 @@ impl ReviewDialog {
         self.error = None;
         cx.notify();
 
-        let edit = self.edit.clone();
+        let edits = self.edits.clone();
         let store = self.store;
         let app = self.app.clone();
         let work = cx.background_executor().spawn(async move {
-            engine::submit_document_review(&edit, store, &title, &description)
+            engine::submit_documents_review(&edits, store, &title, &description)
         });
         // Spawned in the window rather than the application: closing the sheet
         // needs the window, and a closed sheet is what a successful request

@@ -10,13 +10,15 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use clumsiesd::{
-    DaemonContentDraftUpdate, DaemonDraftContent, DaemonDraftDetail, DaemonDraftListQuery,
+    DaemonContentDraftUpdate, DaemonCreateDraftOperation, DaemonDeleteDraftOperation,
+    DaemonDiscardDraftOperation, DaemonDraftContent, DaemonDraftDetail, DaemonDraftListQuery,
     DaemonDraftOperation, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
     DaemonDraftOperationSource, DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary,
     DaemonHealth, DaemonIpcClient, DaemonIpcRequest, DaemonLocalDraftStatus,
-    DaemonProjectCheckoutRequest, DaemonProjectSyncRetryRequest, DaemonRetryResponse,
-    DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
-    DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
+    DaemonProjectCacheClearRequest, DaemonProjectCheckoutRequest, DaemonProjectStorageAvailability,
+    DaemonProjectStorageRequest, DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest,
+    DaemonRenameDraftOperation, DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse,
+    DaemonUpdateDraftOperation, DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
 use serde::Deserialize;
 
@@ -51,8 +53,16 @@ struct ProjectPage {
 
 /// One Memory document in the Project's current Effective Memory. The resource
 /// identity is what a draft operation updates, so it travels with the text.
+#[derive(Clone)]
 pub struct MemoryDocument {
+    /// The Memory resource, as the daemon and the Server name it. A document
+    /// that only exists as a proposal has no resource yet, so this is the draft
+    /// that proposes it.
     pub resource_id: String,
+    /// Whether the Project already holds this document. A proposal is written
+    /// with the create operation, and throwing it away is what deleting it
+    /// means.
+    pub published: bool,
     pub path: String,
     /// What the Project publishes today.
     pub content: String,
@@ -70,17 +80,309 @@ pub struct Checkout {
     pub documents: Vec<MemoryDocument>,
 }
 
-/// The Review the Server created for a draft. Only what this client shows is
-/// modelled; the Server's answer carries much more for a Reviews screen.
-#[derive(Deserialize)]
+/// Where a Review stands, which is what decides whether it can still be
+/// decided or published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStatus {
+    /// Waiting for a decision.
+    Open,
+    /// Accepted, and waiting to be published.
+    Approved,
+    /// Sent back to its author, who may revise and resubmit it.
+    Rejected,
+    /// Published. The Review is complete.
+    Merged,
+}
+
+impl ReviewStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::Approved => "Approved",
+            Self::Rejected => "Rejected",
+            Self::Merged => "Merged",
+        }
+    }
+}
+
+/// Someone the Server names: the author of a proposal or a decision. Their
+/// identity is not read yet, which is what telling the reader's own Reviews
+/// apart will need.
+#[derive(Clone, Debug, Deserialize)]
+pub struct UserRef {
+    pub email: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+impl UserRef {
+    /// What to call this person: their name when the identity provider has one,
+    /// and their address when it does not.
+    pub fn name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.email)
+    }
+}
+
+/// The Review the Server created for a draft, and what a reader deciding it
+/// needs to know.
+#[derive(Clone, Debug, Deserialize)]
 pub struct Review {
     pub review_id: String,
     pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub author: UserRef,
+    pub status: ReviewStatus,
+    /// Which Memory this would publish to. macOS defaults a missing scope to the
+    /// Organization's, and so does this.
+    #[serde(default = "Scope::org")]
+    pub scope: Scope,
+    /// The revision a decision or a merge has to name, so that two reviewers
+    /// deciding at once cannot both win.
+    pub version: i64,
+    /// What the last decision said.
+    #[serde(default)]
+    pub decision_body: Option<String>,
+    #[serde(default)]
+    pub decided_by: Option<UserRef>,
+    /// When the last decision was recorded, as the Server writes it.
+    #[serde(default)]
+    pub decided_at: Option<String>,
+    pub updated_at: String,
+    /// How the proposal stands against the reference it would publish to.
+    pub coordination: Coordination,
+}
+
+impl Review {
+    /// Whether a reader may approve or reject this Review now.
+    pub fn can_decide(&self) -> bool {
+        self.status == ReviewStatus::Open
+    }
+
+    /// Whether approving it would publish it. Approval is the merge transaction
+    /// on the Server, so it waits on the same thing merging does: a base that is
+    /// still the reference's head.
+    pub fn can_approve(&self) -> bool {
+        self.status == ReviewStatus::Open && self.coordination.is_current()
+    }
+
+    /// Whether an already approved Review may be published. A proposal whose
+    /// base has moved on has to be reconciled first.
+    pub fn can_merge(&self) -> bool {
+        self.status == ReviewStatus::Approved && self.coordination.is_current()
+    }
+}
+
+/// Which Memory a proposal publishes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    Org,
+    Project,
+}
+
+impl Scope {
+    fn org() -> Self {
+        Self::Org
+    }
+}
+
+/// A proposal's relationship to the reference it would publish to.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Coordination {
+    /// The reference's head when the Server answered. A merge names it, so the
+    /// publication cannot land on a head nobody reviewed.
+    #[serde(default)]
+    pub current_commit_id: Option<String>,
+    #[serde(default)]
+    pub freshness: Freshness,
+    /// Whether upstream changed this resource since the proposal's base.
+    #[serde(default)]
+    pub has_upstream_resource_changes: bool,
+    /// Whether reconciling with the current reference would need a choice from
+    /// the author.
+    #[serde(default)]
+    pub reconciliation: Reconciliation,
+}
+
+impl Coordination {
+    /// Whether the proposal's base is still the reference's head.
+    pub fn is_current(&self) -> bool {
+        self.freshness == Freshness::Current && !self.has_upstream_resource_changes
+    }
+
+    /// Whether the reference moved on in a way that conflicts with this
+    /// proposal, which is the one state that stops a decision being honest.
+    pub fn has_conflicts(&self) -> bool {
+        self.freshness == Freshness::Behind && self.reconciliation == Reconciliation::Conflicts
+    }
+}
+
+/// Whether the reference can be merged into a proposal without a choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reconciliation {
+    Clean,
+    Conflicts,
+    /// Nothing has been computed yet, which is not a conflict. A state this
+    /// client does not know lands here too, and is treated as no conflict
+    /// rather than as one.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Freshness {
+    Current,
+    Behind,
+    /// The Server names a state this client does not know, which it treats as
+    /// "not current": publishing is the one thing that must not guess.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a Review proposes for one document.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAction {
+    Create,
+    Update,
+    Rename,
+    Delete,
+}
+
+/// One document a Review would publish, with the text it proposes.
+#[derive(Clone, Debug)]
+pub struct ReviewedDocument {
+    /// The resource the proposal targets. An update names this and not the
+    /// path, so this is what ties a proposal to the document it changes.
+    pub resource_id: Option<String>,
+    /// The path the document would have, when the proposal names one.
+    pub path: Option<String>,
+    /// The text the proposal would publish. A rename or a delete carries none.
+    pub content: Option<String>,
+    pub action: ReviewAction,
+}
+
+impl ReviewedDocument {
+    pub fn action_label(&self) -> &'static str {
+        match self.action {
+            ReviewAction::Create => "Added",
+            ReviewAction::Update => "Changed",
+            ReviewAction::Rename => "Renamed",
+            ReviewAction::Delete => "Deleted",
+        }
+    }
+}
+
+/// A Review with everything a reader needs to decide it.
+#[derive(Clone, Debug)]
+pub struct ReviewDetail {
+    pub review: Review,
+    pub documents: Vec<ReviewedDocument>,
+}
+
+/// What the Server sends for a Review: the review, its proposals in either of
+/// the two spellings it uses, and the discussion.
+#[derive(Deserialize)]
+struct ReviewDetailResponse {
+    review: Review,
+    /// The single-proposal spelling.
+    #[serde(default)]
+    draft: Option<DraftResponse>,
+    #[serde(default)]
+    operations: Vec<OperationResponse>,
+    /// The batch spelling, which repeats the pair per proposal.
+    #[serde(default)]
+    drafts: Vec<DraftDetailResponse>,
 }
 
 #[derive(Deserialize)]
-struct ReviewDetail {
-    review: Review,
+struct DraftDetailResponse {
+    draft: DraftResponse,
+    #[serde(default)]
+    operations: Vec<OperationResponse>,
+}
+
+#[derive(Deserialize)]
+struct DraftResponse {
+    #[serde(default)]
+    resource: Option<ResourceRefResponse>,
+}
+
+#[derive(Deserialize)]
+struct ResourceRefResponse {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// One mutation in a proposal. Only what the diff needs is modelled: what the
+/// operation does, to which resource, and the text it would publish.
+#[derive(Deserialize)]
+struct OperationResponse {
+    action: ReviewAction,
+    #[serde(default)]
+    resource: Option<ResourceRefResponse>,
+    #[serde(default)]
+    content: Option<ContentResponse>,
+    #[serde(default)]
+    new_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ContentResponse {
+    content: String,
+}
+
+/// The documents a Review proposes, in the order the Server listed them.
+fn reviewed_documents(
+    draft: Option<DraftResponse>,
+    operations: Vec<OperationResponse>,
+    drafts: Vec<DraftDetailResponse>,
+) -> Vec<ReviewedDocument> {
+    let mut pairs: Vec<(Option<DraftResponse>, Vec<OperationResponse>)> = Vec::new();
+    if !drafts.is_empty() {
+        pairs.extend(
+            drafts
+                .into_iter()
+                .map(|entry| (Some(entry.draft), entry.operations)),
+        );
+    } else if !operations.is_empty() {
+        pairs.push((draft, operations));
+    }
+    pairs
+        .into_iter()
+        .flat_map(|(draft, operations)| {
+            let fallback_path = draft
+                .as_ref()
+                .and_then(|draft| draft.resource.as_ref())
+                .and_then(|resource| resource.path.clone());
+            let fallback_id = draft
+                .and_then(|draft| draft.resource)
+                .and_then(|resource| resource.id);
+            operations.into_iter().map(move |operation| {
+                let resource = operation.resource.unwrap_or(ResourceRefResponse {
+                    id: None,
+                    path: None,
+                });
+                ReviewedDocument {
+                    resource_id: resource.id.or_else(|| fallback_id.clone()),
+                    path: operation
+                        .new_path
+                        .or(resource.path)
+                        .or_else(|| fallback_path.clone()),
+                    content: operation.content.map(|content| content.content),
+                    action: operation.action,
+                }
+            })
+        })
+        .collect()
 }
 
 pub fn engine_status() -> EngineStatus {
@@ -88,6 +390,41 @@ pub fn engine_status() -> EngineStatus {
         Ok(health) => EngineStatus::Connected(health),
         Err(error) => EngineStatus::Unreachable(error.to_string()),
     }
+}
+
+/// Where a Project's Memory lives on this machine, which is what the Project
+/// settings dialog reads: macOS puts the same read-outs in its Memory Cache
+/// section.
+pub struct ProjectStorage {
+    /// Where this Project's Memory is held.
+    pub location: String,
+    /// Which revision of that location this is, which the commands that change
+    /// it have to name.
+    pub location_revision: i64,
+    /// How much of it is there.
+    pub used_bytes: u64,
+    pub status: &'static str,
+    /// Why it is not ready, when it is not.
+    pub diagnostic: Option<String>,
+}
+
+pub fn project_storage(project_id: &str) -> Result<ProjectStorage, String> {
+    let storage = client()
+        .project_storage(DaemonProjectStorageRequest {
+            project_id: project_id.to_owned(),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(ProjectStorage {
+        location: storage.selected_root_path,
+        location_revision: storage.location_revision,
+        used_bytes: storage.size_bytes,
+        status: match storage.availability {
+            DaemonProjectStorageAvailability::Ready => "Ready",
+            DaemonProjectStorageAvailability::Moving => "Moving",
+            _ => "Unavailable",
+        },
+        diagnostic: storage.diagnostic,
+    })
 }
 
 /// The Projects this account can reach. The daemon holds the session, so a
@@ -116,15 +453,16 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
         .into_iter()
         .map(|resource| MemoryDocument {
             resource_id: resource.resource_id,
+            published: true,
             path: resource.path,
             content: resource.content.content,
             draft_content: None,
         })
         .collect();
-    documents.sort_by(|left, right| left.path.cmp(&right.path));
+    let drafts = drafts(project_id)?;
     // A document with a proposal is opened as the proposal has it, which is
     // what the macOS client's catalog does when it builds a Project's list.
-    for draft in drafts(project_id)? {
+    for draft in &drafts {
         let Some(target) = draft.target_id.as_deref() else {
             continue;
         };
@@ -134,10 +472,28 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
         else {
             continue;
         };
-        if let Ok(detail) = client().get_draft(&draft.draft_id) {
-            document.draft_content = proposed_text(&detail);
-        }
+        document.draft_content = proposed_text_of(draft);
     }
+    // A draft that creates a file proposes a document the Project does not hold
+    // yet, and that document is a row like any other: the reader can open it,
+    // edit it, rename it, ask for a Review of it and throw it away. Nothing is
+    // published behind it, which is what `published` says.
+    for draft in &drafts {
+        let Some(path) = draft.path.clone() else {
+            continue;
+        };
+        if documents.iter().any(|document| document.path == path) {
+            continue;
+        }
+        documents.push(MemoryDocument {
+            resource_id: draft.draft_id.clone(),
+            published: false,
+            path,
+            content: String::new(),
+            draft_content: proposed_text_of(draft),
+        });
+    }
+    documents.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(Checkout {
         project_id: checkout.project_id,
         commit_id: checkout.commit_id,
@@ -181,6 +537,40 @@ pub fn configured_server_url() -> Option<String> {
     }
 }
 
+/// Proposes a new document at a path, which is how a Project's Memory grows.
+/// The file exists once the Review that carries it is merged, which is what
+/// makes a proposal safe to write.
+pub fn create_document(
+    project_id: &str,
+    base_commit_id: Option<&str>,
+    path: &str,
+    content: &str,
+) -> Result<DaemonDraftOperationResponse, String> {
+    draft_operation(&DaemonDraftOperationRequest {
+        draft_id: None,
+        base_commit_id: base_commit_id.map(str::to_owned),
+        project_id: project_id.to_owned(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op: DaemonDraftOperation {
+            create: Some(DaemonCreateDraftOperation {
+                path: path.to_owned(),
+                content: DaemonDraftContent {
+                    org_source: None,
+                    description: None,
+                    content: content.to_owned(),
+                },
+                description: None,
+            }),
+            update: None,
+            rename: None,
+            delete: None,
+            discard: None,
+        },
+        source: Some(DaemonDraftOperationSource::Desktop),
+    })
+}
+
 /// One document edit, in the shape the daemon's draft operation takes. It owns
 /// its text because the edit outlives the keystroke that produced it: the
 /// Review sheet holds one while it waits for the network.
@@ -190,8 +580,147 @@ pub struct DocumentEdit {
     /// The draft's own base when one is already open; the Project ref otherwise.
     pub base_commit_id: Option<String>,
     pub draft_id: Option<String>,
+    /// The Memory resource, or — for a document that only exists as a proposal
+    /// — the draft that proposes it.
     pub resource_id: String,
+    /// Whether the Project already holds this document. A proposal is written
+    /// with the create operation, and has nothing to delete.
+    pub published: bool,
+    /// Where the document is, which is the path the create operation names.
+    pub path: String,
     pub content: String,
+}
+
+/// Proposes a new path for a document. A rename is a draft like any other, so
+/// it is reviewed and published the way an edit is.
+pub fn rename_document(
+    document: &DocumentEdit,
+    new_path: &str,
+) -> Result<DaemonDraftOperationResponse, String> {
+    // A proposal is renamed by proposing to create it somewhere else: there is
+    // no resource for a rename to move, and the daemon records the path the
+    // file would be created at.
+    let op = DaemonDraftOperation {
+        create: (!document.published).then(|| DaemonCreateDraftOperation {
+            path: new_path.to_owned(),
+            content: content_of(document),
+            description: None,
+        }),
+        update: None,
+        rename: document.published.then(|| DaemonRenameDraftOperation {
+            id: document.resource_id.clone(),
+            new_path: new_path.to_owned(),
+            description: None,
+        }),
+        delete: None,
+        discard: None,
+    };
+    draft_operation(&DaemonDraftOperationRequest {
+        draft_id: document.draft_id.clone(),
+        base_commit_id: document.base_commit_id.clone(),
+        project_id: document.project_id.clone(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op,
+        source: Some(DaemonDraftOperationSource::Desktop),
+    })
+}
+
+/// Proposes that a document be deleted. The deletion takes effect when the
+/// Review carrying it is merged, which is what makes it safe to offer.
+pub fn delete_document(document: &DocumentEdit) -> Result<DaemonDraftOperationResponse, String> {
+    draft_operation(&DaemonDraftOperationRequest {
+        draft_id: document.draft_id.clone(),
+        base_commit_id: document.base_commit_id.clone(),
+        project_id: document.project_id.clone(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op: DaemonDraftOperation {
+            create: None,
+            update: None,
+            rename: None,
+            delete: Some(DaemonDeleteDraftOperation {
+                id: document.resource_id.clone(),
+                description: None,
+            }),
+            discard: None,
+        },
+        source: Some(DaemonDraftOperationSource::Desktop),
+    })
+}
+
+/// Moves this Project's Memory back to the standard location.
+pub fn reset_project_storage(project_id: &str, revision: i64) -> Result<(), String> {
+    client()
+        .reset_project_storage(DaemonProjectStorageResetRequest {
+            project_id: project_id.to_owned(),
+            expected_location_revision: revision,
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Builds again what the Project's cache holds. Drafts and settings stay.
+pub fn clear_project_cache(project_id: &str, revision: i64) -> Result<(), String> {
+    client()
+        .clear_project_cache(DaemonProjectCacheClearRequest {
+            project_id: project_id.to_owned(),
+            expected_location_revision: revision,
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Asks the daemon to sync this Project's drafts now instead of on its next
+/// tick, which is the one command about the engine's own work.
+pub fn sync_now(project_id: &str) -> Result<(), String> {
+    nudge_drafts(&client(), project_id)
+}
+
+/// Throws a proposal away, which is what a reader does with an edit they no
+/// longer want. The published document is untouched.
+pub fn discard_draft(
+    project_id: &str,
+    draft_id: &str,
+    resource_id: &str,
+) -> Result<DaemonDraftOperationResponse, String> {
+    let request = DaemonDraftOperationRequest {
+        draft_id: Some(draft_id.to_owned()),
+        base_commit_id: None,
+        // The daemon resolves a draft by its id and checks that it belongs to
+        // the Project the request names, so an empty one is refused.
+        project_id: project_id.to_owned(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op: DaemonDraftOperation {
+            create: None,
+            update: None,
+            rename: None,
+            delete: None,
+            discard: Some(DaemonDiscardDraftOperation {
+                id: resource_id.to_owned(),
+            }),
+        },
+        source: Some(DaemonDraftOperationSource::Desktop),
+    };
+    draft_operation(&request)
+}
+
+/// One draft operation through the daemon, which queues it and uploads behind
+/// it. The desktop alias is the one that carries a read-write session.
+fn draft_operation(
+    request: &DaemonDraftOperationRequest,
+) -> Result<DaemonDraftOperationResponse, String> {
+    let payload = serde_json::to_value(request)
+        .map_err(|error| format!("unreadable draft operation: {error}"))?;
+    client()
+        .call(DaemonIpcRequest::new(
+            "desktop_store_draft_operation",
+            payload,
+        ))
+        .map_err(|error| error.to_string())?
+        .into_payload()
+        .map_err(|error| error.to_string())
 }
 
 /// Writes a document's new text as a draft operation.
@@ -206,70 +735,83 @@ pub struct DocumentEdit {
 /// daemon reserves that spelling for Agent protocol proxies, which prove their
 /// identity, and refuses a request that arrives without one.
 pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationResponse, String> {
-    let request = DaemonDraftOperationRequest {
+    // A document that only exists as a proposal is written with the create
+    // operation: there is no resource yet for an update to name, and the path
+    // is what says which file the draft proposes. The daemon keeps one draft
+    // per path, so writing again is what a further edit to a proposal is.
+    let op = DaemonDraftOperation {
+        create: (!edit.published).then(|| DaemonCreateDraftOperation {
+            path: edit.path.clone(),
+            content: content_of(edit),
+            description: None,
+        }),
+        update: edit.published.then(|| {
+            DaemonUpdateDraftOperation::Content(DaemonContentDraftUpdate {
+                id: edit.resource_id.clone(),
+                content: content_of(edit),
+                description: None,
+            })
+        }),
+        rename: None,
+        delete: None,
+        discard: None,
+    };
+    draft_operation(&DaemonDraftOperationRequest {
         draft_id: edit.draft_id.clone(),
         base_commit_id: edit.base_commit_id.clone(),
         project_id: edit.project_id.clone(),
         scope: DaemonDraftScope::Project,
         resource: DaemonDraftResourceKind::Memory,
-        op: DaemonDraftOperation {
-            create: None,
-            update: Some(DaemonUpdateDraftOperation::Content(
-                DaemonContentDraftUpdate {
-                    id: edit.resource_id.clone(),
-                    content: DaemonDraftContent {
-                        org_source: None,
-                        description: None,
-                        content: edit.content.clone(),
-                    },
-                    description: None,
-                },
-            )),
-            rename: None,
-            delete: None,
-            discard: None,
-        },
+        op,
         source: Some(DaemonDraftOperationSource::Desktop),
-    };
-    let payload = serde_json::to_value(request)
-        .map_err(|error| format!("unreadable draft operation: {error}"))?;
-    client()
-        .call(DaemonIpcRequest::new(
-            "desktop_store_draft_operation",
-            payload,
-        ))
-        .map_err(|error| error.to_string())?
-        .into_payload()
-        .map_err(|error| error.to_string())
+    })
 }
 
-/// One edit through to a Review: the text is stored when the editor still
-/// holds something the engine has not accepted, the daemon uploads the draft,
-/// and the Server turns it into a Review.
+/// The document's text as a draft carries it.
+fn content_of(edit: &DocumentEdit) -> DaemonDraftContent {
+    DaemonDraftContent {
+        org_source: None,
+        description: None,
+        content: edit.content.clone(),
+    }
+}
+
+/// One edit, or several, through to a Review: each is stored when the caller
+/// still holds text the engine has not accepted, each is waited for until the
+/// daemon has uploaded its draft, and one Review then names every one of them —
+/// which is what the Server's request is shaped for, and what macOS does with a
+/// folder's worth of drafts.
 ///
-/// The three steps are one function because the last two are only meaningful on
-/// the result of the first: the Server identifies a draft by the identity the
-/// upload assigns, and a Review cannot name a draft the Server has not seen.
-pub fn submit_document_review(
-    edit: &DocumentEdit,
+/// The steps are one function because the last two are only meaningful on the
+/// result of the first: the Server identifies a draft by the identity the upload
+/// assigns, and a Review cannot name a draft the Server has not seen.
+pub fn submit_documents_review(
+    edits: &[DocumentEdit],
     store: bool,
     title: &str,
     description: &str,
 ) -> Result<Review, String> {
-    let draft_id = if store {
-        store_document(edit)?.draft_id
-    } else {
-        edit.draft_id
-            .clone()
-            .ok_or_else(|| "this document has no draft to review yet".to_owned())?
-    };
-    let draft = wait_for_upload(&draft_id)?;
-    request_review(&draft, title, description)
+    if edits.is_empty() {
+        return Err("there is nothing to review".to_owned());
+    }
+    let mut drafts = Vec::new();
+    for edit in edits {
+        let draft_id = if store {
+            store_document(edit)?.draft_id
+        } else {
+            edit.draft_id
+                .clone()
+                .ok_or_else(|| "this document has no draft to review yet".to_owned())?
+        };
+        drafts.push(wait_for_upload(&draft_id)?);
+    }
+    request_reviews(&drafts, title, description)
 }
 
-/// The text a draft proposes for its document, taken from the last full
-/// content update it holds. An update always carries the whole document, which
-/// is what this client stores.
+/// The text a draft proposes for its document, taken from the last full content
+/// it holds — whether that is the update that rewrote a published document or
+/// the create that would write a new one. Either way the operation carries the
+/// whole document, which is what this client stores.
 fn proposed_text(detail: &DaemonDraftDetail) -> Option<String> {
     detail.operations.iter().rev().find_map(|operation| {
         operation
@@ -277,8 +819,25 @@ fn proposed_text(detail: &DaemonDraftDetail) -> Option<String> {
             .update
             .as_ref()
             .and_then(|update| update.content())
+            .or_else(|| {
+                operation
+                    .operation
+                    .create
+                    .as_ref()
+                    .map(|create| &create.content)
+            })
             .map(|content| content.content.clone())
     })
+}
+
+/// What a draft proposes for its document, read from the daemon. Reading it is
+/// one daemon call per draft, and a draft whose text cannot be read leaves the
+/// document showing what the Project publishes.
+fn proposed_text_of(draft: &DaemonDraftSummary) -> Option<String> {
+    client()
+        .get_draft(&draft.draft_id)
+        .ok()
+        .and_then(|detail| proposed_text(&detail))
 }
 
 /// The drafts of one Project that are still proposals: an open one takes
@@ -371,28 +930,32 @@ fn nudge_drafts(client: &DaemonIpcClient, project_id: &str) -> Result<(), String
 /// The Server guards the Project ref with `If-Match`, so the request carries the
 /// ref the draft was rebased onto; a ref that moved under the draft is refused
 /// rather than reviewed against the wrong base.
-pub fn request_review(
-    draft: &DaemonDraftSummary,
+pub fn request_reviews(
+    drafts: &[DaemonDraftSummary],
     title: &str,
     description: &str,
 ) -> Result<Review, String> {
-    let Some(server_draft_id) = draft.server_draft_id.clone() else {
-        return Err("the engine has not uploaded this draft yet".to_owned());
-    };
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "If-Match".to_owned(),
-        format!(
-            "\"{}\"",
-            draft.current_commit_id.as_deref().unwrap_or("ref-none")
-        ),
-    );
-    headers.insert("content-type".to_owned(), "application/json".to_owned());
-    let body = serde_json::json!({
-        "drafts": [{
+    let mut named = Vec::new();
+    for draft in drafts {
+        let Some(server_draft_id) = draft.server_draft_id.clone() else {
+            return Err("the engine has not uploaded this draft yet".to_owned());
+        };
+        named.push(serde_json::json!({
             "draft_id": server_draft_id,
             "expected_draft_version": draft.server_version,
-        }],
+        }));
+    }
+    // Every draft of one selection was written against the same checkout, so the
+    // first one names the commit the whole request is decided against.
+    let base = drafts
+        .first()
+        .and_then(|draft| draft.current_commit_id.as_deref())
+        .unwrap_or("ref-none");
+    let mut headers = BTreeMap::new();
+    headers.insert("If-Match".to_owned(), format!("\"{base}\""));
+    headers.insert("content-type".to_owned(), "application/json".to_owned());
+    let body = serde_json::json!({
+        "drafts": named,
         "title": title,
         "description": description,
     });
@@ -400,9 +963,108 @@ pub fn request_review(
     if response.status != 200 {
         return Err(server_error(&response));
     }
-    let detail: ReviewDetail = serde_json::from_str(&response.body)
+    let detail: ReviewDetailResponse = serde_json::from_str(&response.body)
         .map_err(|error| format!("unreadable Review: {error}"))?;
     Ok(detail.review)
+}
+
+/// The Reviews of one Project, newest first, which is the order the Server
+/// answers in and the order macOS lists them.
+pub fn reviews(project_id: &str) -> Result<Vec<Review>, String> {
+    let response = server(
+        "GET",
+        &format!("/api/v1/reviews?project_id={project_id}"),
+        BTreeMap::new(),
+        None,
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    serde_json::from_str::<ReviewPage>(&response.body)
+        .map(|page| page.items)
+        .map_err(|error| format!("unreadable Review list: {error}"))
+}
+
+/// One Review with its proposals and its discussion.
+pub fn review(review_id: &str) -> Result<ReviewDetail, String> {
+    let response = server(
+        "GET",
+        &format!("/api/v1/reviews/{review_id}"),
+        BTreeMap::new(),
+        None,
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    let response: ReviewDetailResponse = serde_json::from_str(&response.body)
+        .map_err(|error| format!("unreadable Review: {error}"))?;
+    let documents = reviewed_documents(response.draft, response.operations, response.drafts);
+    Ok(ReviewDetail {
+        review: response.review,
+        documents,
+    })
+}
+
+/// Records an approval or a rejection. The note is what the author will read,
+/// so an empty one is sent as nothing rather than as an empty string.
+pub fn decide_review(review: &Review, decision: ReviewStatus, note: &str) -> Result<(), String> {
+    let mut headers = BTreeMap::new();
+    headers.insert("content-type".to_owned(), "application/json".to_owned());
+    let decision = match decision {
+        ReviewStatus::Approved => "approved",
+        ReviewStatus::Rejected => "rejected",
+        other => return Err(format!("a Review cannot be decided as {}", other.label())),
+    };
+    let body = serde_json::json!({
+        "decision": decision,
+        "expected_review_version": review.version,
+        "body": (!note.trim().is_empty()).then_some(note),
+    });
+    let response = server(
+        "POST",
+        &format!("/api/v1/reviews/{}/decisions", review.review_id),
+        headers,
+        Some(body.to_string()),
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    Ok(())
+}
+
+/// Publishes an approved Review. The reference it publishes to must be the one
+/// the approval covered, which is what the If-Match header says.
+pub fn merge_review(review: &Review) -> Result<(), String> {
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "If-Match".to_owned(),
+        format!(
+            "\"{}\"",
+            review
+                .coordination
+                .current_commit_id
+                .as_deref()
+                .unwrap_or("ref-none")
+        ),
+    );
+    headers.insert("content-type".to_owned(), "application/json".to_owned());
+    let body = serde_json::json!({ "expected_review_version": review.version });
+    let response = server(
+        "POST",
+        &format!("/api/v1/reviews/{}/merges", review.review_id),
+        headers,
+        Some(body.to_string()),
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    Ok(())
+}
+
+/// What the Server answers for a list of Reviews.
+#[derive(Deserialize)]
+struct ReviewPage {
+    items: Vec<Review>,
 }
 
 /// One request through the daemon, which is the only party holding a session.

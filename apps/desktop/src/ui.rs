@@ -7,6 +7,7 @@
 // yet is not dead code; it is a step waiting for the screen that needs it.
 #![allow(dead_code)]
 
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 /// Spacing steps on the 4px grid.
@@ -54,14 +55,56 @@ pub const RADIUS: f32 = 4.;
 /// Radius for top-level containers: windows, dialogs, flyouts.
 pub const RADIUS_LG: f32 = 8.;
 
+/// How far a surface is lifted off the page below it. The theme names one
+/// background; a card that has to read as floating needs a little more light
+/// than the page, and one ratio in one place is how it gets it in either mode.
+pub const ELEVATION: f32 = 0.05;
+
+/// The surface a floating card is drawn on: the page's colour, lifted.
+pub fn surface(cx: &App) -> Hsla {
+    cx.theme()
+        .background
+        .blend(cx.theme().foreground.opacity(ELEVATION))
+}
+
 /// A line of text in a semantic color. Every empty state and every failure the
 /// screens draw has this shape.
+/// A hairline rule across a pane, under a header row. Screens use this rather
+/// than a border on one edge, which this framework does not offer.
+pub fn rule(cx: &App) -> AnyElement {
+    div()
+        .h(px(1.))
+        .w_full()
+        .flex_shrink_0()
+        .bg(cx.theme().border)
+        .into_any_element()
+}
+
 pub fn message(text: impl Into<SharedString>, color: Hsla) -> AnyElement {
     div()
         .text_style(&BODY)
         .text_color(color)
         .child(text.into())
         .into_any_element()
+}
+
+/// A long value cut to what a bar can hold.
+pub fn truncate(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_owned();
+    }
+    let kept: String = value.chars().take(limit.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
+/// The tail of an identity, which is what tells two of them apart.
+pub fn shorten(value: &str, keep: usize) -> String {
+    let characters = value.chars().count();
+    if characters <= keep {
+        return value.to_owned();
+    }
+    let tail: String = value.chars().skip(characters - keep).collect();
+    format!("…{tail}")
 }
 
 /// Applies a ramp entry to any styled element.
