@@ -142,8 +142,8 @@ commit 接口仍返回完整快照。它的首次下载是选中 diff 所必需�
   状态来自当前 Draft revision 的持久化 rebase 历史，
   因此重新加载或重新打开 App 后仍保留。从未 rebase 的文件没有 badge。
   不添加状态行、文件计数或结果面板。
-- **Review Actions (…) → Save Conflict
-  Resolutions** 只对作者可编辑的冲突显示。它发送完整的有序提案集，
+- **Review Actions (…) → Save Conflict Resolutions**
+  只对作者可编辑的冲突显示。它发送完整的有序提案集，
   只为冲突文件携带选择，并在每个冲突解决前保持禁用。version、
   membership 和 remote-reference 校验保持原子。这不会发布。
 - 保存后刷新详情和文件标记；当前时移除保存操作，并只在当前详情可读后启用批准。
@@ -175,9 +175,10 @@ commit 接口仍返回完整快照。它的首次下载是选中 diff 所必需�
 ## 5. 工具栏决策
 
 工具栏保留 Reject 和 Approve 为直接操作。Updates、
-Merge 和 Resubmit 使用 **Review Actions (…
-)** 中的明确文字条目，权限和就绪检查相同。**Save Conflict
-Resolutions** 只在作者拥有的 Review 中已准备好的冲突时显示。
+Merge 和 Resubmit 使用
+**Review Actions (…)** 中的明确文字条目，权限和就绪检查相同。
+**Save Conflict Resolutions** 只在作者拥有的 Review
+中已准备好的冲突时显示。
 省略号保持在所属组的最后。加载、保存或等待冲突选择时它被禁用。该条目禁用时菜单仍可打开。
 单个文件详情内没有单独的更新窗口按钮。
 
@@ -197,10 +198,11 @@ Resolutions** 只在作者拥有的 Review 中已准备好的冲突时显示。
   Approve 在一个 Server 事务中记录决定并合并到 authority；
   普通成员仍是读取/评论参与者，看不到任何权限操作。
 - Approved：历史记录在允许且 Server 提供了非空 approved
-  result hash 时保留 **Review Actions (…
-  ) → Merge Review**。没有该不可变结果身份的旧批准仍然可见，但不能合并。
-- Rejected：Draft 作者可看到 **Review Actions (…
-  ) → Resubmit Review**。
+  result hash 时保留
+  **Review Actions (…) → Merge Review**。
+  没有该不可变结果身份的旧批准仍然可见，但不能合并。
+- Rejected：Draft 作者可看到
+  **Review Actions (…) → Resubmit Review**。
 
 Filter 只属于列表页。决策工具只属于活动详情。Sync 保持自己的工具位。
 Search 保持独立且在最右侧。跨区域工具栏分组和 macOS 14-26

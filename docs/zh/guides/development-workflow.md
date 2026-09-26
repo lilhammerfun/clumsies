@@ -188,8 +188,9 @@ pre-release，附带 DMG 和 SHA-256 校验和。
 只有 Sparkle 找到可用更新后，用户账户旁的 **Update** 按钮才会出现。
 关闭更新提示或完成一次更新流程会清除该按钮。Settings → General →
 Check for Updates 仍可用于手动检查，并共用同一个更新器。
-Sparkle 在 App 内下载并验证更新，然后 **Install and
-Relaunch** 替换 App 并重启。账户菜单仍可通过点击头像或名字打开；
+Sparkle 在 App 内下载并验证更新，然后
+**Install and Relaunch** 替换 App 并重启。
+账户菜单仍可通过点击头像或名字打开；
 原来尾部的 chevron 已移除。
 
 要通过这个流程提供 Preview 版本，请用与 App 的 `SUPublicEDKey`

@@ -162,8 +162,9 @@ daemon 可以接受局部文本替换并转换成同步操作。
 
 `behind` 只表示 Base Commit 与发布目标的当前 Ref 不同。
 例如别人发布了另一份无关文档，当前清单的 Draft 也可能变成 behind，
-但不一定有内容冲突。Server 比较 **Base（旧基线）、Current（当前发布状态）、
-Draft Result（提案结果）**，形成 reconciliation
+但不一定有内容冲突。Server 比较
+**Base（旧基线）、Current（当前发布状态）、 Draft Result（提案结果）**，
+形成 reconciliation
 candidate；干净结果可自动 rebase；冲突保留基线并通知作者。
 rebase 不发布内容。
 
