@@ -286,7 +286,7 @@ impl Shell {
             .border_1()
             .border_color(cx.theme().border)
             .overflow_hidden()
-            .bg(cx.theme().background)
+            .bg(ui::surface(cx))
             .child(inside);
 
         let menu_open = self.projects_open;
@@ -305,7 +305,7 @@ impl Shell {
             .v_flex()
             .relative()
             .size_full()
-            .bg(cx.theme().sidebar)
+            .bg(cx.theme().background)
             .child(self.band(window, &chrome, band, actions, cx))
             .child(
                 div()
@@ -335,8 +335,8 @@ impl Shell {
         // window reads as one surface with a card floating on it.
         let band = TitleBar::new()
             .pl(px(0.))
-            .bg(cx.theme().sidebar)
-            .border_color(cx.theme().sidebar)
+            .bg(cx.theme().background)
+            .border_color(cx.theme().background)
             .child(
                 div()
                     .h_flex()

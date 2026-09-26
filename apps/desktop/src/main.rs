@@ -6,6 +6,7 @@
 mod app;
 mod components;
 mod engine;
+mod logging;
 mod screens;
 mod shell;
 mod sign_in;
@@ -17,8 +18,16 @@ use gpui_kit::*;
 use app::DesktopApp;
 
 fn main() {
-    // The section rail, the context bar and the status bar draw icons from the
-    // bundled set, so the window needs that asset source before anything else.
+    // The log starts before anything else, so a failure while the window is
+    // being built leaves a reason behind.
+    logging::init();
+    logging::info(&format!(
+        "starting; daemon root {}, log {}",
+        std::env::var("CLUMSIES_DAEMON_ROOT").unwrap_or_else(|_| "unset".to_owned()),
+        std::env::var("CLUMSIES_DESKTOP_LOG").unwrap_or_else(|_| "beside the daemon".to_owned()),
+    ));
+    // The window draws its own icons, so it needs the bundled asset source
+    // before anything else.
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets::new(""))
         .run(|cx| {

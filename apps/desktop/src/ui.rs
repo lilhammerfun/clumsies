@@ -7,6 +7,7 @@
 // yet is not dead code; it is a step waiting for the screen that needs it.
 #![allow(dead_code)]
 
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 /// Spacing steps on the 4px grid.
@@ -53,6 +54,18 @@ pub const RADIUS: f32 = 4.;
 
 /// Radius for top-level containers: windows, dialogs, flyouts.
 pub const RADIUS_LG: f32 = 8.;
+
+/// How far a surface is lifted off the page below it. The theme names one
+/// background; a card that has to read as floating needs a little more light
+/// than the page, and one ratio in one place is how it gets it in either mode.
+pub const ELEVATION: f32 = 0.05;
+
+/// The surface a floating card is drawn on: the page's colour, lifted.
+pub fn surface(cx: &App) -> Hsla {
+    cx.theme()
+        .background
+        .blend(cx.theme().foreground.opacity(ELEVATION))
+}
 
 /// A line of text in a semantic color. Every empty state and every failure the
 /// screens draw has this shape.

@@ -202,47 +202,6 @@ impl DocumentPane {
         self.save = save;
     }
 
-    /// Whether the draft this document edits has reached the Server, which is
-    /// what a Review needs.
-    fn uploaded(&self) -> bool {
-        self.draft.as_ref().is_some_and(|draft| {
-            draft.server_draft_id.is_some()
-                && draft.pending_operation_count == 0
-                && draft.failed_operation_count == 0
-        })
-    }
-
-    /// One line about the last edit, in the color its meaning asks for.
-    fn save_line(&self, cx: &App) -> (String, Hsla) {
-        if let SaveState::Failed(error) = &self.save {
-            return (error.clone(), cx.theme().danger);
-        }
-        let draft = match &self.draft {
-            Some(draft) if self.uploaded() => {
-                Some(format!("draft v{} on the Server", draft.server_version))
-            }
-            Some(_) => Some("draft uploading".to_owned()),
-            None => None,
-        };
-        let text = match (&self.save, &draft) {
-            (SaveState::Pending, _) => "Unsaved changes".to_owned(),
-            (SaveState::Saving, _) => "Saving…".to_owned(),
-            (SaveState::Saved, Some(draft)) => format!("Saved · {draft}"),
-            (SaveState::Saved, None) => "Saved".to_owned(),
-            (SaveState::Clean, Some(draft)) => {
-                let mut line = draft.clone();
-                line[..1].make_ascii_uppercase();
-                line
-            }
-            (SaveState::Clean, None) => "No local changes".to_owned(),
-            (SaveState::Failed(error), _) => error.clone(),
-        };
-        (text, cx.theme().muted_foreground)
-    }
-
-    /// The work itself: the document, read in one of its three modes, with the
-    /// window's actions at the end of its header — which is where the macOS
-    /// client keeps the same menu, in the detail's toolbar.
     /// What the window's band shows for this document: which document is open,
     /// and how to look at it. macOS has the same two things in the same place.
     pub fn band(
@@ -299,15 +258,18 @@ impl DocumentPane {
                     ),
             )
             .child(modes)
+            .children(self.band_status(cx))
+            .children(self.notice_line(cx))
             .into_any_element()
     }
 
+    /// The work itself: the document, read in one of its three modes.
     pub fn detail(
         &self,
         target: Option<PaneContext<'_>>,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
-        let Some(target) = target else {
+        if target.is_none() {
             return div()
                 .v_flex()
                 .flex_1()
@@ -318,9 +280,8 @@ impl DocumentPane {
                     cx.theme().muted_foreground,
                 ))
                 .into_any_element();
-        };
+        }
         let text = self.text(cx);
-        let this = cx.entity();
 
         let body: AnyElement = match self.mode {
             Mode::Source => div()
@@ -357,23 +318,6 @@ impl DocumentPane {
             }
         };
 
-        // The bar under the document, in the shape the reference gives the same
-        // corner: a card rather than the window's edge, saying what this thing
-        // is doing. The actions stay in the header above, which is where macOS
-        // keeps the same menu.
-        let state_bar = div()
-            .h_flex()
-            .gap_3()
-            .items_center()
-            .mx_4()
-            .mb_4()
-            .px_3()
-            .py_2()
-            .rounded(px(ui::RADIUS_LG))
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(div().flex_1().min_w(px(0.)).child(self.status(cx)));
-
         div()
             .v_flex()
             .flex_1()
@@ -381,27 +325,40 @@ impl DocumentPane {
             .min_w(px(0.))
             .min_h(px(0.))
             .p_4()
-            .gap_3()
             .child(body)
-            .child(state_bar)
             .into_any_element()
     }
 
-    /// What the engine has done with the last edit, and what a Review answered.
-    fn status(&self, cx: &App) -> AnyElement {
-        let (text, color) = self.save_line(cx);
-        div()
-            .h_flex()
-            .gap_3()
-            .items_center()
-            .child(div().text_style(&ui::CAPTION).text_color(color).child(text))
-            .children(self.notice.as_ref().map(|notice| {
-                div()
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().success)
-                    .child(notice.text.clone())
-            }))
-            .into_any_element()
+    /// What the band says about the document beyond its name: only what a reader
+    /// has to act on. A document that is saved says nothing — the version the
+    /// Server holds is not news — while a document that is being written, or
+    /// that failed to write, says so where the eye already is.
+    pub fn band_status(&self, cx: &App) -> Option<AnyElement> {
+        let (text, color) = match &self.save {
+            SaveState::Pending => ("Unsaved changes".to_owned(), cx.theme().muted_foreground),
+            SaveState::Saving => ("Saving…".to_owned(), cx.theme().muted_foreground),
+            SaveState::Failed(error) => (error.clone(), cx.theme().danger),
+            SaveState::Clean | SaveState::Saved => return None,
+        };
+        Some(
+            div()
+                .text_style(&ui::CAPTION)
+                .text_color(color)
+                .child(text)
+                .into_any_element(),
+        )
+    }
+
+    /// What a Review answered, which the band keeps until the document changes.
+    pub fn notice_line(&self, cx: &App) -> Option<AnyElement> {
+        let notice = self.notice.as_ref()?;
+        Some(
+            div()
+                .text_style(&ui::CAPTION)
+                .text_color(cx.theme().success)
+                .child(notice.text.clone())
+                .into_any_element(),
+        )
     }
 
     /// The edit this pane would hand the engine for a Review, and whether its

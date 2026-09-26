@@ -240,6 +240,15 @@ impl DesktopApp {
             Ok(response) => Some(response.draft_id.clone()),
             Err(_) => None,
         };
+        match (&result, &stored) {
+            (Ok(_), Some(draft_id)) => {
+                crate::logging::info(&format!("stored an edit of {resource_id} into {draft_id}"))
+            }
+            (Err(error), _) => crate::logging::error(&format!(
+                "could not store an edit of {resource_id}: {error}"
+            )),
+            _ => {}
+        }
         if let Some(draft_id) = stored {
             self.refresh_drafts(cx);
             self.follow_upload(draft_id, cx);
@@ -295,6 +304,10 @@ impl DesktopApp {
     /// leaves the reader in the document, because the Reviews section is not
     /// built yet.
     pub fn review_requested(&mut self, review: Review, cx: &mut Context<Self>) {
+        crate::logging::info(&format!(
+            "review {} requested for {}",
+            review.review_id, review.title
+        ));
         self.memory.set_notice(Some(Notice {
             text: format!(
                 "Review {} requested · {}",
@@ -351,8 +364,9 @@ impl DesktopApp {
         result: Result<Vec<DaemonDraftSummary>, String>,
         cx: &mut Context<Self>,
     ) {
-        if let Ok(drafts) = result {
-            self.memory.set_drafts(drafts, cx);
+        match result {
+            Ok(drafts) => self.memory.set_drafts(drafts, cx),
+            Err(error) => crate::logging::error(&format!("could not read the drafts: {error}")),
         }
     }
 
@@ -439,6 +453,15 @@ impl DesktopApp {
     /// client is not talking to anything.
     pub fn recheck_engine(&mut self, cx: &mut Context<Self>) {
         self.engine = engine::engine_status();
+        match &self.engine {
+            EngineStatus::Connected(health) => crate::logging::info(&format!(
+                "engine connected: daemon {} at {}",
+                health.daemon_version, health.server_url
+            )),
+            EngineStatus::Unreachable(reason) => {
+                crate::logging::error(&format!("engine unreachable: {reason}"))
+            }
+        }
         cx.notify();
     }
 
