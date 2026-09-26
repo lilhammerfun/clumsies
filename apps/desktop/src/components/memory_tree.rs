@@ -12,14 +12,12 @@ use gpui_kit::component::tree::{TreeItem, TreeState};
 use gpui_kit::*;
 
 use crate::components::file_tree::{self, Decoration, PathEntry, RowClick};
-use crate::engine::MemoryDocument;
 
-/// The Project's documents, as the tree's entries.
-pub fn items(documents: &[MemoryDocument]) -> Vec<TreeItem> {
-    let entries: Vec<PathEntry> = documents
-        .iter()
-        .map(|document| PathEntry::new(document.path.clone()))
-        .collect();
+/// The paths a screen wants drawn, as the tree's entries. A screen filters the
+/// Project's documents itself — the tree knows nothing about a filter — and
+/// hands over the paths that survived.
+pub fn items(paths: &[String]) -> Vec<TreeItem> {
+    let entries: Vec<PathEntry> = paths.iter().cloned().map(PathEntry::new).collect();
     file_tree::items(&entries)
 }
 

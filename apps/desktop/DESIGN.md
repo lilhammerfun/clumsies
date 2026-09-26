@@ -137,6 +137,15 @@ after a divider, the ones only Memory knows, a Review and a discard. A command
 that would change several documents at once says how many it would change, and
 the ones that cannot be undone name the documents in the dialog they ask with.
 
+**The list is filtered by words rather than searched.** What the reader types
+filters the documents the screen already holds — a path, a title, or any word of
+the text, which is what macOS's Memory list matches — and the tree is rebuilt
+from what survives, so a folder whose contents all fall out goes with them.
+Nothing is asked of the Server for it: the filter is a projection of what is
+already on screen. A query that names nothing says so where the list was, which
+is macOS's own empty state for a search with no results, and a row the filter
+takes away is no longer selected.
+
 **A document the Project does not hold yet is still a row.** A draft that creates
 a file proposes one, so the tree draws it — marked `new` rather than `draft` —
 with the text the proposal carries behind it. Editing it writes through the
@@ -184,7 +193,7 @@ detail. This client draws, from the top:
 | --- | --- |
 | Title bar | The window's, not a screen's: the page navigation at the left and the window controls at the right, and nothing else. |
 | Rail | The six destinations of the macOS sidebar, **icons only**, each named in a tooltip. Memory is the brain, as it is in macOS. |
-| List column | The open section's list, under a header row carrying its filter — the Project picker here, which macOS calls MemoryProjectFilter and keeps in the same place — and, at the far right, at most one command rarer than the work itself. No heading: the rail already says which section this is. |
+| List column | The open section's list, under a header row carrying its two filters — the Project picker, which macOS calls MemoryProjectFilter and keeps in the same place, and the field the reader types in, which filters the same list macOS's searchable field filters — and, at the far right, at most one command rarer than the work itself. No heading: the rail already says which section this is. |
 | Detail | The work, under **one** header row: the open documents as tabs on the left, the tools for the one in front on the right. |
 
 **A document opens to be read.** The pane's default is the prose, and editing

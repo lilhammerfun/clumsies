@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use clumsiesd::{DaemonDraftSummary, DaemonLocalDraftStatus};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::tree::TreeState;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
@@ -24,6 +25,11 @@ use crate::components::memory_tree;
 use crate::engine::{Checkout, DocumentEdit, MemoryDocument};
 use crate::screens::document::{DocumentPane, Mode, Notice, PANE_HEADER, PaneContext};
 use crate::ui::{self, Typography};
+
+/// The list header's fields: the filter beside the Project filter, which is
+/// what a search field in a list is. macOS puts the same field in its window
+/// toolbar, because that toolbar is the only place it has for one.
+const SEARCH_HEIGHT: f32 = 28.;
 
 /// One tab. macOS sizes its own between 84 and 200 points; a name that long is
 /// rare here, and the truncation is what keeps the strip from walking off.
@@ -72,6 +78,13 @@ pub struct MemoryScreen {
     pending_path: Option<(String, Option<Mode>)>,
     /// The mode the document the last request resolved to should open in.
     pending_mode: Option<Mode>,
+    /// What the reader is filtering the tree by. macOS keeps one query in its
+    /// workspace navigation and filters the list in front with it; here the
+    /// Memory list is the only list, so the screen keeps it.
+    query: String,
+    /// The field the query is typed in, which sits in the list's own header
+    /// beside the Project filter: both of them filter the same list.
+    search: Entity<InputState>,
     /// The drafts open in this Project, which is what the tree marks and what
     /// the pane offers to review.
     drafts: Vec<DaemonDraftSummary>,
@@ -88,6 +101,7 @@ pub struct MemoryScreen {
     list_focus: FocusHandle,
     /// Dropping a subscription cancels it, so the screen holds it.
     _selection: Subscription,
+    _search_edits: Subscription,
 }
 
 /// What a tree row can offer, read before its menu is built.
@@ -123,6 +137,17 @@ impl MemoryScreen {
             app.memory().follow_selection(cx);
             cx.notify();
         });
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
+        // Every keystroke in the field rebuilds what the tree shows: the filter
+        // is a projection of the documents the screen already holds, so there
+        // is nothing to wait for.
+        let search_edits = cx.subscribe(&search, |app, _, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                let query = app.memory().search.read(cx).value().to_string();
+                app.memory().query = query;
+                app.memory().publish(cx);
+            }
+        });
         let mut screen = Self {
             tree,
             project_id: None,
@@ -136,11 +161,14 @@ impl MemoryScreen {
             pending_open: None,
             pending_path: None,
             pending_mode: None,
+            query: String::new(),
+            search,
             drafts: Vec::new(),
             error: None,
             tools_focus: cx.focus_handle(),
             list_focus: cx.focus_handle(),
             _selection: selection,
+            _search_edits: search_edits,
         };
         screen.set_checkout(checkout, error, cx);
         // Opening a Project opens its first document, which is what opening one
@@ -825,9 +853,9 @@ impl MemoryScreen {
         cx: &App,
     ) -> AnyElement {
         // No title: the rail already says which section this is, and a heading
-        // that repeats it is a line of pixels that says nothing. The filter is
-        // what a reader needs here; the right side is for the one command that
-        // is rarer than the work, and stays empty otherwise.
+        // that repeats it is a line of pixels that says nothing. What a reader
+        // needs here is the two filters — which Project, and which words — and,
+        // at the far right, the one command rarer than the work.
         let header = div()
             .h_flex()
             .h(px(PANE_HEADER))
@@ -836,7 +864,19 @@ impl MemoryScreen {
             .gap_2()
             .items_center()
             .child(project)
-            .child(div().flex_1().min_w(px(0.)))
+            .child(
+                div().flex_1().min_w(px(0.)).child(
+                    Input::new(&self.search)
+                        .w_full()
+                        .h(px(SEARCH_HEIGHT))
+                        .cleanable(true)
+                        .prefix(
+                            Icon::new(IconName::Search)
+                                .with_size(px(14.))
+                                .text_color(cx.theme().muted_foreground),
+                        ),
+                ),
+            )
             .children(settings);
         // The tree's region takes the keyboard as one thing, and says so with a
         // ring, the way every other focusable region in this window does.
@@ -844,6 +884,27 @@ impl MemoryScreen {
             cx.theme().ring
         } else {
             transparent_black()
+        };
+        // A filter that matches nothing says so where the tree was, which is
+        // macOS's own empty state for a search with no results.
+        let body = if self.visible_documents().is_empty() && !self.documents.is_empty() {
+            div()
+                .p_3()
+                .child(ui::message(
+                    format!("No memory matches “{}”.", self.query.trim()),
+                    cx.theme().muted_foreground,
+                ))
+                .into_any_element()
+        } else {
+            memory_tree::memory_tree(
+                &self.tree,
+                &self.selection,
+                &self.drafted_paths(),
+                &self.proposal_paths(),
+                tree_clicked,
+                tree_menu,
+            )
+            .into_any_element()
         };
 
         div()
@@ -863,14 +924,7 @@ impl MemoryScreen {
                     .border_color(ring)
                     .track_focus(&self.list_focus)
                     .tab_stop(true)
-                    .child(memory_tree::memory_tree(
-                        &self.tree,
-                        &self.selection,
-                        &self.drafted_paths(),
-                        &self.proposal_paths(),
-                        tree_clicked,
-                        tree_menu,
-                    )),
+                    .child(body),
             )
             .into_any_element()
     }
@@ -1041,9 +1095,14 @@ impl MemoryScreen {
     /// restored in the same update: the frame after it must not look like a
     /// reader who selected nothing, which would close the open document.
     fn publish(&mut self, cx: &mut Context<DesktopApp>) {
-        let items = memory_tree::items(&self.documents);
+        let paths: Vec<String> = self
+            .visible_documents()
+            .into_iter()
+            .map(|document| document.path.clone())
+            .collect();
+        let items = memory_tree::items(&paths);
         self.tree.update(cx, |state, cx| state.set_items(items, cx));
-        // A renamed or deleted file is not a selected file.
+        // A renamed, deleted or filtered-away file is not a selected file.
         self.selection.retain(&self.row_paths(cx));
         self.select_in_tree(cx);
         self.sync_draft();
@@ -1069,6 +1128,32 @@ impl MemoryScreen {
         let index = path.as_deref().and_then(|path| self.index_of(path, cx));
         self.tree
             .update(cx, |state, cx| state.set_selected_index(index, cx));
+    }
+
+    /// The documents the tree shows under what the reader has typed: the
+    /// Project's Memory, minus everything the query does not name.
+    fn visible_documents(&self) -> Vec<&MemoryDocument> {
+        let needle = self.query.trim();
+        if needle.is_empty() {
+            return self.documents.iter().collect();
+        }
+        self.documents
+            .iter()
+            .filter(|document| Self::names(document, needle))
+            .collect()
+    }
+
+    /// Whether a document is what the reader is looking for. macOS matches a
+    /// Memory's title, path, body and kind; a Project's document is its path and
+    /// its text, and the title is the frontmatter's, which is in the text. Both
+    /// sides are folded, so a query and a document may disagree about case.
+    fn names(document: &MemoryDocument, needle: &str) -> bool {
+        let needle = needle.to_lowercase();
+        let text = document
+            .draft_content
+            .as_deref()
+            .unwrap_or(&document.content);
+        document.path.to_lowercase().contains(&needle) || text.to_lowercase().contains(&needle)
     }
 
     /// The documents that only exist as a proposal, which the tree calls new:
@@ -1453,4 +1538,57 @@ thread_local! {
 /// The last segment of a path, which is what a tab calls a document.
 fn file_name(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    // Only what the tests use: the component library exports a `test` macro of
+    // its own, and a glob import would shadow the built-in attribute with it.
+    use super::MemoryScreen;
+    use crate::engine::MemoryDocument;
+
+    fn document(path: &str, content: &str) -> MemoryDocument {
+        MemoryDocument {
+            resource_id: format!("mem_{path}"),
+            published: true,
+            path: path.to_owned(),
+            content: content.to_owned(),
+            draft_content: None,
+        }
+    }
+
+    #[test]
+    fn a_query_names_a_path_a_title_or_a_body() {
+        let release = document(
+            "procedures/release.md",
+            "---
+title: Releasing Clumsies
+---
+
+Cut a tag and push it.
+",
+        );
+        assert!(MemoryScreen::names(&release, "procedures"));
+        assert!(MemoryScreen::names(&release, "releasing"));
+        assert!(MemoryScreen::names(&release, "CUT A TAG"));
+        assert!(!MemoryScreen::names(&release, "bundles"));
+    }
+
+    #[test]
+    fn a_query_ignores_case_and_matches_what_a_draft_proposes() {
+        let mut architecture = document(
+            "knowledge/architecture.md",
+            "The published text.
+",
+        );
+        architecture.draft_content = Some(
+            "The proposed text.
+"
+            .to_owned(),
+        );
+        assert!(MemoryScreen::names(&architecture, "ARCHITECTURE"));
+        assert!(MemoryScreen::names(&architecture, "Proposed"));
+        // What the reader sees is the proposal, so that is what is searched.
+        assert!(!MemoryScreen::names(&architecture, "published"));
+    }
 }
