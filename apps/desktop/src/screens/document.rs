@@ -266,6 +266,9 @@ impl DocumentPane {
                 .icon(icon)
                 .tooltip(tooltip)
                 .toggled(selected)
+                // The group is a pill, so a button in it is round: one shape
+                // for the tools, another for the pane around them.
+                .rounded(px(999.))
                 .on_click(move |_event, _window, cx| {
                     this.update(cx, |app, cx| action(app, cx));
                 })
@@ -277,7 +280,9 @@ impl DocumentPane {
                 .button(
                     Button::new("document-more-button")
                         .icon(Icon::default().path("icons/ellipsis.svg"))
-                        .tooltip("More"),
+                        .tooltip("More")
+                        .rounded(px(999.))
+                        .dropdown_caret(false),
                 )
                 .dropdown_menu(move |menu, _window, _cx| {
                     let this = this.clone();
@@ -295,10 +300,14 @@ impl DocumentPane {
             .h_flex()
             .items_center()
             .gap_1()
-            .rounded(px(ui::RADIUS))
+            .px_2()
+            .py_1()
+            // The tools are a surface of their own with fully rounded ends, so
+            // the group does not read as another square panel inside the pane.
+            .rounded_full()
+            .bg(ui::surface(cx))
             .border_1()
             .border_color(ring)
-            .p(px(ui::SPACE_XS))
             .track_focus(focus)
             .tab_stop(true)
             .children(self.header_status(cx))

@@ -10,12 +10,13 @@ use gpui_kit::base::Disableable;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::*;
-use gpui_kit::component::{Root, Theme};
+use gpui_kit::component::{Icon, Root, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review, ReviewStatus};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::memory::{MemoryScreen, Move};
+use crate::screens::project_settings::{ProjectSettings, ProjectSettingsDialog};
 use crate::screens::reviews::{ReviewNotice, ReviewsScreen};
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
 use crate::shell::{Chrome, EngineFacts, Section, Shell, Slots};
@@ -125,6 +126,52 @@ impl DesktopApp {
     /// built while the window renders, and it only needs to know what a row has.
     pub fn memory_ref(&self) -> &MemoryScreen {
         &self.memory
+    }
+
+    /// The one command the list column's right side offers: the Project's
+    /// settings. Anything more is more than a reader needs above the work.
+    fn settings_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("project-settings")
+            .icon(Icon::default().path("icons/settings.svg"))
+            .tooltip("Project settings")
+            .on_click(cx.listener(|app, _event, window, cx| app.open_project_settings(window, cx)))
+            .into_any_element()
+    }
+
+    /// Opens the Project settings dialog. Settings do not replace the work: a
+    /// reader who loses their document to a settings pane has to work out how to
+    /// get it back, and a dialog never takes it away.
+    pub fn open_project_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self
+            .selected_project
+            .and_then(|index| self.projects.get(index))
+        else {
+            return;
+        };
+        let health = match &self.engine {
+            EngineStatus::Connected(health) => Some(health),
+            EngineStatus::Unreachable(_) => None,
+        };
+        let settings = ProjectSettings {
+            project: project.name.clone(),
+            storage: engine::project_storage(&project.project_id),
+            server: health.map(|health| health.server_url.clone()),
+            daemon: health
+                .map(|health| health.daemon_version.clone())
+                .unwrap_or_else(|| "not answering".to_owned()),
+            log_dir: health.map(|health| health.log_dir.clone()),
+        };
+        let view = cx.new(|_| ProjectSettingsDialog::new(settings));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view = view.clone();
+            dialog
+                .title("Project settings")
+                .w(px(560.))
+                .keyboard(true)
+                .content(move |content, _window, _cx| content.child(view.clone()))
+                .footer(div())
+                .footer(div())
+        });
     }
 
     /// Opens a document from the tree's menu. A menu comes with a window, so
@@ -999,7 +1046,10 @@ impl DesktopApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.list(picker, None, window, cx),
+            Section::Memory => {
+                let settings = self.settings_button(cx);
+                self.memory.list(picker, Some(settings), window, cx)
+            }
             Section::Reviews => self.reviews.list(picker, window, cx),
             other => placeholder(other.list_note(), cx),
         }

@@ -14,8 +14,9 @@ use clumsiesd::{
     DaemonDraftListQuery, DaemonDraftOperation, DaemonDraftOperationRequest,
     DaemonDraftOperationResponse, DaemonDraftOperationSource, DaemonDraftResourceKind,
     DaemonDraftScope, DaemonDraftSummary, DaemonHealth, DaemonIpcClient, DaemonIpcRequest,
-    DaemonLocalDraftStatus, DaemonProjectCheckoutRequest, DaemonProjectSyncRetryRequest,
-    DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
+    DaemonLocalDraftStatus, DaemonProjectCheckoutRequest, DaemonProjectStorageAvailability,
+    DaemonProjectStorageRequest, DaemonProjectSyncRetryRequest, DaemonRetryResponse,
+    DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
     DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
 use serde::Deserialize;
@@ -383,6 +384,37 @@ pub fn engine_status() -> EngineStatus {
     }
 }
 
+/// Where a Project's Memory lives on this machine, which is what the Project
+/// settings dialog reads: macOS puts the same read-outs in its Memory Cache
+/// section.
+pub struct ProjectStorage {
+    /// Where this Project's Memory is held.
+    pub location: String,
+    /// How much of it is there.
+    pub used_bytes: u64,
+    pub status: &'static str,
+    /// Why it is not ready, when it is not.
+    pub diagnostic: Option<String>,
+}
+
+pub fn project_storage(project_id: &str) -> Result<ProjectStorage, String> {
+    let storage = client()
+        .project_storage(DaemonProjectStorageRequest {
+            project_id: project_id.to_owned(),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(ProjectStorage {
+        location: storage.selected_root_path,
+        used_bytes: storage.size_bytes,
+        status: match storage.availability {
+            DaemonProjectStorageAvailability::Ready => "Ready",
+            DaemonProjectStorageAvailability::Moving => "Moving",
+            _ => "Unavailable",
+        },
+        diagnostic: storage.diagnostic,
+    })
+}
+
 /// The Projects this account can reach. The daemon holds the session, so a
 /// signed-out daemon and an empty organization arrive as different errors.
 pub fn projects() -> Result<Vec<Project>, String> {
@@ -690,6 +722,11 @@ pub fn wait_for_upload(draft_id: &str) -> Result<DaemonDraftSummary, String> {
 }
 
 /// Asks the daemon to sync the drafts channel now instead of on its next tick.
+/// Asks the daemon to sync a Project's drafts now instead of on its next tick.
+pub fn sync_now(project_id: &str) -> Result<(), String> {
+    nudge_drafts(&client(), project_id)
+}
+
 fn nudge_drafts(client: &DaemonIpcClient, project_id: &str) -> Result<(), String> {
     let payload = serde_json::to_value(DaemonProjectSyncRetryRequest {
         project_id: project_id.to_owned(),
