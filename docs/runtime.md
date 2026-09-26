@@ -94,9 +94,9 @@ Regression evidence lives in `crates/clumsiesd/tests/client_diagnostics.rs`,
 daemon diagnostics/XPC unit tests, Server telemetry tests, and macOS
 `ClientDiagnosticsTests` / `NativeServerBootstrapTests`. Changes to request or
 logging boundaries must verify failure evidence, correlation, redaction and
-retention, in addition to successful requests. Run `cargo test -p clumsiesd
---test client_diagnostics`, `cargo test -p clumsiesd --lib --bins`, `cargo test -p
-server telemetry::tests --lib`, and `just test-macos`. All are covered by the
+retention, in addition to successful requests. Run
+`cargo test -p clumsiesd --test client_diagnostics`, `cargo test -p clumsiesd --lib --bins`,
+`cargo test -p server telemetry::tests --lib`, and `just test-macos`. All are covered by the
 existing Rust/macOS CI jobs. The timeout probe uses 118 fake Drafts, a loopback
 server, temporary storage and an in-memory credential store.
 
