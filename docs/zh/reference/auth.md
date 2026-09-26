@@ -35,8 +35,7 @@ App 显示原生初始化界面，而不是打开 Server 托管的页面。
 默认 Project 与可选的邮箱域名允许列表。
 
 随后 App 启动常规的 loopback 授权流程，并把同一个 `redirect_uri`、
-state 与 `S256` challenge 发送到 `POST /api/v1/setup
-/oidc-authorizations`。提供方校验通过后，
+state 与 `S256` challenge 发送到 `POST /api/v1/setup/oidc-authorizations`。提供方校验通过后，
 Server 在一个事务中创建组织、首位 Owner、默认 Project、
 身份绑定与初始 Ref。它把客户端授权码返回给 loopback 回调；
 App 用自己的 verifier 兑换该授权码，并把 token 对安装进 daemon。
@@ -45,8 +44,7 @@ App 用自己的 verifier 兑换该授权码，并把 token 对安装进 daemon�
 ## 提供方校验
 
 Server 从配置的 issuer 发现提供方元数据与 JWKS，
-并要求发现文档返回完全相同的 issuer。授权码交换失败使用 `oidc_code_excha
-nge_failed`；issuer、audience、nonce、
+并要求发现文档返回完全相同的 issuer。授权码交换失败使用 `oidc_code_exchange_failed`；issuer、audience、nonce、
 过期与签名失败使用 `oidc_id_token_invalid`。
 
 当 ID Token 引用了未知的签名密钥时，Server 会刷新一次发现文档与 JWKS，
@@ -90,13 +88,11 @@ App 内的 Administration 界面通过 daemon 使用同一套 bearer 凭
 | `CLUMSIES_OIDC_CLIENT_SECRET` | OIDC 机密客户端密钥 |
 | `CLUMSIES_CLIENT_REDIRECT_URIS` | 逗号分隔的额外受信任客户端回调 |
 
-Server 从 `CLUMSIES_PUBLIC_ORIGIN` 推导提供方回调 `/logi
-n/oauth2/code/oidc`。原生客户端回调单独列入允许列表，
+Server 从 `CLUMSIES_PUBLIC_ORIGIN` 推导提供方回调 `/login/oauth2/code/oidc`。原生客户端回调单独列入允许列表，
 因此 Server 永远不会把授权码重定向到不受信任的来源。
 
 对 Desktop 的动态 loopback 端口，
-配置 `CLUMSIES_CLIENT_REDIRECT_URIS=http://127.0.0
-.1/callback`。缺失端口是刻意的模板：
+配置 `CLUMSIES_CLIENT_REDIRECT_URIS=http://127.0.0.1/callback`。缺失端口是刻意的模板：
 Server 只对确切的 loopback 主机、协议、路径与查询串接受任意临时端口。
 
 Desktop 使用的远程 Server URL 必须是 HTTPS。

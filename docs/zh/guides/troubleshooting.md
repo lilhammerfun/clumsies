@@ -28,8 +28,7 @@
 
 如果第 1 步已经成功，就先读取已创建的 Review 状态，
 避免因为页面尚未显示而重复创建提案。连续的短请求也可能积累成长等待；
-单看最慢的一次请求会漏掉串行等待和重复下载。性能分析方式见[延迟模型与诊断](/zh/perfo
-rmance/latency-model)。
+单看最慢的一次请求会漏掉串行等待和重复下载。性能分析方式见[延迟模型与诊断](/zh/performance/latency-model)。
 
 ## 提供哪些证据最有用
 
@@ -46,8 +45,7 @@ ry 正文。
 
 具体日志文件、轮转和请求关联说明见[本地运行时](/zh/runtime)。
 独立开发实例有自己的运行目录，应使用 `just dev-macos-logs`，
-避免读错稳定版日志。系统崩溃报告位于 `~/Library/Logs/DiagnosticRep
-orts/`；它适合诊断进程退出，不能替代业务请求日志。
+避免读错稳定版日志。系统崩溃报告位于 `~/Library/Logs/DiagnosticReports/`；它适合诊断进程退出，不能替代业务请求日志。
 
 ## 缓存与编辑不能一起清掉
 
@@ -56,8 +54,7 @@ Project 的 generation 和搜索索引是可重建数据；
 使用产品提供的 Project 缓存管理入口，并先确认错误属于该层。
 删除 `local.db` 可能丢失尚未同步的编辑。
 
-管理员检查部署、OIDC、数据库与服务健康时，继续读[部署指南](/zh/guides/depl
-oy-for-an-org)和[认证与会话](/zh/reference/auth)。
+管理员检查部署、OIDC、数据库与服务健康时，继续读[部署指南](/zh/guides/deploy-for-an-org)和[认证与会话](/zh/reference/auth)。
 开发者需要具体实现时，从[代码库地图](/zh/repos)按问题所在层定位。
 ## Project 移除后同步暂停
 
