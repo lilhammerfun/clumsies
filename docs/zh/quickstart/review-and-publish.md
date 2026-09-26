@@ -1,5 +1,6 @@
 ---
-description: 在 App 中提交 Codex 修改后的草稿，由人检查差异并发布到项目 Memory。
+description: 在 App 中提交 Codex 修改后的草稿，
+由人检查差异并发布到项目 Memory。
 prev:
   text: 让 Codex 修改 Memory
   link: /zh/quickstart/update-memory
@@ -52,8 +53,8 @@ Review 是 Clumsies 内的变更审阅单，作用类似代码 PR。
 新增句子的意思是“回滚后验证健康检查和关键业务请求，并记录结果”。
 
 4. 右键文件，选择 **Request Review…**。也可在打开文件后，
-   从右上角 **Memory Actions** 菜单选择 **Request
-   Review**。
+   从右上角 **Memory Actions** 菜单选择
+   **Request Review**。
 5. 在 **Title** 填写
    `Add post-rollback verification`，
    在 **Description** 简述为什么要验证健康检查和关键业务请求。
@@ -72,8 +73,8 @@ Review 是 Clumsies 内的变更审阅单，作用类似代码 PR。
 提示文字为 **Approve and merge this Review**；
 也可以使用 macOS 菜单 **Review → Approve**。
 
-**当前 App 中的 Approve 会直接执行批准并合并。
-** 成功后状态变为 **Merged**，本次修改进入项目正式内容。如果你没有项目发布权限，
+**当前 App 中的 Approve 会直接执行批准并合并。 **
+成功后状态变为 **Merged**，本次修改进入项目正式内容。如果你没有项目发布权限，
 请由有权限的同事完成这一步。仅保存草稿、提交 Review 或在项目中读到新句子，
 都不能证明已经发布。
 
