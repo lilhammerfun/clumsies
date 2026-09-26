@@ -85,9 +85,7 @@ y**。它会直接登录同一个受信任的 Server 来源，并只在 App 内�
 ## GitHub 交付
 
 `CI` 在 `main` 上的 `build` 汇总检查通过后，
-仅当改动影响 Server 交付时才调用 `.github/workflows/server-d
-elivery.yml`。这个可复用工作流为 `linux/amd64` 与 `linux/ar
-m64` 构建经过验证的那个精确提交，带 OCI source/revision 标签与 pro
+仅当改动影响 Server 交付时才调用 `.github/workflows/server-delivery.yml`。这个可复用工作流为 `linux/amd64` 与 `linux/arm64` 构建经过验证的那个精确提交，带 OCI source/revision 标签与 pro
 venance 发布到 GHCR，并部署 manifest digest。
 同样的镜像架构在 PR 中只做构建检查、不发布。
 
@@ -101,12 +99,7 @@ venance 发布到 GHCR，并部署 manifest digest。
 并 reload Caddy，使同步过来的配置在运行中的容器上生效。
 
 GHCR 包通过 OCI source 标签与本仓库关联。把该包设为公开一次，
-自托管安装即可无需个人 token 拉取。GitHub 同时记录了[公开容器包的匿名拉取](ht
-tps://docs.github.com/en/packages/learn-github-p
-ackages/configuring-a-packages-access-control-an
-d-visibility)与推荐的 [`GITHUB_TOKEN` 发布流程](https://
-docs.github.com/en/actions/tutorials/publish-pac
-kages/publish-docker-images)。
+自托管安装即可无需个人 token 拉取。GitHub 同时记录了[公开容器包的匿名拉取](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)与推荐的 [`GITHUB_TOKEN` 发布流程](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)。
 
 创建一个名为 `production` 的 GitHub Environment，
 并配置这些 secret：
@@ -118,8 +111,7 @@ kages/publish-docker-images)。
 | `DEPLOY_SSH_KEY` | 仅供 Actions 使用的专用 Ed25519 私钥 |
 | `DEPLOY_KNOWN_HOSTS` | `DEPLOY_HOST` 固定的 SSH 主机密钥行 |
 
-引导阶段把仓库变量 `SERVER_AUTO_DEPLOY_ENABLED` 设为 `false
-`。等镜像包公开、受限部署身份验证通过后，再设为 `true`；
+引导阶段把仓库变量 `SERVER_AUTO_DEPLOY_ENABLED` 设为 `false`。等镜像包公开、受限部署身份验证通过后，再设为 `true`；
 此后 `main` 上的绿色提交会自动部署。
 
 不要上传个人或 root 的 SSH 密钥。生成专用密钥，把公钥复制到主机，
@@ -164,8 +156,7 @@ deploy ghcr.io/lilhammerfun/clumsies-server@sha256:<64 hex> <40 hex commit>
 已发布的 migration 因此不需要对上一个 Server 镜像保持可读；
 破坏性 migration 仍然需要 migration 测试，但不需要兼容实现。
 
-要重试一次交付，用它的已发布 digest 与原始 commit 触发 `Server Deli
-very`。破坏性 migration 之后，不要把旧镜像当作独立的回滚手段：
+要重试一次交付，用它的已发布 digest 与原始 commit 触发 `Server Delivery`。破坏性 migration 之后，不要把旧镜像当作独立的回滚手段：
 恢复这样的发布需要它记录的部署前数据库备份与先前镜像，作为一次恢复操作。
 生产环境从不重新构建源码。
 
@@ -198,8 +189,7 @@ sudo clumsies-server-release backup manual
 sudo clumsies-server-release restore-drill
 ```
 
-备份与发布记录位于 `/opt/clumsies/backups` 与 `/opt/clumsi
-es/releases`。本地保留不是灾难恢复。请配置与安装组织相称的加密异地存储，
+备份与发布记录位于 `/opt/clumsies/backups` 与 `/opt/clumsies/releases`。本地保留不是灾难恢复。请配置与安装组织相称的加密异地存储，
 并从那份副本验证恢复；不要把数据库 dump 放进源码仓库或普通的 GitHub Actions
 artifact。
 
@@ -216,10 +206,7 @@ PostgreSQL 连接数与库大小、备份与恢复演练的新鲜度、以及证
 生产环境的 `deploy/Caddyfile` 打开一个全局块，
 让 Caddy 在 Compose 网络的 admin 端点上暴露 HTTP 指标，
 并对 Server 自己的 `/metrics` 路由返回 404，使采集端点留在内网。
-安装步骤、必需的 `.env`、告警通道配置与告警规则都写在 [`deploy/observab
-ility/README.md`](https://github.com/lilhammerfu
-n/clumsies/blob/main/deploy/observability/README
-.md)。
+安装步骤、必需的 `.env`、告警通道配置与告警规则都写在 [`deploy/observability/README.md`](https://github.com/lilhammerfun/clumsies/blob/main/deploy/observability/README.md)。
 
 ## 服务目标
 
@@ -250,8 +237,7 @@ VitePress 源码在 `docs/` 下，
 
 ### 通过 CI/CD 部署
 
-`CI` 在选中的检查于 `main` 上通过后调用 `Site Delivery`（`.git
-hub/workflows/site-delivery.yml`）。`docs/`、
+`CI` 在选中的检查于 `main` 上通过后调用 `Site Delivery`（`.github/workflows/site-delivery.yml`）。`docs/`、
 `site/`、Bun 依赖、`deploy/site.sh`、
 Caddy/Compose 配置与 CI 交付策略的改动都会选中它。
 只有 README 与截图改动不会部署站点。该工作流构建并部署经过测试的那个精确提交，
@@ -267,8 +253,7 @@ Caddy/Compose 配置与 CI 交付策略的改动都会选中它。
 | `SITE_DEPLOY_USER` | 可选；默认 `root` |
 | `DEPLOY_KNOWN_HOSTS` | 主机固定的 SSH 主机密钥行（与 Server Delivery 共用） |
 
-把 `SITE_DEPLOY_SSH_KEY` 的公钥加入站点部署用户的 `authorized
-_keys`（若用 `root`，即 `/root/.ssh/authorized_keys`）
+把 `SITE_DEPLOY_SSH_KEY` 的公钥加入站点部署用户的 `authorized_keys`（若用 `root`，即 `/root/.ssh/authorized_keys`）
 。与 Server Delivery 的密钥不同，这把密钥**不**受强制命令限制：
 `deploy/site.sh` 需要一个能执行交互命令的 SSH 会话，
 在主机上运行 `mkdir`、`rsync`、`scp` 与 `docker compose`。
@@ -284,8 +269,7 @@ deploy/site.sh my-host  # 也可以显式传入 ssh 目标
 ```
 
 脚本会构建 VitePress 站点，用 `rsync` 同步两个静态根目录，
-在目标上更新 `deploy/Caddyfile` 与 `compose.production.
-yml`，并 reload Caddy 使同步过来的配置生效。
+在目标上更新 `deploy/Caddyfile` 与 `compose.production.yml`，并 reload Caddy 使同步过来的配置生效。
 `docs.clumsies.ai` 与 `clumsies.ai` 的 DNS 必须指向该服务
 器；Caddy 会自动申请 TLS 证书。
 
