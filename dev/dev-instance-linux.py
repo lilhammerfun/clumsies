@@ -12,7 +12,7 @@ script is macOS mechanics end to end -- launchd, Keychain, a signed .app,
 Xcode. The two share the layout and dev/dev-server.sh, and differ only in what
 supervises the processes, which is the part that cannot be shared.
 
-    dev/dev-instance-linux.py up [--seed-memory]
+    dev/dev-instance-linux.py up [--seed-memory] [--no-client]
     dev/dev-instance-linux.py sign-in [--server-url URL] [--setup-code CODE]
     dev/dev-instance-linux.py status | logs | down | reset
 
@@ -146,6 +146,8 @@ class Instance:
         self.compose_project = f"clumsies-dev-{self.instance_id}"
         self.server_binary = os.path.join(self.bin, "clumsies-server")
         self.daemon_binary = os.path.join(REPO_ROOT, "target", "debug", "clumsiesd")
+        self.client_binary = os.path.join(REPO_ROOT, "target", "debug", "clumsies-desktop")
+        self.client_pid = os.path.join(self.root, "client.pid")
 
     # -- files
 
@@ -224,6 +226,10 @@ class Instance:
 
     def build_server(self):
         run(["cargo", "build", "-p", "server", "--bin", "clumsies-server"], cwd=REPO_ROOT)
+        # Replacing a running executable fails on Linux, and "up" means "make
+        # this instance current", so the old Server stops before the swap and
+        # start_server brings it back.
+        stop(self.server_pid)
         shutil.copy2(
             os.path.join(REPO_ROOT, "target", "debug", "clumsies-server"), self.server_binary
         )
@@ -280,6 +286,20 @@ class Instance:
             print(".", end="", flush=True)
             time.sleep(1)
         raise SystemExit(f"\nthe daemon never opened its socket; see {self.logs}/daemon.log")
+
+    def start_client(self):
+        """The macOS instance opens the App as part of "up"; this is the same
+        promise, so a developer sees the product rather than a description of
+        it."""
+        if running(self.client_pid):
+            return
+        run(["cargo", "build", "-p", "desktop"], cwd=REPO_ROOT)
+        spawn(
+            [self.client_binary],
+            log=os.path.join(self.logs, "client.log"),
+            pid_file=self.client_pid,
+            environment={"CLUMSIES_DAEMON_ROOT": self.daemon_root},
+        )
 
     # -- the session
 
@@ -415,7 +435,7 @@ class Instance:
 
     # -- lifecycle
 
-    def up(self, seed):
+    def up(self, seed, with_client=True):
         self.create()
         values = self.env()
         self.write_env(values)
@@ -434,11 +454,15 @@ class Instance:
         )
         if seed:
             self.seed_memory()
+        if with_client:
+            print("starting the client", end="", flush=True)
+            self.start_client()
+            print()
         print()
         print(f"instance {self.instance_id} is up")
         print(f"  server: http://127.0.0.1:{server_port}")
         print(f"  daemon: {self.daemon_root}/daemon.sock")
-        print(f"  client: CLUMSIES_DAEMON_ROOT={self.daemon_root} cargo run -p desktop")
+        print(f"  logs:   {self.logs}")
         print(f"  seeded: {'yes' if seed else 'no (pass --seed-memory)'}")
 
     def port_of(self, name):
@@ -464,7 +488,7 @@ class Instance:
                     sys.stdout.write("".join(handle.readlines()[-40:]))
 
     def down(self):
-        for pid_file in (self.daemon_pid, self.server_pid):
+        for pid_file in (self.client_pid, self.daemon_pid, self.server_pid):
             stop(pid_file)
         if docker_available():
             subprocess.run(
@@ -528,25 +552,50 @@ def spawn(command, log, pid_file, environment=None):
     write_private(pid_file, str(process.pid))
 
 
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
 def running(pid_file):
     if not os.path.exists(pid_file):
         return False
     try:
-        os.kill(int(open(pid_file).read().strip()), 0)
-        return True
-    except (ValueError, ProcessLookupError, PermissionError):
+        return alive(int(open(pid_file).read().strip()))
+    except ValueError:
         return False
 
 
 def stop(pid_file):
-    if not running(pid_file):
-        os.path.exists(pid_file) and os.remove(pid_file)
+    """Asks a process to stop and waits for it, because the caller usually
+    wants to replace the executable it is running from."""
+    if not os.path.exists(pid_file):
         return
-    pid = int(open(pid_file).read().strip())
     try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+        pid = int(open(pid_file).read().strip())
+    except ValueError:
+        os.remove(pid_file)
+        return
+    if alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        for _ in range(50):
+            if not alive(pid):
+                break
+            time.sleep(0.1)
+        else:
+            # A Server holds a database and a daemon holds draft state, so this
+            # is the last resort, not the first move.
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            time.sleep(0.5)
     os.remove(pid_file)
 
 
@@ -719,8 +768,9 @@ def authorize(server_url, setup_code=None, redirect_port=49199):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    up = commands.add_parser("up", help="start containers, Server, daemon; sign in")
+    up = commands.add_parser("up", help="start containers, Server, daemon, client; sign in")
     up.add_argument("--seed-memory", action="store_true", help="also publish starter Memory")
+    up.add_argument("--no-client", action="store_true", help="leave the client alone")
     sign_in = commands.add_parser("sign-in", help="sign the daemon in to a Server")
     sign_in.add_argument("--server-url", default=None)
     sign_in.add_argument("--setup-code", default=None)
@@ -730,7 +780,7 @@ def main():
 
     instance = Instance()
     if arguments.command == "up":
-        instance.up(seed=arguments.seed_memory)
+        instance.up(seed=arguments.seed_memory, with_client=not arguments.no_client)
     elif arguments.command == "sign-in":
         instance.sign_in(arguments.server_url, arguments.setup_code)
     elif arguments.command == "status":
