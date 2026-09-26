@@ -16,6 +16,7 @@ use clumsiesd::{
 };
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::tree::TreeState;
@@ -28,6 +29,49 @@ use crate::components::memory_tree;
 use crate::engine::{Checkout, DocumentEdit, MemoryDocument};
 use crate::screens::document::{DocumentPane, Mode, Notice, PANE_HEADER, PaneContext};
 use crate::ui::{self, Typography};
+
+/// What an empty Memory offers: the starting point macOS offers from the same
+/// state, which is the guidelines file and a folder for each kind of knowledge.
+fn empty_memory_state(cx: &mut Context<DesktopApp>) -> AnyElement {
+    div()
+        .v_flex()
+        .flex_1()
+        .h_full()
+        .min_w(px(0.))
+        .p_4()
+        .gap_2()
+        .child(
+            div()
+                .text_style(&ui::SUBTITLE)
+                .text_color(cx.theme().foreground)
+                .child("Give your memory a starting point"),
+        )
+        .child(
+            div()
+                .max_w(px(520.))
+                .text_style(&ui::BODY)
+                .text_color(cx.theme().muted_foreground)
+                .child(
+                    "Memory guidelines tell agents what to remember and how to keep it useful. \
+                     Start with our defaults and make them your own.",
+                ),
+        )
+        .child(
+            Button::new("set-up-memory")
+                .primary()
+                .label("Set up guidelines")
+                .on_click(cx.listener(|app, _event, _window, cx| app.set_up_guidelines(cx))),
+        )
+        .child(
+            div()
+                .text_style(&ui::CAPTION)
+                .text_color(cx.theme().muted_foreground)
+                .child(
+                    "Creates CLUMSIES.md and starter folders for knowledge, procedures, and lessons.",
+                ),
+        )
+        .into_any_element()
+}
 
 /// The list header's fields: the filter beside the Project filter, which is
 /// what a search field in a list is. macOS puts the same field in its window
@@ -713,6 +757,15 @@ impl MemoryScreen {
         self.selection.paths().cloned().collect()
     }
 
+    /// Every path the Project's Memory holds, which is what a starting point has
+    /// to avoid treading on.
+    pub fn paths(&self) -> Vec<String> {
+        self.documents
+            .iter()
+            .map(|document| document.path.clone())
+            .collect()
+    }
+
     /// What a rename or a deletion is made of: the document, the draft it joins
     /// when it has one, and the base the daemon should record.
     pub fn edit_for_path(&self, path: &str) -> Option<DocumentEdit> {
@@ -978,10 +1031,10 @@ impl MemoryScreen {
             // has all closed.
             let reason = match (&self.error, self.documents.is_empty()) {
                 (Some(error), _) => ui::message(error.clone(), cx.theme().danger),
-                (None, true) => ui::message(
-                    "This Project has no Memory yet.",
-                    cx.theme().muted_foreground,
-                ),
+                // A Project with no Memory at all is where Memory starts: macOS
+                // offers the same thing from this state rather than a sentence,
+                // because a reader with nothing to browse has nothing else to do.
+                (None, true) => return empty_memory_state(cx),
                 (None, false) => ui::message("Select a document.", cx.theme().muted_foreground),
             };
             return div()

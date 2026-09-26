@@ -146,6 +146,14 @@ already on screen. A query that names nothing says so where the list was, which
 is macOS's own empty state for a search with no results, and a row the filter
 takes away is no longer selected.
 
+**An empty Memory offers a starting point rather than a sentence.** macOS's
+empty Memory is where its guidelines are set up, and this client's is the same:
+the guidelines file, which tells agents what is worth remembering and how to keep
+it useful, and one folder for each kind of knowledge — knowledge, procedures,
+lessons — each with a README that says what belongs there. All four are proposed
+as drafts, because a Project's Memory changes through review, and the reader
+lands in the guidelines, which is what they came there to write.
+
 **A row says what the engine is doing with its draft.** macOS's row menu
 carries the draft's synchronization, and this client's carries the same, read
 from the same daemon fields: `Retry draft sync` when operations could not be

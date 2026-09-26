@@ -16,6 +16,7 @@ use gpui_kit::*;
 use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review, ReviewStatus};
 use crate::screens::dialogs::{ConfirmDialog, DialogAction, RenameDialog, RenameFolderDialog};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
+use crate::screens::guidelines;
 use crate::screens::memory::{MemoryScreen, Move};
 use crate::screens::new_memory::NewMemoryDialog;
 use crate::screens::project_settings::{ProjectSettings, ProjectSettingsDialog};
@@ -316,6 +317,53 @@ impl DesktopApp {
             })
             .collect();
         self.run_plan(what, calls, cx);
+    }
+
+    /// Starts a Project's Memory: the guidelines and a folder for each kind of
+    /// knowledge, which is what macOS offers an empty Memory. Every document is
+    /// proposed as a draft in one go, so the whole starting point is one Review,
+    /// and the folder a Project already uses is left alone.
+    pub fn set_up_guidelines(&mut self, cx: &mut Context<Self>) {
+        let Some(project_id) = self.memory.project_id().map(str::to_owned) else {
+            return;
+        };
+        let commit = self.memory.commit_id().map(str::to_owned);
+        let starters = guidelines::starters(&self.memory.paths());
+        let work = cx.background_executor().spawn(async move {
+            for starter in &starters {
+                engine::create_document(
+                    &project_id,
+                    commit.as_deref(),
+                    &starter.path,
+                    starter.body,
+                )?;
+            }
+            Ok::<usize, String>(starters.len())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| {
+                match &result {
+                    Ok(count) => crate::logging::info(&format!(
+                        "started this Project's Memory: {count} documents proposed"
+                    )),
+                    Err(error) => {
+                        crate::logging::error(&format!("could not start Memory: {error}"))
+                    }
+                }
+                if result.is_ok() {
+                    // The reader is here to write the guidelines, which is what
+                    // macOS opens after its own setup.
+                    app.memory
+                        .open_when_loaded(guidelines::GUIDELINES_PATH, Some(Mode::Edit));
+                }
+                app.refresh_drafts(cx);
+                app.reload_memory(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Asks the daemon to try this Project's draft uploads again, which is what a
