@@ -73,24 +73,6 @@ the same tunnel can forward all three:
 ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 <installation-host>
 ```
 
-### Change the administrator
-
-`GF_SECURITY_ADMIN_USER` and `GF_SECURITY_ADMIN_PASSWORD` apply to the first
-start only, because Grafana stores the account in its database. Rename it
-through the API and reset its password with the bundled CLI:
-
-```bash
-cd /opt/clumsies/observability
-password=$(grep GRAFANA_ADMIN_PASSWORD .env | cut -d= -f2)
-curl -u "$(grep GRAFANA_ADMIN_USER .env | cut -d= -f2):$password" \
-  -X PUT -H 'Content-Type: application/json' \
-  -d '{"login":"new-login","name":"new-login"}' http://127.0.0.1:3000/api/users/1
-docker compose --file compose.observability.yml --env-file .env exec grafana \
-  grafana cli --homepath /usr/share/grafana admin reset-admin-password new-password
-```
-
-Update `.env` to match, so a rebuilt instance starts with the same account.
-
 ## Alert delivery
 
 `alertmanager/alertmanager.yml` ships with placeholders. Replace them with a
