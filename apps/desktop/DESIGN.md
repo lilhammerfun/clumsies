@@ -165,8 +165,14 @@ detail. This client draws, from the top:
 | --- | --- |
 | Title bar | The window's, not a screen's: the page navigation at the left and the window controls at the right, and nothing else. |
 | Rail | The six destinations of the macOS sidebar, **icons only**, each named in a tooltip. Memory is the brain, as it is in macOS. |
-| List column | The open section's list, under a header row that names it and carries its filter — the Project picker here, which macOS calls MemoryProjectFilter and keeps in the same place. |
-| Detail | The work, in two rows: the strip of open documents, then a header row with how the document in front is read and the section's actions at the end of it, which is where macOS keeps its section menus. |
+| List column | The open section's list, under a header row carrying its filter — the Project picker here, which macOS calls MemoryProjectFilter and keeps in the same place — and, at the far right, at most one command rarer than the work itself. No heading: the rail already says which section this is. |
+| Detail | The work, under **one** header row: the open documents as tabs on the left, the tools for the one in front on the right. |
+
+**A document opens to be read.** The pane's default is the prose, and editing
+and diffing are tools a reader turns on rather than a mode switch they start in;
+turning one off returns to reading. The rare commands (request a review, and
+whatever joins it) live behind the overflow at the end of that row, which is
+where macOS keeps its Memory Actions menu.
 
 **Every pane carries its own header row.** A pane header — WinUI calls the
 control a command bar, VS Code a view header — holds the commands and the facts

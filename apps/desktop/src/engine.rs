@@ -10,12 +10,12 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use clumsiesd::{
-    DaemonContentDraftUpdate, DaemonDraftContent, DaemonDraftDetail, DaemonDraftListQuery,
-    DaemonDraftOperation, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
-    DaemonDraftOperationSource, DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary,
-    DaemonHealth, DaemonIpcClient, DaemonIpcRequest, DaemonLocalDraftStatus,
-    DaemonProjectCheckoutRequest, DaemonProjectSyncRetryRequest, DaemonRetryResponse,
-    DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
+    DaemonContentDraftUpdate, DaemonDiscardDraftOperation, DaemonDraftContent, DaemonDraftDetail,
+    DaemonDraftListQuery, DaemonDraftOperation, DaemonDraftOperationRequest,
+    DaemonDraftOperationResponse, DaemonDraftOperationSource, DaemonDraftResourceKind,
+    DaemonDraftScope, DaemonDraftSummary, DaemonHealth, DaemonIpcClient, DaemonIpcRequest,
+    DaemonLocalDraftStatus, DaemonProjectCheckoutRequest, DaemonProjectSyncRetryRequest,
+    DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
     DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
 use serde::Deserialize;
@@ -498,6 +498,50 @@ pub struct DocumentEdit {
 /// The method is the desktop alias and not the plain store_draft_operation: the
 /// daemon reserves that spelling for Agent protocol proxies, which prove their
 /// identity, and refuses a request that arrives without one.
+
+/// Throws a proposal away, which is what a reader does with an edit they no
+/// longer want. The published document is untouched.
+pub fn discard_draft(
+    draft_id: &str,
+    resource_id: &str,
+) -> Result<DaemonDraftOperationResponse, String> {
+    let request = DaemonDraftOperationRequest {
+        draft_id: Some(draft_id.to_owned()),
+        base_commit_id: None,
+        project_id: String::new(),
+        scope: DaemonDraftScope::Project,
+        resource: DaemonDraftResourceKind::Memory,
+        op: DaemonDraftOperation {
+            create: None,
+            update: None,
+            rename: None,
+            delete: None,
+            discard: Some(DaemonDiscardDraftOperation {
+                id: resource_id.to_owned(),
+            }),
+        },
+        source: Some(DaemonDraftOperationSource::Desktop),
+    };
+    draft_operation(&request)
+}
+
+/// One draft operation through the daemon, which queues it and uploads behind
+/// it. The desktop alias is the one that carries a read-write session.
+fn draft_operation(
+    request: &DaemonDraftOperationRequest,
+) -> Result<DaemonDraftOperationResponse, String> {
+    let payload = serde_json::to_value(request)
+        .map_err(|error| format!("unreadable draft operation: {error}"))?;
+    client()
+        .call(DaemonIpcRequest::new(
+            "desktop_store_draft_operation",
+            payload,
+        ))
+        .map_err(|error| error.to_string())?
+        .into_payload()
+        .map_err(|error| error.to_string())
+}
+
 pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationResponse, String> {
     let request = DaemonDraftOperationRequest {
         draft_id: edit.draft_id.clone(),

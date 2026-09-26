@@ -109,6 +109,9 @@ impl DesktopApp {
         // A Project that already holds a proposal must show it on the first
         // frame: the tree marks it and the pane header offers to review it.
         app.refresh_drafts(cx);
+        // The pane's tools are a region of the window (F6 walks it), so the
+        // window owns the handle and the screen draws from it.
+        app.memory.set_tools_focus(app.actions_focus.clone());
         app
     }
 
@@ -116,6 +119,85 @@ impl DesktopApp {
     /// notification.
     pub fn memory(&mut self) -> &mut MemoryScreen {
         &mut self.memory
+    }
+
+    /// The same screen, for a reader rather than a writer: the tree's menu is
+    /// built while the window renders, and it only needs to know what a row has.
+    pub fn memory_ref(&self) -> &MemoryScreen {
+        &self.memory
+    }
+
+    /// Opens a document from the tree's menu. A menu comes with a window, so
+    /// the tab can be made now rather than on the next frame.
+    pub fn open_document(
+        &mut self,
+        path: &str,
+        mode: Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.memory.open_now(path, Some(mode), window, cx) {
+            cx.notify();
+        }
+    }
+
+    /// Asks for a Review of one document, whether or not it is the open one.
+    pub fn request_review_for(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.memory.open_now(path, None, window, cx) {
+            self.request_review(window, cx);
+        }
+    }
+
+    /// Throws away the draft that carries a document's edits. macOS does this
+    /// without asking; the published document is untouched either way.
+    pub fn discard_draft_for(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some((draft_id, resource_id)) = self.memory.draft_for_path(path) else {
+            return;
+        };
+        let discarded = resource_id.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { engine::discard_draft(&draft_id, &resource_id) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| {
+                match result {
+                    Ok(response) => crate::logging::info(&format!(
+                        "discarded {} for {}",
+                        response.draft_id, discarded
+                    )),
+                    Err(error) => crate::logging::error(&format!(
+                        "could not discard the draft for {discarded}: {error}"
+                    )),
+                }
+                app.refresh_drafts(cx);
+                app.reload_memory(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the Review sheet for the document in front, which is what the
+    /// pane's overflow offers and what the tree's menu offers per row.
+    pub fn request_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.memory.render_target() else {
+            return;
+        };
+        let Some(pane) = self.memory.active_pane() else {
+            return;
+        };
+        let (edit, store) = pane.review_edit(&target, cx);
+        document::open_review_sheet(
+            edit,
+            store,
+            pane.review_title(),
+            pane.review_description(),
+            cx.entity().downgrade(),
+            window,
+            cx,
+        );
     }
 
     /// The sections are the shell's, so the window only has to be told which one
@@ -321,6 +403,11 @@ impl DesktopApp {
             self.merge_review(cx);
             return;
         }
+        if self.shell.section() == Section::Memory {
+            self.toggle_document_edit(cx);
+            return;
+        }
+
         let Some(target) = self.memory.render_target() else {
             return;
         };
@@ -341,7 +428,9 @@ impl DesktopApp {
 
     fn can_run_primary_action(&self) -> bool {
         match self.shell.section() {
-            Section::Memory => self.memory.can_review(),
+            // The pane's primary tool is editing, which is always available for
+            // a document that is open.
+            Section::Memory => self.memory.active_pane().is_some(),
             Section::Reviews => self.reviews.can_approve() || self.reviews.can_merge(),
             _ => false,
         }
@@ -473,6 +562,26 @@ impl DesktopApp {
             }
         })
         .detach();
+    }
+
+    /// Turns editing on for the document in front, or off again: a tool the
+    /// reader picks up, not a mode the window is in.
+    pub fn toggle_document_edit(&mut self, cx: &mut Context<Self>) {
+        let mode = match self.memory.active_pane().map(|pane| pane.mode()) {
+            Some(Mode::Edit) => Mode::Preview,
+            _ => Mode::Edit,
+        };
+        self.set_document_mode(mode, cx);
+    }
+
+    /// The same for the diff, which is what an edit looks like against what the
+    /// Project publishes.
+    pub fn show_document_diff(&mut self, cx: &mut Context<Self>) {
+        let mode = match self.memory.active_pane().map(|pane| pane.mode()) {
+            Some(Mode::Diff) => Mode::Preview,
+            _ => Mode::Diff,
+        };
+        self.set_document_mode(mode, cx);
     }
 
     pub fn set_document_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
@@ -890,7 +999,7 @@ impl DesktopApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.list(picker, window, cx),
+            Section::Memory => self.memory.list(picker, None, window, cx),
             Section::Reviews => self.reviews.list(picker, window, cx),
             other => placeholder(other.list_note(), cx),
         }
@@ -898,9 +1007,14 @@ impl DesktopApp {
 
     /// Its detail: the work itself. The actions the open screen offers are drawn
     /// in the detail pane's own header, beside what they act on.
-    fn section_detail(&self, actions: Option<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
+    fn section_detail(
+        &self,
+        actions: Option<AnyElement>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.detail(actions, cx),
+            Section::Memory => self.memory.detail(&self.actions_focus, window, cx),
             Section::Reviews => self.reviews.detail(actions, cx),
             other => placeholder(other.detail_note(), cx),
         }
@@ -990,7 +1104,7 @@ impl Render for DesktopApp {
         let picker = self.shell.project_picker(&chrome, cx);
         let slots = Slots {
             list: self.section_list(picker, window, cx),
-            detail: self.section_detail(actions, cx),
+            detail: self.section_detail(actions, window, cx),
         };
         let shell = self.shell.render(window, cx, chrome, slots);
         // The window's own keys, handled above everything else: F6 moves between

@@ -15,10 +15,11 @@ use std::time::Duration;
 use clumsiesd::DaemonDraftSummary;
 use gpui_kit::base::{Disableable, StyledExt};
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Icon;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
@@ -34,31 +35,17 @@ pub const SAVE_DELAY: Duration = Duration::from_millis(600);
 /// the same one, so the two headers line up across the card.
 pub const PANE_HEADER: f32 = 44.;
 
-/// The three ways a document can be read, which are the macOS tab modes.
+/// What the pane is doing with a document. Reading it as prose is what a
+/// document is for, so that is what a reader gets without asking; editing and
+/// diffing are tools they turn on, and turning one off returns to reading.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    Source,
+    /// Read as prose. The default, and the state a tool returns to.
     Preview,
+    /// Edit the text, which is what a proposal is made of.
+    Edit,
     /// What this edit changes against the version the checkout holds.
     Diff,
-}
-
-impl Mode {
-    fn index(self) -> usize {
-        match self {
-            Mode::Source => 0,
-            Mode::Preview => 1,
-            Mode::Diff => 2,
-        }
-    }
-
-    fn from_index(index: usize) -> Self {
-        match index {
-            1 => Mode::Preview,
-            2 => Mode::Diff,
-            _ => Mode::Source,
-        }
-    }
 }
 
 /// What the engine has done with the text in the editor.
@@ -141,7 +128,7 @@ impl DocumentPane {
         });
         Self {
             editor,
-            mode: Mode::Source,
+            mode: Mode::Preview,
             base_text: String::new(),
             saved_text: String::new(),
             save: SaveState::Clean,
@@ -250,44 +237,95 @@ impl DocumentPane {
         self.save = save;
     }
 
-    /// The document pane's own header: which document is open, how to look at
-    /// it, what it has to say about itself, and what the screen can do with it.
-    /// macOS keeps the first two in the window toolbar; here they sit on the
-    /// pane they act on, above the text.
-    pub fn header(&self, actions: Option<AnyElement>, cx: &mut Context<DesktopApp>) -> AnyElement {
+    /// The pane's tools, at the right of the toolbar row: what the engine is
+    /// doing with the document, then what a reader can do with it. Editing and
+    /// diffing are tools rather than a mode switch — a document opens to be
+    /// read — and everything rarer lives behind the overflow.
+    ///
+    /// macOS keeps the same commands in its window toolbar; this is the pane
+    /// they act on.
+    pub fn tools(
+        &self,
+        focus: &FocusHandle,
+        window: &Window,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
         let this = cx.entity();
-        let modes = TabBar::new("document-mode")
-            .segmented()
-            .selected_index(self.mode.index())
-            .on_click({
-                let this = this.clone();
-                move |index, _window, cx| {
-                    let mode = Mode::from_index(*index);
-                    this.update(cx, |app, cx| app.set_document_mode(mode, cx));
-                }
-            })
-            .children([
-                Tab::new().label("Source"),
-                Tab::new().label("Preview"),
-                Tab::new().label("Diff"),
-            ]);
+        let ring = if focus.is_focused(window) {
+            cx.theme().ring
+        } else {
+            transparent_black()
+        };
+        let tool = |id: &'static str,
+                    icon: Icon,
+                    tooltip: &'static str,
+                    selected: bool,
+                    this: Entity<DesktopApp>,
+                    action: fn(&mut DesktopApp, &mut Context<DesktopApp>)| {
+            Button::new(id)
+                .icon(icon)
+                .tooltip(tooltip)
+                .toggled(selected)
+                .on_click(move |_event, _window, cx| {
+                    this.update(cx, |app, cx| action(app, cx));
+                })
+        };
+        let can_review = self.can_review();
+        let more = {
+            let this = this.clone();
+            DropdownButton::new("document-more")
+                .button(
+                    Button::new("document-more-button")
+                        .icon(Icon::default().path("icons/ellipsis.svg"))
+                        .tooltip("More"),
+                )
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let this = this.clone();
+                    menu.item(
+                        PopupMenuItem::new("Request review…")
+                            .disabled(!can_review)
+                            .on_click(move |_event, window, cx| {
+                                this.update(cx, |app, cx| app.request_review(window, cx));
+                            }),
+                    )
+                })
+        };
         div()
+            .id("document-tools")
             .h_flex()
-            .h(px(PANE_HEADER))
-            .px_4()
-            .gap_3()
             .items_center()
-            .child(modes)
+            .gap_1()
+            .rounded(px(ui::RADIUS))
+            .border_1()
+            .border_color(ring)
+            .p(px(ui::SPACE_XS))
+            .track_focus(focus)
+            .tab_stop(true)
             .children(self.header_status(cx))
             .children(self.header_notice(cx))
-            .child(div().flex_1().min_w(px(0.)))
-            .children(actions)
+            .child(tool(
+                "document-edit",
+                Icon::default().path("icons/pencil.svg"),
+                "Edit this document",
+                self.mode == Mode::Edit,
+                this.clone(),
+                DesktopApp::toggle_document_edit,
+            ))
+            .child(tool(
+                "document-diff",
+                Icon::default().path("icons/file-diff.svg"),
+                "What this edit changes",
+                self.mode == Mode::Diff,
+                this,
+                DesktopApp::show_document_diff,
+            ))
+            .child(more)
             .into_any_element()
     }
 
-    /// The work itself: the document, read in one of its three modes, under the
-    /// pane's header.
-    pub fn detail(&self, actions: Option<AnyElement>, cx: &mut Context<DesktopApp>) -> AnyElement {
+    /// The work itself, under the toolbar: the document, read the way the pane
+    /// is set to read it.
+    pub fn body(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
         let text = self.text(cx);
 
         let body: AnyElement = match self.mode {
@@ -295,7 +333,7 @@ impl DocumentPane {
             // the document is the whole of what a reader sees here. Its height
             // is the box the pane measured, because the editor's own element
             // asks for a percentage, which nothing in a flex column resolves.
-            Mode::Source => {
+            Mode::Edit => {
                 let height = self.editor_height.clone();
                 let this = cx.entity().downgrade();
                 let editor = Textarea::new(&self.editor)
@@ -338,16 +376,14 @@ impl DocumentPane {
             }
         };
 
+        // The body is a flex column of its own: a percentage or a flex share
+        // only reaches a control whose parent lays out as flex, and the editor
+        // needs one of the two.
         div()
             .v_flex()
             .flex_1()
             .min_w(px(0.))
             .min_h(px(0.))
-            .child(self.header(actions, cx))
-            .child(ui::rule(cx))
-            // The body is a flex column of its own: a percentage or a flex
-            // share only reaches a control whose parent lays out as flex, and
-            // the editor needs one of the two.
             .child(div().v_flex().flex_1().min_h(px(0.)).p_4().child(body))
             .into_any_element()
     }

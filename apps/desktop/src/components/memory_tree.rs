@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::*;
 
@@ -69,8 +70,14 @@ fn join(prefix: &str, name: &str) -> String {
     }
 }
 
-/// The tree, with a Draft mark on every file an open draft touches.
-pub fn memory_tree(state: &Entity<TreeState>, drafted: &BTreeSet<String>) -> impl IntoElement {
+/// The tree, with a Draft mark on every file an open draft touches, and a
+/// context menu whose contents the caller decides: a row's path is handed to
+/// the builder, which knows what the Project's drafts say about it.
+pub fn memory_tree(
+    state: &Entity<TreeState>,
+    drafted: &BTreeSet<String>,
+    build_menu: impl Fn(&str, PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
+) -> impl IntoElement {
     let drafted = drafted.clone();
     tree(state, move |index, entry, _selected, _window, cx| {
         let marker = if entry.is_folder() {
@@ -94,5 +101,9 @@ pub fn memory_tree(state: &Entity<TreeState>, drafted: &BTreeSet<String>) -> imp
                 .child(entry.item().label.clone())
                 .children(mark),
         )
+    })
+    .context_menu(move |_index, entry, menu, window, cx| {
+        let path = entry.item().id.to_string();
+        build_menu(&path, menu, window, cx)
     })
 }

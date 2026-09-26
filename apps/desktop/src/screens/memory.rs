@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use clumsiesd::{DaemonDraftSummary, DaemonLocalDraftStatus};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::tree::TreeState;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::*;
@@ -22,11 +23,6 @@ use crate::components::memory_tree;
 use crate::engine::{Checkout, MemoryDocument};
 use crate::screens::document::{DocumentPane, Mode, Notice, PANE_HEADER, PaneContext};
 use crate::ui::{self, Typography};
-
-/// The height of the strip of open documents, which sits above the pane's
-/// header. macOS's DocumentTabStrip is 28 points; this is the control height
-/// its platform gives a strip of controls.
-pub const TAB_STRIP: f32 = 36.;
 
 /// One tab. macOS sizes its own between 84 and 200 points; a name that long is
 /// rare here, and the truncation is what keeps the strip from walking off.
@@ -69,6 +65,10 @@ pub struct MemoryScreen {
     drafts: Vec<DaemonDraftSummary>,
     /// Why the documents could not be read, when they could not be.
     error: Option<String>,
+    /// Where the pane's tools take the keyboard. The tools belong to the pane
+    /// but the region is the window's (F6 walks it), so the handle is handed
+    /// over once instead of being threaded through every call.
+    tools_focus: FocusHandle,
     /// Where the file tree takes the keyboard, which is where F6 reaches it.
     /// The tree component keeps a focus handle of its own for clicks; this one
     /// is the screen's, so the window can ask whether the list is the region
@@ -76,6 +76,12 @@ pub struct MemoryScreen {
     list_focus: FocusHandle,
     /// Dropping a subscription cancels it, so the screen holds it.
     _selection: Subscription,
+}
+
+/// What a tree row can offer, read before its menu is built.
+pub struct MenuTarget {
+    pub draft_id: Option<String>,
+    pub can_review: bool,
 }
 
 /// Where an arrow key moves the list's selection.
@@ -110,6 +116,7 @@ impl MemoryScreen {
             pending_open: None,
             drafts: Vec::new(),
             error: None,
+            tools_focus: cx.focus_handle(),
             list_focus: cx.focus_handle(),
             _selection: selection,
         };
@@ -271,12 +278,6 @@ impl MemoryScreen {
             .map(|tab| tab.resource_id.clone())
     }
 
-    /// Whether the tab in front offers a Review, which is the window's primary
-    /// action in this section.
-    pub fn can_review(&self) -> bool {
-        self.active_pane().is_some_and(|pane| pane.can_review())
-    }
-
     /// Whether there is anywhere to go back to. macOS asks its back stack the
     /// same question, and the window's arrow is drawn from the answer.
     pub fn can_go_back(&self) -> bool {
@@ -310,6 +311,9 @@ impl MemoryScreen {
     /// has. This runs at the top of a frame, before the panes draw, so a new
     /// tab's editor is already there and already holds its text.
     pub fn apply_pending_open(&mut self, window: &mut Window, cx: &mut Context<DesktopApp>) {
+        // A menu built inside the tree talks to the application, so the screen
+        // leaves itself where that builder can find it.
+        TREE_APP.with(|slot| *slot.borrow_mut() = Some(cx.entity().downgrade()));
         let Some(resource_id) = self.pending_open.take() else {
             return;
         };
@@ -438,6 +442,76 @@ impl MemoryScreen {
         }
     }
 
+    /// The window hands over the handle its F6 cycle uses for the tools region.
+    pub fn set_tools_focus(&mut self, focus: FocusHandle) {
+        self.tools_focus = focus;
+    }
+
+    /// What the tree menu needs to know about one row: whether a draft carries
+    /// it, and whether that draft is one a Review could be asked for. A folder
+    /// is not a document, so it has nothing to offer yet.
+    pub fn menu_target(&self, path: &str) -> Option<MenuTarget> {
+        let document = self
+            .documents
+            .iter()
+            .find(|document| document.path == path)?;
+        let draft = self.draft_for(document);
+        Some(MenuTarget {
+            draft_id: draft.map(|draft| draft.draft_id.clone()),
+            can_review: draft.is_some_and(|draft| draft.status == DaemonLocalDraftStatus::Open),
+        })
+    }
+
+    /// The draft that carries a document's edits, as the daemon names it.
+    pub fn draft_for_path(&self, path: &str) -> Option<(String, String)> {
+        let document = self
+            .documents
+            .iter()
+            .find(|document| document.path == path)?;
+        let draft = self.draft_for(document)?;
+        Some((draft.draft_id.clone(), document.resource_id.clone()))
+    }
+
+    /// Opens a document for a caller that has a window — a menu, rather than a
+    /// tree click, which arrives without one. Returns whether it is open.
+    pub fn open_now(
+        &mut self,
+        path: &str,
+        mode: Option<Mode>,
+        window: &mut Window,
+        cx: &mut Context<DesktopApp>,
+    ) -> bool {
+        let Some(document) = self
+            .documents
+            .iter()
+            .find(|document| document.path == path)
+            .cloned()
+        else {
+            return false;
+        };
+        let index = match self.tab_index(&document.resource_id) {
+            Some(index) => index,
+            None => {
+                let mut pane = DocumentPane::new(window, cx);
+                pane.load(&document, window, cx);
+                self.open.push(OpenDocument {
+                    resource_id: document.resource_id.clone(),
+                    pane,
+                });
+                self.open.len() - 1
+            }
+        };
+        if let Some(mode) = mode
+            && let Some(tab) = self.open.get_mut(index)
+        {
+            tab.pane.set_mode(mode);
+        }
+        let typing = self.keyboard_in_editor(window, cx) || mode == Some(Mode::Edit);
+        self.activate(index, cx);
+        self.follow_editor_focus(typing, window, cx);
+        true
+    }
+
     /// Gives the keyboard to the file tree, which is one of the regions F6
     /// walks: a list is reachable by keyboard on this platform, and the tree
     /// component leaves the keys to whoever holds the focus.
@@ -509,15 +583,27 @@ impl MemoryScreen {
     /// The section's list column: the Project's Memory, as files, under a header
     /// row of its own saying which Project and offering to change it. Every pane
     /// carries its own header; this is the list's.
-    pub fn list(&self, project: AnyElement, window: &Window, cx: &App) -> AnyElement {
+    pub fn list(
+        &self,
+        project: AnyElement,
+        settings: Option<AnyElement>,
+        window: &Window,
+        cx: &App,
+    ) -> AnyElement {
+        // No title: the rail already says which section this is, and a heading
+        // that repeats it is a line of pixels that says nothing. The filter is
+        // what a reader needs here; the right side is for the one command that
+        // is rarer than the work, and stays empty otherwise.
         let header = div()
             .h_flex()
             .h(px(PANE_HEADER))
-            .px_3()
+            .pl_3()
+            .pr_2()
             .gap_2()
             .items_center()
-            .child(div().text_style(&ui::BODY).child("Memory"))
-            .child(project);
+            .child(project)
+            .child(div().flex_1().min_w(px(0.)))
+            .children(settings);
         // The tree's region takes the keyboard as one thing, and says so with a
         // ring, the way every other focusable region in this window does.
         let ring = if self.list_focused(window) {
@@ -543,14 +629,23 @@ impl MemoryScreen {
                     .border_color(ring)
                     .track_focus(&self.list_focus)
                     .tab_stop(true)
-                    .child(memory_tree::memory_tree(&self.tree, &self.drafted_paths())),
+                    .child(memory_tree::memory_tree(
+                        &self.tree,
+                        &self.drafted_paths(),
+                        |path, menu, window, cx| tree_menu(path, menu, window, cx),
+                    )),
             )
             .into_any_element()
     }
 
     /// The section's detail: the strip of open documents over the tab in front,
     /// which draws under the pane's own header.
-    pub fn detail(&self, actions: Option<AnyElement>, cx: &mut Context<DesktopApp>) -> AnyElement {
+    pub fn detail(
+        &self,
+        focus: &FocusHandle,
+        window: &Window,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
         let Some(pane) = self.active_pane() else {
             // Three ways to have nothing to show: a Project that could not be
             // read, one with no Memory at all, and one whose tabs the reader
@@ -572,24 +667,47 @@ impl MemoryScreen {
                 .child(reason)
                 .into_any_element();
         };
-        let pane = pane.detail(actions, cx);
+        // One toolbar for the pane: which document is open on the left, what
+        // can be done with it on the right. macOS splits the same two between
+        // its tab strip and its window toolbar.
+        let toolbar = div()
+            .h_flex()
+            .h(px(PANE_HEADER))
+            .pl_2()
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .h_flex()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .gap_1()
+                    .items_center()
+                    .overflow_hidden()
+                    .children(self.tabs(cx)),
+            )
+            .child(pane.tools(focus, window, cx));
+        let body = pane.body(cx);
         div()
             .v_flex()
             .flex_1()
             .h_full()
             .min_w(px(0.))
             .min_h(px(0.))
-            .children(self.strip(cx))
-            .child(pane)
+            .child(toolbar)
+            .child(ui::rule(cx))
+            .child(body)
             .into_any_element()
     }
 
-    /// The strip of open documents: macOS's DocumentTabStrip, at this
-    /// platform's metrics. One tab per document, the one in front drawn as a
-    /// surface of its own, and a close button on every tab.
-    fn strip(&self, cx: &mut Context<DesktopApp>) -> Option<AnyElement> {
+    /// The open documents as tabs, which are the left half of the pane's
+    /// toolbar: macOS's DocumentTabStrip, at this platform's metrics. One tab
+    /// per document, the one in front drawn as a surface of its own, and a
+    /// close button on every tab.
+    fn tabs(&self, cx: &mut Context<DesktopApp>) -> Vec<AnyElement> {
         if self.open.is_empty() {
-            return None;
+            return Vec::new();
         }
         // The colors a chip needs are taken once: a listener borrows the
         // application, so the theme cannot be held across one.
@@ -613,11 +731,14 @@ impl MemoryScreen {
                 .document_for_resource(&tab.resource_id)
                 .map(|document| file_name(&document.path))
                 .unwrap_or_else(|| ui::shorten(&tab.resource_id, 12));
-            // macOS appends the mode to a tab read as a preview, so a tab the
-            // reader is not looking at still says how it will open.
+            // The tool a tab is using is worth saying, because a tab the reader
+            // is not looking at cannot show its tools. Reading is the default
+            // and stays unlabelled: macOS appends it to every tab, which is
+            // noise when it is what documents open as.
             let label = match tab.pane.mode() {
-                Mode::Preview => format!("{title} Preview"),
-                _ => title,
+                Mode::Edit => format!("{title} — editing"),
+                Mode::Diff => format!("{title} — diff"),
+                Mode::Preview => title,
             };
             let tone = if selected { foreground } else { muted };
             let mut chip =
@@ -679,22 +800,7 @@ impl MemoryScreen {
                 .into_any_element(),
             );
         }
-        Some(
-            div()
-                .v_flex()
-                .child(
-                    div()
-                        .h_flex()
-                        .h(px(TAB_STRIP))
-                        .px_2()
-                        .gap_1()
-                        .items_center()
-                        .overflow_hidden()
-                        .children(chips),
-                )
-                .child(ui::rule(cx))
-                .into_any_element(),
-        )
+        chips
     }
 
     /// Rebuilds what the tree draws and points the panes at the right draft.
@@ -803,11 +909,80 @@ impl MemoryScreen {
         }
     }
 
+    /// Puts the keyboard where the open document can be read or written. A
+    /// document opens to be read, and the editor exists only while it is being
+    /// edited, so the pane's tools take the keyboard in every other mode — a
+    /// window with nothing focused is a window that drops every key.
     fn focus_active_editor(&self, window: &mut Window, cx: &mut App) {
-        if let Some(pane) = self.active_pane() {
-            pane.focus_editor(window, cx);
+        match self.active_pane() {
+            Some(pane) if pane.mode() == Mode::Edit => pane.focus_editor(window, cx),
+            _ => window.focus(&self.tools_focus, cx),
         }
     }
+}
+
+/// What the tree offers for one row, which is what the Project's drafts say
+/// about that document. macOS puts the same commands in its row context menu;
+/// the menu itself is the component library's, so arrows move, Enter chooses
+/// and Escape closes the way they do everywhere else on this platform.
+fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) -> PopupMenu {
+    let Some(this) = TREE_APP.with(|slot| slot.borrow().as_ref().and_then(|weak| weak.upgrade()))
+    else {
+        return menu;
+    };
+    let Some(target) = this.read_with(cx, |app, _| app.memory_ref().menu_target(path)) else {
+        return menu;
+    };
+    let opening = this.clone();
+    let editing = this.clone();
+    let reviewing = this.clone();
+    let discarding = this.clone();
+    let opening_path = path.to_owned();
+    let editing_path = path.to_owned();
+    let reviewing_path = path.to_owned();
+    let discarding_path = path.to_owned();
+    let mut menu = menu
+        .item(
+            PopupMenuItem::new("Open").on_click(move |_event, window, cx| {
+                opening.update(cx, |app, cx| {
+                    app.open_document(&opening_path, Mode::Preview, window, cx)
+                });
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Edit").on_click(move |_event, window, cx| {
+                editing.update(cx, |app, cx| {
+                    app.open_document(&editing_path, Mode::Edit, window, cx)
+                });
+            }),
+        );
+    if target.can_review {
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new("Request review…").on_click(move |_event, window, cx| {
+                    reviewing.update(cx, |app, cx| {
+                        app.request_review_for(&reviewing_path, window, cx)
+                    });
+                }),
+            );
+    }
+    if target.draft_id.is_some() {
+        menu = menu.item(PopupMenuItem::new("Discard draft").on_click(
+            move |_event, _window, cx| {
+                discarding.update(cx, |app, cx| app.discard_draft_for(&discarding_path, cx));
+            },
+        ));
+    }
+    menu
+}
+
+// The entity a menu built inside a component can reach. A menu builder runs
+// with the application rather than with the screen that drew the tree, so the
+// screen leaves itself here while it renders.
+thread_local! {
+    static TREE_APP: std::cell::RefCell<Option<WeakEntity<DesktopApp>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The last segment of a path, which is what a tab calls a document.
