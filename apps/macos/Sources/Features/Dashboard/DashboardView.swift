@@ -4,6 +4,8 @@ import SwiftUI
 struct DashboardPage: View {
     @ObservedObject var context: WorkspaceContext
     @StateObject private var model = DashboardModel()
+    var refreshes: WorkspaceRefreshScheduler? = nil
+    @State private var refreshRegistration: UUID?
     let onOpenMemory: (String) -> Void
 
     private struct Input: Hashable {
@@ -18,11 +20,24 @@ struct DashboardPage: View {
     }
 
     var body: some View {
-        DashboardView(model: model, onRefresh: { Task { await load(input) } }, onOpenMemory: onOpenMemory)
-            .task(id: input) { await load(input) }
+        DashboardView(model: model, onRefresh: {
+            if let refreshes { refreshes.request(.dashboard) }
+            else { Task { _ = await load(input) } }
+        }, onOpenMemory: onOpenMemory)
+            .task(id: input) {
+                if let refreshes {
+                    let current = input
+                    refreshRegistration = refreshes.register(.dashboard) { await load(current) }
+                    refreshes.request(.dashboard)
+                } else { _ = await load(input) }
+            }
+            .onDisappear {
+                if let refreshRegistration { refreshes?.unregister(.dashboard, id: refreshRegistration) }
+            }
     }
 
-    private func load(_ input: Input) async {
+    private func load(_ input: Input) async -> WorkspaceRefreshScheduler.Result {
+        guard input == self.input else { return .deferred }
         let name = context.activeProject?.name ?? context.organization?.name ?? String(localized: "Organization")
         await model.load(key: "\(input.authority):\(input.projectID ?? "organization"):\(input.period)") {
             if let demo = try await DashboardModel.demoSnapshot(projectID: input.projectID, period: input.period) { return (demo, true) }
@@ -31,6 +46,7 @@ struct DashboardPage: View {
                 daemon: context.daemon, server: context.server
             ), false)
         }
+        return model.snapshot != nil && !model.isShowingSavedContent ? .updated : .retained
     }
 }
 
@@ -65,6 +81,10 @@ struct DashboardView: View {
                         if let notice = summary.snapshot.notice {
                             Label(notice, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
                         }
+                        if model.isShowingSavedContent && summary.snapshot.notice == nil {
+                            Label("Showing previous data. Refresh to check for changes.", systemImage: "clock.badge.exclamationmark")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
                         metrics(summary, width: geometry.size.width)
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 18),
                                                  count: geometry.size.width >= 940 ? 2 : 1), spacing: 18) {
@@ -90,6 +110,7 @@ struct DashboardView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+        .pageFeedback(model.snapshot != nil ? model.errorMessage : nil, isStatus: true, retry: onRefresh)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.75))
         .toolbar {
             if #available(macOS 26.0, *) {

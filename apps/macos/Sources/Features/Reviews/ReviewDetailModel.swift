@@ -97,6 +97,7 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
 @MainActor
 final class ReviewDetailModel: ObservableObject {
     private let fetchDetail: (String) async throws -> ReviewDetail
+    private let fetchBackgroundDetail: (String) async throws -> ReviewDetail
     private var authorityObservation: AnyCancellable?
     let reviewId: String
     private let workspaceContext: WorkspaceContext
@@ -111,6 +112,7 @@ final class ReviewDetailModel: ObservableObject {
         workspaceFeedback = feedback
         reviewModel = reviews
         self.fetchDetail = fetchDetail ?? { try await reviews.reviewDetail($0) }
+        self.fetchBackgroundDetail = fetchDetail ?? { try await reviews.reviewDetail($0, requiresFresh: true) }
         authorityObservation = context.$authorityGeneration.dropFirst().sink { [weak self] _ in
             self?.invalidateDetailRequests()
             self?.detail = nil
@@ -277,6 +279,43 @@ final class ReviewDetailModel: ObservableObject {
             } else if let message = error.backgroundMessage {
                 workspaceFeedback.errorMessage = message
             }
+        }
+    }
+
+    /// Comments can change without changing the file proposal. Keep the editor,
+    /// selection and loaded Diff alive when polling that unchanged proposal.
+    func refreshInBackground() async -> WorkspaceRefreshScheduler.Result {
+        guard !loading, !isSubmittingComment else { return .deferred }
+        let generation = detailRequestGeneration
+        let baseline = storedReviewDecisionSignature
+        do {
+            let loaded = try await fetchBackgroundDetail(reviewId)
+            guard !Task.isCancelled, detailRequestGeneration == generation,
+                  !isSubmittingComment, storedReviewDecisionSignature == baseline else { return .deferred }
+            guard loaded.review.version >= (baseline?.reviewVersion ?? 0) else { return .retained }
+            let oldDrafts = detail.map { ($0.drafts ?? [.init(draft: $0.draft, operations: $0.operations)]).map(\.draft) } ?? []
+            let newDrafts = (loaded.drafts ?? [.init(draft: loaded.draft, operations: loaded.operations)]).map(\.draft)
+            let sameFiles = oldDrafts.count == newDrafts.count && zip(oldDrafts, newDrafts).allSatisfy {
+                $0.draftId == $1.draftId && $0.version == $1.version && $0.baseCommitId == $1.baseCommitId
+                    && $0.coordination == $1.coordination
+            }
+            if let current = detail, current.review.version == loaded.review.version,
+               current.review.coordination == loaded.review.coordination, sameFiles {
+                detail = loaded
+                loadError = nil
+                reviewModel.replaceReview(with: WorkspaceLoader.mapReview(loaded.review))
+            } else {
+                guard reviewModel.updates[reviewId] == nil else { return .retained }
+                let request = beginDetailRequest()
+                applyLoadedDetail(loaded, request: request)
+            }
+            return .updated
+        } catch where error.isUserCancellation { return .deferred }
+        catch {
+            guard detailRequestGeneration == generation, !Task.isCancelled else { return .deferred }
+            if detail == nil { loadError = error.actionMessage }
+            else if let message = error.backgroundMessage { workspaceFeedback.errorMessage = message }
+            return .retained
         }
     }
 

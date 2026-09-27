@@ -373,6 +373,87 @@ final class ReviewUpdateTests: XCTestCase {
         XCTAssertEqual(saves, 0)
     }
 
+    func testBackgroundCommentsRefreshKeepsCommentDraftSelectionAndDiff() async {
+        let plan = fixture()
+        let workspace = WorkspaceCoordinator()
+        workspace.context.account = plan.detail.review.author
+        workspace.reviews.reviews = [WorkspaceLoader.mapReview(plan.detail.review)]
+        let update = workspace.reviews.beginUpdate(workspace.reviews.reviews[0])
+        let candidate = plan.candidates[1]
+        update?.setResolution(resolved(candidate, choosing: candidate.draftState), for: candidate.candidateId)
+        let comment = ReviewComment(commentId: "new-comment", reviewId: plan.detail.review.reviewId,
+            author: plan.detail.review.author, body: "New external comment", createdAt: "2026-09-27T00:00:00Z",
+            anchorPath: nil, anchorLine: nil, reviewVersion: plan.detail.review.version)
+        let updated = ReviewDetail(review: plan.detail.review, draft: plan.detail.draft,
+            operations: plan.detail.operations, drafts: plan.detail.drafts, comments: [comment])
+        let model = ReviewDetailModel(reviewId: plan.detail.review.reviewId, context: workspace.context,
+            feedback: workspace.feedback, reviews: workspace.reviews, fetchDetail: { _ in updated })
+        model.detail = plan.detail
+        model.loading = false
+        model.commentDraft = "My unfinished reply"
+        model.selectedFileId = "draft-clean"
+        model.loadedPaths = ["draft-clean": "example.md"]
+        model.diffModel = .init(rows: [], blocks: [])
+        let result = await model.refreshInBackground()
+        XCTAssertEqual(result, .updated)
+        XCTAssertEqual(model.detail?.comments, [comment])
+        XCTAssertEqual(model.commentDraft, "My unfinished reply")
+        XCTAssertEqual(model.selectedFileId, "draft-clean")
+        XCTAssertEqual(model.loadedPaths, ["draft-clean": "example.md"])
+        XCTAssertNotNil(model.diffModel)
+        XCTAssertTrue(workspace.reviews.updates[plan.detail.review.reviewId] === update)
+        XCTAssertEqual(update?.resolutions[candidate.candidateId]?.state, candidate.draftState)
+    }
+
+    func testReviewListRefreshRejectsLateAuthorityAndPreservesConcurrentChanges() async throws {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.phase = .ready
+        let record = WorkspaceLoader.mapReview(fixture().detail.review)
+        var continuation: CheckedContinuation<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>?
+        var started = expectation(description: "List loading")
+        let model = ReviewsModel(context: workspace.context, edits: workspace.edits,
+            feedback: workspace.feedback, navigation: workspace.navigation,
+            reconciliation: workspace.reconciliation, sessions: workspace.sessions,
+            fetchReviews: { try await withCheckedThrowingContinuation { continuation = $0; started.fulfill() } })
+        model.reviews = [record]
+        let load = Task { await model.refreshList() }
+        await fulfillment(of: [started], timeout: 1)
+        model.reviews[0].autoRebased = true
+        try XCTUnwrap(continuation).resume(returning: ([record], false))
+        let firstResult = await load.value
+        XCTAssertEqual(firstResult, .updated)
+        XCTAssertTrue(model.reviews[0].autoRebased)
+        started = expectation(description: "Old authority loading")
+        let old = Task { await model.refreshList() }
+        await fulfillment(of: [started], timeout: 1)
+        model.resetAuthority()
+        try XCTUnwrap(continuation).resume(returning: ([record], false))
+        let oldResult = await old.value
+        XCTAssertEqual(oldResult, .deferred)
+        XCTAssertTrue(model.reviews.isEmpty)
+    }
+
+    func testReviewListDoesNotReplaceLiveDataWithCachedResults() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.phase = .ready
+        let record = WorkspaceLoader.mapReview(fixture().detail.review)
+        var stale = true
+        let model = ReviewsModel(context: workspace.context, edits: workspace.edits,
+            feedback: workspace.feedback, navigation: workspace.navigation,
+            reconciliation: workspace.reconciliation, sessions: workspace.sessions,
+            fetchReviews: { ([], stale) })
+        model.reviews = [record]
+        let cached = await model.refreshList()
+        XCTAssertEqual(cached, .retained)
+        XCTAssertEqual(model.reviews, [record])
+        XCTAssertNotNil(model.reviewLoadState.failureMessage)
+        stale = false
+        let fresh = await model.refreshList()
+        XCTAssertEqual(fresh, .updated)
+        XCTAssertTrue(model.reviews.isEmpty)
+        XCTAssertEqual(model.reviewLoadState, .loaded)
+    }
+
     private func fixture(description: String = "") -> ReviewUpdatePlan {
         let user = UserReference(userId: "author", email: "author@example.test", displayName: "Author",
             avatarUrl: nil, role: "admin")

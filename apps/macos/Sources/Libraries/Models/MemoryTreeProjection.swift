@@ -11,9 +11,16 @@ enum MemoryTreeProjection {
             activeProjectId: activeProjectId,
             selectedOrgResourceIds: selectedOrgResourceIds
         )
-        let activeDrafts = MemoryTreeProjection.preferredMemoryTreeDrafts(
+        let preferredDrafts = MemoryTreeProjection.preferredMemoryTreeDrafts(
             MemoryTreeProjection.memoryTreeDrafts(drafts, activeProjectId: activeProjectId)
         )
+        let adaptedOrgIds = Set(authoritative.filter { $0.scope == .project }.compactMap { $0.orgSource?.resourceId })
+            .union(preferredDrafts.filter { $0.scope == .project }.compactMap { $0.orgSource?.resourceId })
+        // Effective Memory hides an adapted Org source, including its Org Draft
+        // overlay. Keep that proposal in the inventory for Reviews, not the tree.
+        let activeDrafts = preferredDrafts.filter { draft in
+            draft.scope != .org || !adaptedOrgIds.contains(draft.targetId ?? draft.id)
+        }
         var draftByTarget: [String: LocalDraft] = [:]
         for draft in activeDrafts {
             guard let target = draft.targetId ?? draft.orgSource?.resourceId else { continue }

@@ -868,6 +868,7 @@ final class InboxTests: XCTestCase {
         responses.unavailable = true
         await store.refresh()
         XCTAssertEqual(store.items.count, 1)
+        XCTAssertTrue(store.isShowingSavedContent)
         XCTAssertNil(store.errorMessage, "A background failure should not duplicate the window's connection state.")
     }
 
