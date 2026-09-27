@@ -25,34 +25,37 @@ final class StartupWindowLayoutTests: XCTestCase {
         }
     }
 
-    func testCompactLoadingResizesTheSameWindowAroundItsCenter() throws {
+    func testStartupScreensAndReopeningKeepOneCompactWindow() throws {
         let controller = StartupWindowController()
         defer { controller.close() }
         let form = NativeServerAccessView(model: NativeServerAccessModel(
             purpose: .appSignIn, destination: .memoryOnly,
             recoveryState: NativeAdministratorRecoveryState()
         ))
-        // Let AppKit place the tallest content before checking centered resizing.
+        let setup = NativeServerAccessView(model: NativeServerAccessModel(
+            purpose: .appSignIn, destination: .memoryOnly,
+            recoveryState: NativeAdministratorRecoveryState(),
+            initialSetupStatus: .init(state: .setupRequired, setupCodeConfigured: true,
+                                      oidcConfigured: true, session: nil)
+        ))
         controller.show(form)
         let window = try XCTUnwrap(controller.window)
-        let formFrame = window.frame
-        controller.show(ProgressView("Connecting…"), height: 360)
-        let compactFrame = window.frame
-        XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 360))
-        XCTAssertEqual(compactFrame.midX, formFrame.midX)
-        XCTAssertEqual(compactFrame.midY, formFrame.midY)
-
+        window.setFrameOrigin(NSPoint(x: 150, y: 160))
+        let frame = window.frame
+        for content in [AnyView(LaunchView()), AnyView(setup),
+                        AnyView(FailureView(message: "Server unavailable", retry: {})),
+                        AnyView(form)] {
+            controller.show(content)
+            XCTAssertTrue(controller.window === window)
+            XCTAssertEqual(window.frame, frame)
+            XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 360))
+            XCTAssertEqual(window.contentMinSize, NSSize(width: 540, height: 360))
+            XCTAssertEqual(window.contentMaxSize, NSSize(width: 540, height: 360))
+        }
+        window.orderOut(nil)
         controller.show(form)
-        XCTAssertTrue(controller.window === window)
-        XCTAssertEqual(window.contentView?.frame.size, StartupWindowController.contentSize)
-        XCTAssertEqual(window.frame, formFrame)
-        XCTAssertEqual(window.frame.midX, compactFrame.midX)
-        XCTAssertEqual(window.frame.midY, compactFrame.midY)
-
-        controller.show(ProgressView("Syncing team memory…"), height: 360)
-        XCTAssertEqual(window.frame, compactFrame)
-        XCTAssertEqual(window.contentMinSize, NSSize(width: 540, height: 360))
-        XCTAssertEqual(window.contentMaxSize, NSSize(width: 540, height: 360))
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(window.frame, frame)
     }
 
     func testStartupContentChangesKeepTheSameWindowFrameAndBackground() throws {

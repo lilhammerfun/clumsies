@@ -267,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentMainLoading() {
-        startupWindowController.show(LaunchView(), height: 360)
+        startupWindowController.show(LaunchView())
     }
 
     private func presentMainFailure(message: String, retry: @escaping () -> Void) {
