@@ -32,6 +32,26 @@ final class MemoryGuidelinesTests: XCTestCase {
         XCTAssertThrowsError(try MemoryGuidelines.defaultDocuments(occupiedPaths: ["CLUMSIES.md"]))
     }
 
+    func testStarterOccupancyUsesProjectMemoryInsteadOfUnselectedOrganizationResources() throws {
+        let shared = ["knowledge", "procedures", "lessons"].map {
+            resource(path: "\($0)/existing.md")
+        }
+        let empty = try plan(resources: shared)
+        XCTAssertEqual(empty.action, .createDefault)
+        XCTAssertEqual(try MemoryGuidelines.defaultDocuments(occupiedPaths: empty.occupiedPaths).map(\.path), [
+            "CLUMSIES.md", "knowledge/README.md", "procedures/README.md", "lessons/README.md",
+        ])
+
+        let selected = MemoryListItem(id: shared[0].id, resource: shared[0], draft: nil, inherited: true)
+        let partial = try plan(
+            items: [selected, draftItem(path: "procedures/custom.md")], resources: shared
+        )
+        XCTAssertEqual(partial.occupiedPaths, ["knowledge/existing.md", "procedures/custom.md"])
+        XCTAssertEqual(try MemoryGuidelines.defaultDocuments(occupiedPaths: partial.occupiedPaths).map(\.path), [
+            "CLUMSIES.md", "lessons/README.md",
+        ])
+    }
+
     func testEmptySpaceOffersBundledDocumentAtExactDefaultPath() throws {
         let setup = try plan()
         XCTAssertEqual(setup.action, .createDefault)

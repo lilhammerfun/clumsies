@@ -312,9 +312,9 @@ final class MemoryModel: ObservableObject {
             organizationResources: authorityResources
         )
         setup.organizationCommitId = authorityCommitId
-        setup.occupiedPaths = Set(authorityResources.map(\.document.path))
-            .union(visibleMemoryItems.map(\.document.path))
-            .union(MemoryTreeProjection.memoryTreeDrafts(edits.drafts, activeProjectId: projectId).map(\.document.path))
+        setup.occupiedPaths.formUnion(
+            MemoryTreeProjection.memoryTreeDrafts(edits.drafts, activeProjectId: projectId).map(\.document.path)
+        )
         return setup
     }
 
