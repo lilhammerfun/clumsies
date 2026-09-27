@@ -935,6 +935,10 @@ components:
           properties:
             resource_id: {type: string}
             commit_id: {type: string}
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         memory_id:
           type: string
           description: >-

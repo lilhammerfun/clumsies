@@ -560,6 +560,7 @@ struct OrgMemorySource: Codable, Hashable, Sendable {
 struct DaemonDraftContent: Codable, Hashable, Sendable {
     let description: String?
     let content: String
+    var isDirectory: Bool? = nil
 
     var orgSource: OrgMemorySource? = nil
 
@@ -567,7 +568,7 @@ struct DaemonDraftContent: Codable, Hashable, Sendable {
     var renderedText: String { content }
 
     func replacingPrimaryText(with text: String) -> DaemonDraftContent {
-        .init(description: description, content: text, orgSource: orgSource)
+        .init(description: description, content: text, isDirectory: isDirectory, orgSource: orgSource)
     }
 }
 

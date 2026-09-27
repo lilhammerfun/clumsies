@@ -93,6 +93,9 @@ pub struct DraftResourceContent {
     /// Explicit immutable origin of a Project adaptation; omitted for ordinary Memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_source: Option<crate::app::memory::dto::OrgMemorySource>,
+    /// Explicit directory entry; directories have no text body.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_directory: bool,
     /// Human-readable explanation associated with the resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

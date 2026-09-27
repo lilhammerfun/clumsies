@@ -169,6 +169,10 @@ async fn create_linked_review(pool: &PgPool, review_id: &str) -> Result<(), Serv
                     resource,
                     content: Some(DraftResourceContent {
                         org_source: None,
+                        is_directory: state
+                            .content
+                            .as_ref()
+                            .is_some_and(|content| content.is_directory),
                         description: None,
                         content: body,
                     }),

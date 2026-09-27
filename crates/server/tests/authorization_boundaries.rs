@@ -166,6 +166,7 @@ async fn bearer_identity_enforces_personal_and_project_boundaries() {
                     resource: owner_draft.draft.resource.clone(),
                     content: Some(DraftResourceContent {
                         org_source: None,
+                        is_directory: false,
                         description: None,
                         content: "# Private".to_owned(),
                     }),

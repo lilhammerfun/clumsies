@@ -21,7 +21,8 @@ final class WorkspaceCoordinator {
     let sync: MemorySyncService
     private var observations: Set<AnyCancellable> = []
 
-    init(storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil) {
+    init(storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil,
+         navigationDefaults: UserDefaults? = nil) {
         let context = WorkspaceContext()
         self.context = context
         let catalog = MemoryCatalog(context: context)
@@ -43,7 +44,7 @@ final class WorkspaceCoordinator {
         self.sync = sync
         let bundleSelection = BundlesModel(bundles: bundles)
         self.bundleSelection = bundleSelection
-        let navigation = WorkspaceNavigation(catalog: catalog, context: context, edits: edits, feedback: feedback, sessions: sessions)
+        let navigation = WorkspaceNavigation(catalog: catalog, context: context, edits: edits, feedback: feedback, sessions: sessions, defaults: navigationDefaults)
         self.navigation = navigation
         let projects = ProjectService(agents: agents, bundles: bundles, catalog: catalog, context: context, edits: edits, refresh: refresh, sessions: sessions)
         self.projects = projects
@@ -60,6 +61,11 @@ final class WorkspaceCoordinator {
             feedback?.clearIrrelevantScopedErrorPresentation()
         }.store(in: &observations)
         catalog.documentsChanged.merge(with: edits.documentsChanged).sink { [weak navigation] in
+            navigation?.pruneOrphanedMemoryTabs()
+            navigation?.refreshAllDocumentTabs()
+        }.store(in: &observations)
+        edits.$draftInventoryLoadState.receive(on: RunLoop.main).sink { [weak navigation] state in
+            guard case .loaded = state else { return }
             navigation?.pruneOrphanedMemoryTabs()
             navigation?.refreshAllDocumentTabs()
         }.store(in: &observations)
@@ -215,9 +221,7 @@ final class WorkspaceCoordinator {
         context.activeProjectId = nil
         catalog.refreshVisibleStaleResourceIds()
         navigation.showsProjectSettings = false
-        navigation.selectedItemId = nil
-        let tab = navigation.visibleTabs.last
-        navigation.activeTabId = tab?.id
+        navigation.activateCurrentProjectTab()
     }
 
     func selectProject(_ projectId: String) async {
@@ -269,9 +273,7 @@ final class WorkspaceCoordinator {
             navigation.clearPendingDocumentSessionPresentation()
             context.activeProjectId = projectId
             catalog.refreshVisibleStaleResourceIds()
-            let tab = navigation.visibleTabs.last
-            navigation.activeTabId = tab?.id
-            navigation.selectedItemId = tab?.itemId
+            navigation.activateCurrentProjectTab()
 
             let loader = WorkspaceLoader(daemon: context.daemon, bootstrap: context.bootstrap, server: context.server)
             var loadedProject: (state: ProjectState, resources: [MemoryResource])?

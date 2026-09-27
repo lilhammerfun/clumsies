@@ -128,13 +128,13 @@ final class MemoryFileOperationsModel: ObservableObject {
         let authority = workspaceContext.authorityGeneration
         let project = workspaceContext.activeProjectId
         var completed = 0
-        directoryOperationProgress = String(localized: "Renaming \(plan.changes.count) memories…")
+        directoryOperationProgress = String(localized: "Updating \(plan.changes.count) paths…")
         defer { directoryOperationProgress = nil }
         do {
             for (index, change) in plan.changes.enumerated() {
                 guard isCurrent(authority: authority, project: project) else { return }
                 directoryOperationProgress =
-                    String(localized: "Renaming \(index + 1) of \(plan.changes.count) memories…")
+                    String(localized: "Updating path \(index + 1) of \(plan.changes.count)…")
                 try await rename(change.item, change.newPath)
                 completed += 1
             }
@@ -142,7 +142,7 @@ final class MemoryFileOperationsModel: ObservableObject {
             guard isCurrent(authority: authority, project: project) else { return }
             let prefix = completed == 0
                 ? ""
-                : String(localized: "Renamed \(completed) of \(plan.changes.count) memories. ")
+                : String(localized: "Updated \(completed) of \(plan.changes.count) paths. ")
             workspaceFeedback.errorMessage = prefix + error.userFacingMessage
         }
     }

@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private let store = WorkspaceCoordinator()
+    private let store = WorkspaceCoordinator(navigationDefaults: .standard)
     private lazy var administration = AdministrationModel(
         context: store.context, onWorkspaceChanged: { [weak store] in await store?.reload() }
     )
@@ -467,7 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let fileItem = NSMenuItem()
         mainMenu.addItem(fileItem)
         let fileMenu = NSMenu(title: String(localized: "File"))
-        let newMemory = fileMenu.addItem(withTitle: String(localized: "New Memory"), action: #selector(newMemory(_:)), keyEquivalent: "n")
+        let newMemory = fileMenu.addItem(withTitle: String(localized: "New File"), action: #selector(newMemory(_:)), keyEquivalent: "n")
         newMemory.target = self
         let newProject = fileMenu.addItem(
             withTitle: String(localized: "New Project…"),

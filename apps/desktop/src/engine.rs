@@ -14,7 +14,8 @@ use clumsiesd::{
     DaemonDraftOperation, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
     DaemonDraftOperationSource, DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary,
     DaemonHealth, DaemonIpcClient, DaemonIpcRequest, DaemonLocalDraftStatus,
-    DaemonProjectCheckoutRequest, DaemonProjectSyncRetryRequest, DaemonRetryResponse,
+    DaemonProjectCheckoutRequest, DaemonProjectCheckoutResource, DaemonProjectSyncRetryRequest,
+    DaemonRetryResponse,
     DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
     DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
@@ -111,17 +112,7 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
             project_id: project_id.to_owned(),
         })
         .map_err(|error| error.to_string())?;
-    let mut documents: Vec<MemoryDocument> = checkout
-        .resources
-        .into_iter()
-        .map(|resource| MemoryDocument {
-            resource_id: resource.resource_id,
-            path: resource.path,
-            content: resource.content.content,
-            draft_content: None,
-        })
-        .collect();
-    documents.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut documents = editable_documents(checkout.resources);
     // A document with a proposal is opened as the proposal has it, which is
     // what the macOS client's catalog does when it builds a Project's list.
     for draft in drafts(project_id)? {
@@ -143,6 +134,23 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
         commit_id: checkout.commit_id,
         documents,
     })
+}
+
+/// Keep directory records out of the document-only editor. Files beneath
+/// them still produce the inferred tree folders supported by this client.
+fn editable_documents(resources: Vec<DaemonProjectCheckoutResource>) -> Vec<MemoryDocument> {
+    let mut documents: Vec<_> = resources
+        .into_iter()
+        .filter(|resource| !resource.content.is_directory)
+        .map(|resource| MemoryDocument {
+            resource_id: resource.resource_id,
+            path: resource.path,
+            content: resource.content.content,
+            draft_content: None,
+        })
+        .collect();
+    documents.sort_by(|left, right| left.path.cmp(&right.path));
+    documents
 }
 
 /// Hands the daemon a session. The client never keeps one: it holds the tokens
@@ -218,6 +226,7 @@ pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationRespons
                 DaemonContentDraftUpdate {
                     id: edit.resource_id.clone(),
                     content: DaemonDraftContent {
+                        is_directory: false,
                         org_source: None,
                         description: None,
                         content: edit.content.clone(),
@@ -432,4 +441,31 @@ fn server_error(response: &DaemonServerResponse) -> String {
 
 fn client() -> DaemonIpcClient {
     DaemonIpcClient::new(DAEMON_SERVICE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directory_records_never_become_editable_documents() {
+        let resources: Vec<DaemonProjectCheckoutResource> = serde_json::from_value(serde_json::json!([
+            { "resource_id": "dir", "scope": "project", "resource_kind": "memory",
+              "project_id": "p", "path": "notes", "content_hash": "empty",
+              "content": { "is_directory": true, "content": "" } },
+            { "resource_id": "file", "scope": "project", "resource_kind": "memory",
+              "project_id": "p", "path": "notes/readme.md", "content_hash": "body",
+              "content": { "content": "Keep this file" } },
+            { "resource_id": "empty", "scope": "org", "resource_kind": "memory",
+              "project_id": null, "path": "empty", "content_hash": "empty",
+              "content": { "is_directory": true, "content": "" } }
+        ])).unwrap();
+        let directories = resources.iter().filter(|r| r.content.is_directory).cloned().collect();
+        assert!(editable_documents(directories).is_empty());
+        let documents = editable_documents(resources);
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].resource_id, "file");
+        assert_eq!(documents[0].path, "notes/readme.md");
+        assert_eq!(documents[0].content, "Keep this file");
+    }
 }

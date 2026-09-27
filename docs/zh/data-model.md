@@ -119,6 +119,14 @@ HTTP 详情是 `{ memory, content, etag }`：
 Markdown 第一个标题，没有标题时从文件名派生；
 Draft `title` 是这次修改的说明。修改正文标题不会自动改变路径或资源身份。
 
+## 文件与目录
+
+显式文件夹拥有稳定的资源 ID、`is_directory: true`、规范化的相对路径和空正文，沿用所属范围的 Draft、Review 与发布流程。macOS 文件导航器新建的文件夹属于 Project；共享到 Organization 时，需要走现有的独立贡献和审批流程。
+
+目录标记保存在不可变 Tree、同步快照和导出中。缺省或 false 标记保持原有文件编码。daemon 创建真实目录，但不把目录纳入语义检索。历史文件仍通过路径生成隐式父目录，不会额外创建资源记录。
+
+文件不能包含后代路径，文件与目录不能占用同一路径，已有资源不能改变条目类型。目录重命名、移动和删除从未过滤的 Project 文件树收集显式目录记录及其后代。每项资源保留自己的 Draft，组合 Review 原子发布这些变更。选用 Org 目录不会自动选用今后加入的子资源。
+
 ## Selection 与 Bundle：都存 ID，职责不同
 
 | | Project Org Selection | Bundle |

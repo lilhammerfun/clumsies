@@ -97,7 +97,13 @@ pub(crate) fn validate_new_resource_draft_operations(
 pub(crate) fn validate_draft_content_shape(
     content: &DraftResourceContent,
 ) -> Result<(), ServerError> {
-    if content.content.trim().is_empty() {
+    if content.is_directory {
+        if !content.content.is_empty() {
+            return Err(ServerError::InvalidRequest(
+                "directory content must be empty".to_owned(),
+            ));
+        }
+    } else if content.content.trim().is_empty() {
         return Err(ServerError::InvalidRequest(
             "memory content must not be empty".to_owned(),
         ));
@@ -129,6 +135,7 @@ pub(crate) fn content_for_kind(
 ) -> DraftResourceContent {
     DraftResourceContent {
         org_source: None,
+        is_directory: false,
         description,
         content,
     }
@@ -173,6 +180,15 @@ pub(crate) fn apply_operations_to_state(
                     ));
                 }
                 content.org_source = origin;
+                if state
+                    .content
+                    .as_ref()
+                    .is_some_and(|previous| previous.is_directory != content.is_directory)
+                {
+                    return Err(ServerError::InvalidRequest(
+                        "a resource's entry type cannot be changed".to_owned(),
+                    ));
+                }
                 state.content = Some(content);
             }
             DraftOperationAction::Rename => {
@@ -341,6 +357,7 @@ pub(crate) fn merge_resource_states(
             exists: true,
             resource,
             content: merged_text.map(|content| DraftResourceContent {
+                is_directory: draft.content.as_ref().is_some_and(|c| c.is_directory),
                 org_source: current
                     .content
                     .as_ref()
@@ -410,6 +427,7 @@ pub(super) fn reconciliation_merge_preview(
             .content
             .as_ref()
             .and_then(|content| content.org_source.clone());
+        content.is_directory = draft.content.as_ref().is_some_and(|c| c.is_directory);
         state.content = Some(content);
     }
     super::dto::ReconciliationMergePreview {
@@ -670,6 +688,7 @@ mod tests {
             },
             content: content.map(|content| DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: content.to_owned(),
             }),
@@ -710,10 +729,23 @@ mod tests {
     }
 
     #[test]
+    fn directory_content_is_empty_and_legacy_file_json_stays_unchanged() {
+        let legacy = r#"{"content":"body"}"#;
+        let mut content: DraftResourceContent = serde_json::from_str(legacy).unwrap();
+        assert!(!content.is_directory);
+        assert_eq!(serde_json::to_string(&content).unwrap(), legacy);
+        content.is_directory = true;
+        assert!(validate_draft_content_shape(&content).is_err());
+        content.content.clear();
+        assert!(validate_draft_content_shape(&content).is_ok());
+    }
+
+    #[test]
     fn memory_content_must_not_be_blank() {
         assert!(
             validate_draft_content_shape(&DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: String::new(),
             })
@@ -722,6 +754,7 @@ mod tests {
         assert!(
             validate_draft_content_shape(&DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "  \n".to_owned(),
             })
@@ -730,6 +763,7 @@ mod tests {
         assert!(
             validate_draft_content_shape(&DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "# Testing\n\nRun focused tests.".to_owned(),
             })

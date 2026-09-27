@@ -59,6 +59,7 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     let needsUpdate: Bool
     let hasConflicts: Bool
     var autoRebased = false
+    var isDirectory = false
 
     var reconciliationState: ReviewReconciliationState? {
         .resolve(freshness: needsUpdate ? .behind : .current,
@@ -68,7 +69,8 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     static func resolve(
         reviewId: String,
         detail: ReviewDraftDetail,
-        loadedPath: String? = nil
+        loadedPath: String? = nil,
+        loadedIsDirectory: Bool? = nil
     ) -> ReviewFileDescriptor {
         let initialPath = detail.operations.first?.resource.path ?? detail.draft.resource.path
         let proposedPath = detail.operations.reduce(initialPath) { path, operation in
@@ -86,7 +88,8 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
             path: path,
             needsUpdate: needsUpdate,
             hasConflicts: needsUpdate && detail.draft.coordination.reconciliation == .conflicts,
-            autoRebased: ["open", "submitted"].contains(detail.draft.status) && detail.draft.coordination.autoRebased == true
+            autoRebased: ["open", "submitted"].contains(detail.draft.status) && detail.draft.coordination.autoRebased == true,
+            isDirectory: loadedIsDirectory ?? detail.operations.compactMap { $0.content?.isDirectory }.last ?? false
         )
     }
 }
@@ -112,6 +115,7 @@ final class ReviewDetailModel: ObservableObject {
             self?.invalidateDetailRequests()
             self?.detail = nil
             self?.loadedPaths = [:]
+            self?.loadedDirectoryTypes = [:]
             self?.loading = false
             self?.loadError = nil
         }
@@ -121,6 +125,7 @@ final class ReviewDetailModel: ObservableObject {
     private var fileLoader: ReviewFileLoader?
     private var fileLoadTask: Task<Void, Never>?
     @Published var loadedPaths: [String: String] = [:]
+    @Published var loadedDirectoryTypes: [String: Bool] = [:]
     @Published var loadingFile = false
     @Published var fileLoadError: String?
     @Published var changeSources: ReviewChangeSources?
@@ -162,7 +167,8 @@ final class ReviewDetailModel: ObservableObject {
             ReviewFileDescriptor.resolve(
                 reviewId: self.reviewId,
                 detail: $0,
-                loadedPath: self.loadedPaths[$0.draft.draftId]
+                loadedPath: self.loadedPaths[$0.draft.draftId],
+                loadedIsDirectory: self.loadedDirectoryTypes[$0.draft.draftId]
             )
         }
     }
@@ -227,6 +233,7 @@ final class ReviewDetailModel: ObservableObject {
         loadError = nil
         detail = nil
         loadedPaths = [:]
+        loadedDirectoryTypes = [:]
         changeSources = nil
         diffModel = nil
         composing = nil
@@ -318,6 +325,7 @@ final class ReviewDetailModel: ObservableObject {
 
         detail = loadedDetail
         loadedPaths = [:]
+        loadedDirectoryTypes = [:]
         let client = workspaceContext.server
         fileLoader = ReviewFileLoader { id in
             try await client.get("/api/v1/commits/\(id)")
@@ -356,6 +364,7 @@ final class ReviewDetailModel: ObservableObject {
                 self.changeSources = content.sources
                 self.diffModel = content.diff
                 self.loadedPaths[selectedDraftDetail.draft.draftId] = content.sources.proposedPath
+                self.loadedDirectoryTypes[selectedDraftDetail.draft.draftId] = content.sources.isDirectory
                 self.loadingFile = false
                 self.markCurrentDetailDecisionReady()
                 let elapsed = started.duration(to: .now).components

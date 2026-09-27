@@ -6,14 +6,16 @@ struct PathTreeItem: Identifiable, Hashable, Sendable {
     let fallbackName: String?
     let badge: String?
     let badgeColor: Color?
+    let isDirectory: Bool
 
     init(id: String, path: String, fallbackName: String? = nil,
-         badge: String? = nil, badgeColor: Color? = nil) {
+         badge: String? = nil, badgeColor: Color? = nil, isDirectory: Bool = false) {
         self.id = id
         self.path = path
         self.fallbackName = fallbackName
         self.badge = badge
         self.badgeColor = badgeColor
+        self.isDirectory = isDirectory
     }
 }
 
@@ -52,7 +54,7 @@ struct PathTreeNode: Identifiable, Sendable {
             $0.localizedStandardCompare($1) == .orderedAscending
         }.map { name in
             let group = groups[name] ?? []
-            if let file = group.first(where: { $0.components.count <= 1 }) {
+            if let file = group.first(where: { $0.components.count <= 1 && !$0.item.isDirectory }) {
                 return .init(
                     id: file.item.id,
                     name: name,
@@ -62,13 +64,14 @@ struct PathTreeNode: Identifiable, Sendable {
             }
 
             let path = prefix.isEmpty ? name : "\(prefix)/\(name)"
-            let descendants = group.map {
+            let directory = group.first { $0.components.count <= 1 && $0.item.isDirectory }
+            let descendants = group.filter { $0.components.count > 1 }.map {
                 Entry(item: $0.item, components: $0.components.dropFirst())
             }
             return .init(
                 id: "directory:\(path)",
                 name: name,
-                item: nil,
+                item: directory?.item,
                 children: build(descendants, prefix: path)
             )
         }
@@ -152,11 +155,18 @@ struct PathTreeView: View {
                         name: entry.node.name,
                         path: item.path,
                         depth: entry.depth,
-                        isDirectory: false,
-                        isExpanded: false,
+                        isDirectory: item.isDirectory,
+                        isExpanded: expandedDirectoryIds.contains(entry.id),
                         badge: item.badge,
                         badgeColor: item.badgeColor
                     )
+                    .onTapGesture(count: 2) {
+                        if item.isDirectory { toggleDirectory(entry.id) }
+                    }
+                    .accessibilityAction(named: String(localized: "Open")) {
+                        if item.isDirectory { toggleDirectory(entry.id) }
+                        selection = item.id
+                    }
                     .tag(item.id)
                     .accessibilityIdentifier("path-tree-item-\(item.id)")
                     .listRowInsets(.init(top: 0, leading: 5, bottom: 0, trailing: 5))

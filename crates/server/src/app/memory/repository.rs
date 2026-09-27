@@ -155,7 +155,7 @@ pub(crate) async fn list_resource_rows(
         sqlx::query(
             "SELECT
                 resource_id, scope, project_id, path, name, description, status, org_source,
-                content_hash, updated_at
+                content_hash, is_directory, updated_at
              FROM resources
              WHERE scope = $1 AND project_id = $2 AND status = 'active'
              ORDER BY path",
@@ -168,7 +168,7 @@ pub(crate) async fn list_resource_rows(
         sqlx::query(
             "SELECT
                 resource_id, scope, project_id, path, name, description, status, org_source,
-                content_hash, updated_at
+                content_hash, is_directory, updated_at
              FROM resources
              WHERE scope = $1 AND org_id = $2 AND status = 'active'
              ORDER BY path",
@@ -203,7 +203,7 @@ pub(crate) async fn load_resource_detail_row(
         sqlx::query(
             "SELECT
                 resource_id, scope, project_id, path, name, description, status, org_source,
-                revision, content_hash, body, updated_at
+                revision, content_hash, is_directory, body, updated_at
              FROM resources
              WHERE resource_id = $1
                AND scope = $2
@@ -219,7 +219,7 @@ pub(crate) async fn load_resource_detail_row(
         sqlx::query(
             "SELECT
                 resource_id, scope, project_id, path, name, description, status, org_source,
-                revision, content_hash, body, updated_at
+                revision, content_hash, is_directory, body, updated_at
              FROM resources
              WHERE resource_id = $1
                AND scope = $2
@@ -250,6 +250,7 @@ pub(crate) fn memory_meta_from_row(row: &sqlx::postgres::PgRow) -> Result<Memory
                 "org_source",
             )?
             .map(|source| source.0),
+        is_directory: row.try_get("is_directory")?,
         memory_id: row.try_get("resource_id")?,
         scope: resource_scope(row.try_get::<String, _>("scope")?.as_str())?,
         project_id: row.try_get("project_id")?,
@@ -285,7 +286,7 @@ pub(crate) async fn load_project_org_selection(
     let rows = sqlx::query(
         "SELECT
             r.resource_id, r.scope, r.project_id, r.path, r.name, r.description, r.org_source,
-            r.status, r.content_hash, r.updated_at
+            r.status, r.content_hash, r.is_directory, r.updated_at
          FROM project_org_resource_selections s
          JOIN resources r ON r.resource_id = s.resource_id
          WHERE s.project_id = $1 AND r.status = 'active'
@@ -324,7 +325,7 @@ pub(crate) async fn load_target_resource(
 ) -> Result<TargetResource, ServerError> {
     let row = if let Some(id) = resource.id.as_deref() {
         sqlx::query(
-            "SELECT resource_id, path, name
+            "SELECT resource_id, path, name, is_directory
              FROM resources
              WHERE resource_id = $1 AND org_id = $2 AND scope = $3
                AND (($3 = 'org' AND project_id IS NULL) OR project_id = $4)
@@ -339,7 +340,7 @@ pub(crate) async fn load_target_resource(
         .await?
     } else if let Some(path) = resource.path.as_deref() {
         sqlx::query(
-            "SELECT resource_id, path, name
+            "SELECT resource_id, path, name, is_directory
              FROM resources
              WHERE org_id = $1 AND scope = $2
                AND (($2 = 'org' AND project_id IS NULL) OR project_id = $3)
@@ -361,6 +362,7 @@ pub(crate) async fn load_target_resource(
     .ok_or_else(|| ServerError::not_found("resource", resource.id.as_deref().unwrap_or("path")))?;
 
     Ok(TargetResource {
+        is_directory: row.try_get("is_directory")?,
         resource_id: row.try_get("resource_id")?,
         path: row.try_get("path")?,
         name: row.try_get("name")?,
@@ -518,7 +520,7 @@ pub(crate) async fn export_memory_state(
 ) -> Result<MemoryExport, ServerError> {
     let memories = sqlx::query(
         "SELECT resource_id, scope, project_id, path, name, description, status, org_source,
-                content_hash, body, updated_at
+                content_hash, is_directory, body, updated_at
          FROM resources
          WHERE org_id = $1 AND status = 'active'
          ORDER BY scope, path, resource_id",
@@ -535,6 +537,7 @@ pub(crate) async fn export_memory_state(
                         "org_source",
                     )?
                     .map(|source| source.0),
+                is_directory: row.try_get("is_directory")?,
                 memory_id: row.try_get("resource_id")?,
                 scope: row.try_get("scope")?,
                 project_id: row.try_get("project_id")?,
@@ -718,9 +721,9 @@ pub(super) async fn insert_memory(
     sqlx::query(
         "INSERT INTO resources (
                     resource_id, org_id, project_id, scope, resource_kind, path, name,
-                    status, revision, content_hash, body, org_source
+                    status, revision, content_hash, body, org_source, is_directory
                  )
-                 VALUES ($1, $2, $3, $4, 'memory', $5, $6, 'active', 1, $7, $8, $9)",
+                 VALUES ($1, $2, $3, $4, 'memory', $5, $6, 'active', 1, $7, $8, $9, $10)",
     )
     .bind(input.resource_id)
     .bind(input.org_id)
@@ -731,6 +734,7 @@ pub(super) async fn insert_memory(
     .bind(input.content_hash)
     .bind(input.body)
     .bind(input.org_source.map(sqlx::types::Json))
+    .bind(input.is_directory)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -922,7 +926,7 @@ pub(super) async fn list_effective_paths(
     org_id: &str,
 ) -> Result<Vec<EffectiveMemoryPath>, ServerError> {
     Ok(sqlx::query_as::<_, EffectiveMemoryPath>(
-        "SELECT r.resource_id, r.resource_kind, r.path
+        "SELECT r.resource_id, r.resource_kind, r.path, r.is_directory
          FROM resources r
          WHERE r.status = 'active'
            AND (
@@ -957,6 +961,8 @@ pub(super) struct SelectingProject {
 /// Resource category and output path participating in a project's effective snapshot.
 #[derive(sqlx::FromRow)]
 pub(super) struct EffectiveMemoryPath {
+    /// Explicit directory entries may contain descendants.
+    pub(super) is_directory: bool,
     /// Stable identity of the persisted resource.
     pub(super) resource_id: String,
     /// Resource path within its ownership scope, used to determine the materialized destination.
@@ -976,7 +982,7 @@ pub(crate) async fn list_bundle_memories(
     let rows = sqlx::query(
         "SELECT
             r.resource_id, r.scope, r.project_id, r.path, r.name, r.description, r.org_source,
-            r.status, r.content_hash, r.updated_at
+            r.status, r.content_hash, r.is_directory, r.updated_at
          FROM personal_bundle_items i
          JOIN resources r ON r.resource_id = i.resource_id
          WHERE i.bundle_id = $1 AND r.status = 'active'
@@ -998,6 +1004,8 @@ pub(crate) async fn list_bundle_memories(
 pub(super) struct NewMemory<'a> {
     /// Optional immutable source of a Project adaptation.
     pub(super) org_source: Option<&'a super::dto::OrgMemorySource>,
+    /// Whether this resource is an explicit directory.
+    pub(super) is_directory: bool,
     /// Stable identity of the persisted resource.
     pub(super) resource_id: &'a str,
     /// Organization boundary to which the resource or identity belongs.

@@ -90,6 +90,7 @@ async fn wait_for_storage_move(
 fn context_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
         org_source: None,
+        is_directory: false,
         description: None,
         content: content.to_owned(),
     }
@@ -98,6 +99,7 @@ fn context_content(content: &str) -> DaemonDraftContent {
 fn rule_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
         org_source: None,
+        is_directory: false,
         description: None,
         content: content.to_owned(),
     }
@@ -106,6 +108,7 @@ fn rule_content(content: &str) -> DaemonDraftContent {
 fn workflow_content(content: &str) -> DaemonDraftContent {
     DaemonDraftContent {
         org_source: None,
+        is_directory: false,
         description: None,
         content: content.to_owned(),
     }
@@ -565,6 +568,7 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
         draft.operations[0].input.content,
         Some(DraftResourceContent {
             org_source: None,
+            is_directory: false,
             description: None,
             content: "# Synced\n\nCreated through the local daemon.".to_owned(),
         })
@@ -719,6 +723,7 @@ async fn merged_context_drafts_are_terminal_across_update_rename_and_delete() {
                 },
                 content: Some(DraftResourceContent {
                     org_source: None,
+                    is_directory: false,
                     description: None,
                     content: "# Original\n\nBefore local editing.".to_owned(),
                 }),
@@ -1045,6 +1050,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
                 },
                 content: Some(DraftResourceContent {
                     org_source: None,
+                    is_directory: false,
                     description: None,
                     content: "# Base\n\nThe offline Draft starts from this Commit.".to_owned(),
                 }),
@@ -1180,6 +1186,7 @@ async fn offline_behind_draft_stays_editable_until_explicit_reconciliation() {
                 },
                 content: Some(DraftResourceContent {
                     org_source: None,
+                    is_directory: false,
                     description: None,
                     content: "# Remote change\n\nThis advances the Project Ref.".to_owned(),
                 }),
@@ -2308,6 +2315,353 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
 }
 
 #[tokio::test]
+async fn directories_sync_review_rename_and_delete_across_two_installations() {
+    for scope in [DaemonDraftScope::Org, DaemonDraftScope::Project] {
+        let postgres = common::start_postgres().await;
+        let database_url = &postgres.database_url;
+        let pool = sqlx::PgPool::connect(database_url).await.unwrap();
+        server::infra::database::run_migrations(&pool)
+            .await
+            .unwrap();
+        let bootstrap =
+            common::initialize_installation(pool.clone(), "Directory Synchronization").await;
+
+        let access_token = "daemon-convergence-access-token";
+        let token_hash = hex::encode(Sha256::digest(access_token.as_bytes()));
+        sqlx::query(
+            "INSERT INTO auth_sessions (session_id, user_id, org_id)
+         VALUES ('ses_daemon_convergence', $1, $2)",
+        )
+        .bind(&bootstrap.user_id)
+        .bind(&bootstrap.org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO access_tokens (
+            token_id, session_id, user_id, kind, token_hash, expires_at
+         ) VALUES (
+            'tok_daemon_convergence', 'ses_daemon_convergence', $1,
+            'access', $2, now() + interval '30 minutes'
+         )",
+        )
+        .bind(&bootstrap.user_id)
+        .bind(token_hash)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let server = common::TestServer::start(pool.clone(), postgres).await;
+        let server_address = server.address;
+
+        let root_a = tempfile::tempdir().unwrap();
+        let mut config_a = DaemonConfig::for_root(root_a.path());
+        config_a.project.server_url = format!("http://{server_address}");
+        config_a.project.project_id = Some(bootstrap.project_id.clone());
+        let (state_a, _credential_store_a) =
+            common::initialize_authenticated_daemon(config_a.clone(), access_token, None).await;
+        let service_a = DaemonIpcService::new(state_a);
+
+        let root_b = tempfile::tempdir().unwrap();
+        let mut config_b = DaemonConfig::for_root(root_b.path());
+        config_b.project.server_url = format!("http://{server_address}");
+        config_b.project.project_id = Some(bootstrap.project_id.clone());
+        let (state_b, _) =
+            common::initialize_authenticated_daemon(config_b, access_token, None).await;
+        let service_b = DaemonIpcService::new(state_b);
+
+        let directory = create_resource_draft(
+            &service_a,
+            &bootstrap.project_id,
+            scope,
+            DaemonDraftResourceKind::Memory,
+            "empty",
+            DaemonDraftContent {
+                org_source: None,
+                is_directory: true,
+                description: None,
+                content: String::new(),
+            },
+            DaemonDraftOperationSource::Desktop,
+        )
+        .await;
+        service_a
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::Drafts,
+            })
+            .await
+            .unwrap();
+        service_b
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::All,
+            })
+            .await
+            .unwrap();
+        let drafts = service_b
+            .list_drafts(DaemonDraftListQuery::default())
+            .await
+            .unwrap();
+        let pending = service_b
+            .get_draft(&drafts.items[0].draft_id)
+            .await
+            .unwrap();
+        assert!(
+            pending.operations[0]
+                .operation
+                .create
+                .as_ref()
+                .unwrap()
+                .content
+                .is_directory
+        );
+        let mut org_commit = sync_local_draft_and_merge(&service_a, &pool, &directory, None).await;
+        service_b
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::All,
+            })
+            .await
+            .unwrap();
+        let checkout = service_b
+            .project_checkout(DaemonProjectCheckoutRequest {
+                project_id: bootstrap.project_id.clone(),
+            })
+            .await
+            .unwrap();
+        let directory_id = checkout
+            .resources
+            .iter()
+            .find(|r| r.path == "empty")
+            .unwrap()
+            .resource_id
+            .clone();
+        assert!(
+            checkout
+                .resources
+                .iter()
+                .find(|r| r.resource_id == directory_id)
+                .unwrap()
+                .content
+                .is_directory
+        );
+        let metadata = if scope == DaemonDraftScope::Org {
+            server::app::memory::get_org_memory(
+                &pool,
+                &common::owner_principal(&pool).await,
+                &directory_id,
+            )
+            .await
+            .unwrap()
+        } else {
+            server::app::memory::get_project_memory(
+                &pool,
+                &common::owner_principal(&pool).await,
+                &bootstrap.project_id,
+                &directory_id,
+            )
+            .await
+            .unwrap()
+        };
+        assert!(metadata.memory.is_directory);
+        assert!(metadata.content.is_empty());
+        let project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
+        let cache = cache_root_for_commit(&service_b, &bootstrap.project_id, &project_commit).await;
+        assert!(cache.join("cache/memory/empty").is_dir());
+        assert_eq!(
+            std::fs::read_dir(cache.join("cache/memory/empty"))
+                .unwrap()
+                .count(),
+            0
+        );
+
+        let rename = service_a
+            .store_draft_operation(DaemonDraftOperationRequest {
+                draft_id: None,
+                base_commit_id: None,
+                project_id: bootstrap.project_id.clone(),
+                scope,
+                resource: DaemonDraftResourceKind::Memory,
+                op: DaemonDraftOperation {
+                    create: None,
+                    update: None,
+                    delete: None,
+                    discard: None,
+                    rename: Some(DaemonRenameDraftOperation {
+                        id: directory_id.clone(),
+                        new_path: "renamed".to_owned(),
+                        description: None,
+                    }),
+                },
+                source: Some(DaemonDraftOperationSource::Desktop),
+            })
+            .await
+            .unwrap();
+        org_commit =
+            sync_local_draft_and_merge(&service_a, &pool, &rename.draft_id, Some(&org_commit))
+                .await;
+        let file = create_resource_draft(
+            &service_a,
+            &bootstrap.project_id,
+            scope,
+            DaemonDraftResourceKind::Memory,
+            "renamed/readme.md",
+            context_content("# Child file"),
+            DaemonDraftOperationSource::Desktop,
+        )
+        .await;
+        org_commit = sync_local_draft_and_merge(&service_a, &pool, &file, Some(&org_commit)).await;
+        service_b
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::All,
+            })
+            .await
+            .unwrap();
+        let checkout = service_b
+            .project_checkout(DaemonProjectCheckoutRequest {
+                project_id: bootstrap.project_id.clone(),
+            })
+            .await
+            .unwrap();
+        let file_id = checkout
+            .resources
+            .iter()
+            .find(|r| r.path == "renamed/readme.md")
+            .unwrap()
+            .resource_id
+            .clone();
+        assert!(
+            !checkout
+                .resources
+                .iter()
+                .find(|r| r.resource_id == file_id)
+                .unwrap()
+                .content
+                .is_directory
+        );
+        let project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
+        let cache = cache_root_for_commit(&service_b, &bootstrap.project_id, &project_commit).await;
+        assert!(!cache.join("cache/memory/empty").exists());
+        assert_eq!(
+            std::fs::read_to_string(cache.join("cache/memory/renamed/readme.md")).unwrap(),
+            "# Child file"
+        );
+
+        // A content update cannot silently turn an existing folder into a file.
+        let resource = DraftResourceRef {
+            scope: if scope == DaemonDraftScope::Org {
+                ResourceScope::Org
+            } else {
+                ResourceScope::Project
+            },
+            id: Some(directory_id.clone()),
+            path: None,
+        };
+        let invalid = server::app::draft::create_draft(
+            &pool,
+            &common::owner_principal(&pool).await,
+            CreateDraftRequest {
+                daemon_installation_id: "invalid-conversion".to_owned(),
+                project_id: bootstrap.project_id.clone(),
+                base_commit_id: Some(org_commit.clone()),
+                title: "Invalid conversion".to_owned(),
+                description: None,
+                resource: resource.clone(),
+                operations: vec![DraftOperationInput {
+                    action: DraftOperationAction::Update,
+                    resource,
+                    content: Some(DraftResourceContent {
+                        org_source: None,
+                        is_directory: false,
+                        description: None,
+                        content: "file body".to_owned(),
+                    }),
+                    new_path: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        let invalid_review = server::app::review::create_review(
+            &pool,
+            &common::owner_principal(&pool).await,
+            Some(&org_commit),
+            CreateReviewRequest {
+                org_contribution: None,
+                drafts: vec![ReviewDraftRequest {
+                    draft_id: invalid.draft.draft_id.clone(),
+                    expected_draft_version: invalid.draft.version,
+                    candidate_id: None,
+                    resolved_state: None,
+                }],
+                title: None,
+                description: None,
+            },
+        )
+        .await
+        .unwrap();
+        let error = server::app::review::create_review_merge(
+            &pool,
+            &invalid_review.review.review_id,
+            &common::owner_principal(&pool).await,
+            Some(&org_commit),
+            CreateReviewMergeRequest {
+                expected_review_version: invalid_review.review.version,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("entry type"));
+        server::app::draft::discard_draft(
+            &pool,
+            &invalid.draft.draft_id,
+            &common::owner_principal(&pool).await,
+            invalid_review.draft.version,
+        )
+        .await
+        .unwrap();
+
+        let deletion = delete_resource_draft(
+            &service_a,
+            &bootstrap.project_id,
+            scope,
+            DaemonDraftResourceKind::Memory,
+            &file_id,
+        )
+        .await;
+        org_commit =
+            sync_local_draft_and_merge(&service_a, &pool, &deletion, Some(&org_commit)).await;
+        service_b
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::All,
+            })
+            .await
+            .unwrap();
+        let project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
+        let cache = cache_root_for_commit(&service_b, &bootstrap.project_id, &project_commit).await;
+        assert!(cache.join("cache/memory/renamed").is_dir());
+        assert!(!cache.join("cache/memory/renamed/readme.md").exists());
+        let deletion = delete_resource_draft(
+            &service_a,
+            &bootstrap.project_id,
+            scope,
+            DaemonDraftResourceKind::Memory,
+            &directory_id,
+        )
+        .await;
+        sync_local_draft_and_merge(&service_a, &pool, &deletion, Some(&org_commit)).await;
+        service_b
+            .retry_sync(DaemonSyncRetryRequest {
+                channel: SyncRetryChannel::All,
+            })
+            .await
+            .unwrap();
+        let project_commit = current_project_commit_id(&pool, &bootstrap.project_id).await;
+        let cache = cache_root_for_commit(&service_b, &bootstrap.project_id, &project_commit).await;
+        assert!(!cache.join("cache/memory/renamed").exists());
+        server.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn two_daemon_installations_converge_on_the_same_draft_history() {
     let postgres = common::start_postgres().await;
     let database_url = &postgres.database_url;
@@ -2672,6 +3026,7 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
                 },
                 content: Some(DraftResourceContent {
                     org_source: None,
+                    is_directory: false,
                     description: None,
                     content: "# Commit sync\n\nInstalled from an immutable Commit.".to_owned(),
                 }),
