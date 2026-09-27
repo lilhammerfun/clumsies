@@ -16,7 +16,7 @@ pub(crate) async fn load_user_ref(
     user_id: &str,
 ) -> Result<UserRef, ServerError> {
     let row = sqlx::query(
-        "SELECT user_id, email, display_name, avatar_url, role
+        "SELECT user_id, username, email, display_name, avatar_url, role
          FROM users
          WHERE user_id = $1",
     )
@@ -127,13 +127,13 @@ pub(crate) async fn list_admin_members(
     query: Option<&str>,
 ) -> Result<Vec<Member>, ServerError> {
     let rows = sqlx::query(
-        "SELECT u.user_id, u.email, u.display_name, u.role, u.status, u.revision,
+        "SELECT u.user_id, u.username, u.email, u.display_name, u.role, u.status, u.revision,
                 EXISTS (
                     SELECT 1 FROM external_identities i WHERE i.user_id = u.user_id
                 ) AS external_identity_bound
          FROM users u
          WHERE $3::text IS NULL
-            OR strpos(lower(concat_ws(' ', u.email, u.display_name)), lower($3)) > 0
+            OR strpos(lower(concat_ws(' ', u.username, u.email, u.display_name)), lower($3)) > 0
          ORDER BY u.created_at, u.user_id
          LIMIT $1 OFFSET $2",
     )
@@ -209,12 +209,13 @@ pub(crate) async fn lock_member(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
 ) -> Result<LockedMember, ServerError> {
-    let row = sqlx::query("SELECT role, status, revision FROM users WHERE user_id = $1 FOR UPDATE")
+    let row = sqlx::query("SELECT role, status, revision, (EXISTS(SELECT 1 FROM password_credentials p WHERE p.user_id = users.user_id) OR EXISTS(SELECT 1 FROM external_identities i WHERE i.user_id = users.user_id)) AS has_credentials FROM users WHERE user_id = $1 FOR UPDATE")
         .bind(user_id)
         .fetch_optional(&mut **tx)
         .await?
         .ok_or_else(|| ServerError::not_found("user", user_id))?;
     Ok(LockedMember {
+        has_credentials: row.try_get("has_credentials")?,
         role: row.try_get("role")?,
         status: row.try_get("status")?,
         revision: row.try_get("revision")?,
@@ -290,6 +291,8 @@ pub(crate) async fn revoke_user_sessions(
     .bind(user_id)
     .execute(&mut **tx)
     .await?;
+    sqlx::query("UPDATE action_tokens SET revoked_at = now() WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL")
+        .bind(user_id).execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -299,7 +302,7 @@ pub(crate) async fn revoke_user_sessions(
 /// Propagates database access and row-decoding failures and reports a missing required resource.
 pub(crate) async fn load_member(pool: &PgPool, user_id: &str) -> Result<Member, ServerError> {
     let row = sqlx::query(
-        "SELECT u.user_id, u.email, u.display_name, u.role, u.status, u.revision,
+        "SELECT u.user_id, u.username, u.email, u.display_name, u.role, u.status, u.revision,
                 EXISTS (
                     SELECT 1 FROM external_identities i WHERE i.user_id = u.user_id
                 ) AS external_identity_bound
@@ -351,6 +354,7 @@ fn member_from_row(row: &sqlx::postgres::PgRow) -> Result<Member, ServerError> {
     Ok(Member {
         user_id: row.try_get("user_id")?,
         email: row.try_get("email")?,
+        username: row.try_get("username")?,
         display_name: row.try_get("display_name")?,
         role: org_role(row.try_get::<String, _>("role")?.as_str())?,
         status: member_status(row.try_get::<String, _>("status")?.as_str())?,

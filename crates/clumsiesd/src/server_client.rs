@@ -82,9 +82,13 @@ pub(crate) async fn execute_authenticated_server_request(
     let snapshot = state.project_config_with_credentials_snapshot().await;
     let request_session_revision = snapshot.session_revision;
     let config = snapshot.config;
-    let access_token = config.access_token.clone().ok_or_else(|| {
-        DaemonError::InvalidConfig("access_token is required for Server requests".to_owned())
-    })?;
+    let access_token = config
+        .access_token
+        .clone()
+        .ok_or_else(|| DaemonError::ServerResponse {
+            status: reqwest::StatusCode::UNAUTHORIZED.as_u16(),
+            body: "Server sign-in is required".to_owned(),
+        })?;
     let response = send_server_request(
         state,
         &config.server_url,
@@ -229,6 +233,11 @@ async fn refresh_server_tokens(
                     stale_access_token,
                 )
                 .await?;
+            // The original resource request lost its session, not its input validity.
+            return Err(DaemonError::ServerResponse {
+                status: reqwest::StatusCode::UNAUTHORIZED.as_u16(),
+                body,
+            });
         }
         return Err(DaemonError::ServerResponse {
             status: status.as_u16(),

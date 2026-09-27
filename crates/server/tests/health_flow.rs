@@ -28,7 +28,7 @@ async fn health_after_migrations_reports_database_and_schema_ready() {
         .await
         .unwrap();
     let health: AdminHealth = serde_json::from_slice(&body).unwrap();
-    assert_eq!(health.status, HealthStatus::Down);
+    assert_eq!(health.status, HealthStatus::Ok);
     assert_eq!(health.database.status, HealthStatus::Ok);
     assert_eq!(health.schema.status, HealthStatus::Ok);
     assert_eq!(
@@ -36,6 +36,6 @@ async fn health_after_migrations_reports_database_and_schema_ready() {
         format!("migration {} applied", current_schema_migration())
     );
     assert_eq!(health.commit_service.status, HealthStatus::Ok);
-    assert_eq!(health.oidc.status, HealthStatus::Down);
+    assert_eq!(health.oidc.status, HealthStatus::Ok);
     postgres.shutdown().await;
 }

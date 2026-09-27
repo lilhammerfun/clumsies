@@ -189,6 +189,7 @@ private struct AdministrationMembersView: View {
     @State private var query = ""
     @State private var completedQuery: String?
     @State private var showsAddMember = false
+    @State private var issuedCredential: AccountActionCredential?
     @State private var pendingDisable: AdminOrganizationMemberRecord?
     @State private var errorMessage: String?
 
@@ -214,10 +215,10 @@ private struct AdministrationMembersView: View {
 
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(member.displayName ?? member.email)
+                            Text(member.identityLabel)
                                 .lineLimit(1)
                             if member.displayName != nil {
-                                Text(member.email)
+                                Text(member.loginLabel)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
@@ -226,7 +227,7 @@ private struct AdministrationMembersView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         VStack(alignment: .trailing, spacing: 3) {
                             Text(member.role.title + (isCurrentUser ? String(localized: " · You") : ""))
-                            if member.status == .disabled || !member.externalIdentityBound {
+                            if member.status != .active {
                                 Text(member.status == .disabled ? "Disabled" : "Not signed in")
                                     .foregroundStyle(.secondary)
                             }
@@ -241,6 +242,14 @@ private struct AdministrationMembersView: View {
                             }
                             .disabled(!canEditMember)
                             Divider()
+                            if member.status == .invited || (member.status == .active && member.username != nil) {
+                                Button(member.status == .invited ? "Reissue invitation…" : "Reset password…") {
+                                    Task {
+                                        do { issuedCredential = try await administration.issueAccountAction(for: member) }
+                                        catch { errorMessage = error.actionMessage }
+                                    }
+                                }.disabled(!canEditMember || (member.role != .member && workspaceContext.account?.role != "owner"))
+                            }
                             if member.status == .disabled {
                                 Button("Reactivate") {
                                     mutate { try await administration.updateAdminOrganizationMember(member, status: .active) }
@@ -256,7 +265,7 @@ private struct AdministrationMembersView: View {
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
                         .fixedSize()
-                        .accessibilityLabel("Manage \(member.displayName ?? member.email)")
+                        .accessibilityLabel("Manage \(member.identityLabel)")
                     }
                     .padding(.vertical, 2)
                 }
@@ -285,6 +294,7 @@ private struct AdministrationMembersView: View {
                 if requestedQuery == query { completedQuery = requestedQuery }
             } catch {}
         }
+        .sheet(item: $issuedCredential) { credential in AccountActionCredentialView(credential: credential) }
         .sheet(isPresented: $showsAddMember) {
             AdministrationAddMemberSheet(onUnsavedChangesChange: onUnsavedChangesChange)
         }
@@ -296,12 +306,12 @@ private struct AdministrationMembersView: View {
             ),
             presenting: pendingDisable
         ) { member in
-            Button("Disable \(member.displayName ?? member.email)", role: .destructive) {
+            Button("Disable \(member.identityLabel)", role: .destructive) {
                 mutate { try await administration.disableAdminOrganizationMember(member) }
                 pendingDisable = nil
             }
         } message: { member in
-            Text("This disables \(member.email) and revokes their active sessions.")
+            Text("This disables \(member.loginLabel) and revokes their active sessions.")
         }
     }
 
@@ -348,15 +358,20 @@ private struct AdministrationAddMemberSheet: View {
     @EnvironmentObject private var administration: AdministrationModel
     let onUnsavedChangesChange: (Bool) -> Void
     @State private var email = ""
+    @State private var usesEmail = false
+    @State private var credential: AccountActionCredential?
     @State private var role: AdminOrganizationRole = .member
     @State private var errorMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
+            if let credential {
+                AccountActionCredentialView(credential: credential)
+            } else {
             Form {
                 Section {
-                    TextField("Email", text: $email)
-                        .textContentType(.emailAddress)
+                    Toggle("Admit an email for identity-provider login", isOn: $usesEmail)
+                    if usesEmail { TextField("Email", text: $email).textContentType(.emailAddress) }
                     Picker("Organization role", selection: $role) {
                         ForEach(assignableRoles) { role in
                             Text(role.title).tag(role)
@@ -366,7 +381,7 @@ private struct AdministrationAddMemberSheet: View {
                     Text("Add member")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("This person can sign in with this email using your organization's single sign-on. No invitation email is sent.")
+                        Text(usesEmail ? "This person can sign in with this email using your organization's single sign-on. No invitation email is sent." : "Create a one-time invitation and send it to the member yourself. No email is required.")
                         FormErrorMessage(message: errorMessage)
                     }
                 }
@@ -379,8 +394,9 @@ private struct AdministrationAddMemberSheet: View {
                 isWorking: workspaceContext.isMutatingAdministration, canConfirm: canAdd,
                 cancel: { dismiss() }, confirm: add
             )
+            }
         }
-        .frame(width: 460, height: 285)
+        .frame(width: 480, height: 340)
         .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
         .onChange(of: email.isEmpty) { _, empty in onUnsavedChangesChange(!empty) }
         .onDisappear { onUnsavedChangesChange(false) }
@@ -388,13 +404,13 @@ private struct AdministrationAddMemberSheet: View {
 
     private var canAdd: Bool {
         administration.canMutate(.members)
-            && email.contains("@")
-            && !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!usesEmail || email.contains("@"))
     }
 
     private var assignableRoles: [AdminOrganizationRole] {
-        var roles: [AdminOrganizationRole] = [.member, .admin]
+        var roles: [AdminOrganizationRole] = usesEmail ? [.member, .admin] : [.member]
         if workspaceContext.account?.role == AdminOrganizationRole.owner.rawValue {
+            if !roles.contains(.admin) { roles.append(.admin) }
             roles.append(.owner)
         }
         return roles
@@ -405,6 +421,11 @@ private struct AdministrationAddMemberSheet: View {
         errorMessage = nil
         Task {
             do {
+                if !usesEmail {
+                    credential = try await administration.createLocalInvitation(role: role)
+                    onUnsavedChangesChange(false)
+                    return
+                }
                 try await administration.inviteAdminOrganizationMember(
                     email: email.trimmingCharacters(in: .whitespacesAndNewlines),
                     role: role

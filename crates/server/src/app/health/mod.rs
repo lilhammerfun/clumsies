@@ -22,10 +22,15 @@ pub(crate) async fn admin_health(State(state): State<AppState>) -> Json<AdminHea
     };
     let oidc = if state.auth.configured() {
         implemented_component("OIDC")
+    } else if state.auth.login_methods().password_enabled {
+        HealthCheck {
+            status: HealthStatus::Ok,
+            message: "OIDC is optional; local password authentication is available".to_owned(),
+        }
     } else {
         HealthCheck {
             status: HealthStatus::Down,
-            message: "OIDC is not configured".to_owned(),
+            message: "No sign-in method is configured".to_owned(),
         }
     };
     let status = overall_status([

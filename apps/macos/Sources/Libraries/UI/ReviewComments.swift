@@ -10,7 +10,7 @@ struct ReviewCommentRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(comment.author.displayName ?? comment.author.email)
+                    Text(comment.author.identityLabel)
                         .font(.caption.weight(.semibold))
                     Text(
                         TimestampFormatting.relativeText(comment.createdAt, relativeTo: .now)

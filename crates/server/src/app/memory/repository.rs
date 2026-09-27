@@ -397,7 +397,7 @@ pub(crate) async fn user_ref(
     user_id: &str,
 ) -> Result<UserRef, ServerError> {
     let row = sqlx::query(
-        "SELECT user_id, email, display_name, avatar_url, role
+        "SELECT user_id, username, email, display_name, avatar_url, role
          FROM users
          WHERE user_id = $1",
     )

@@ -103,7 +103,7 @@ struct AvatarView: View {
     private var fallback: some View {
         ZStack {
             Color.accentColor.opacity(0.2)
-            Text(String((account?.displayName ?? account?.email ?? "C").prefix(1)).uppercased())
+            Text(String((account?.identityLabel ?? "C").prefix(1)).uppercased())
                 .font(.system(size: size == .small ? 10 : size == .regular ? 11 : 16, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }

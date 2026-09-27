@@ -22,7 +22,7 @@ y 分区的 organization 范围，不是一个部署进程。
 
 - Docker Engine 与 Docker Compose v2 或更新版本；
 - 一个公网 HTTPS 主机名；
-- 一个 OIDC 机密客户端，并在 IdP 注册下面的回调地址；
+- 可选的 OIDC 机密客户端，并在 IdP 注册下面的回调地址；
 - 一个按 digest 固定、已发布的 Clumsies Server 镜像。
 
 ```text
@@ -42,6 +42,7 @@ CLUMSIES_SERVER_IMAGE=ghcr.io/lilhammerfun/clumsies-server@sha256:published-dige
 CLUMSIES_PUBLIC_ORIGIN=https://memory.example.com
 CLUMSIES_DB_PASSWORD=replace-with-a-random-password
 CLUMSIES_SETUP_CODE=replace-with-at-least-32-random-characters
+CLUMSIES_PASSWORD_LOGIN_ENABLED=true
 CLUMSIES_OIDC_ISSUER=https://identity.example.com
 CLUMSIES_OIDC_CLIENT_ID=replace-with-oidc-client-id
 CLUMSIES_OIDC_CLIENT_SECRET=replace-with-oidc-client-secret
@@ -66,7 +67,7 @@ curl --fail --silent https://memory.example.com/api/v1/admin/health
 打开 macOS App，把 `https://memory.example.com` 填为 S
 erver 地址。App 只接受 HTTPS 来源形式的远程地址，并会识别出需要初始化。
 输入一次性 Setup Code、组织名称、默认 Project 与可选的邮箱域名，
-然后在系统浏览器里完成 OIDC。App 与 Server 使用 state 加 `S256`
+可以设置用户名密码创建本地 Owner，也可以在系统浏览器里完成 OIDC。App 与 Server 使用 state 加 `S256`
 PKCE；Server 在一个事务中创建组织、首位 Owner、默认 Project、
 外部身份与初始 Ref，之后才返回客户端授权码。App 用它换取 bearer token、
 安装进 daemon，安装随即永久锁定。初始化完成后，
@@ -81,6 +82,22 @@ Server 的 Admin API 只接受 bearer；
 如果 daemon 启动失败，在 App 中选择 **Administrator Recovery**。
 它会直接登录同一个受信任的 Server 来源，并只在 App 内存里保留临时会话，
 让管理员先检查健康、修复成员访问或吊销 token，再重试正常启动。
+
+## 本地密码与 Owner 恢复
+
+默认启用本地密码。强制外部身份登录的部署可以设置 `CLUMSIES_PASSWORD_LOGIN_ENABLED=false`，关闭本地登录、邀请、设置密码和重置入口。纯密码部署需将三个 `CLUMSIES_OIDC_*` 配置及 `CLUMSIES_CLIENT_REDIRECT_URIS` 一并留空，无需 SMTP 或身份平台订阅。邮箱域名规则用于 OIDC 准入；本地账号通过管理员邀请准入。
+
+密码由成员自行设置，至少 15 个字符，服务端只保存 Argon2id 哈希。用户名忽略大小写，采用 3–32 位 ASCII 字母、数字、点、下划线或连字符，首位为字母或数字。当前每个服务进程每分钟最多接受 60 次认证尝试，同时最多执行四个密码计算；多实例部署需在入口增加共享限流。
+
+管理员可以为普通成员生成密码重置凭据，管理员或 Owner 的重置仅允许 Owner 发起。唯一 Owner 忘记本地密码时，具有部署权限的操作员可在交互终端执行：
+
+```bash
+docker compose --project-name clumsies -f compose.production.yml exec server clumsies-server recover-owner usr_OWNER_ID
+```
+
+参数是已有 Owner 的 `user_id`，不是邮箱。目标必须是已激活、已设置本地密码的 Owner。命令会记录审计事件，并只在终端显示有效期 30 分钟的一次性凭据。私下交给 Owner，在 App **忘记密码？** 中使用；不要写入日志或命令参数。恢复成功后旧会话失效，不会重新开放初始化流程。
+
+App 与 Server 需配套更新：用户 API 现在允许邮箱为空，并新增可选用户名。迁移保留已有 Google 绑定及用户 ID，不生成默认密码。原有仅 Google 登录的 Owner 如需独立访问，应先在登录方式中添加密码。
 
 ## GitHub 交付
 

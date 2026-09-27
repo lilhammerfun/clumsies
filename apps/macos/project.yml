@@ -55,6 +55,9 @@ targets:
       - path: Resources/FileSymbols
         type: folder
         buildPhase: resources
+      - path: Resources/Fonts
+        type: folder
+        buildPhase: resources
       - path: Resources/Octicons
         type: folder
         buildPhase: resources
@@ -76,6 +79,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: "14.0"
         NSHighResolutionCapable: true
+        ATSApplicationFontsPath: Fonts
         NSHumanReadableCopyright: Copyright © 2026 Clumsies Lab
         NSPrincipalClass: NSApplication
         SUFeedURL: $(CLUMSIES_UPDATE_FEED_URL)

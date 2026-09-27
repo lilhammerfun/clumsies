@@ -3292,3 +3292,40 @@ async fn merged_commit_materializes_on_two_daemons_and_survives_restart() {
 
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn revoked_refresh_reports_expired_session_and_clears_credentials() {
+    let postgres = common::start_postgres().await;
+    let pool = sqlx::PgPool::connect(&postgres.database_url).await.unwrap();
+    server::infra::database::run_migrations(&pool)
+        .await
+        .unwrap();
+    common::initialize_installation(pool.clone(), "Expired Session").await;
+    let server = common::TestServer::start(pool, postgres).await;
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{}", server.address);
+    let (state, credentials) = common::initialize_authenticated_daemon(
+        config,
+        "revoked-access",
+        Some("revoked-refresh".to_owned()),
+    )
+    .await;
+    for _ in 0..2 {
+        let error = state
+            .server_request(DaemonServerRequest {
+                method: "GET".to_owned(),
+                path: "/api/v1/me".to_owned(),
+                headers: BTreeMap::new(),
+                body: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            clumsiesd::DaemonError::ServerResponse { status: 401, .. }
+        ));
+        assert!(credentials.credentials().is_none());
+    }
+    server.shutdown().await;
+}

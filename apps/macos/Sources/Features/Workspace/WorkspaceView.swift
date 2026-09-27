@@ -533,7 +533,7 @@ struct WorkspaceView: View {
         let needle = reviewSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
         guard !needle.isEmpty else { return byFilters }
         return byFilters.filter {
-            "\($0.title) \($0.description) \($0.author.email) \($0.status)"
+            "\($0.title) \($0.description) \($0.author.identityLabel) \($0.status)"
                 .localizedLowercase.contains(needle)
         }
     }
@@ -1021,7 +1021,7 @@ private struct GlobalSidebar: View {
            !displayName.isEmpty {
             return displayName
         }
-        return workspaceContext.account?.email ?? String(localized: "Account")
+        return workspaceContext.account?.loginLabel ?? String(localized: "Account")
     }
 
     private var selection: Binding<GlobalSidebarDestination?> {

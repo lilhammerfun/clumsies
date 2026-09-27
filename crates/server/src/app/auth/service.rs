@@ -53,20 +53,23 @@ pub async fn get_me(
 /// Reusable authentication dependencies and login/session operations.
 #[derive(Clone)]
 pub struct AuthService {
+    /// Deployment policy allowing local authentication independently of OIDC.
+    pub(super) password_enabled: bool,
     /// Shared connection pool reused by authentication persistence operations.
-    pool: PgPool,
+    pub(super) pool: PgPool,
     /// Reusable identity-provider adapter; absent when login is unconfigured.
     provider: Option<Arc<dyn OidcIdentityProvider>>,
     /// Explicitly permitted client callback URLs, including loopback callback templates.
     allowed_redirects: Arc<Vec<Url>>,
     /// Non-secret provider configuration exposed to administrators.
-    provider_summary: Option<ProviderSummary>,
+    pub(super) provider_summary: Option<ProviderSummary>,
 }
 
 impl AuthService {
     /// Construct authentication with no provider while retaining the shared database dependency.
     pub fn unconfigured(pool: PgPool) -> Self {
         Self {
+            password_enabled: true,
             pool,
             provider: None,
             allowed_redirects: Arc::new(Vec::new()),
@@ -83,11 +86,18 @@ impl AuthService {
         provider_summary: Option<ProviderSummary>,
     ) -> Self {
         Self {
+            password_enabled: true,
             pool,
             provider: Some(provider),
             allowed_redirects: Arc::new(allowed_redirects),
             provider_summary,
         }
+    }
+
+    /// Apply deployment policy without changing configured external identities.
+    pub fn with_password_enabled(mut self, enabled: bool) -> Self {
+        self.password_enabled = enabled;
+        self
     }
 
     /// Report whether an identity-provider adapter is available for login.
@@ -314,7 +324,22 @@ impl AuthService {
         } else {
             let org = repository::organization_admission(&mut tx).await?;
             enforce_email_domain(&identity.email, &org.allowed_email_domains)?;
-            let user_id = repository::resolve_external_identity(&mut tx, &identity).await?;
+            let user_id = if let Some(session_id) = &transaction.binding_session_id {
+                match repository::bind_external_identity(&mut tx, session_id, &identity).await {
+                    Ok(user_id) => user_id,
+                    Err(error) => {
+                        tx.rollback().await?;
+                        repository::consume_login_transaction(
+                            &self.pool,
+                            &transaction.transaction_id,
+                        )
+                        .await?;
+                        return callback_redirect(&transaction, None, Some((error.code(), None)));
+                    }
+                }
+            } else {
+                repository::resolve_external_identity(&mut tx, &identity).await?
+            };
             (user_id, org.org_id)
         };
 
@@ -337,9 +362,13 @@ impl AuthService {
             &mut tx,
             &org_id,
             Some(&user_id),
-            "auth.oidc_login_completed",
-            "session",
-            None,
+            if transaction.binding_session_id.is_some() {
+                "auth.oidc_identity_bound"
+            } else {
+                "auth.oidc_login_completed"
+            },
+            "user",
+            Some(&user_id),
         )
         .await?;
         tx.commit().await?;

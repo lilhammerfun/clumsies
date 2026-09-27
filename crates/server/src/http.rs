@@ -183,6 +183,9 @@ impl IntoResponse for HttpError {
             }
             Self::Auth(error) => {
                 let status = match &error {
+                    AuthError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+                    AuthError::PasswordUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+                    AuthError::Forbidden => StatusCode::FORBIDDEN,
                     AuthError::Unauthorized => StatusCode::UNAUTHORIZED,
                     AuthError::MemberNotAllowed
                     | AuthError::DomainNotAllowed

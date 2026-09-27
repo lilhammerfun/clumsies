@@ -14,7 +14,9 @@ Open the [installed Clumsies App](/quickstart/install). This page gets you into 
 
 ## Check your account access
 
-An organization administrator must have added your account before your first sign-in. Use the matching SSO email address; the identity provider must mark it as verified, and it must satisfy any email-domain policy set by the organization. **Add Member…** records membership but does not send an invitation email.
+Access is invitation-only. An administrator can create a one-time invitation in **Settings → Organization → Members** and share it privately. Choose **Accept invitation** in the App, paste the credential, and set your username and password. No email address or mail service is required. Invitations expire after seven days and can be revoked or reissued.
+
+Administrators can also admit a verified email for identity-provider login. That option records membership without sending mail. An existing local account must explicitly bind its Google account; matching email text never merges accounts.
 
 The default Server is **`https://app.clumsies.ai`**. Installing the App does not grant access to that organization. If your team uses another deployment, obtain its Server address and account access from an administrator.
 
@@ -22,7 +24,11 @@ The default Server is **`https://app.clumsies.ai`**. Installing the App does not
 
 On **Sign in to Clumsies**, check **Server address**. A first installation prefills the default address; keep it when joining that organization. For another deployment, enter your team's HTTPS address. The documentation website is not a Server address.
 
-Select **Continue in Browser**. Complete your organization's sign-in in the system browser, then return to Clumsies. The App loads the organization configured on that Server; you do not need to enter an organization ID.
+Enter your username and password, or select **Sign in with Google** when Google is configured. Other OIDC providers use **Sign in with identity provider**. External authentication opens the system browser and returns to the App. The App loads the organization configured on that Server.
+
+In **Settings → Login methods…**, add a password or explicitly bind your Google account after verifying your current account. Both methods keep the same user, projects, and permissions.
+
+For a forgotten password, ask an administrator for a reset credential and choose **Forgot password?**. Reset credentials expire after 30 minutes; resetting your password revokes old sessions. There is no email recovery service.
 
 ## Choose the agents on this Mac
 

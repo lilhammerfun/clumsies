@@ -35,6 +35,7 @@ enum DrainResult<T> {
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     telemetry::init()?;
     let ServerConfig {
+        password_enabled,
         database_url,
         listen_addr,
         public_origin,
@@ -77,7 +78,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
         }
         None => AuthService::unconfigured(pool.clone()),
-    };
+    }
+    .with_password_enabled(password_enabled);
     let app = build_app(pool, auth, installation);
     ready_file.publish(listen_addr, &public_origin)?;
 

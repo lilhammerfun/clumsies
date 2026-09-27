@@ -12,7 +12,19 @@ use cookie::Cookie;
 
 /// Apply the shared browser-security response headers after executing the request.
 pub(crate) async fn security_headers(request: Request, next: Next) -> Response {
+    let sensitive = request.uri().path().starts_with("/api/v1/auth/")
+        || request.uri().path().starts_with("/api/v1/setup")
+        || request
+            .uri()
+            .path()
+            .starts_with("/api/v1/admin/invitations")
+        || request.uri().path().starts_with("/api/v1/admin/members/");
     let mut response = next.run(request).await;
+    if sensitive {
+        response
+            .headers_mut()
+            .insert("cache-control", HeaderValue::from_static("no-store"));
+    }
     for (name, value) in [
         (
             "content-security-policy",

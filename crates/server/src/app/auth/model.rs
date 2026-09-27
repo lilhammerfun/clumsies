@@ -89,6 +89,8 @@ pub(super) struct LoginTransaction {
     pub(super) flow: LoginFlow,
     /// Setup session authorized to continue first-run OIDC initialization.
     pub(super) setup_session_id: Option<String>,
+    /// Session proving which account initiated an explicit provider binding.
+    pub(super) binding_session_id: Option<String>,
 }
 
 /// Distinction between ordinary product login and first-owner setup.

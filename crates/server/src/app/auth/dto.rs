@@ -142,3 +142,98 @@ pub struct OidcProviderStatus {
     /// Deployment mechanism supplying the identity-provider credentials.
     pub secret_source: SecretSource,
 }
+
+/// Password login input; deliberately excludes Debug to prevent accidental credential logging.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasswordLoginRequest {
+    /// Local login identifier.
+    pub username: String,
+    /// Password used only for this request.
+    pub password: String,
+}
+
+/// Single-use account action input; purpose is fixed by the endpoint.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedeemActionRequest {
+    /// Opaque invitation or password-reset credential.
+    pub token: String,
+    /// Required when activating an invitation; omitted when resetting a password.
+    pub username: Option<String>,
+    /// New local password.
+    pub password: String,
+}
+
+/// Administrator-issued invitation with an explicitly chosen role.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvitationRequest {
+    /// Privileges granted to the invited member.
+    pub role: crate::app::organization::dto::OrgRole,
+}
+
+/// One-time delivery of a credential; never returned by subsequent list operations.
+#[derive(Serialize)]
+pub struct ActionTokenResponse {
+    /// Identifier used for revocation without retaining the secret.
+    pub token_id: String,
+    /// Account that will be activated or recovered.
+    pub user_id: String,
+    /// Plaintext credential shown only at issuance.
+    pub token: String,
+    /// UTC expiration of this credential.
+    #[serde(with = "time::serde::rfc3339")]
+    pub expires_at: time::OffsetDateTime,
+}
+
+/// Public login capabilities without deployment secrets.
+#[derive(Serialize)]
+pub struct LoginMethods {
+    /// Whether local password authentication is enabled.
+    pub password_enabled: bool,
+    /// OIDC is available only when configured by deployment.
+    pub oidc_enabled: bool,
+    /// Whether the configured issuer is Google, for native button branding.
+    pub google: bool,
+}
+
+/// Change or add local credentials after proving control of the current account.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePasswordRequest {
+    /// Required when the account has no username yet.
+    pub username: Option<String>,
+    /// Existing local password, or absent for a freshly authenticated OIDC account.
+    pub current_password: Option<String>,
+    /// Replacement password.
+    pub password: String,
+}
+
+/// Authenticated request to bind an OIDC identity to the current account.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindOidcRequest {
+    /// Native callback and PKCE parameters.
+    pub authorization: OidcAuthorizationRequest,
+    /// Existing local password when local credentials are present.
+    pub current_password: Option<String>,
+}
+
+/// Browser destination created by an authenticated binding request.
+#[derive(Serialize)]
+pub struct OidcBindingResponse {
+    /// Authorization URL to open in the system browser.
+    pub authorization_url: String,
+}
+
+/// Credential availability for the authenticated account.
+#[derive(Serialize)]
+pub struct AccountCredentials {
+    /// Optional local username.
+    pub username: Option<String>,
+    /// Whether a password has been established.
+    pub password_set: bool,
+    /// Email recorded by the configured external provider at binding time.
+    pub oidc_email: Option<String>,
+}

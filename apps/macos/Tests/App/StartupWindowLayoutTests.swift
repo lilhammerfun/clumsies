@@ -5,7 +5,55 @@ import XCTest
 
 @MainActor
 final class StartupWindowLayoutTests: XCTestCase {
-    func testLocalDevelopmentNeverPresentsManualSetupButPrivateServersStillDo() throws {
+    func testEditingServerKeepsFormAndClearsCredentialsUntilAddressIsChecked() async {
+        let model = NativeServerAccessModel(
+            serverURL: URL(string: "https://clumsies.example.com")!,
+            purpose: .appSignIn, destination: .memoryOnly,
+            recoveryState: NativeAdministratorRecoveryState(),
+            initialLoginMethods: .init(passwordEnabled: true, oidcEnabled: true, google: true))
+        XCTAssertTrue(model.serverReady)
+        model.password = "old server password"
+        model.confirmPassword = model.password
+        model.actionToken = "invitation"
+        model.setupCode = "setup secret"
+        model.serverOrigin = "invalid address"
+        XCTAssertFalse(model.serverReady)
+        XCTAssertEqual(model.password, "")
+        XCTAssertEqual(model.confirmPassword, "")
+        XCTAssertEqual(model.actionToken, "")
+        XCTAssertEqual(model.setupCode, "")
+        model.signInWithPassword()
+        model.continueFromServer()
+        model.completeSetup()
+        XCTAssertFalse(model.isBusy)
+        model.loadLoginMethods()
+        while model.isBusy { await Task.yield() }
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertEqual(model.loginMethods?.google, true)
+        XCTAssertEqual(model.loginMethods?.passwordEnabled, true)
+        model.serverOrigin = "https://clumsies.example.com"
+        XCTAssertTrue(model.serverReady)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    func testDualMethodLoginRendersInTheSharedCompactWindow() throws {
+        let controller = StartupWindowController()
+        defer { controller.close() }
+        let model = NativeServerAccessModel(serverURL: URL(string: "https://clumsies.example.com")!,
+            purpose: .appSignIn, destination: .memoryOnly,
+            recoveryState: NativeAdministratorRecoveryState(),
+            initialLoginMethods: .init(passwordEnabled: true, oidcEnabled: true, google: true))
+        controller.show(NativeServerAccessView(model: model))
+        let content = try XCTUnwrap(controller.window?.contentView)
+        content.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(controller.window?.contentLayoutRect.size, NSSize(width: 540, height: 440))
+        XCTAssertNotNil(NSImage(named: "GoogleG"))
+        XCTAssertNotNil(NSFont(name: "GoogleSans-Regular_Medium", size: 14))
+
+    }
+
+    func testLocalDevelopmentWaitsForCapabilitiesBeforeOfferingManualSetup() throws {
         let status = NativeSetupStatus(state: .setupRequired, setupCodeConfigured: true,
                                        oidcConfigured: true, session: nil)
         for (origin, instance, automatic) in [
@@ -25,18 +73,50 @@ final class StartupWindowLayoutTests: XCTestCase {
         }
     }
 
+    func testReadyDevelopmentServerAllowsManualPasswordLoginAndSetup() throws {
+        let model = NativeServerAccessModel(
+            serverURL: URL(string: "http://127.0.0.1:18080")!, purpose: .appSignIn,
+            destination: .memoryOnly, recoveryState: NativeAdministratorRecoveryState(),
+            initialSetupStatus: .init(state: .setupRequired, setupCodeConfigured: true, oidcConfigured: false, session: nil),
+            initialLoginMethods: .init(passwordEnabled: true, oidcEnabled: false, google: false),
+            developmentInstanceID: "dev-instance")
+        XCTAssertFalse(model.usesAutomaticDevelopmentLogin)
+        XCTAssertTrue(model.showsSetup)
+    }
+
+    func testSignInInvitationResetAndRecoveryKeepTheStartupWidth() throws {
+        let controller = StartupWindowController()
+        defer { controller.close() }
+        for purpose in [NativeServerAccessModel.Purpose.appSignIn, .administratorRecovery] {
+            let model = NativeServerAccessModel(
+                purpose: purpose, destination: .memoryOnly,
+                recoveryState: NativeAdministratorRecoveryState(),
+                initialLoginMethods: .init(passwordEnabled: true, oidcEnabled: true, google: true))
+            for action in [NativeServerAccessModel.LocalAction.signIn, .invitation, .reset] {
+                model.localAction = action
+                controller.show(NativeServerAccessView(model: model))
+                controller.window?.contentView?.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                XCTAssertEqual(controller.window?.frame.width, 540)
+                XCTAssertEqual(controller.window?.contentLayoutRect.size, StartupWindowController.contentSize)
+            }
+        }
+    }
+
     func testStartupScreensAndReopeningKeepOneCompactWindow() throws {
         let controller = StartupWindowController()
         defer { controller.close() }
         let form = NativeServerAccessView(model: NativeServerAccessModel(
             purpose: .appSignIn, destination: .memoryOnly,
-            recoveryState: NativeAdministratorRecoveryState()
+            recoveryState: NativeAdministratorRecoveryState(),
+            initialLoginMethods: .init(passwordEnabled: true, oidcEnabled: true, google: true)
         ))
         let setup = NativeServerAccessView(model: NativeServerAccessModel(
             purpose: .appSignIn, destination: .memoryOnly,
             recoveryState: NativeAdministratorRecoveryState(),
             initialSetupStatus: .init(state: .setupRequired, setupCodeConfigured: true,
-                                      oidcConfigured: true, session: nil)
+                                      oidcConfigured: true, session: nil),
+            initialLoginMethods: .init(passwordEnabled: true, oidcEnabled: true, google: true)
         ))
         controller.show(form)
         let window = try XCTUnwrap(controller.window)
@@ -48,9 +128,9 @@ final class StartupWindowLayoutTests: XCTestCase {
             controller.show(content)
             XCTAssertTrue(controller.window === window)
             XCTAssertEqual(window.frame, frame)
-            XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 360))
-            XCTAssertEqual(window.contentMinSize, NSSize(width: 540, height: 360))
-            XCTAssertEqual(window.contentMaxSize, NSSize(width: 540, height: 360))
+            XCTAssertEqual(window.contentView?.frame.size, NSSize(width: 540, height: 440))
+            XCTAssertEqual(window.contentMinSize, NSSize(width: 540, height: 440))
+            XCTAssertEqual(window.contentMaxSize, NSSize(width: 540, height: 440))
         }
         window.orderOut(nil)
         controller.show(form)
@@ -63,7 +143,8 @@ final class StartupWindowLayoutTests: XCTestCase {
         defer { controller.close() }
         controller.show(NativeServerAccessView(model: NativeServerAccessModel(
             purpose: .appSignIn, destination: .memoryOnly,
-            recoveryState: NativeAdministratorRecoveryState()
+            recoveryState: NativeAdministratorRecoveryState(),
+            initialLoginMethods: .init(passwordEnabled: true, oidcEnabled: true, google: true)
         )))
         let window = try XCTUnwrap(controller.window)
         window.setFrameOrigin(NSPoint(x: 150, y: 160))
