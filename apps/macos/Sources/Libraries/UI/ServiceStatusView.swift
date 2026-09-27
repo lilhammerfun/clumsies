@@ -74,9 +74,9 @@ private struct WindowFeedbackView: View {
         }
     }
 
-    private func label(_ notice: PageFeedback, symbol: String = "exclamationmark.circle") -> some View {
+    private func label(_ notice: PageFeedback, symbol: String? = nil) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: symbol).accessibilityHidden(true)
+            Image(systemName: symbol ?? (notice.isStatus ? "info.circle" : "exclamationmark.circle")).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 8) {
                 Text(notice.message)
                     .fixedSize(horizontal: false, vertical: true)

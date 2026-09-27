@@ -10,6 +10,7 @@ final class AdministrationModel: ObservableObject {
     @Published private(set) var pageStates: [AdministrationSection: AdministrationPageState] = [:]
     @Published private(set) var refreshGeneration = UUID()
     @Published private(set) var loadingProjectIds: Set<String> = []
+    @Published var statusMessage: String?
     private var loadGenerations: [AdministrationSection: UUID] = [:]
     private var loadTasks: [AdministrationSection: Task<Void, Never>] = [:]
     private var projectMemberLoadGenerations: [String: UUID] = [:]
@@ -499,6 +500,7 @@ final class AdministrationModel: ObservableObject {
     func deleteAdminProject(_ project: AdminProjectRecord, onDeleted: () -> Void = {}) async throws {
         let generation = try beginAdministrationMutation(.projects, projectId: project.id)
         defer { context.finishAdministrationMutation(generation) }
+        statusMessage = nil
         let _: DeleteResult = try await server.send(
             method: "DELETE",
             path: "/api/v1/admin/projects/\(project.id)",
@@ -506,7 +508,11 @@ final class AdministrationModel: ObservableObject {
             body: EmptyPayload()
         )
         try context.ensureCurrentAdministrationMutation(generation)
-        context.removeProjectRole(project.id)
+        loadTasks[.projects]?.cancel()
+        loadTasks[.projects] = nil
+        loadGenerations[.projects] = UUID()
+        pageStates[.projects, default: .init()].isLoading = false
+        context.removeProject(project.id)
         let isInDirectory = snapshot?.projects.contains(where: { $0.id == project.id }) == true
         snapshot?.projects.removeAll { $0.id == project.id }
         projectDetails[project.id] = nil
@@ -518,6 +524,7 @@ final class AdministrationModel: ObservableObject {
         if isInDirectory {
             pageStates[.projects, default: .init()].offsetProjectCursor(by: -1)
         }
+        statusMessage = String(localized: "Project “\(project.name)” was deleted.")
         onDeleted()
         try await refreshAfterAdministrationMutation(
             generation: generation,
@@ -694,6 +701,7 @@ final class AdministrationModel: ObservableObject {
     }
 
     private func reset() {
+        statusMessage = nil
         loadTasks.values.forEach { $0.cancel() }
         loadTasks.removeAll()
         loadGenerations.removeAll()

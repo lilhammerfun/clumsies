@@ -18,6 +18,7 @@ final class WorkspaceContext: ObservableObject {
     @Published var authorityGeneration = UUID()
 
     let projectDirectoryChanges = PassthroughSubject<Void, Never>()
+    let projectDeletions = PassthroughSubject<(projectId: String, wasActive: Bool), Never>()
 
     @Published var activeProjectId: String? {
         didSet {
@@ -124,8 +125,16 @@ final class WorkspaceContext: ObservableObject {
         self.organization = organization
     }
 
-    func removeProjectRole(_ projectId: String) {
+    func removeProject(_ projectId: String) {
+        let wasActive = activeProjectId == projectId
+        workspaceReloadGeneration = UUID()
         projectRoles[projectId] = nil
+        projects.removeAll { $0.id == projectId }
+        if activeProjectId == projectId || loadingProjectId == projectId {
+            invalidateProjectSelection()
+        }
+        if wasActive { activeProjectId = nil }
+        projectDeletions.send((projectId, wasActive))
     }
 
     func invalidateAdministrationAuthority() {

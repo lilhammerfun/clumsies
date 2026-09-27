@@ -249,7 +249,7 @@ pub async fn delete_admin_project(
         Some(project_id),
     )
     .await?;
-    repository::delete_admin_project(&mut tx, &principal.org_id, project_id).await?;
+    repository::delete_project(&mut tx, project_id).await?;
     tx.commit().await?;
     Ok(DeleteResult {
         deleted: true,
