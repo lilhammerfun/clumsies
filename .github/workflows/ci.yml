@@ -99,7 +99,7 @@ jobs:
 
       - name: Check macOS packaging scripts
         run: |
-          shellcheck apps/macos/Scripts/archive-preview.sh \
+          shellcheck apps/macos/Scripts/archive-adhoc.sh \
             apps/macos/Scripts/archive-release.sh apps/macos/Scripts/create-dmg.sh \
             apps/macos/Scripts/embed-daemon.sh apps/macos/Scripts/generate-appcast.sh \
             apps/macos/Scripts/ensure-update-feeds.sh apps/macos/Scripts/test-update-feeds.sh \
@@ -241,6 +241,10 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build and verify the signed Agent runtime package
         run: just test-macos-package
+      - name: Build and verify the ad-hoc release DMG and stable feed settings
+        env:
+          CLUMSIES_BUILD_NUMBER: ${{ github.run_number }}
+        run: sh apps/macos/Scripts/archive-adhoc.sh release
 
   server_image:
     needs: changes

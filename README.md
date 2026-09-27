@@ -9,7 +9,7 @@
 [![CI](https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml/badge.svg)](https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/lilhammerfun/clumsies?label=License)](LICENSE)
 
-> **A macOS preview installer is available.** [Download the DMG](https://github.com/lilhammerfun/clumsies/releases), with no build tools needed. The preview is not notarized by Apple; see the first-open instructions below.
+> **A macOS installer is available.** [Download the DMG](https://github.com/lilhammerfun/clumsies/releases/latest), with no build tools needed. This download is not notarized by Apple; see the first-open instructions below.
 
 Clumsies helps teams maintain shared Markdown guidance for coding agents: architecture decisions, project constraints, and procedures. The organization keeps published **Memory**; each **Project** selects the Memory it uses and connects it to local repositories. Agents retrieve relevant guidance while they work and can propose changes when a user asks.
 
@@ -33,12 +33,12 @@ Retrieval does not automatically rewrite Memory. A saved Draft is a proposal, an
 
 Supports **macOS 14 or later on Apple Silicon Macs (M1 or newer)**. No Xcode, Rust, or other build tools are needed to install the DMG.
 
-1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) and download `Clumsies-*-macos-arm64.dmg` from the newest **Clumsies macOS Preview**.
+1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases/latest) and download `Clumsies-*-macos-arm64.dmg` from the **Latest release**.
 2. Open the DMG, drag **Clumsies.app** into **Applications**, eject the disk image, and open the installed App.
-3. The preview is not notarized by Apple. If macOS blocks the first launch, confirm the file came from this repository, then use **System Settings → Privacy & Security → Open Anyway**. Managed Macs may restrict this exception. [Apple's instructions](https://support.apple.com/102445)
+3. This download is not notarized by Apple. If macOS blocks the first launch, confirm the file came from this repository, then use **System Settings → Privacy & Security → Open Anyway**. Managed Macs may restrict this exception. [Apple's instructions](https://support.apple.com/102445)
 4. Keep the default Server address **`https://app.clumsies.ai`** and sign in with an account admitted by that organization. Use your team's Server address for another deployment.
 
-Continue with the [quickstart](https://docs.clumsies.ai/quickstart/) to connect your organization, create a Project, and connect your agent. To update a preview, quit the App, download a newer DMG, and replace the existing application; accounts, Memory, and settings are retained.
+Continue with the [quickstart](https://docs.clumsies.ai/quickstart/) to connect your organization, create a Project, and connect your agent. To update manually, quit the App, download a newer DMG, and replace the existing application; accounts, Memory, and settings are retained.
 
 If you previously installed `~/Applications/Clumsies.app`, quit it and replace it there to avoid keeping two copies. For source installation, see the [source installation guide](https://docs.clumsies.ai/quickstart/install#install-from-source).
 
@@ -46,9 +46,9 @@ If you previously installed `~/Applications/Clumsies.app`, quit it and replace i
 
 ```text
 Install Clumsies from:
-https://github.com/lilhammerfun/clumsies/releases
+https://github.com/lilhammerfun/clumsies/releases/latest
 
-Download the DMG from the newest Clumsies macOS Preview and install its
+Download the DMG from the Latest release and install its
 Clumsies.app in Applications. If already installed, quit it and replace it
 in its existing location. Preserve accounts, Memory, and settings.
 Use the built-in Server address. Do not create a Dev Instance or start a

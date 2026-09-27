@@ -228,24 +228,25 @@ ad-hoc 签名的 Release 构建无法通过该检查。
 
 ### 分发签名
 
-tag 发布构建 Developer ID 签名的通用 App，对它公证并装订票据，
-验证 App 与内嵌 Agent runtime 具有预期的签名团队和
-hardened-runtime 身份，然后创建签名并公证的 DMG 供下载。
-GitHub Actions 发布
-`Clumsies-<version>-macos-universal.dmg`、
-Sparkle 签名的 ZIP 更新归档和 `appcast.xml`。
-Sparkle 只扫描 ZIP，因此 DMG 不会为同一版本产生重复更新。
-workflow 也可以从当前默认分支顶端以 `distribution=notarized`
-手动触发，生成签名候选。手动候选同时包含 DMG 和 ZIP，
-但不发布 GitHub Release 或 appcast。
-tag 发布还会更新固定的 `macos-updates/appcast.xml` feed，
-并显式标记为 Latest，供仍使用原 feed URL 的旧客户端使用。
+GitHub tag 发布复用 Preview 已验证的 ad-hoc Debug 构建方式，产出带版本号的
+Apple Silicon DMG、SHA-256 校验文件和必须经过 Sparkle 签名的 `appcast.xml`。
+它是标记为 Latest 的正式 GitHub Release，不以 Apple 公证为前置条件。
+包内 App 使用正式版本更新源；workflow 也把同一签名条目发布到
+`preview-appcast.xml`，让已有 Preview 原地升级后进入正式版本更新通道。
+两种通道都不创建 Dev Instance，也不改变 App/daemon 身份。
+发布说明位于 `docs/releases/<tag>.md`，需要说明签名状态、支持平台、
+升级兼容性，以及上一版本到当前版本的 changelog。
+
+独立的 `distribution=notarized` 流程仍从当前默认分支顶端构建
+Developer ID 签名的通用 Release App，对 App 和 DMG 公证并装订票据，
+验证 App 与 daemon 的签名团队和 hardened-runtime 身份，上传 DMG/ZIP
+workflow 产物，但不发布 GitHub Release 或 appcast。该路径仍要求 Apple 凭据。
 
 DMG 包含 `Clumsies.app` 和 `Applications` 快捷方式。
 用户把 App 拖入 Applications，推出磁盘映像，再打开已安装的 App。
 ZIP 也可用于手动安装：解压后把 App 移到 Applications 再打开。
 两种格式都不需要构建工具。Developer ID 签名和公证让 Gatekeeper
-无需体验版的手动放行即可验证下载。改用 ZIP 不会取消这些检查。
+无需 ad-hoc 下载的手动放行即可验证下载。改用 ZIP 不会取消这些检查。
 这条分发路径不使用 App Store Review。
 
 `just test-macos-package` 还会创建并挂载临时 DMG，
@@ -256,11 +257,12 @@ ZIP 也可用于手动安装：解压后把 App 移到 Applications 再打开。
 从已有 App 创建本地打包预览；这条命令不会为分发包签名或公证。
 
 把 Apple 证书、证书密码、公证账号、App 专用密码、Team ID、
-临时 Keychain 密码和 Sparkle 私钥保存在受保护的
+临时 Keychain 密码保存在受保护的
 `macos-signing` GitHub environment 中，
 使用 `release.yml` 引用的 secret 名称。
 将该 environment 限制在默认分支和 release tag，
-并要求在其 secret 暴露前经过审查。Sparkle 私钥只在 tag 发布时需要；
+并要求在其 secret 暴露前经过审查。ad-hoc tag 发布从仓库 secrets
+读取 Sparkle 私钥，正式发布必须配置它，Preview 则为可选；
 只有它的公钥提交在 `project.yml` 中。
 
 Debug ad-hoc runtime 在安装边界被接受，
