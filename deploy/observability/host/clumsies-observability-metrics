@@ -1,7 +1,7 @@
 #!/bin/sh
 # Operational metrics for the node-exporter textfile collector: backup, restore
-# drill, and release freshness, plus the backlog, saturation, and business
-# throughput signals that only the database knows about.
+# drill, and release freshness, plus database state snapshots.
+# Row counts are gauges: deleting a Project can remove its history.
 set -eu
 
 OUT=/var/lib/clumsies-observability/textfile/clumsies.prom
@@ -11,47 +11,88 @@ TMP="$(mktemp "${OUT}.XXXXXX")"
 trap 'rm -f "${TMP}"' EXIT
 
 READ_SQL="
-SELECT 'drafts' AS kind, status AS label, count(*)::text AS value FROM drafts GROUP BY status
-UNION ALL SELECT 'reviews', status, count(*)::text FROM reviews GROUP BY status
-UNION ALL SELECT 'reconciliation', status, count(*)::text FROM draft_reconciliation_candidates GROUP BY status
-UNION ALL SELECT 'inbox_unread', '', count(*)::text FROM inbox_notifications WHERE read_version < version
-UNION ALL SELECT 'oldest_open_draft_age', '', coalesce(round(extract(epoch FROM (now() - min(created_at))))::text, '0') FROM drafts WHERE status = 'open'
-UNION ALL SELECT 'commits_total', '', count(*)::text FROM commits
-UNION ALL SELECT 'drafts_total', '', count(*)::text FROM drafts
-UNION ALL SELECT 'reviews_total', '', count(*)::text FROM reviews
-UNION ALL SELECT 'db_active_backends', '', count(*)::text FROM pg_stat_activity WHERE state = 'active'
-UNION ALL SELECT 'db_longest_query_seconds', '', coalesce(round(max(extract(epoch FROM (now() - query_start))))::text, '0') FROM pg_stat_activity WHERE state <> 'idle'
+SELECT 'drafts' AS kind, s.status AS label, count(d.draft_id)::text AS value
+FROM (VALUES ('open'), ('submitted'), ('merged'), ('discarded')) s(status)
+LEFT JOIN drafts d ON d.status = s.status GROUP BY s.status
+UNION ALL
+SELECT 'reviews', s.status, count(r.review_id)::text
+FROM (VALUES ('open'), ('approved'), ('rejected'), ('merged')) s(status)
+LEFT JOIN reviews r ON r.status = s.status GROUP BY s.status
+UNION ALL
+SELECT 'drafts_with_reconciliation_conflicts', '', count(DISTINCT d.draft_id)::text
+FROM drafts d
+JOIN projects p ON p.project_id = d.project_id
+JOIN refs current_ref ON current_ref.ref_name = 'refs/heads/main' AND (
+    (d.resource_scope = 'org' AND current_ref.scope = 'org' AND current_ref.org_id = p.org_id)
+    OR (d.resource_scope = 'project' AND current_ref.scope = 'project' AND current_ref.project_id = d.project_id)
+)
+JOIN draft_reconciliation_candidates c ON c.draft_id = d.draft_id
+    AND c.draft_version = d.version
+    AND c.base_commit_id IS NOT DISTINCT FROM d.base_commit_id
+    AND c.current_commit_id IS NOT DISTINCT FROM current_ref.commit_id
+    AND c.invalidated_at IS NULL
+WHERE d.status IN ('open', 'submitted') AND c.status = 'conflicts'
+    AND d.base_commit_id IS DISTINCT FROM current_ref.commit_id
+UNION ALL SELECT 'inbox_unread_records', '', count(*)::text FROM inbox_notifications WHERE read_version < version
+UNION ALL SELECT 'oldest_open_draft_age_seconds', '', coalesce(round(extract(epoch FROM (now() - min(created_at))))::text, '0') FROM drafts WHERE status = 'open'
+UNION ALL SELECT 'commits_created_last_hour', '', count(*)::text FROM commits WHERE created_at >= now() - interval '1 hour'
+UNION ALL SELECT 'drafts_created_last_hour', '', count(*)::text FROM drafts WHERE created_at >= now() - interval '1 hour'
+UNION ALL SELECT 'reviews_created_last_hour', '', count(*)::text FROM reviews WHERE created_at >= now() - interval '1 hour'
+UNION ALL SELECT 'db_active_backends', '', count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND pid <> pg_backend_pid()
+UNION ALL SELECT 'db_longest_query_seconds', '', coalesce(round(max(extract(epoch FROM (now() - query_start))))::text, '0') FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND pid <> pg_backend_pid()
 ORDER BY 1, 2
 "
 
 read_database() {
-  # A failed read leaves the database metrics absent rather than stale.
   docker compose --project-name clumsies --file "${COMPOSE}" exec -T postgres \
-    sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F"|" -c "$1"' _ "${READ_SQL}" </dev/null 2>/dev/null || true
+    sh -c 'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=30000" psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F"|" -c "$1"' _ "${READ_SQL}" </dev/null 2>/dev/null
 }
 
 emit_database() {
-  read_database | while IFS="|" read -r kind label value; do
-    [ -n "${value}" ] || continue
-    case "${kind}" in
-      drafts) printf 'clumsies_drafts{status="%s"} %s\n' "${label}" "${value}" ;;
-      reviews) printf 'clumsies_reviews{status="%s"} %s\n' "${label}" "${value}" ;;
-      reconciliation) printf 'clumsies_reconciliation_candidates{status="%s"} %s\n' "${label}" "${value}" ;;
-      inbox_unread) printf 'clumsies_inbox_unread %s\n' "${value}" ;;
-      oldest_open_draft_age) printf 'clumsies_oldest_open_draft_age_seconds %s\n' "${value}" ;;
-      commits_total) printf 'clumsies_commits_total %s\n' "${value}" ;;
-      drafts_total) printf 'clumsies_drafts_total %s\n' "${value}" ;;
-      reviews_total) printf 'clumsies_reviews_total %s\n' "${value}" ;;
-      db_active_backends) printf 'clumsies_db_active_backends %s\n' "${value}" ;;
-      db_longest_query_seconds) printf 'clumsies_db_longest_query_seconds %s\n' "${value}" ;;
-    esac
-  done
+  # Publish a failed attempt without reusing stale or partial database results.
+  if rows="$(read_database)"; then
+    printf 'clumsies_database_collection_success 1\n'
+    printf '%s\n' "${rows}" | while IFS="|" read -r kind label value; do
+      if [ -n "${label}" ]; then
+        printf 'clumsies_%s{status="%s"} %s\n' "${kind}" "${label}" "${value}"
+      else
+        printf 'clumsies_%s %s\n' "${kind}" "${value}"
+      fi
+    done
+  else
+    printf 'clumsies_database_collection_success 0\n'
+    echo 'Clumsies database metrics collection failed; check PostgreSQL and Compose access.' >&2
+  fi
+  printf 'clumsies_database_collection_timestamp_seconds %s\n' "$(date +%s)"
 }
 
 {
-  printf '# TYPE clumsies_commits_total counter\n'
-  printf '# TYPE clumsies_drafts_total counter\n'
-  printf '# TYPE clumsies_reviews_total counter\n'
+  cat <<'METADATA'
+# HELP clumsies_drafts Stored Drafts by lifecycle state, including zero counts.
+# TYPE clumsies_drafts gauge
+# HELP clumsies_reviews Stored Reviews by lifecycle state, including zero counts.
+# TYPE clumsies_reviews gauge
+# HELP clumsies_drafts_with_reconciliation_conflicts Open or submitted Drafts with a valid conflicting candidate for the current main ref. Unevaluated Drafts are not counted.
+# TYPE clumsies_drafts_with_reconciliation_conflicts gauge
+# HELP clumsies_inbox_unread_records Stored notification receipts with read_version below version, including archived or inaccessible items. Not the user-visible inbox badge.
+# TYPE clumsies_inbox_unread_records gauge
+# HELP clumsies_oldest_open_draft_age_seconds Age since creation of the oldest open Draft, or zero if none. Not sync latency or time since last edit.
+# TYPE clumsies_oldest_open_draft_age_seconds gauge
+# HELP clumsies_commits_created_last_hour Retained Commit rows created in the last 60 minutes, including bootstrap and system commits. Deletions reduce this count.
+# TYPE clumsies_commits_created_last_hour gauge
+# HELP clumsies_drafts_created_last_hour Retained Draft rows created in the last 60 minutes. Deletions reduce this count.
+# TYPE clumsies_drafts_created_last_hour gauge
+# HELP clumsies_reviews_created_last_hour Retained Review rows created in the last 60 minutes. Deletions reduce this count.
+# TYPE clumsies_reviews_created_last_hour gauge
+# HELP clumsies_db_active_backends Active sessions in the application database, excluding this collector.
+# TYPE clumsies_db_active_backends gauge
+# HELP clumsies_db_longest_query_seconds Longest currently active query in the application database, excluding this collector, or zero if none.
+# TYPE clumsies_db_longest_query_seconds gauge
+# HELP clumsies_database_collection_success Whether the latest database snapshot succeeded.
+# TYPE clumsies_database_collection_success gauge
+# HELP clumsies_database_collection_timestamp_seconds Unix time of the latest database collection attempt, successful or failed.
+# TYPE clumsies_database_collection_timestamp_seconds gauge
+METADATA
 
   newest_dump="$(find /opt/clumsies/backups -maxdepth 1 -type f -name '*.dump' \
     -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"

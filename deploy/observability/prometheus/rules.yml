@@ -123,3 +123,15 @@ groups:
           severity: critical
         annotations:
           summary: "A PostgreSQL query has been running for more than a minute"
+
+      - alert: DatabaseMetricsCollectionFailed
+        expr: >-
+          (up{job="node"} == 1) unless on (job, instance)
+          ((clumsies_database_collection_success == 1) and on (job, instance)
+          (time() - clumsies_database_collection_timestamp_seconds <= 15 * 60))
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clumsies database metrics are missing, failed, or stale"
+          description: "Node exporter is reachable but the database snapshot is unhealthy. Check clumsies-observability-metrics.service and its timer, Compose access, and PostgreSQL."

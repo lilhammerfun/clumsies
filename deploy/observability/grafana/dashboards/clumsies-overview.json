@@ -553,7 +553,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Commits per hour",
+      "title": "Commits created in the last hour",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -578,8 +578,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(clumsies_commits_total[1h])) * 3600",
-          "legendFormat": "commits/h"
+          "expr": "clumsies_commits_created_last_hour",
+          "legendFormat": "commits / last 60m"
         }
       ],
       "gridPos": {
@@ -591,11 +591,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency. Includes bootstrap and system commits."
     },
     {
       "type": "timeseries",
-      "title": "Drafts created per hour",
+      "title": "Drafts created in the last hour",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -620,8 +621,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(clumsies_drafts_total[1h])) * 3600",
-          "legendFormat": "drafts/h"
+          "expr": "clumsies_drafts_created_last_hour",
+          "legendFormat": "drafts / last 60m"
         }
       ],
       "gridPos": {
@@ -633,11 +634,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency."
     },
     {
       "type": "timeseries",
-      "title": "Reviews created per hour",
+      "title": "Reviews created in the last hour",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -662,8 +664,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(clumsies_reviews_total[1h])) * 3600",
-          "legendFormat": "reviews/h"
+          "expr": "clumsies_reviews_created_last_hour",
+          "legendFormat": "reviews / last 60m"
         }
       ],
       "gridPos": {
@@ -675,11 +677,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency."
     },
     {
       "type": "timeseries",
-      "title": "Draft backlog by state",
+      "title": "Drafts by lifecycle state",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -704,7 +707,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "clumsies_drafts{status=~\"open|merged|discarded\"}",
+          "expr": "clumsies_drafts",
           "legendFormat": "{{status}}"
         }
       ],
@@ -717,11 +720,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Includes open, submitted, merged and discarded. Merged/discarded are historical states; open Drafts can remain in active use. Counts do not imply a service backlog."
     },
     {
       "type": "timeseries",
-      "title": "Open draft growth",
+      "title": "Open Draft net change per hour",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -746,7 +750,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "deriv(clumsies_drafts{status=\"open\"}[6h])",
+          "expr": "deriv(clumsies_drafts{status=\"open\"}[6h]) * 3600",
           "legendFormat": "drafts/h"
         }
       ],
@@ -759,11 +763,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Hourly slope of the last 6 hours of stored open Draft counts. Includes creation, reopening, submission, discard and deletion; not creation throughput or processing latency."
     },
     {
       "type": "row",
-      "title": "Queueing",
+      "title": "Workflow state",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -775,7 +780,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Reconciliation conflicts",
+      "title": "Drafts with current reconciliation conflicts",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -800,8 +805,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "clumsies_reconciliation_candidates{status=\"conflicts\"}",
-          "legendFormat": "conflicts"
+          "expr": "clumsies_drafts_with_reconciliation_conflicts",
+          "legendFormat": "drafts"
         }
       ],
       "gridPos": {
@@ -813,11 +818,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Open/submitted Drafts with a non-invalidated conflicting candidate matching the current Draft version, base commit and main ref. Historical candidates are excluded. Unevaluated Drafts are not counted; zero does not prove every Draft is conflict-free."
     },
     {
       "type": "timeseries",
-      "title": "Unread notifications",
+      "title": "Stored unread notification records",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -842,7 +848,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "clumsies_inbox_unread",
+          "expr": "clumsies_inbox_unread_records",
           "legendFormat": "unread"
         }
       ],
@@ -855,11 +861,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Stored receipts with read_version below version, including archived or inaccessible notifications. Not the visible inbox badge or a notification delivery failure."
     },
     {
       "type": "timeseries",
-      "title": "Oldest open draft (days)",
+      "title": "Oldest open Draft age since creation (days)",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
@@ -898,7 +905,8 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Time since created_at; recent edits do not reset this age. Zero when no open Draft exists. Not inactivity, synchronization latency or a processing deadline."
     },
     {
       "type": "row",
@@ -994,7 +1002,8 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "Active queries in the application database only, excluding this collector and idle-in-transaction sessions."
     },
     {
       "type": "timeseries",
