@@ -6,12 +6,15 @@ struct ReviewDetailPage: View {
     @EnvironmentObject private var reviewModel: ReviewsModel
     let reviewId: String
     let loadsRemoteContent: Bool
+    let refreshes: WorkspaceRefreshScheduler?
+    @State private var refreshRegistration: UUID?
 
     @StateObject private var model: ReviewDetailModel
 
-    init(reviewId: String, loadsRemoteContent: Bool = true, model: @autoclosure @escaping () -> ReviewDetailModel) {
+    init(reviewId: String, loadsRemoteContent: Bool = true, refreshes: WorkspaceRefreshScheduler? = nil, model: @autoclosure @escaping () -> ReviewDetailModel) {
         self.reviewId = reviewId
         self.loadsRemoteContent = loadsRemoteContent
+        self.refreshes = refreshes
         _model = StateObject(wrappedValue: model())
     }
 
@@ -49,12 +52,16 @@ struct ReviewDetailPage: View {
                 return
             }
             await self.model.load()
+            guard !Task.isCancelled else { return }
+            refreshRegistration = refreshes?.register(.reviewDetail) { await model.refreshInBackground() }
+            refreshes?.visible = .reviewDetail
         }
         .task(id: reviewModel.updates[reviewId].map(ObjectIdentifier.init)) {
             guard loadsRemoteContent, let update = reviewModel.updates[reviewId] else { return }
             await reviewModel.prepareUpdate(update.review)
         }
         .onDisappear {
+            if let refreshRegistration { refreshes?.unregister(.reviewDetail, id: refreshRegistration) }
             self.model.invalidateDetailRequests()
         }
         .navigationTitle(model.review?.title ?? String(localized: "Review"))

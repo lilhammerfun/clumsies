@@ -16,6 +16,7 @@ private enum InboxFilter: String, CaseIterable, Identifiable {
 struct InboxView: View {
     @Environment(\.undoManager) private var undoManager
     @ObservedObject var store: InboxStore
+    var onRefresh: (@MainActor () -> Void)? = nil
     let searchFocusToken: UUID
     let open: @MainActor (InboxDestination) async throws -> Void
     @State private var filter: InboxFilter = .inbox
@@ -63,12 +64,20 @@ struct InboxView: View {
         .toolbar { if message == nil { toolbarContent } }
         .onChange(of: visibleItems.map(\.id)) { _, ids in selection.formIntersection(ids) }
         .onChange(of: searchFocusToken) { _, _ in searchFocusRequest += 1 }
-        .task { await store.refresh() }
+        .task { if onRefresh == nil { await store.refresh() } else { onRefresh?() } }
         .onDisappear { actionTask?.cancel() }
+    }
+
+    private func refreshInbox() {
+        if let onRefresh { onRefresh() } else { Task { await store.refresh() } }
     }
 
     private var notificationList: some View {
         List(selection: $selection) {
+            if store.isShowingSavedContent {
+                Label("Showing previous data. Refresh to check for changes.", systemImage: "clock.badge.exclamationmark")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             ForEach(visibleItems) { item in
                 HStack(alignment: .top, spacing: 10) {
                     Toggle("Select notification", isOn: Binding(
@@ -109,7 +118,7 @@ struct InboxView: View {
                     } description: {
                         Text(error)
                     } actions: {
-                        Button("Retry") { Task { await store.refresh() } }
+                        Button("Retry") { refreshInbox() }
                     }
                 } else {
                     ContentUnavailableView(
@@ -232,7 +241,7 @@ struct InboxView: View {
             ToolbarSpacer(.fixed, placement: .automatic)
         }
         ToolbarItem(id: "inbox.refresh", placement: .trailingPinned) {
-            Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+            Button { refreshInbox() } label: { Image(systemName: "arrow.clockwise") }
                 .toolbarHelp(String(localized: "Refresh Inbox"))
                 .accessibilityLabel("Refresh Inbox")
                 .accessibilityIdentifier("inbox-toolbar-refresh")

@@ -26,6 +26,7 @@ enum WorkspaceColumnLayout: Equatable {
 struct WorkspaceView: View {
     @EnvironmentObject private var bundleStore: BundleStore
     let store: WorkspaceCoordinator
+    @ObservedObject private var refreshes: WorkspaceRefreshScheduler
     @EnvironmentObject private var bundleModel: BundlesModel
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     @EnvironmentObject private var workspaceContext: WorkspaceContext
@@ -70,6 +71,7 @@ struct WorkspaceView: View {
         loadsReviewDetail: Bool = true
     ) {
         self.store = store
+        self.refreshes = store.refreshes
         self.onSignOut = onSignOut
         self.onOpenSettings = onOpenSettings
         self.loadsReviewDetail = loadsReviewDetail
@@ -110,6 +112,20 @@ struct WorkspaceView: View {
                 regularWorkspace
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if [.memory, .reviews, .inbox, .dashboard].contains(workspaceNavigation.selectedSection) {
+                WorkspaceRefreshStatusView(scheduler: refreshes)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            store.refreshVisiblePage(isForeground: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            store.refreshVisiblePage(isForeground: false)
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+            store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
+        }
         .pageFeedback(administration.statusMessage, isStatus: true, dismiss: { administration.statusMessage = nil })
         .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
         .sheet(isPresented: $workspaceNavigation.showsLocalProjectRecovery) {
@@ -119,6 +135,7 @@ struct WorkspaceView: View {
             ProjectCreationSheet(model: ProjectCreationModel(projects: store.projects))
         }
         .onChange(of: workspaceNavigation.selectedSection) { _, _ in
+            store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
             DispatchQueue.main.async {
                 workspaceNavigation.searchQuery = ""
                 if workspaceNavigation.selectedSection != .memory {
@@ -127,6 +144,7 @@ struct WorkspaceView: View {
             }
         }
         .task {
+            store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
             await store.runRefreshLoop()
         }
     }
@@ -136,7 +154,7 @@ struct WorkspaceView: View {
             GlobalSidebar(store: store, onSignOut: onSignOut, onOpenSettings: onOpenSettings)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
-            DashboardPage(context: workspaceContext) { id in
+            DashboardPage(context: workspaceContext, refreshes: refreshes) { id in
                 guard let item = workspaceNavigation.memoryItems.first(where: { $0.id == id }) else { return }
                 workspaceNavigation.selectedSection = .memory
                 workspaceNavigation.open(item)
@@ -161,7 +179,7 @@ struct WorkspaceView: View {
             GlobalSidebar(store: store, onSignOut: onSignOut, onOpenSettings: onOpenSettings)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
-            InboxView(store: inbox,
+            InboxView(store: inbox, onRefresh: { refreshes.request(.inbox) },
                 searchFocusToken: workspaceNavigation.workspaceSearchFocusToken,
                 open: { try await store.openInboxDestination($0) })
                 .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
@@ -418,6 +436,7 @@ struct WorkspaceView: View {
                 .navigationDestination(for: ReviewRoute.self) { route in
                     ReviewDetailPage(reviewId: route.reviewId,
                         loadsRemoteContent: loadsReviewDetail,
+                        refreshes: refreshes,
                         model: ReviewDetailModel(reviewId: route.reviewId, context: store.context, feedback: store.feedback, reviews: store.reviews)
                     )
                     .toolbar {
