@@ -37,6 +37,7 @@ struct WorkspaceView: View {
     @EnvironmentObject private var reviewModel: ReviewsModel
     @EnvironmentObject private var documentSessions: DocumentSessions
     @EnvironmentObject private var inbox: InboxStore
+    @EnvironmentObject private var administration: AdministrationModel
     let onSignOut: () -> Void
     let onOpenSettings: () -> Void
     let loadsReviewDetail: Bool
@@ -109,6 +110,7 @@ struct WorkspaceView: View {
                 regularWorkspace
             }
         }
+        .pageFeedback(administration.statusMessage, isStatus: true, dismiss: { administration.statusMessage = nil })
         .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
         .sheet(isPresented: $workspaceNavigation.showsLocalProjectRecovery) {
             LocalProjectRecoveryView(store: inbox, retry: { await store.refresh.retrySync(allProjects: true, reportFailure: false) })

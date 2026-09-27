@@ -78,6 +78,7 @@ struct SettingsWindowView: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
+        .pageFeedback(administration.statusMessage, isStatus: true, dismiss: { administration.statusMessage = nil })
         .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
         .toolbar(removing: .sidebarToggle)
         .font(.system(size: 13))
