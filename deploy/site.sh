@@ -35,9 +35,9 @@ scp compose.production.yml "${SSH_TARGET}:${DEPLOY_DIR}/compose.production.yml"
 echo "==> Applying the Caddy configuration"
 # The Caddyfile is a mounted file: changing its contents does not make Docker
 # recreate the container, and Caddy does not watch it by default. Start the
-# container, then reload so a synced configuration takes effect.
+# container without restarting Server/PostgreSQL, then reload the synced configuration.
 # shellcheck disable=SC2029 # DEPLOY_DIR intentionally expands client-side
-ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml up -d caddy"
+ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml up -d --no-deps caddy"
 # shellcheck disable=SC2029 # DEPLOY_DIR intentionally expands client-side
 ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
 
