@@ -96,6 +96,10 @@ enum MemoryGuidelines {
                 String(localized: "Your configured memory guidelines, \(path), could not be found. Restore that memory or correct the configured path.")
             )
         }
-        return .init(projectId: projectId, path: path, action: .createDefault)
+        // Shared resources only occupy a folder after they enter this project's effective memory.
+        return .init(
+            projectId: projectId, path: path, action: .createDefault,
+            occupiedPaths: Set(items.map(\.document.path))
+        )
     }
 }
