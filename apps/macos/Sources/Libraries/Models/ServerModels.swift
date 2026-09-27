@@ -3,7 +3,10 @@ import Foundation
 struct UserReference: Codable, Identifiable, Hashable, Sendable {
     var id: String { userId }
     let userId: String
-    let email: String
+    let email: String?
+    var username: String? = nil
+    var identityLabel: String { displayName ?? username ?? email ?? userId }
+    var loginLabel: String { username ?? email ?? userId }
     let displayName: String?
     let avatarUrl: String?
     let role: String
@@ -132,7 +135,10 @@ struct AdminOrganizationMemberRecord: Codable, Identifiable, Hashable, Sendable 
     var id: String { userId }
 
     let userId: String
-    let email: String
+    let email: String?
+    var username: String? = nil
+    var identityLabel: String { displayName ?? username ?? email ?? userId }
+    var loginLabel: String { username ?? email ?? userId }
     let displayName: String?
     let role: AdminOrganizationRole
     let status: AdminMemberStatus

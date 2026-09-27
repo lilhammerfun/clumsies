@@ -15,6 +15,8 @@ pub(crate) struct LockedAdminOrg {
 
 /// Membership privileges and revision read before an administrative mutation.
 pub(crate) struct LockedMember {
+    /// Whether this account has established at least one usable login identity.
+    pub(crate) has_credentials: bool,
     /// Organization-wide privileges; project membership is checked separately.
     pub(crate) role: String,
     /// Current membership state read under the administrative lock.

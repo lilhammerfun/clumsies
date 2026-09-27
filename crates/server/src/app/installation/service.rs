@@ -183,13 +183,14 @@ impl InstallationService {
     /// # Errors
     /// Rejects invalid setup credentials, completed installation state, or invalid configuration
     /// and propagates persistence failures.
-    pub async fn authorize_oidc(
+    pub async fn authorize_owner_setup(
         &self,
         session_token: &str,
         csrf_token: &str,
     ) -> Result<String, InstallationError> {
         let mut tx = self.pool.begin().await?;
-        let session_id = repository::authorize_oidc(&mut tx, session_token, csrf_token).await?;
+        let session_id =
+            repository::authorize_owner_setup(&mut tx, session_token, csrf_token).await?;
         tx.commit().await?;
         Ok(session_id)
     }
@@ -214,14 +215,35 @@ impl InstallationService {
         let org_id = prefixed_id("org");
         let user_id = prefixed_id("usr");
         let project_id = prefixed_id("prj");
-        repository::initialize_with_oidc(
+        repository::initialize(
             tx,
-            identity,
+            Some(identity),
             configuration,
-            &owner_email,
+            Some(&owner_email),
             org_id,
             user_id,
             project_id,
+        )
+        .await
+    }
+    /// Establish the first owner without requiring an external identity provider.
+    ///
+    /// # Errors
+    /// Rejects invalid setup credentials or completed installation and propagates database failures.
+    pub(crate) async fn initialize_local(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        session_id: &str,
+    ) -> Result<InitializedInstallation, InstallationError> {
+        let configuration = repository::setup_configuration_for_update(tx, session_id).await?;
+        repository::initialize(
+            tx,
+            None,
+            configuration,
+            None,
+            prefixed_id("org"),
+            prefixed_id("usr"),
+            prefixed_id("prj"),
         )
         .await
     }

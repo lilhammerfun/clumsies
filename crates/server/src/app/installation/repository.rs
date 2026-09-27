@@ -132,7 +132,7 @@ pub(super) async fn replace_configuration(
 ///
 /// # Errors
 /// Propagates database access and row-decoding failures.
-pub(super) async fn authorize_oidc(
+pub(super) async fn authorize_owner_setup(
     tx: &mut Transaction<'_, Postgres>,
     session_token: &str,
     csrf_token: &str,
@@ -183,11 +183,11 @@ pub(super) async fn setup_configuration_for_update(
 ///
 /// # Errors
 /// Propagates database access and row-decoding failures.
-pub(super) async fn initialize_with_oidc(
+pub(super) async fn initialize(
     tx: &mut Transaction<'_, Postgres>,
-    identity: &OidcIdentity,
+    identity: Option<&OidcIdentity>,
     configuration: SetupConfiguration,
-    owner_email: &str,
+    owner_email: Option<&str>,
     org_id: String,
     user_id: String,
     project_id: String,
@@ -209,22 +209,24 @@ pub(super) async fn initialize_with_oidc(
     )
     .bind(&user_id)
     .bind(owner_email)
-    .bind(identity.display_name.as_deref())
-    .bind(identity.avatar_url.as_deref())
+    .bind(identity.and_then(|value| value.display_name.as_deref()))
+    .bind(identity.and_then(|value| value.avatar_url.as_deref()))
     .execute(&mut **tx)
     .await?;
-    sqlx::query(
-        "INSERT INTO external_identities (
+    if let Some(identity) = identity {
+        sqlx::query(
+            "INSERT INTO external_identities (
             external_identity_id, user_id, protocol, issuer, subject, email_at_binding
          ) VALUES ($1, $2, 'oidc', $3, $4, $5)",
-    )
-    .bind(prefixed_id("idn"))
-    .bind(&user_id)
-    .bind(&identity.issuer)
-    .bind(&identity.subject)
-    .bind(&identity.email)
-    .execute(&mut **tx)
-    .await?;
+        )
+        .bind(prefixed_id("idn"))
+        .bind(&user_id)
+        .bind(&identity.issuer)
+        .bind(&identity.subject)
+        .bind(&identity.email)
+        .execute(&mut **tx)
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO projects (project_id, org_id, name)
          VALUES ($1, $2, $3)",

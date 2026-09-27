@@ -96,7 +96,7 @@ pub(super) async fn create_setup_oidc_authorization(
     let (session_token, csrf_token) = setup_credentials(&state.installation, &headers)?;
     let setup_session_id = state
         .installation
-        .authorize_oidc(&session_token, &csrf_token)
+        .authorize_owner_setup(&session_token, &csrf_token)
         .await?;
     let authorization_url = state
         .auth
@@ -137,4 +137,26 @@ fn setup_credentials(
 /// Read the setup credential from the deployment-appropriate cookie name.
 fn setup_session_token(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     cookie_value(headers, cookie_name)
+}
+
+/// Create a local first owner behind the existing setup cookie and CSRF proof.
+///
+/// # Errors
+/// Rejects invalid setup credentials, password policy or an already-initialized installation.
+pub(super) async fn create_password_owner(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::app::auth::dto::PasswordLoginRequest>,
+) -> Result<Json<crate::app::auth::dto::TokenResponse>, HttpError> {
+    let (session_token, csrf_token) = setup_credentials(&state.installation, &headers)?;
+    let session_id = state
+        .installation
+        .authorize_owner_setup(&session_token, &csrf_token)
+        .await?;
+    Ok(Json(
+        state
+            .auth
+            .initialize_password_owner(&state.installation, &session_id, request)
+            .await?,
+    ))
 }

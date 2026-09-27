@@ -41,8 +41,9 @@ Its canonical path determines the App identity, daemon service, runtime
 directories, Keychain service, Compose project, dynamic ports, and isolated
 `CODEX_HOME`. Local `just dev-macos` initializes the Server and signs in the
 fake-OIDC owner through the daemon before opening the App. Login failure stops
-startup; the tester should never need the setup or sign-in screen. This does not
-apply to remote Preview instances.
+startup. After signing out, a reachable Server exposes its normal login methods
+so authentication flows can be tested manually. This automatic startup login does
+not apply to remote Preview instances.
 
 ```sh
 just dev-macos-status

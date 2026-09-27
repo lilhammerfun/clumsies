@@ -176,17 +176,17 @@ struct ReviewDetailPage: View {
                             .foregroundStyle(.secondary)
                         UserIdentityLabel(
                             account: decider,
-                            displayName: decider.displayName ?? decider.email
+                            displayName: decider.identityLabel
                         )
                     }
                     .font(.caption)
                     .help(
                         TimestampFormatting.absoluteText(review.decidedAt).map {
-                            "Merged by \(decider.displayName ?? decider.email) at \($0)"
-                        } ?? "Merged by \(decider.displayName ?? decider.email)"
+                            "Merged by \(decider.identityLabel) at \($0)"
+                        } ?? "Merged by \(decider.identityLabel)"
                     )
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Merged by \(decider.displayName ?? decider.email)")
+                    .accessibilityLabel("Merged by \(decider.identityLabel)")
                 } else {
                     ReviewStatusIndicator(status: review.status)
                 }
@@ -221,7 +221,7 @@ struct ReviewDetailPage: View {
     }
 
     private func metadata(_ review: ReviewRecord) -> some View {
-        let author = review.author.displayName ?? review.author.email
+        let author = review.author.identityLabel
         let project = workspaceContext.projects.first { $0.id == review.projectId }?.name
         let context = [author, project]
             .compactMap { $0 }
@@ -249,7 +249,7 @@ struct ReviewDetailPage: View {
                     Text(self.decisionTitle(review.status))
                         .font(.callout.weight(.semibold))
                     if let decider = review.decidedBy {
-                        let deciderName = decider.displayName ?? decider.email
+                        let deciderName = decider.identityLabel
                         Text("· Decision by \(deciderName)")
                             .font(.caption)
                             .foregroundStyle(.secondary)

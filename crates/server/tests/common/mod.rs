@@ -106,7 +106,7 @@ pub async fn initialize_installation(
         .await
         .unwrap();
     let session_id = installation
-        .authorize_oidc(&credentials.token, &credentials.session.csrf_token)
+        .authorize_owner_setup(&credentials.token, &credentials.session.csrf_token)
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();

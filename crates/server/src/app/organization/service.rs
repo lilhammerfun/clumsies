@@ -179,7 +179,13 @@ pub async fn update_admin_member(
         .unwrap_or_else(|| current.role.clone());
     let next_status = request
         .status
-        .map(|status| status.as_str().to_owned())
+        .map(|status| {
+            if status == MemberStatus::Active && !current.has_credentials {
+                MemberStatus::Invited.as_str().to_owned()
+            } else {
+                status.as_str().to_owned()
+            }
+        })
         .unwrap_or_else(|| current.status.clone());
     if principal.role != "owner" && (current.role == "owner" || next_role == "owner") {
         return Err(ServerError::Forbidden(

@@ -26,7 +26,7 @@ pub(crate) async fn user_ref(
     user_id: &str,
 ) -> Result<UserRef, ServerError> {
     let row = sqlx::query(
-        "SELECT user_id, email, display_name, avatar_url, role
+        "SELECT user_id, username, email, display_name, avatar_url, role
          FROM users
          WHERE user_id = $1",
     )
@@ -525,7 +525,7 @@ pub(crate) async fn list_drafts(
             d.draft_id, d.project_id, d.base_commit_id, d.title, d.description,
             d.status, d.version, d.resource_scope, d.target_id, d.path,
             d.created_at, d.updated_at,
-            u.user_id, u.email, u.display_name, u.avatar_url, u.role,
+            u.user_id, u.username, u.email, u.display_name, u.avatar_url, u.role,
             current_ref.commit_id AS current_commit_id,
             candidate.status AS candidate_status,
             candidate.candidate_id,
@@ -869,7 +869,7 @@ pub(super) async fn load_detail_record(
             d.status, d.version,
             d.resource_scope, d.resource_kind, d.target_id, d.path, d.daemon_installation_id,
             d.created_at, d.updated_at,
-            u.user_id, u.email, u.display_name, u.avatar_url, u.role
+            u.user_id, u.username, u.email, u.display_name, u.avatar_url, u.role
          FROM drafts d
          JOIN users u ON u.user_id = d.author_user_id
          WHERE d.draft_id = $1",

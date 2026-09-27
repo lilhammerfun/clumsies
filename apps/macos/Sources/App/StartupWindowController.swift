@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class StartupWindowController: NSWindowController {
-    static let contentSize = NSSize(width: 540, height: 360)
+    static let contentSize = NSSize(width: 540, height: 440)
 
     init() {
         super.init(window: nil)

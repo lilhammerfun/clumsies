@@ -67,7 +67,7 @@ struct NativeAccountMenu: NSViewRepresentable {
 
             if let account = configuration.account {
                 let identity = NSMenuItem(
-                    title: account.email,
+                    title: account.loginLabel,
                     action: nil,
                     keyEquivalent: ""
                 )

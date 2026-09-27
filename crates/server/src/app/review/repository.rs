@@ -303,6 +303,7 @@ pub(crate) fn review_from_row(
             .map(|user_id| {
                 Ok::<UserRef, sqlx::Error>(UserRef {
                     user_id,
+                    username: row.try_get("decision_user_username")?,
                     email: row.try_get("decision_user_email")?,
                     display_name: row.try_get("decision_user_display_name")?,
                     avatar_url: row.try_get("decision_user_avatar_url")?,
@@ -331,7 +332,7 @@ pub(crate) async fn load_review_comments(
         "SELECT
             c.comment_id, c.review_id, c.body, c.anchor_path, c.anchor_line,
             c.review_version, c.created_at,
-            u.user_id, u.email, u.display_name, u.avatar_url, u.role
+            u.user_id, u.username, u.email, u.display_name, u.avatar_url, u.role
          FROM review_comments c
          JOIN users u ON u.user_id = c.author_user_id
          WHERE c.review_id = $1
@@ -443,8 +444,8 @@ pub(crate) async fn list_reviews(
                    FROM review_org_contributions c WHERE c.org_review_id = r.review_id) AS project_source,
                 r.status, r.version, r.decision_body, r.approved_result_hash,
                 r.decided_at, r.created_at, r.updated_at,
-                u.user_id, u.email, u.display_name, u.avatar_url, u.role,
-                du.user_id AS decision_user_id, du.email AS decision_user_email,
+                u.user_id, u.username, u.email, u.display_name, u.avatar_url, u.role,
+                du.user_id AS decision_user_id, du.email AS decision_user_email, du.username AS decision_user_username,
                 du.display_name AS decision_user_display_name,
                 du.avatar_url AS decision_user_avatar_url, du.role AS decision_user_role
              FROM reviews r
@@ -471,8 +472,8 @@ pub(crate) async fn list_reviews(
                    FROM review_org_contributions c WHERE c.org_review_id = r.review_id) AS project_source,
                 r.status, r.version, r.decision_body, r.approved_result_hash,
                 r.decided_at, r.created_at, r.updated_at,
-                u.user_id, u.email, u.display_name, u.avatar_url, u.role,
-                du.user_id AS decision_user_id, du.email AS decision_user_email,
+                u.user_id, u.username, u.email, u.display_name, u.avatar_url, u.role,
+                du.user_id AS decision_user_id, du.email AS decision_user_email, du.username AS decision_user_username,
                 du.display_name AS decision_user_display_name,
                 du.avatar_url AS decision_user_avatar_url, du.role AS decision_user_role
              FROM reviews r
@@ -1154,8 +1155,8 @@ pub(super) async fn load_review(
             r.status, r.version, r.decision_body, r.approved_result_hash,
             r.decided_by_user_id, r.decided_at,
             r.created_at, r.updated_at,
-            u.user_id, u.email, u.display_name, u.avatar_url, u.role,
-            du.user_id AS decision_user_id, du.email AS decision_user_email,
+            u.user_id, u.username, u.email, u.display_name, u.avatar_url, u.role,
+            du.user_id AS decision_user_id, du.email AS decision_user_email, du.username AS decision_user_username,
             du.display_name AS decision_user_display_name,
             du.avatar_url AS decision_user_avatar_url, du.role AS decision_user_role
          FROM reviews r

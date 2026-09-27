@@ -717,3 +717,31 @@ final class AdministrationModel: ObservableObject {
     }
 
 }
+
+extension AdministrationModel {
+    func createLocalInvitation(role: AdminOrganizationRole) async throws -> AccountActionCredential {
+        let generation = try beginAdministrationMutation(.members)
+        defer { context.finishAdministrationMutation(generation) }
+        let credential: AccountActionCredential = try await server.send(method: "POST", path: "/api/v1/admin/invitations", body: CreateMemberInvitation(role: role))
+        try context.ensureCurrentAdministrationMutation(generation)
+        try await refreshAfterAdministrationMutation(generation: generation, section: .members, invalidating: [.members, .audit])
+        return credential
+    }
+
+    func issueAccountAction(for member: AdminOrganizationMemberRecord) async throws -> AccountActionCredential {
+        let generation = try beginAdministrationMutation(.members)
+        defer { context.finishAdministrationMutation(generation) }
+        let action = member.status == .invited ? "invitation" : "password-reset"
+        let credential: AccountActionCredential = try await server.send(method: "POST", path: "/api/v1/admin/members/\(member.userId)/\(action)", body: [String: String]())
+        try context.ensureCurrentAdministrationMutation(generation)
+        return credential
+    }
+
+    func revokeAccountAction(_ credential: AccountActionCredential) async throws {
+        let generation = try beginAdministrationMutation(.members)
+        defer { context.finishAdministrationMutation(generation) }
+        let response = try await server.raw(method: "DELETE", path: "/api/v1/admin/action-tokens/\(credential.tokenId)")
+        guard response.status == 204 else { throw ServerClientError.response(status: response.status, message: "Could not revoke credential.") }
+        try context.ensureCurrentAdministrationMutation(generation)
+    }
+}

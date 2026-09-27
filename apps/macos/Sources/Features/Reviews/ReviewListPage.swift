@@ -169,7 +169,7 @@ struct ReviewListPage: View {
     }
 
     private func authorName(_ author: UserReference) -> String {
-        author.displayName ?? author.email
+        author.identityLabel
     }
 
     private func projectName(for review: ReviewRecord) -> String? {
@@ -364,7 +364,7 @@ struct ReviewRow: View {
     }
 
     private var author: String {
-        review.author.displayName ?? review.author.email
+        review.author.identityLabel
     }
 
     private var lifecycleSymbolName: String {

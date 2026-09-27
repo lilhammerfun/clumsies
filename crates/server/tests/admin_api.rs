@@ -119,7 +119,7 @@ async fn owner_can_operate_the_complete_admin_contract() {
     )
     .await;
     assert_eq!(member.role, OrgRole::Admin);
-    assert_eq!(member.status, MemberStatus::Active);
+    assert_eq!(member.status, MemberStatus::Invited);
 
     let project_member: ProjectMember = post_json(
         app.clone(),

@@ -77,14 +77,14 @@ pub(crate) async fn list_project_member_candidates(
     query: Option<&str>,
 ) -> Result<Vec<UserRef>, ServerError> {
     let rows = sqlx::query(
-        "SELECT u.user_id, u.email, u.display_name, u.avatar_url, u.role
+        "SELECT u.user_id, u.username, u.email, u.display_name, u.avatar_url, u.role
          FROM users u
          WHERE u.status != 'disabled'
            AND NOT EXISTS (
                SELECT 1 FROM project_members m WHERE m.project_id = $1 AND m.user_id = u.user_id
            )
            AND ($4::text IS NULL
-               OR strpos(lower(concat_ws(' ', u.email, u.display_name)), lower($4)) > 0)
+               OR strpos(lower(concat_ws(' ', u.username, u.email, u.display_name)), lower($4)) > 0)
          ORDER BY u.created_at, u.user_id
          LIMIT $2 OFFSET $3",
     )
@@ -241,7 +241,7 @@ pub(crate) async fn list_project_members(
     limit: i64,
 ) -> Result<Vec<ProjectMember>, ServerError> {
     let rows = sqlx::query(
-        "SELECT p.project_id, u.user_id, u.email, u.display_name, u.avatar_url,
+        "SELECT p.project_id, u.user_id, u.username, u.email, u.display_name, u.avatar_url,
                 u.role AS org_role, m.role AS project_role, m.joined_at
          FROM project_members m
          JOIN projects p ON p.project_id = m.project_id
@@ -299,7 +299,7 @@ pub(crate) async fn load_project_member(
     user_id: &str,
 ) -> Result<ProjectMember, ServerError> {
     let row = sqlx::query(
-        "SELECT p.project_id, u.user_id, u.email, u.display_name, u.avatar_url,
+        "SELECT p.project_id, u.user_id, u.username, u.email, u.display_name, u.avatar_url,
                 u.role AS org_role, m.role AS project_role, m.joined_at
          FROM project_members m
          JOIN projects p ON p.project_id = m.project_id
@@ -718,6 +718,7 @@ fn project_member_from_row(row: &sqlx::postgres::PgRow) -> Result<ProjectMember,
         user: UserRef {
             user_id: row.try_get("user_id")?,
             email: row.try_get("email")?,
+            username: row.try_get("username")?,
             display_name: row.try_get("display_name")?,
             avatar_url: row.try_get("avatar_url")?,
             role: row.try_get("org_role")?,

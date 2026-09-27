@@ -7,6 +7,7 @@ use axum::Router;
 use axum::routing::{get, post, put};
 
 define_routes!(public_routes, PUBLIC_OPERATIONS, {
+    "/api/v1/setup/password-owner" => { post: handler::create_password_owner, };
     "/api/v1/setup" => {
         get: handler::get_setup,
     };

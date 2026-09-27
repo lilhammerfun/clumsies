@@ -22,7 +22,7 @@ network.
 
 - Docker Engine and Docker Compose v2 or newer;
 - a public HTTPS hostname;
-- an OIDC confidential client with the callback below registered at the IdP;
+- optionally, an OIDC confidential client with the callback below registered at the IdP;
 - a published Clumsies Server image pinned by digest.
 
 ```text
@@ -42,6 +42,7 @@ CLUMSIES_SERVER_IMAGE=ghcr.io/lilhammerfun/clumsies-server@sha256:published-dige
 CLUMSIES_PUBLIC_ORIGIN=https://memory.example.com
 CLUMSIES_DB_PASSWORD=replace-with-a-random-password
 CLUMSIES_SETUP_CODE=replace-with-at-least-32-random-characters
+CLUMSIES_PASSWORD_LOGIN_ENABLED=true
 CLUMSIES_OIDC_ISSUER=https://identity.example.com
 CLUMSIES_OIDC_CLIENT_ID=replace-with-oidc-client-id
 CLUMSIES_OIDC_CLIENT_SECRET=replace-with-oidc-client-secret
@@ -68,7 +69,7 @@ curl --fail --silent https://memory.example.com/api/v1/admin/health
 Open the macOS App and enter `https://memory.example.com` as the Server address.
 The App accepts a remote address only as an HTTPS origin and detects that setup
 is required. Enter the one-time Setup Code, organization name, default Project,
-and optional email domains, then finish OIDC in the system browser. The App and
+and optional email domains. Create a local owner with a username and password, or finish OIDC in the system browser. The App and
 Server use state plus `S256` PKCE; Server creates the organization, first Owner,
 default Project, external identity, and initial Refs in one transaction before
 returning a client authorization code. The App exchanges it for bearer tokens,
@@ -85,6 +86,22 @@ If daemon startup fails, choose **Administrator Recovery** in the App. It signs
 in directly to the same trusted Server origin and keeps the temporary session
 in App memory only so an administrator can inspect health, repair member
 access, or revoke tokens before retrying normal startup.
+
+## Local passwords and owner recovery
+
+Local passwords are enabled by default. `CLUMSIES_PASSWORD_LOGIN_ENABLED=false` disables local login, invitations, password setup and reset endpoints for deployments requiring external authentication. For a password-only deployment, leave all four `CLUMSIES_OIDC_*` / `CLUMSIES_CLIENT_REDIRECT_URIS` settings empty. No SMTP configuration or external identity subscription is needed. Email-domain policy governs OIDC admission; local admission is controlled by administrator invitations.
+
+Members set their own passwords (minimum 15 characters). The server stores Argon2id hashes. Username comparison is case-insensitive and usernames contain 3–32 ASCII letters, digits, dots, underscores or hyphens, starting with a letter or digit. Authentication is capped at 60 attempts per minute per server process, with four concurrent hashing workers; scaled deployments need a shared edge rate limit.
+
+An owner can issue a member password-reset credential from the App. Only owners can issue recovery credentials for administrators or other owners. If the last owner loses their local password, an authorized deployment operator can issue a 30-minute reset credential in an interactive terminal:
+
+```bash
+docker compose --project-name clumsies -f compose.production.yml exec server clumsies-server recover-owner usr_OWNER_ID
+```
+
+Use the existing owner's `user_id`, not their email. The command requires an active owner with a local password, records an audit event, and shows the secret only in a terminal. Share it privately and redeem it through **Forgot password?** in the App. Do not place it in logs or shell arguments. Completing recovery revokes old sessions; it does not reopen installation setup.
+
+Deploy the matching App and Server together: the API now permits null email and adds optional username. Existing Google identities and user IDs are preserved. This migration does not copy or invent passwords for existing users. Configure a local password in Login methods if a Google-only owner needs independent access.
 
 ## GitHub delivery
 

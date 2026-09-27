@@ -3,8 +3,11 @@
 pub mod dto;
 mod error;
 mod handler;
+mod local;
+mod local_repository;
 pub(crate) mod model;
 mod oidc;
+mod password;
 mod repository;
 pub(crate) mod routes;
 mod service;

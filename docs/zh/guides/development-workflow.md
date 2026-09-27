@@ -45,8 +45,8 @@ Rust、Bun 和 Docker Desktop。
 Keychain service、Compose project、
 动态端口和实例专属 `CODEX_HOME`。本地 `just dev-macos` 在打开
 App 前初始化 Server，并通过 daemon 完成 fake-OIDC owner
-登录。登录失败即停止启动；测试者不应需要 setup 或登录页面。
-远端 Preview 实例不适用。
+登录。登录失败即停止启动；退出后，如果 Server 可访问，App 会显示
+正常登录方式，便于手动验收认证流程。远端 Preview 实例不适用自动登录。
 
 ```sh
 just dev-macos-status

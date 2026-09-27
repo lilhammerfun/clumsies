@@ -16,6 +16,8 @@ const DEFAULT_SERVER_ADDR: &str = "127.0.0.1:8080";
 
 /// Explicit startup configuration parsed before constructing external dependencies.
 pub(crate) struct ServerConfig {
+    /// Whether deployment permits local password authentication.
+    pub(crate) password_enabled: bool,
     /// PostgreSQL connection URL; it may contain credentials and must not be logged.
     pub(crate) database_url: String,
     /// Socket address on which the server listens; port zero requests a dynamic port.
@@ -56,7 +58,13 @@ impl ServerConfig {
             value => Some(PublicOrigin::parse(&value)?),
         };
 
+        let password_enabled = match optional_env("CLUMSIES_PASSWORD_LOGIN_ENABLED").as_deref() {
+            None | Some("true") => true,
+            Some("false") => false,
+            Some(_) => return Err(ServerConfigError::InvalidPasswordPolicy),
+        };
         Ok(Self {
+            password_enabled,
             database_url,
             listen_addr,
             public_origin,
@@ -148,6 +156,9 @@ fn required_oidc_value(name: &str, value: Option<String>) -> Result<String, Serv
 /// Missing or invalid deployment configuration preventing startup.
 #[derive(Debug, Error)]
 pub(crate) enum ServerConfigError {
+    /// Local password policy must be an explicit boolean when supplied.
+    #[error("CLUMSIES_PASSWORD_LOGIN_ENABLED must be true or false")]
+    InvalidPasswordPolicy,
     /// Provider settings are incomplete or contain invalid credential or redirect values.
     #[error("{0}")]
     Oidc(String),

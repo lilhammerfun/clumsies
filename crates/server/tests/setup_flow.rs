@@ -116,7 +116,7 @@ async fn setup_claim_creates_one_oidc_bound_installation_and_locks_it() {
     let token: TokenResponse =
         decode_json(exchange_setup_token(app.clone(), &authorization_code, SETUP_VERIFIER).await)
             .await;
-    assert_eq!(token.user.email, "owner@example.com");
+    assert_eq!(token.user.email.as_deref(), Some("owner@example.com"));
     assert_eq!(token.user.role, "owner");
 
     let admin_response = app
