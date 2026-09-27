@@ -60,6 +60,26 @@ final class WorkspaceCoordinator {
         context.projectSelectionChanges.sink { [weak feedback] in
             feedback?.clearIrrelevantScopedErrorPresentation()
         }.store(in: &observations)
+        context.projectDeletions.sink { [weak self] deletion in
+            guard let self else { return }
+            let projectId = deletion.projectId
+            cancelPostReadyWork()
+            for key in Array(edits.pendingDocumentSaves.keys) where key.projectId == projectId {
+                edits.cancelDocumentSave(key)
+            }
+            let accessible = Set(context.projects.map(\.id))
+            edits.retainAccessibleProjects(accessible)
+            reviews.retainAccessibleProjects(accessible)
+            catalog.clearStaleResourceState(for: projectId)
+            catalog.replaceProjectResources(projectId: projectId, with: [])
+            navigation.pruneOrphanedMemoryTabs()
+            if deletion.wasActive {
+                navigation.showsProjectSettings = false
+                navigation.selectedItemId = nil
+                navigation.activeTabId = nil
+                navigation.clearPendingDocumentSessionPresentation()
+            }
+        }.store(in: &observations)
         catalog.documentsChanged.merge(with: edits.documentsChanged).sink { [weak navigation] in
             navigation?.pruneOrphanedMemoryTabs()
             navigation?.refreshAllDocumentTabs()

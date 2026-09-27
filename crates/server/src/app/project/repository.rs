@@ -210,25 +210,6 @@ pub(crate) async fn lock_admin_project_revision(
     .ok_or_else(|| ServerError::not_found("project", project_id))
 }
 
-/// Delete project metadata within the caller's administrative transaction.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(crate) async fn delete_admin_project(
-    tx: &mut Transaction<'_, Postgres>,
-    org_id: &str,
-    project_id: &str,
-) -> Result<(), ServerError> {
-    sqlx::query("DELETE FROM projects WHERE project_id = $1 AND org_id = $2")
-        .bind(project_id)
-        .bind(org_id)
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
 /// Check project ownership without disclosing metadata from another organization.
 ///
 /// # Errors
@@ -676,7 +657,7 @@ pub(crate) async fn update_project(
     Ok(())
 }
 
-/// Delete project metadata inside the caller's transaction.
+/// Delete project-owned history and metadata, preserving published organization memory.
 ///
 /// Uses the caller's transaction without committing it.
 ///
@@ -686,6 +667,24 @@ pub(crate) async fn delete_project(
     tx: &mut Transaction<'_, Postgres>,
     project_id: &str,
 ) -> Result<(), ServerError> {
+    // These history references deliberately restrict individual record deletion.
+    // Remove their owners first; PostgreSQL's project cascades are not dependency-ordered.
+    for statement in [
+        "DELETE FROM review_merges USING reviews
+         WHERE review_merges.review_id = reviews.review_id AND reviews.project_id = $1",
+        "DELETE FROM reviews WHERE project_id = $1",
+        "DELETE FROM draft_rebases USING drafts
+         WHERE draft_rebases.draft_id = drafts.draft_id AND drafts.project_id = $1",
+        "DELETE FROM drafts WHERE project_id = $1",
+        "DELETE FROM kanban_issues WHERE project_id = $1",
+        "DELETE FROM refs WHERE project_id = $1",
+        "DELETE FROM commits WHERE project_id = $1",
+    ] {
+        sqlx::query(statement)
+            .bind(project_id)
+            .execute(&mut **tx)
+            .await?;
+    }
     sqlx::query("DELETE FROM projects WHERE project_id = $1")
         .bind(project_id)
         .execute(&mut **tx)
