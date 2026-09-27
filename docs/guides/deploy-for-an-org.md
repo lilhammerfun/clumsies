@@ -238,7 +238,7 @@ a single host without redundancy cannot honestly promise more nines.
 | Objective | Target | Evidence |
 |---|---|---|
 | Public availability | external probes succeed 99.5 percent of the time over 30 days | `probe_success` from the blackbox exporter |
-| Write freshness | 99 percent of client changes reach the Server within five minutes | `clumsies_commits_total` against client activity in the edge logs |
+| Write freshness (not yet measured) | 99 percent of client changes reach the Server within five minutes | Requires client operation enqueue-to-acknowledgment latency and failure metrics; Commit counts and HTTP traffic cannot measure this |
 | Durability | recovery point at most 26 hours old, recovery time at most one hour | backup freshness metric and the weekly restore drill |
 | Request latency | p95 below one second on the app origin | `caddy_http_request_duration_seconds` |
 | Server errors | fewer than 1 percent of requests answer with a server error | `caddy_http_request_duration_seconds_count` by code |
@@ -246,7 +246,9 @@ a single host without redundancy cannot honestly promise more nines.
 Alert thresholds follow these targets instead of local judgement: the backup
 rule fires at 26 hours, the error-rate rule at one percent. Queueing signals
 (open drafts, reconciliation conflicts, unread notifications) are backlog
-reporting until an objective exists for them.
+reporting until an objective exists for them. Open Drafts can remain part of a
+Project's Effective Memory before publication; their creation age is not a sync
+delay. Successful reads do not imply that a Commit should have been created.
 
 Revisit the targets when the architecture changes. Availability above 99.5
 percent needs redundancy that one host cannot provide, and the deployment has to

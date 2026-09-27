@@ -91,6 +91,9 @@ jobs:
         run: |
           shellcheck dev/check-agent-runtime-boundary.sh
 
+      - name: Check observability configuration and alert behavior
+        run: python3 deploy/observability/test.py
+
       - name: Check macOS packaging scripts
         run: |
           shellcheck apps/macos/Scripts/archive-preview.sh \

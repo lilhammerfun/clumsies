@@ -75,6 +75,23 @@ the same tunnel can forward all three:
 ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 <installation-host>
 ```
 
+The Compose commands set `--web.external-url` to `http://localhost:9090` and
+`http://localhost:9093`. Email and Source links therefore use these tunnel
+addresses instead of Docker hostnames. Keep the tunnel open when following a
+link; if you forward different local ports, adjust the corresponding flags.
+This does not expose the monitoring services on the public interface. Links
+in emails already delivered cannot be changed.
+
+| Page | Purpose |
+|---|---|
+| [Prometheus Alerts](http://localhost:9090/alerts) | All alert rules, their expressions, pending duration, and current state |
+| [Alertmanager Alerts](http://localhost:9093/#/alerts) | Firing alerts, notification groups, and temporary silences |
+| [Grafana](http://localhost:3000/) | Metric trends and logs |
+
+An inactive Prometheus rule is enabled but not currently firing. Alertmanager
+does not list inactive rules or edit Prometheus thresholds. Its Status page
+shows the loaded notification routing configuration.
+
 ## Logs
 
 Both dashboards carry a *Logs* row with a `request id` text box. Every response
@@ -119,8 +136,11 @@ sudo docker compose --file compose.observability.yml --env-file .env exec alertm
 sudo docker compose --file compose.observability.yml --env-file .env restart alertmanager
 ```
 
-The `Watchdog` rule always fires, so a working pipeline produces a periodic
-"everything is fine" email. Remove the rule if that is unwanted noise.
+The `Watchdog` rule always fires and has a separate route that emails once per
+24 hours, after an initial 10-second wait. This checks notification delivery,
+not application health. Other alerts wait 30 seconds initially, notify group
+changes on a five-minute interval, and repeat every four hours until resolved.
+Recovery also sends an email. Warning and critical alerts use the same receiver.
 
 ## Alert rules
 
@@ -129,4 +149,46 @@ within 14 days, or a scrape target down. Capacity: a filesystem below 15 percent
 free or host memory below 10 percent available. Application: PostgreSQL
 unreachable, more than 80 percent of connections in use, or a Clumsies container
 above 2 GiB. Operations: no backup for 26 hours, no restore drill for 8 days, or
-a failed backup unit.
+a failed backup unit. HTTP server errors above one percent for five minutes and
+database queries above one minute for five minutes also alert.
+
+Draft age/count, Commit throughput, reconciliation conflicts, and unread inbox
+items remain in the collector and Grafana dashboards. They do not page the
+operator: an open Draft can still be used and updated in its Project, reading
+does not require publication, and human work has no installation-wide response
+deadline. Add an alert only when a measured failure or an agreed service
+objective gives its recipient a concrete action. Commit counts cannot measure
+client synchronization latency.
+
+## Validate and update
+
+From the repository root, run `python3 deploy/observability/test.py`. It uses
+Docker Compose validation plus the shipped images' `promtool` and `amtool`, with
+sample configuration and no production credentials or running stack. The rule
+tests cover long-lived workflow state without emails and database failures
+firing and resolving. CI runs the same check.
+
+Monitoring configuration is deployed separately from Server and site delivery.
+For an existing installation, back up the current configuration, then copy the
+new `prometheus/rules.yml` and `compose.observability.yml` into
+`/opt/clumsies/observability/`. Preserve `.env`, data volumes, and the credential
+values in `alertmanager/alertmanager.yml`; merge only the Watchdog child route
+from the template if it is missing.
+
+On the installation host:
+
+```bash
+cd /opt/clumsies/observability
+sudo docker compose --file compose.observability.yml --env-file .env config -q
+sudo docker compose --file compose.observability.yml --env-file .env exec prometheus \
+  promtool check config /etc/prometheus/prometheus.yml
+sudo docker compose --file compose.observability.yml --env-file .env exec alertmanager \
+  amtool check-config /etc/alertmanager/alertmanager.yml
+sudo docker compose --file compose.observability.yml --env-file .env up -d --no-deps --pull never prometheus alertmanager
+```
+
+Recreation is needed to apply the external URL flags. Confirm 14 rules are
+loaded in Prometheus, the five workflow alerts are absent, the Watchdog route
+repeats daily, and newly generated links work through the tunnel. An existing
+workflow alert may send a final resolved email. To roll back, restore the
+backed-up files and repeat validation and recreation without deleting volumes.
