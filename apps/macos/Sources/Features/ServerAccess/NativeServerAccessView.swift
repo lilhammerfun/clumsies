@@ -7,8 +7,8 @@ struct NativeServerAccessView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                BrandLogoView(size: 68, isBreathing: model.isBusy)
+            VStack(spacing: 14) {
+                BrandLogoView(size: 52, isBreathing: model.isBusy)
 
                 VStack(spacing: 7) {
                     Text(model.title)
@@ -34,7 +34,7 @@ struct NativeServerAccessView: View {
                 }
 
             }
-            .padding(36)
+            .padding(24)
             .frame(maxWidth: .infinity)
         }
         .background(Color(nsColor: .textBackgroundColor))
