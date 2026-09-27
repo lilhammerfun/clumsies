@@ -91,6 +91,12 @@ jobs:
         run: |
           shellcheck dev/check-agent-runtime-boundary.sh
 
+      - name: Check observability configuration, collection and alert behavior
+        run: |
+          sh -n deploy/observability/host/clumsies-observability-metrics
+          shellcheck deploy/observability/host/clumsies-observability-metrics
+          python3 deploy/observability/test.py
+
       - name: Check macOS packaging scripts
         run: |
           shellcheck apps/macos/Scripts/archive-preview.sh \

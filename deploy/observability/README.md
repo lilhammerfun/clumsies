@@ -75,6 +75,23 @@ the same tunnel can forward all three:
 ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 <installation-host>
 ```
 
+The Compose commands set `--web.external-url` to `http://localhost:9090` and
+`http://localhost:9093`. Email and Source links therefore use these tunnel
+addresses instead of Docker hostnames. Keep the tunnel open when following a
+link; if you forward different local ports, adjust the corresponding flags.
+This does not expose the monitoring services on the public interface. Links
+in emails already delivered cannot be changed.
+
+| Page | Purpose |
+|---|---|
+| [Prometheus Alerts](http://localhost:9090/alerts) | All alert rules, their expressions, pending duration, and current state |
+| [Alertmanager Alerts](http://localhost:9093/#/alerts) | Firing alerts, notification groups, and temporary silences |
+| [Grafana](http://localhost:3000/) | Metric trends and logs |
+
+An inactive Prometheus rule is enabled but not currently firing. Alertmanager
+does not list inactive rules or edit Prometheus thresholds. Its Status page
+shows the loaded notification routing configuration.
+
 ## Logs
 
 Both dashboards carry a *Logs* row with a `request id` text box. Every response
@@ -119,8 +136,11 @@ sudo docker compose --file compose.observability.yml --env-file .env exec alertm
 sudo docker compose --file compose.observability.yml --env-file .env restart alertmanager
 ```
 
-The `Watchdog` rule always fires, so a working pipeline produces a periodic
-"everything is fine" email. Remove the rule if that is unwanted noise.
+The `Watchdog` rule always fires and has a separate route that emails once per
+24 hours, after an initial 10-second wait. This checks notification delivery,
+not application health. Other alerts wait 30 seconds initially, notify group
+changes on a five-minute interval, and repeat every four hours until resolved.
+Recovery also sends an email. Warning and critical alerts use the same receiver.
 
 ## Alert rules
 
@@ -129,4 +149,91 @@ within 14 days, or a scrape target down. Capacity: a filesystem below 15 percent
 free or host memory below 10 percent available. Application: PostgreSQL
 unreachable, more than 80 percent of connections in use, or a Clumsies container
 above 2 GiB. Operations: no backup for 26 hours, no restore drill for 8 days, or
-a failed backup unit.
+a failed backup unit. HTTP server errors above one percent for five minutes and
+database queries above one minute for five minutes also alert. A failed, missing,
+or more than 15-minute-old database snapshot alerts after five minutes while
+node-exporter is reachable; exporter outages use `ScrapeTargetDown`.
+
+Draft age/count, recent Commit records, current reconciliation conflicts, and
+stored unread receipts remain in the collector and Grafana dashboards. They do
+not page the operator: an open Draft can still be used and updated in its Project, reading
+does not require publication, and human work has no installation-wide response
+deadline. Add an alert only when a measured failure or an agreed service
+objective gives its recipient a concrete action. Commit counts cannot measure
+client synchronization latency.
+
+## Database metric semantics
+
+The host timer samples every five minutes. All database metrics are gauges,
+not counters; deleting records can reduce counts. Both dashboard languages use
+the same queries and explain these limits in panel descriptions.
+
+| Metric | Meaning |
+| --- | --- |
+| `clumsies_{commits,drafts,reviews}_created_last_hour` | Retained rows whose `created_at` is in the last 60 minutes. Includes system/bootstrap Commits; deletion reduces the count. No `rate()` or `increase()` is applied. |
+| `clumsies_drafts`, `clumsies_reviews` | Current row counts by lifecycle state, including zero for empty states. Merged/discarded Drafts are history, not backlog. |
+| `clumsies_drafts_with_reconciliation_conflicts` | Open/submitted Drafts with a non-invalidated conflicting candidate matching their version, base commit and current main ref, following the Draft repository's validity checks. Unevaluated Drafts are excluded; zero is not proof that every Draft is conflict-free. |
+| `clumsies_inbox_unread_records` | Stored unread receipts, including archived or inaccessible notifications. Not the visible inbox badge or a delivery failure. |
+| `clumsies_oldest_open_draft_age_seconds` | Age since creation, not last edit, processing time or synchronization latency; zero if no open Draft exists. |
+| `clumsies_db_active_backends`, `clumsies_db_longest_query_seconds` | Active sessions/queries in this database only, excluding the collector and idle transactions. |
+| `clumsies_database_collection_success`, `clumsies_database_collection_timestamp_seconds` | Latest attempt's outcome and time. A failed query emits success=0 and omits database samples, preserving independent backup/release metrics. |
+
+Open Draft net change is the six-hour fitted slope multiplied by 3600 to show
+Drafts/hour. It includes state transitions and deletion, not just creation.
+Recent-row counts are approximate activity snapshots, not durable event totals.
+True event throughput or client enqueue-to-acknowledgment latency requires
+instrumentation at those events; it cannot be reconstructed from table sizes.
+
+## Validate and update
+
+From the repository root, run `python3 deploy/observability/test.py`. It uses
+Docker Compose validation plus the shipped images' `promtool` and `amtool`, with
+sample configuration and no production credentials. An ephemeral, isolated
+PostgreSQL container applies the actual Server migrations and exercises the
+installed collector with creation, deletion, zero counts, stale candidates and
+SQL failure/recovery. The rule tests cover quiet workflow state and operational
+failures firing and resolving, including failed or stopped collection. CI runs
+the same check.
+
+Monitoring configuration is deployed separately from Server and site delivery.
+For an existing installation, back up the current configuration, then copy the
+new `prometheus/rules.yml`, `compose.observability.yml`,
+`host/clumsies-observability-metrics` and both `grafana/dashboards/*.json` files
+into their matching paths under `/opt/clumsies/observability/`. Also back up the
+installed `/usr/local/sbin/clumsies-observability-metrics` executable.
+Preserve `.env`, data volumes, and the credential values in `alertmanager/alertmanager.yml`; merge only the Watchdog child route
+from the template if it is missing.
+
+The old `clumsies_{commits,drafts,reviews}_total` row-count counters,
+`clumsies_reconciliation_candidates`, and `clumsies_inbox_unread` are retired.
+Update custom queries to the metrics above. Historical series remain until
+Prometheus retention expires; no history is rewritten or backfilled.
+Install the collector and dashboards together, before loading the new health
+rule. No application schema migration is needed for this monitoring update.
+
+On the installation host:
+
+```bash
+cd /opt/clumsies/observability
+sudo install -m 0755 host/clumsies-observability-metrics /usr/local/sbin/clumsies-observability-metrics
+sudo systemctl start clumsies-observability-metrics.service
+sudo systemctl is-active clumsies-observability-metrics.timer
+sudo grep '^clumsies_database_collection_' /var/lib/clumsies-observability/textfile/clumsies.prom
+sudo docker compose --file compose.observability.yml --env-file .env config -q
+sudo docker compose --file compose.observability.yml --env-file .env exec prometheus \
+  promtool check config /etc/prometheus/prometheus.yml
+sudo docker compose --file compose.observability.yml --env-file .env exec alertmanager \
+  amtool check-config /etc/alertmanager/alertmanager.yml
+sudo docker compose --file compose.observability.yml --env-file .env up -d --no-deps --pull never prometheus alertmanager
+```
+
+Confirm `clumsies_database_collection_success` is 1 and the collection timestamp
+is current before proceeding; the service also writes failure=0 on SQL errors.
+Grafana's file provider reloads the dashboard JSON within 30 seconds.
+Recreation is needed to apply the external URL flags. Confirm 15 rules are
+loaded in Prometheus, the five workflow alerts are absent, the Watchdog route
+repeats daily, and newly generated links work through the tunnel. An existing
+workflow alert may send a final resolved email. To roll back, restore the
+backed-up files and collector executable, run the collector once, and repeat
+validation and recreation without deleting volumes. Restore both dashboards
+with the collector so their metric names stay aligned.

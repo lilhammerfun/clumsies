@@ -554,7 +554,7 @@
     },
     {
       "type": "timeseries",
-      "title": "\u6bcf\u5c0f\u65f6\u63d0\u4ea4\u6570",
+      "title": "\u6700\u8fd1 1 \u5c0f\u65f6\u65b0\u5efa\u63d0\u4ea4\u8bb0\u5f55",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -579,8 +579,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(clumsies_commits_total[1h])) * 3600",
-          "legendFormat": "commits/h"
+          "expr": "clumsies_commits_created_last_hour",
+          "legendFormat": "commits / last 60m"
         }
       ],
       "gridPos": {
@@ -592,11 +592,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u6bcf 5 \u5206\u949f\u91c7\u96c6\uff0c\u6309 created_at \u7edf\u8ba1\u5f53\u524d\u4ecd\u4fdd\u7559\u7684\u6700\u8fd1 60 \u5206\u949f\u8bb0\u5f55\u3002\u5220\u9664\u4f1a\u51cf\u5c11\u8ba1\u6570\uff1b\u4e0d\u662f\u7d2f\u8ba1\u4e8b\u4ef6\u8ba1\u6570\uff0c\u4e5f\u4e0d\u662f\u540c\u6b65\u5ef6\u8fdf\u3002 \u5305\u542b\u521d\u59cb\u5316\u53ca\u7cfb\u7edf\u751f\u6210\u7684\u63d0\u4ea4\u3002"
     },
     {
       "type": "timeseries",
-      "title": "\u6bcf\u5c0f\u65f6\u65b0\u5efa\u8349\u7a3f",
+      "title": "\u6700\u8fd1 1 \u5c0f\u65f6\u65b0\u5efa\u8349\u7a3f",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -621,8 +622,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(clumsies_drafts_total[1h])) * 3600",
-          "legendFormat": "drafts/h"
+          "expr": "clumsies_drafts_created_last_hour",
+          "legendFormat": "drafts / last 60m"
         }
       ],
       "gridPos": {
@@ -634,11 +635,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u6bcf 5 \u5206\u949f\u91c7\u96c6\uff0c\u6309 created_at \u7edf\u8ba1\u5f53\u524d\u4ecd\u4fdd\u7559\u7684\u6700\u8fd1 60 \u5206\u949f\u8bb0\u5f55\u3002\u5220\u9664\u4f1a\u51cf\u5c11\u8ba1\u6570\uff1b\u4e0d\u662f\u7d2f\u8ba1\u4e8b\u4ef6\u8ba1\u6570\uff0c\u4e5f\u4e0d\u662f\u540c\u6b65\u5ef6\u8fdf\u3002"
     },
     {
       "type": "timeseries",
-      "title": "\u6bcf\u5c0f\u65f6\u65b0\u5efa\u8bc4\u5ba1",
+      "title": "\u6700\u8fd1 1 \u5c0f\u65f6\u65b0\u5efa\u8bc4\u5ba1",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -663,8 +665,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(clumsies_reviews_total[1h])) * 3600",
-          "legendFormat": "reviews/h"
+          "expr": "clumsies_reviews_created_last_hour",
+          "legendFormat": "reviews / last 60m"
         }
       ],
       "gridPos": {
@@ -676,11 +678,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u6bcf 5 \u5206\u949f\u91c7\u96c6\uff0c\u6309 created_at \u7edf\u8ba1\u5f53\u524d\u4ecd\u4fdd\u7559\u7684\u6700\u8fd1 60 \u5206\u949f\u8bb0\u5f55\u3002\u5220\u9664\u4f1a\u51cf\u5c11\u8ba1\u6570\uff1b\u4e0d\u662f\u7d2f\u8ba1\u4e8b\u4ef6\u8ba1\u6570\uff0c\u4e5f\u4e0d\u662f\u540c\u6b65\u5ef6\u8fdf\u3002"
     },
     {
       "type": "timeseries",
-      "title": "\u8349\u7a3f\u79ef\u538b\uff08\u6309\u72b6\u6001\uff09",
+      "title": "\u8349\u7a3f\u6570\u91cf\uff08\u6309\u751f\u547d\u5468\u671f\u72b6\u6001\uff09",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -705,7 +708,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "clumsies_drafts{status=~\"open|merged|discarded\"}",
+          "expr": "clumsies_drafts",
           "legendFormat": "{{status}}"
         }
       ],
@@ -718,11 +721,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u5305\u542b open\u3001submitted\u3001merged\u3001discarded\uff1b\u5df2\u5408\u5e76\u548c\u5df2\u4e22\u5f03\u5c5e\u4e8e\u5386\u53f2\u72b6\u6001\uff0copen \u8349\u7a3f\u4e5f\u53ef\u6301\u7eed\u4f7f\u7528\uff0c\u4e0d\u4ee3\u8868\u6545\u969c\u79ef\u538b\u3002"
     },
     {
       "type": "timeseries",
-      "title": "\u672a\u5b8c\u6210\u8349\u7a3f\u589e\u957f",
+      "title": "\u5f00\u653e\u8349\u7a3f\u6570\u91cf\u51c0\u53d8\u5316\uff08\u6bcf\u5c0f\u65f6\uff09",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -747,7 +751,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "deriv(clumsies_drafts{status=\"open\"}[6h])",
+          "expr": "deriv(clumsies_drafts{status=\"open\"}[6h]) * 3600",
           "legendFormat": "drafts/h"
         }
       ],
@@ -760,11 +764,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u6839\u636e\u6700\u8fd1 6 \u5c0f\u65f6\u7684\u5b58\u91cf\u62df\u5408\u6bcf\u5c0f\u65f6\u51c0\u53d8\u5316\uff0c\u542b\u65b0\u5efa\u3001\u91cd\u65b0\u6253\u5f00\u3001\u63d0\u4ea4\u3001\u4e22\u5f03\u548c\u5220\u9664\uff1b\u4e0d\u662f\u65b0\u5efa\u901f\u7387\u6216\u5904\u7406\u8017\u65f6\u3002"
     },
     {
       "type": "row",
-      "title": "\u6392\u961f",
+      "title": "\u5de5\u4f5c\u6d41\u72b6\u6001",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -776,7 +781,7 @@
     },
     {
       "type": "timeseries",
-      "title": "\u5bf9\u8d26\u51b2\u7a81",
+      "title": "\u5b58\u5728\u6709\u6548\u5bf9\u8d26\u51b2\u7a81\u7684\u8349\u7a3f",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -801,8 +806,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "clumsies_reconciliation_candidates{status=\"conflicts\"}",
-          "legendFormat": "conflicts"
+          "expr": "clumsies_drafts_with_reconciliation_conflicts",
+          "legendFormat": "drafts"
         }
       ],
       "gridPos": {
@@ -814,11 +819,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u4ec5\u7edf\u8ba1 open/submitted \u8349\u7a3f\u4e2d\u5339\u914d\u5f53\u524d\u7248\u672c\u3001\u57fa\u7840\u63d0\u4ea4\u548c\u4e3b\u5f15\u7528\u7684\u6709\u6548\u51b2\u7a81\u7ed3\u679c\u3002\u6392\u9664\u5386\u53f2\u53ca\u5931\u6548\u8bb0\u5f55\uff1b\u672a\u7ecf\u5bf9\u8d26\u7684\u8349\u7a3f\u4e0d\u8ba1\u5165\uff0c\u96f6\u4e0d\u4ee3\u8868\u6240\u6709\u8349\u7a3f\u90fd\u65e0\u51b2\u7a81\u3002"
     },
     {
       "type": "timeseries",
-      "title": "\u672a\u8bfb\u901a\u77e5",
+      "title": "\u6570\u636e\u5e93\u672a\u8bfb\u901a\u77e5\u8bb0\u5f55\u6570",
       "fieldConfig": {
         "defaults": {
           "unit": null,
@@ -843,7 +849,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "clumsies_inbox_unread",
+          "expr": "clumsies_inbox_unread_records",
           "legendFormat": "unread"
         }
       ],
@@ -856,11 +862,12 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "read_version \u5c0f\u4e8e version \u7684\u6570\u636e\u5e93\u8bb0\u5f55\uff0c\u542b\u5df2\u5f52\u6863\u6216\u7528\u6237\u5df2\u65e0\u6cd5\u8bbf\u95ee\u7684\u901a\u77e5\u3002\u4e0d\u662f\u7528\u6237\u53ef\u89c1\u7684\u672a\u8bfb\u89d2\u6807\uff0c\u4e5f\u4e0d\u8868\u793a\u901a\u77e5\u6295\u9012\u5931\u8d25\u3002"
     },
     {
       "type": "timeseries",
-      "title": "\u6700\u8001\u672a\u5b8c\u6210\u8349\u7a3f\uff08\u5929\uff09",
+      "title": "\u6700\u65e9\u5f00\u653e\u8349\u7a3f\u7684\u521b\u5efa\u5e74\u9f84\uff08\u5929\uff09",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
@@ -899,7 +906,8 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u4ece created_at \u8d77\u7b97\uff1b\u8fd1\u671f\u7f16\u8f91\u4e0d\u4f1a\u91cd\u7f6e\u521b\u5efa\u5e74\u9f84\u3002\u6ca1\u6709\u5f00\u653e\u8349\u7a3f\u65f6\u4e3a\u96f6\u3002\u4e0d\u662f\u95f2\u7f6e\u65f6\u95f4\u6216\u540c\u6b65\u5ef6\u8fdf\uff0c\u4e5f\u6ca1\u6709\u5904\u7406\u671f\u9650\u3002"
     },
     {
       "type": "row",
@@ -995,7 +1003,8 @@
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
-      }
+      },
+      "description": "\u4ec5\u7edf\u8ba1\u5f53\u524d\u5e94\u7528\u6570\u636e\u5e93\u4e2d\u6b63\u5728\u6267\u884c\u7684\u67e5\u8be2\uff0c\u6392\u9664\u91c7\u96c6\u67e5\u8be2\u548c\u4e8b\u52a1\u5185\u7a7a\u95f2\u8fde\u63a5\u3002"
     },
     {
       "type": "timeseries",

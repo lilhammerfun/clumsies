@@ -66,7 +66,7 @@ def classify(paths):
             selected.update(SERVER | {"docs", "scripts", "site_delivery"})
         elif path in {"deploy/Caddyfile", "deploy/site.sh"}:
             selected.update({"docs", "scripts", "site_delivery"})
-        elif path.startswith("deploy/server/"):
+        elif path.startswith(("deploy/server/", "deploy/observability/")):
             selected.add("scripts")
         elif path in {"docker-compose.yml", "justfile"} or path.startswith(("dev/dev-", "dev/oidc/")):
             selected.update({"scripts", "server", "daemon", "runtime", "macos", "package"})
