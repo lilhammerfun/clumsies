@@ -9,7 +9,7 @@
 [![CI](https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml/badge.svg)](https://github.com/lilhammerfun/clumsies/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/lilhammerfun/clumsies?label=License)](LICENSE)
 
-> **体验版已提供 macOS 安装包。** [下载 DMG](https://github.com/lilhammerfun/clumsies/releases)，无需自行编译。当前版本尚未经过 Apple 公证，首次打开步骤见下方说明。
+> **已提供 macOS 安装包。** [下载 DMG](https://github.com/lilhammerfun/clumsies/releases/latest)，无需自行编译。当前版本尚未经过 Apple 公证，首次打开步骤见下方说明。
 
 Clumsies 帮助团队维护供 Coding Agent 使用的 Markdown 知识，例如架构决策、项目约束和操作流程。组织保存已发布的 **Memory**；每个 **Project（项目）** 选择需要使用的 Memory，再与本地仓库绑定。Agent 在工作时检索相关指导，也可以在用户明确要求后提出修改。
 
@@ -33,12 +33,12 @@ Clumsies 帮助团队维护供 Coding Agent 使用的 Markdown 知识，例如�
 
 支持 **macOS 14 及以上版本，Apple Silicon Mac（M1 及更新机型）**。直接安装无需 Xcode、Rust 或其他编译工具。
 
-1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases)，在最新的 **Clumsies macOS Preview** 中下载 `Clumsies-*-macos-arm64.dmg`。
+1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases/latest)，在标记为 **Latest** 的正式版本 中下载 `Clumsies-*-macos-arm64.dmg`。
 2. 打开 DMG，将 **Clumsies.app** 拖入 **Applications（应用程序）**，推出磁盘映像，再打开已安装的 App。
-3. 当前体验版尚未经过 Apple 公证。首次打开若被拦截，确认文件来自本仓库后，到 **系统设置 → 隐私与安全 → 仍要打开** 放行。受管理的 Mac 可能不允许此操作。[Apple 操作说明](https://support.apple.com/zh-cn/102445)
+3. 当前版本尚未经过 Apple 公证。首次打开若被拦截，确认文件来自本仓库后，到 **系统设置 → 隐私与安全 → 仍要打开** 放行。受管理的 Mac 可能不允许此操作。[Apple 操作说明](https://support.apple.com/zh-cn/102445)
 4. 保留默认 Server 地址 **`https://app.clumsies.ai`** 并登录；需要该组织已经准入的账号。接入其他部署时，使用团队提供的 Server 地址。
 
-安装后，按[快速开始](https://docs.clumsies.ai/zh/quickstart/)连接组织、创建项目并接入 Agent。体验版更新时，退出 App，下载新的 DMG 并替换原位置的应用；账号、Memory 和设置会保留。
+安装后，按[快速开始](https://docs.clumsies.ai/zh/quickstart/)连接组织、创建项目并接入 Agent。手动更新时，退出 App，下载新的 DMG 并替换原位置的应用；账号、Memory 和设置会保留。
 
 如果此前安装在 `~/Applications/Clumsies.app`，请退出 App 后在该位置替换，避免保留两份应用。需要从源码安装时，请阅读[源码安装说明](https://docs.clumsies.ai/zh/quickstart/install#从源码安装)。
 
@@ -46,9 +46,9 @@ Clumsies 帮助团队维护供 Coding Agent 使用的 Markdown 知识，例如�
 
 ```text
 请帮我安装 Clumsies，下载页面：
-https://github.com/lilhammerfun/clumsies/releases
+https://github.com/lilhammerfun/clumsies/releases/latest
 
-选择最新 Clumsies macOS Preview 的 DMG，将其中的 Clumsies.app 安装到
+选择最新正式版本 的 DMG，将其中的 Clumsies.app 安装到
 应用程序目录；已有安装时退出 App 并在原位置替换，保留账号、Memory 和设置。
 沿用内置 Server 地址。不要创建 Dev Instance，也不要启动本地 Server。
 macOS 首次打开授权和登录需要我操作时，告诉我具体步骤。

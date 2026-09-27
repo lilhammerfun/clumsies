@@ -37,17 +37,27 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: sh apps/macos/Scripts/ensure-update-feeds.sh
 
-  macos-preview:
-    if: github.event_name == 'workflow_dispatch' && inputs.distribution == 'preview'
+  macos-adhoc:
+    if: github.event_name == 'push' || inputs.distribution == 'preview'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
 
-      - name: Verify preview source matches the selected workflow
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Verify source and tagged version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            git fetch --depth=1 --no-tags origin "$DEFAULT_BRANCH"
+            test "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)"
+            VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
+            test "$GITHUB_REF_NAME" = "v$VERSION"
+            test -s "docs/releases/$GITHUB_REF_NAME.md"
+          fi
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -57,43 +67,54 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Build and verify preview DMG
+      - name: Build and verify ad-hoc DMG
         env:
           CLUMSIES_BUILD_NUMBER: ${{ github.run_number }}
-          CLUMSIES_AGENT_RUNTIME_BUILD_ID: preview-${{ github.sha }}
-        run: sh apps/macos/Scripts/archive-preview.sh
+          CLUMSIES_AGENT_RUNTIME_BUILD_ID: adhoc-${{ github.sha }}
+          DISTRIBUTION: ${{ github.event_name == 'push' && 'release' || 'preview' }}
+        run: sh apps/macos/Scripts/archive-adhoc.sh "$DISTRIBUTION"
 
       - name: Exercise bundled daemon over XPC and MCP
         env:
-          CLUMSIES_TEST_PACKAGED_DAEMON: ${{ github.workspace }}/build/macos-preview-derived/Build/Products/Debug/Clumsies.app/Contents/Resources/clumsiesd
+          CLUMSIES_TEST_PACKAGED_DAEMON: ${{ github.workspace }}/build/macos-adhoc-derived/Build/Products/Debug/Clumsies.app/Contents/Resources/clumsiesd
           CARGO_PROFILE_DEV_DEBUG: '0'
         run: cargo test --locked -p clumsiesd --test agent_runtime_xpc_e2e -- --nocapture
 
-      - name: Sign the Preview in-app update
+      - name: Sign the in-app update
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          CLUMSIES_MACOS_DERIVED_DATA: ${{ github.workspace }}/build/macos-preview-derived
-          CLUMSIES_MACOS_OUTPUT_DIR: ${{ github.workspace }}/dist/macos-preview
+          CLUMSIES_MACOS_DERIVED_DATA: ${{ github.workspace }}/build/macos-adhoc-derived
+          CLUMSIES_MACOS_OUTPUT_DIR: ${{ github.workspace }}/dist/macos
         run: |
           if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            if [ "$GITHUB_EVENT_NAME" = push ]; then
+              echo "::error::SPARKLE_PRIVATE_KEY is required for a tagged release."
+              exit 1
+            fi
             echo "::warning::SPARKLE_PRIVATE_KEY is not configured. Publishing the DMG without changing the in-app update feed."
             exit 0
           fi
           NATIVE_VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
-          sh apps/macos/Scripts/generate-appcast.sh "macos-preview-$GITHUB_RUN_NUMBER" \
-            "dist/macos-preview/Clumsies-$NATIVE_VERSION-preview.$GITHUB_RUN_NUMBER-macos-arm64.dmg"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            sh apps/macos/Scripts/generate-appcast.sh "$GITHUB_REF_NAME" \
+              "dist/macos/Clumsies-$NATIVE_VERSION-macos-arm64.dmg"
+          else
+            sh apps/macos/Scripts/generate-appcast.sh "macos-preview-$GITHUB_RUN_NUMBER" \
+              "dist/macos/Clumsies-$NATIVE_VERSION-preview.$GITHUB_RUN_NUMBER-macos-arm64.dmg"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: clumsies-macos-preview
+          name: clumsies-macos-adhoc
           path: |
-            dist/macos-preview/*.dmg
-            dist/macos-preview/*.sha256
-            dist/macos-preview/preview-appcast.xml
+            dist/macos/*.dmg
+            dist/macos/*.sha256
+            dist/macos/*appcast.xml
           if-no-files-found: error
 
   publish-preview:
-    needs: [macos-preview]
+    if: github.event_name == 'workflow_dispatch'
+    needs: [macos-adhoc]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -101,8 +122,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: clumsies-macos-preview
-          path: dist/macos-preview
+          name: clumsies-macos-adhoc
+          path: dist/macos
 
       - name: Publish downloadable preview
         env:
@@ -138,16 +159,16 @@ jobs:
             gh release create "$TAG" --target "$GITHUB_SHA" --draft --prerelease \
               --title "Clumsies macOS Preview $GITHUB_RUN_NUMBER" \
               --notes-file "$RUNNER_TEMP/preview-notes.md"
-          gh release upload "$TAG" dist/macos-preview/* --clobber
+          gh release upload "$TAG" dist/macos/* --clobber
           gh release edit "$TAG" --draft=false --prerelease --latest=false
 
           sh apps/macos/Scripts/ensure-update-feeds.sh
-          if [ -f dist/macos-preview/preview-appcast.xml ]; then
-            gh release upload macos-updates dist/macos-preview/preview-appcast.xml --clobber
+          if [ -f dist/macos/preview-appcast.xml ]; then
+            gh release upload macos-updates dist/macos/preview-appcast.xml --clobber
           fi
 
   macos-release:
-    if: github.event_name == 'push' || inputs.distribution == 'notarized'
+    if: github.event_name == 'workflow_dispatch' && inputs.distribution == 'notarized'
     environment: macos-signing
     runs-on: macos-26
     steps:
@@ -169,12 +190,6 @@ jobs:
             echo "Release source is missing the signed release gate." >&2
             exit 1
           }
-
-      - name: Verify tag matches native macOS version
-        if: github.event_name == 'push'
-        run: |
-          NATIVE_VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
-          test "$GITHUB_REF_NAME" = "v$NATIVE_VERSION"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -240,30 +255,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CLUMSIES_BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            CLUMSIES_VERSION="${GITHUB_REF_NAME#v}"
-          else
-            CLUMSIES_VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
-          fi
+          CLUMSIES_VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
           export CLUMSIES_VERSION
           apps/macos/Scripts/archive-release.sh
-
-      - name: Generate Sparkle appcast
-        if: github.event_name == 'push'
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: apps/macos/Scripts/generate-appcast.sh "$GITHUB_REF_NAME" "dist/macos/Clumsies-${GITHUB_REF_NAME#v}-macos-universal.zip"
-
-      - name: Stage tagged macOS artifacts
-        if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
-        with:
-          name: clumsies-macos
-          path: |
-            dist/macos/Clumsies-*-macos-universal.dmg
-            dist/macos/Clumsies-*-macos-universal.zip
-            dist/macos/appcast.xml
-          if-no-files-found: error
 
       - name: Stage signed macOS candidate
         if: github.event_name == 'workflow_dispatch'
@@ -277,7 +271,7 @@ jobs:
 
   publish-release:
     if: github.event_name == 'push'
-    needs: [macos-release]
+    needs: [macos-adhoc]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -286,7 +280,7 @@ jobs:
       - name: Download native macOS artifacts
         uses: actions/download-artifact@v4
         with:
-          name: clumsies-macos
+          name: clumsies-macos-adhoc
           path: dist/macos
 
       - name: Publish complete release
@@ -294,13 +288,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          NOTES="docs/releases/$GITHUB_REF_NAME.md"
+          test -s "$NOTES"
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
               --draft \
-              --generate-notes \
+              --notes-file "$NOTES" \
               --title "$GITHUB_REF_NAME"
           gh release upload "$GITHUB_REF_NAME" dist/macos/* --clobber
-          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=false --latest --notes-file "$NOTES"
 
           sh apps/macos/Scripts/ensure-update-feeds.sh
           gh release upload macos-updates dist/macos/appcast.xml --clobber
+          # Preview installations receive this release, then use its stable feed.
+          cp dist/macos/appcast.xml dist/macos/preview-appcast.xml
+          gh release upload macos-updates dist/macos/preview-appcast.xml --clobber

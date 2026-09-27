@@ -226,24 +226,28 @@ Privacy & Security exception, which managed Macs can restrict.
 
 ### Distribution signing
 
-Tagged releases build a universal Developer ID-signed app, notarize and staple
-it, verify the App and bundled Agent runtime share the expected signing team
-and hardened-runtime identity, then create a signed and notarized DMG for
-downloads. GitHub Actions publishes `Clumsies-<version>-macos-universal.dmg`,
-the Sparkle-signed ZIP update archive, and `appcast.xml`. Sparkle only scans
-the ZIP, so the DMG cannot create a duplicate update for the same version.
-The workflow can also be dispatched
-with `distribution=notarized` from the current default-branch tip to produce a signed candidate. Manual
-candidates include both DMG and ZIP, without publishing a GitHub Release or appcast.
-Tagged releases also update the fixed `macos-updates/appcast.xml` feed and are
-explicitly marked Latest for older clients still using the original feed URL.
+Tagged GitHub releases use the same ad-hoc Debug build contract as previews,
+with a versioned Apple Silicon DMG, SHA-256 checksum, and a mandatory
+Sparkle-signed `appcast.xml`. They are normal releases marked Latest, without
+requiring Apple notarization. The packaged App uses the stable update feed;
+the workflow also publishes that signed entry to `preview-appcast.xml` so
+existing Preview installations can upgrade in place. Neither channel creates
+a Dev Instance or changes the App/daemon identity. Release notes live in
+`docs/releases/<tag>.md` and must describe signing, supported platforms,
+upgrade compatibility, and the previous-to-current changelog.
+
+The separate `distribution=notarized` workflow still builds a universal
+Developer ID-signed Release app from the current default-branch tip. It
+notarizes and staples the App and DMG, verifies the App and daemon team and
+hardened-runtime identity, and uploads DMG/ZIP workflow artifacts without
+publishing a GitHub Release or appcast. Its Apple credentials remain required.
 
 The DMG contains `Clumsies.app` and an `Applications` shortcut. Users drag the
 App into Applications, eject the disk image, and open the installed App.
 The ZIP is also usable for manual installation: unzip it and move the App
 to Applications before opening it. Neither format requires build tools.
 Developer ID signing and notarization let Gatekeeper validate the download
-without the preview's manual exception. Switching to ZIP does not remove
+without the ad-hoc download's manual exception. Switching to ZIP does not remove
 those checks. This distribution path does not use App Store Review.
 
 `just test-macos-package` also creates and mounts a temporary DMG, verifies
@@ -254,11 +258,11 @@ packaging preview can be created from an existing App with
 that command does not sign or notarize a distribution package.
 
 Keep the Apple certificate, certificate passphrase, notarization account,
-app-specific password, team ID, temporary keychain password, and Sparkle
-private key in the protected `macos-signing` GitHub environment, using the
+app-specific password, team ID, and temporary keychain password in the protected `macos-signing` GitHub environment, using the
 secret names referenced by `release.yml`. Restrict that environment to the
 default branch and release tags and require a reviewer before its secrets
-are exposed. The Sparkle private key is required only for a tagged release;
+are exposed. Tagged ad-hoc releases read the Sparkle private key from repository
+secrets. It is mandatory for tagged publication and optional for previews;
 only its public key is committed in `project.yml`.
 
 A Debug ad-hoc runtime is accepted at the installation boundary and supports
