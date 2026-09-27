@@ -3,6 +3,26 @@ import XCTest
 
 @MainActor
 final class WorkspaceRefreshTests: XCTestCase {
+    func testCancellationBeforeExecutionDoesNotStartLoader() async {
+        let scheduler = WorkspaceRefreshScheduler()
+        var calls = 0
+        scheduler.register(.memory) { calls += 1; return .updated }
+        let task = scheduler.request(.memory)
+        scheduler.cancel()
+        await task?.value
+        XCTAssertEqual(calls, 0)
+        XCTAssertNil(scheduler.statuses[.memory]?.lastSuccess)
+        XCTAssertEqual(scheduler.statuses[.memory]?.isRefreshing, false)
+    }
+
+    func testBackgroundTransitionDuringStartupIsRememberedWithoutStartingReads() {
+        let workspace = WorkspaceCoordinator()
+        workspace.refreshVisiblePage(isForeground: false)
+        XCTAssertFalse(workspace.refreshes.isForeground)
+        XCTAssertFalse(workspace.refreshes.statuses.values.contains { $0.isRefreshing })
+        XCTAssertEqual(workspace.refreshes.interval(for: .memory), 60)
+    }
+
     func testSlowMemoryDoesNotBlockInboxOrSyncAndBurstsCoalesce() async throws {
         let scheduler = WorkspaceRefreshScheduler()
         let started = expectation(description: "Memory blocked")

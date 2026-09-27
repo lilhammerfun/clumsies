@@ -97,6 +97,7 @@ final class WorkspaceRefreshScheduler: ObservableObject {
         let action = job.action
         statuses[domain, default: Status()].isRefreshing = true
         job.task = Task { [weak self] in
+            guard !Task.isCancelled else { return }
             let started = ContinuousClock.now
             let requestID = "req_" + UUID().uuidString.lowercased()
             ClientDiagnostics.record("workspace_refresh_started", ["domain": domain.rawValue, "request_id": requestID])

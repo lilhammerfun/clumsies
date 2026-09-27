@@ -480,7 +480,10 @@ final class WorkspaceCoordinator {
         case .dashboard: domain = .dashboard
         default: domain = .sync
         }
-        guard context.phase == .ready else { return }
+        guard context.phase == .ready else {
+            refreshes.isForeground = isForeground
+            return
+        }
         refreshes.show(domain, isForeground: isForeground)
         refreshes.tick()
     }
