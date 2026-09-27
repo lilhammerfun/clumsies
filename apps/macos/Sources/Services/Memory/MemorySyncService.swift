@@ -17,13 +17,14 @@ final class MemorySyncService: ObservableObject {
         self.sessions = sessions
     }
 
-    func refreshOrgResourcesIfNeeded(isActive: () -> Bool) async {
+    @discardableResult
+    func refreshOrgResourcesIfNeeded(isActive: () -> Bool) async -> Bool {
         let workspaceGeneration = context.workspaceReloadGeneration
         guard isActive(),
               context.activeProjectId == nil,
               !context.isSwitchingMemoryContext,
               catalog.orgResourceRefreshGeneration == nil else {
-            return
+            return true
         }
         let observedOrgRefCommitId = catalog.orgRefCommitId
         let generation = UUID()
@@ -36,18 +37,18 @@ final class MemorySyncService: ObservableObject {
         do {
             let head: (value: CommitStateResponse, response: DaemonServerResponse) =
                 try await context.server.getWithMetadata("/api/v1/org/commit-state")
-            guard context.workspaceReloadGeneration == workspaceGeneration,
+            guard !Task.isCancelled, context.workspaceReloadGeneration == workspaceGeneration,
                   context.phase == .ready,
                   isActive(),
                   context.activeProjectId == nil,
                   !context.isSwitchingMemoryContext,
                   catalog.orgResourceRefreshGeneration == generation,
                   !head.response.isStaleCache else {
-                return
+                return false
             }
             guard head.value.ref.commitId != observedOrgRefCommitId else {
                 feedback.resolveBackgroundError(.organizationResources)
-                return
+                return true
             }
             guard let snapshot = try await catalog.loadStableOrgAuthoritySnapshot(),
                   let snapshotCommitId = snapshot.commitId,
@@ -59,7 +60,7 @@ final class MemorySyncService: ObservableObject {
                   !self.context.isSwitchingMemoryContext,
                   catalog.orgResourceRefreshGeneration == generation,
                   catalog.orgRefCommitId == observedOrgRefCommitId else {
-                return
+                return false
             }
 
             // Any inactive Project plan containing an Org row was derived
@@ -106,35 +107,38 @@ final class MemorySyncService: ObservableObject {
             }
             catalog.documentsChanged.send()
             feedback.resolveBackgroundError(.organizationResources)
+            return true
         } catch where error.isUserCancellation {
-            return
+            return false
         } catch {
-            guard context.workspaceReloadGeneration == workspaceGeneration,
+            guard !Task.isCancelled, context.workspaceReloadGeneration == workspaceGeneration,
                   context.phase == .ready,
                   isActive(),
                   context.activeProjectId == nil,
                   !context.isSwitchingMemoryContext,
                   catalog.orgResourceRefreshGeneration == generation else {
-                return
+                return false
             }
             feedback.presentBackgroundError(
                 error,
                 source: .organizationResources
             )
+            return false
         }
     }
 
-    func refreshStaleResourcesIfNeeded(sync: DaemonSyncStatus) async {
+    @discardableResult
+    func refreshStaleResourcesIfNeeded(sync: DaemonSyncStatus) async -> Bool {
         let workspaceGeneration = context.workspaceReloadGeneration
         guard let projectId = context.activeProjectId,
               let project = context.projects.first(where: { $0.id == projectId }),
               let serverCursor = sync.commitSync.serverCursor else {
-            return
+            return true
         }
         let errorSource = WorkspaceBackgroundErrorSource.staleResources(projectId: projectId)
         guard serverCursor != project.refCommitId else {
             feedback.resolveBackgroundError(errorSource)
-            return
+            return true
         }
         let observedRef = project.refCommitId
         let refreshGeneration = UUID()
@@ -142,11 +146,11 @@ final class MemorySyncService: ObservableObject {
         do {
             let commit: (value: CommitStateResponse, response: DaemonServerResponse) =
                 try await context.server.getWithMetadata("/api/v1/projects/\(projectId)/commit-state")
-            guard context.activeProjectId == projectId,
+            guard !Task.isCancelled, context.activeProjectId == projectId,
                   context.projects.first(where: { $0.id == projectId }) == project,
                   catalog.staleResourceRefreshGenerations[projectId] == refreshGeneration,
                   !commit.response.isStaleCache else {
-                return
+                return false
             }
             let authoritativeCommitId = commit.value.ref.commitId
             let authoritativeRefEtag = commit.response.headers.first {
@@ -164,13 +168,13 @@ final class MemorySyncService: ObservableObject {
                     )
                 }
                 feedback.resolveBackgroundError(errorSource)
-                return
+                return true
             }
             let checkout = try await context.daemon.projectCheckout(projectId)
-            guard context.activeProjectId == projectId,
+            guard !Task.isCancelled, context.activeProjectId == projectId,
                   context.projects.first(where: { $0.id == projectId }) == project,
                   catalog.staleResourceRefreshGenerations[projectId] == refreshGeneration else {
-                return
+                return false
             }
             let needsOrgAuthority = !project.selectedOrgResourceIds.isEmpty
                 || !checkout.selectedOrgResourceIds.isEmpty
@@ -181,7 +185,7 @@ final class MemorySyncService: ObservableObject {
             )?
             if needsOrgAuthority {
                 guard let snapshot = try await catalog.loadStableOrgAuthoritySnapshot(),
-                      let commitId = snapshot.commitId else { return }
+                      let commitId = snapshot.commitId else { return false }
                 orgAuthority = (commitId, snapshot.refEtag, snapshot.resources)
             } else {
                 orgAuthority = nil
@@ -190,7 +194,7 @@ final class MemorySyncService: ObservableObject {
                 try await context.server.getWithMetadata(
                     "/api/v1/projects/\(projectId)/commit-state"
                 )
-            guard context.activeProjectId == projectId,
+            guard !Task.isCancelled, context.activeProjectId == projectId,
                   context.projects.first(where: { $0.id == projectId }) == project,
                   catalog.staleResourceRefreshGenerations[projectId] == refreshGeneration,
                   !verifiedCommit.response.isStaleCache,
@@ -214,7 +218,7 @@ final class MemorySyncService: ObservableObject {
                     // the next poll conclude that the plan is already applied.
                     provisionalResourceIds: catalog.provisionalStaleAdditionIds
                   ) else {
-                return
+                return false
             }
             let installedPlan = catalog.staleResourceSnapshots.filter { _, snapshot in
                 snapshot.projectId == projectId
@@ -222,13 +226,13 @@ final class MemorySyncService: ObservableObject {
             if !plan.isEmpty, MemorySyncPlan.staleResourcePlansMatch(plan, installedPlan) {
                 applyUneditedUpdates(projectId: projectId)
                 feedback.resolveBackgroundError(errorSource)
-                return
+                return true
             }
             let hydratedPlan = await hydrateStaleResourcePlan(plan)
-            guard context.activeProjectId == projectId,
+            guard !Task.isCancelled, context.activeProjectId == projectId,
                   context.projects.first(where: { $0.id == projectId }) == project,
                   catalog.staleResourceRefreshGenerations[projectId] == refreshGeneration else {
-                return
+                return false
             }
             catalog.installStaleResourcePlan(hydratedPlan, for: projectId)
             applyUneditedUpdates(projectId: projectId)
@@ -242,20 +246,22 @@ final class MemorySyncService: ObservableObject {
                 )
             }
             feedback.resolveBackgroundError(errorSource)
+            return true
         } catch where error.isUserCancellation {
-            return
+            return false
         } catch {
-            guard context.workspaceReloadGeneration == workspaceGeneration,
+            guard !Task.isCancelled, context.workspaceReloadGeneration == workspaceGeneration,
                   context.phase == .ready,
                   context.activeProjectId == projectId,
                   context.projects.first(where: { $0.id == projectId }) == project,
                   catalog.staleResourceRefreshGenerations[projectId] == refreshGeneration else {
-                return
+                return false
             }
             feedback.presentBackgroundError(
                 error,
                 source: errorSource
             )
+            return false
         }
     }
 

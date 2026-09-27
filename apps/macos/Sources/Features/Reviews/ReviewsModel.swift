@@ -9,15 +9,19 @@ final class ReviewsModel: ObservableObject {
     private let navigation: WorkspaceNavigation
     private let reconciliation: DraftReconciliationService
     private let sessions: DocumentSessions
+    let didMutate = PassthroughSubject<Void, Never>()
+    private let fetchReviews: () async throws -> (records: [ReviewRecord], hasStaleServerResponse: Bool)
+    private var reviewRequestGeneration = UUID()
     var onMerged: (() async -> Void)?
 
-    init(context: WorkspaceContext, edits: DraftStore, feedback: WorkspaceFeedback, navigation: WorkspaceNavigation, reconciliation: DraftReconciliationService, sessions: DocumentSessions) {
+    init(context: WorkspaceContext, edits: DraftStore, feedback: WorkspaceFeedback, navigation: WorkspaceNavigation, reconciliation: DraftReconciliationService, sessions: DocumentSessions, fetchReviews: (() async throws -> (records: [ReviewRecord], hasStaleServerResponse: Bool))? = nil) {
         self.context = context
         self.edits = edits
         self.feedback = feedback
         self.navigation = navigation
         self.reconciliation = reconciliation
         self.sessions = sessions
+        self.fetchReviews = fetchReviews ?? { try await context.loader.loadReviews() }
     }
 
     @Published var reviews: [ReviewRecord] = []
@@ -303,6 +307,7 @@ final class ReviewsModel: ObservableObject {
         try context.ensureAuthority(authority)
         let record = WorkspaceLoader.mapReview(detail)
         reviews.insert(record, at: 0)
+        didMutate.send()
         selectedReviewId = record.id
         navigation.selectedSection = .reviews
     }
@@ -322,6 +327,7 @@ final class ReviewsModel: ObservableObject {
             path: "/api/v1/reviews/\(review.id)/org-contribution", body: [String: String]())
         try context.ensureAuthority(authority)
         replaceReview(with: WorkspaceLoader.mapReview(detail))
+        didMutate.send()
     }
 
     func resubmit(
@@ -367,13 +373,18 @@ final class ReviewsModel: ObservableObject {
         )
         try context.ensureAuthority(authority)
         replaceReview(with: WorkspaceLoader.mapReview(updated))
+        didMutate.send()
     }
 
-    func reviewDetail(_ reviewId: String) async throws -> ReviewDetail {
+    func reviewDetail(_ reviewId: String, requiresFresh: Bool = false) async throws -> ReviewDetail {
         let authority = context.authorityGeneration
-        let detail: ReviewDetail = try await context.server.get("/api/v1/reviews/\(reviewId)")
+        let result: (value: ReviewDetail, response: DaemonServerResponse) =
+            try await context.server.getWithMetadata("/api/v1/reviews/\(reviewId)")
         try context.ensureAuthority(authority)
-        return detail
+        if requiresFresh && result.response.isStaleCache {
+            throw ActionFailure(String(localized: "Fresh Review data was unavailable. Existing Reviews were kept."))
+        }
+        return result.value
     }
 
     func addComment(
@@ -395,6 +406,7 @@ final class ReviewsModel: ObservableObject {
         )
         try context.ensureAuthority(authority)
         try await refreshReview(review.id)
+        didMutate.send()
     }
 
     func decide(_ review: ReviewRecord, decision: String, note: String) async throws {
@@ -410,6 +422,7 @@ final class ReviewsModel: ObservableObject {
         )
         try context.ensureAuthority(authority)
         replaceReview(with: WorkspaceLoader.mapReview(detail))
+        didMutate.send()
     }
 
     func merge(_ review: ReviewRecord) async throws {
@@ -470,53 +483,56 @@ final class ReviewsModel: ObservableObject {
         baseSnapshotWasStale: Bool
     ) {
         cancelLoading()
-        let loader = context.loader
-        let baselineReviews = reviews
+        let request = UUID()
+        reviewRequestGeneration = request
         reviewLoadState = .loading
         reviewLoadTask = Task { @MainActor [weak self] in
-            defer {
-                if let self, self.context.workspaceReloadGeneration == generation {
-                    self.reviewLoadTask = nil
-                }
+            guard let self else { return }
+            defer { if self.reviewRequestGeneration == request { self.reviewLoadTask = nil } }
+            _ = await self.loadReviewList(generation: generation,
+                requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale, request: request)
+        }
+    }
+
+    func refreshList() async -> WorkspaceRefreshScheduler.Result {
+        guard context.phase == .ready, reviewLoadTask == nil else { return .deferred }
+        return await loadReviewList(generation: context.workspaceReloadGeneration,
+            requiresFreshData: true, baseSnapshotWasStale: false)
+    }
+
+    private func loadReviewList(generation: UUID, requiresFreshData: Bool,
+                                baseSnapshotWasStale: Bool, request: UUID = UUID()) async -> WorkspaceRefreshScheduler.Result {
+        guard !Task.isCancelled, context.workspaceReloadGeneration == generation else { return .deferred }
+        reviewRequestGeneration = request
+        let baseline = reviews
+        do {
+            let loaded = try await fetchReviews()
+            try Task.checkCancellation()
+            guard context.workspaceReloadGeneration == generation, context.phase == .ready,
+                  reviewRequestGeneration == request else { return .deferred }
+            guard WorkspaceLoadPolicy.canPublishDeferredLoad(requiresFreshData: requiresFreshData,
+                baseSnapshotWasStale: baseSnapshotWasStale,
+                responseWasStale: loaded.hasStaleServerResponse) else {
+                reviewLoadState = .failed(String(localized: "Fresh Review data was unavailable. Existing Reviews were kept."))
+                return .retained
             }
-            do {
-                let loaded = try await loader.loadReviews()
-                try Task.checkCancellation()
-                guard let self,
-                      context.workspaceReloadGeneration == generation,
-                      context.phase == .ready else {
-                    return
-                }
-                guard WorkspaceLoadPolicy.canPublishDeferredLoad(
-                    requiresFreshData: requiresFreshData,
-                    baseSnapshotWasStale: baseSnapshotWasStale,
-                    responseWasStale: loaded.hasStaleServerResponse
-                ) else {
-                    reviewLoadState = .failed(
-                        String(localized: "Fresh Review data was unavailable. Existing Reviews were kept.")
-                    )
-                    return
-                }
-                reviews = WorkspaceLoadPolicy.mergeDeferredRecords(
-                    baseline: baselineReviews,
-                    current: reviews,
-                    loaded: loaded.records
-                )
-                reviewLoadState = .loaded
-                if let selectedReviewId = selectedReviewId,
-                   !self.reviews.contains(where: { $0.id == selectedReviewId }) {
-                    self.selectedReviewId = nil
-                }
-            } catch where error.isUserCancellation {
-                return
-            } catch {
-                guard let self, context.workspaceReloadGeneration == generation else { return }
-                reviewLoadState = .failed(error.userFacingMessage)
+            reviews = WorkspaceLoadPolicy.mergeDeferredRecords(baseline: baseline, current: reviews, loaded: loaded.records)
+            reviewLoadState = .loaded
+            if let selectedReviewId, !reviews.contains(where: { $0.id == selectedReviewId }) {
+                self.selectedReviewId = nil
             }
+            return loaded.hasStaleServerResponse ? .retained : .updated
+        } catch where error.isUserCancellation { return .deferred }
+        catch {
+            guard context.workspaceReloadGeneration == generation, reviewRequestGeneration == request,
+                  !Task.isCancelled else { return .deferred }
+            reviewLoadState = .failed(error.userFacingMessage)
+            return .retained
         }
     }
 
     func cancelLoading() {
+        reviewRequestGeneration = UUID()
         reviewLoadTask?.cancel()
         reviewLoadTask = nil
     }

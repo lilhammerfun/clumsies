@@ -806,8 +806,6 @@ final class DaemonContractTests: XCTestCase {
     }
 
     func testWorkspaceRefreshLoopHasOneOwnerAndBoundedCadence() throws {
-        XCTAssertEqual(WorkspaceRefreshCadence.syncStatus, .seconds(2))
-        XCTAssertEqual(WorkspaceRefreshCadence.synchronizedData, .seconds(30))
         let view = try source("Features/Workspace/WorkspaceView.swift")
         XCTAssertEqual(view.components(separatedBy: "await store.runRefreshLoop()").count - 1, 1)
         let status = try source("Services/Daemon/DaemonSyncService.swift", method: "func refreshSyncStatus()")

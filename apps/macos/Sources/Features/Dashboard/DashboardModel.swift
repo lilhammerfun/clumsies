@@ -7,6 +7,7 @@ final class DashboardModel: ObservableObject {
     @Published private(set) var snapshot: DashboardSnapshot?
     @Published private(set) var isDemo = false
     @Published private(set) var isLoading = false
+    @Published private(set) var isShowingSavedContent = false
     @Published private(set) var errorMessage: String?
     private var generation = UUID()
     private var contextKey: String?
@@ -19,6 +20,7 @@ final class DashboardModel: ObservableObject {
         if contextKey != key {
             snapshot = nil
             isDemo = false
+            isShowingSavedContent = false
         }
         contextKey = key
         let request = UUID()
@@ -32,9 +34,11 @@ final class DashboardModel: ObservableObject {
             guard generation == request else { return }
             snapshot = value
             isDemo = demo
+            isShowingSavedContent = value.notice != nil
         } catch where error.isUserCancellation {
         } catch {
             guard generation == request, !Task.isCancelled else { return }
+            isShowingSavedContent = snapshot != nil
             errorMessage = snapshot == nil ? error.actionMessage : error.backgroundMessage
         }
     }

@@ -606,22 +606,83 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertEqual(MemoryFileTreeMenu.trashable([item], inOrgView: false), [item])
     }
 
-    func testAdaptationAndOrganizationProposalKeepIndependentIdentities() {
+    func testAdaptationShadowsOrganizationProposalOnlyInTheProjectTree() {
         let source = resourceItem("org-source", scope: .org, inherited: true, path: "guide.md").resource!
         var adaptation = localDraft("adaptation", scope: .project, path: "guide.md")
         adaptation.orgSource = .init(resourceId: source.id, commitId: "project-v1")
         let proposal = localDraft("org-proposal", scope: .org, targetId: source.id, path: "guide.md")
         for drafts in [[adaptation, proposal], [proposal, adaptation]] {
             let items = MemoryTreeProjection.items(resources: [source], drafts: drafts, activeProjectId: "p1", selectedOrgResourceIds: [source.id])
-            XCTAssertEqual(items.count, 2)
-            XCTAssertEqual(Set(items.compactMap { $0.draft?.id }), [adaptation.id, proposal.id])
-            XCTAssertEqual(Set(items.map(\.id)).count, 2)
+            XCTAssertEqual(items.count, 1)
+            XCTAssertEqual(items.compactMap { $0.draft?.id }, [adaptation.id])
             XCTAssertEqual(items.first { $0.id == source.id }?.draft?.id, adaptation.id)
+            XCTAssertEqual(Set(MemoryTreeProjection.preferredMemoryTreeDrafts(drafts).map(\.id)), [adaptation.id, proposal.id])
             XCTAssertEqual(MemoryTreeProjection.memoryTabDraft(itemId: proposal.id, projectId: "p1", drafts: drafts)?.scope, .org)
         }
         var published = resourceItem("project-adaptation", scope: .project, inherited: false, projectId: "p1", path: "guide.md").resource!
         published.orgSource = adaptation.orgSource
         XCTAssertEqual(MemoryTreeProjection.memoryTreeResources([source, published], activeProjectId: "p1", selectedOrgResourceIds: [source.id]).map(\.id), [published.id])
+        XCTAssertEqual(MemoryTreeProjection.items(resources: [source, published], drafts: [proposal],
+            activeProjectId: "p1", selectedOrgResourceIds: [source.id]).map(\.id), [published.id])
+        XCTAssertEqual(MemoryTreeProjection.items(resources: [source, published], drafts: [adaptation, proposal],
+            activeProjectId: nil, selectedOrgResourceIds: []).map(\.resource), [source])
+        XCTAssertEqual(MemoryTreeProjection.items(resources: [source, published], drafts: [adaptation, proposal],
+            activeProjectId: "p2", selectedOrgResourceIds: [source.id]).map(\.resource), [source])
+        for status in [DaemonLocalDraftStatus.discarded, .merged] {
+            var inactive = localDraft("inactive", scope: .project, status: status)
+            inactive.orgSource = adaptation.orgSource
+            XCTAssertEqual(MemoryTreeProjection.items(resources: [source], drafts: [inactive, proposal],
+                activeProjectId: "p1", selectedOrgResourceIds: [source.id]).compactMap { $0.draft?.id }, [proposal.id])
+        }
+    }
+
+    @MainActor
+    func testSyncedMCPMigrationReplacesOldSkillPathsAfterInventoryRefresh() throws {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "p1"
+        workspace.navigation.selectedSection = .memory
+        let paths = ["coding/SKILL.md", "koal-coding/SKILL.md", "koal-coding/references/issue.md", "rust-best-practice/SKILL.md"]
+        var details: [DaemonDraftDetail] = []
+        for (index, path) in paths.enumerated() {
+            let source = resourceItem("source-\(index)", scope: .org, inherited: true, path: "skills/\(path)").resource!
+            workspace.catalog.resources.append(source)
+            workspace.edits.drafts.append(localDraft("proposal-\(index)", scope: .org, targetId: source.id,
+                syncStatus: .synced, path: source.document.path))
+            let detail = try JSONCoding.decoder().decode(DaemonDraftDetail.self, from: Data("""
+                {"draft": {
+                  "draft_id": "migration-\(index)", "project_id": "p1", "server_version": 1,
+                  "freshness": "current", "has_upstream_resource_changes": false, "reconciliation": "clean",
+                  "scope": "project", "resource_kind": "memory", "target_id": null,
+                  "path": "procedures/\(path)", "status": "open",
+                  "created_at": "2026-09-27T00:00:00Z", "updated_at": "2026-09-27T00:00:00Z",
+                  "pending_operation_count": 0, "failed_operation_count": 0
+                }, "operations": [{
+                  "local_operation_id": "op-\(index)", "resource_kind": "memory",
+                  "operation": {"create": {"path": "procedures/\(path)", "content": {
+                    "content": "Migrated content", "org_source": {"resource_id": "\(source.id)", "commit_id": "org-base"}
+                  }}}, "source": "mcp_store", "sync_status": "synced",
+                  "created_at": "2026-09-27T00:00:00Z", "updated_at": "2026-09-27T00:00:00Z"
+                }]}
+                """.utf8))
+            details.append(detail)
+        }
+        workspace.context.projects = [.init(id: "p1", name: "Project", refCommitId: "base", refEtag: "base",
+            selectedOrgResourceIds: Set(workspace.catalog.resources.map(\.id)), orgSelectionRevision: 1, isLoaded: true)]
+        XCTAssertEqual(Set(workspace.memory.visibleMemoryItems.map { $0.document.path }), Set(paths.map { "skills/\($0)" }))
+
+        let plan = DraftStore.draftInventoryPlan(summaries: details.map(\.draft), currentDrafts: workspace.edits.drafts, includeFailed: false)
+        XCTAssertEqual(plan.refreshIds, Set(details.map { $0.draft.draftId }), "Already-synced external creates must still be discovered.")
+        workspace.edits.drafts += details.map { WorkspaceLoader.mapDraft($0, resources: workspace.catalog.resources) }
+        workspace.edits.documentsChanged.send()
+
+        let items = workspace.memory.visibleMemoryItems
+        XCTAssertEqual(items.count, 4)
+        XCTAssertEqual(Set(items.map { $0.document.path }), Set(paths.map { "procedures/\($0)" }))
+        XCTAssertNil(FileTreeNode.node(withId: "directory:skills", in: FileTreeNode.build(items)))
+        XCTAssertTrue(items.allSatisfy { $0.draft?.targetId == nil && $0.draft?.orgSource != nil && $0.draft?.syncStatus == .synced })
+        XCTAssertEqual(workspace.edits.drafts.count, 8, "Organization proposals remain available for review.")
+        workspace.context.activeProjectId = nil
+        XCTAssertEqual(Set(workspace.memory.visibleMemoryItems.map { $0.document.path }), Set(paths.map { "skills/\($0)" }))
     }
 
     // MARK: - Mixed selection stays predictable

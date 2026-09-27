@@ -47,11 +47,24 @@ final class DashboardTests: XCTestCase {
         await model.load(key: "p") { (self.snapshot(), true) }
         await model.load(key: "p") { throw URLError(.timedOut) }
         XCTAssertEqual(model.snapshot?.projectID, "p")
+        XCTAssertTrue(model.isShowingSavedContent)
         XCTAssertNil(model.errorMessage, "Retained content must not repeat a connection error.")
         await model.load(key: "other") { throw URLError(.timedOut) }
         XCTAssertNil(model.snapshot)
+        XCTAssertFalse(model.isShowingSavedContent)
         XCTAssertEqual(model.errorMessage, ClientFailure.connection.message)
         XCTAssertFalse(model.isDemo)
+    }
+
+    func testSuccessfulRefreshClearsRetainedContentNotice() async {
+        let model = DashboardModel()
+        await model.load(key: "p") { (self.snapshot(), false) }
+        await model.load(key: "p") { throw ServerClientError.response(status: 403, message: "private") }
+        XCTAssertTrue(model.isShowingSavedContent)
+        XCTAssertEqual(model.errorMessage, ClientFailure.forbidden.message)
+        await model.load(key: "p") { (self.snapshot(), false) }
+        XCTAssertFalse(model.isShowingSavedContent)
+        XCTAssertNil(model.errorMessage)
     }
 
 }
