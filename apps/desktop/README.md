@@ -55,6 +55,12 @@ A Dev Instance may keep a `fixtures/dashboard.json` beside its daemon root, as
 the live statistics and badges the page "Demo data". A month of history takes a
 month to accumulate, so this is how the screen is looked at while it is built.
 
+**Settings and the account menu** are the macOS client's own two: the identity
+at the foot of the rail opens Settings — a dialog here, because this client has
+one window — and ends the session from the same menu. Signing out stores what
+the panes still hold, tells the Server to revoke the session, leaves the daemon
+with a Server address and nothing else, and puts the form back.
+
 What is still missing is screen coverage, not data: Inbox, Bundles and Activity
 are not translated, and Reviews is missing comments, resubmission and the
 permission checks macOS makes from its own capabilities.

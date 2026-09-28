@@ -28,6 +28,8 @@
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::button::*;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, Sizable as _, TitleBar};
 use gpui_kit::*;
@@ -157,12 +159,24 @@ pub struct EngineFacts {
     pub version: String,
 }
 
+/// The account the rail's foot stands for: the identity a menu names it by,
+/// and the Organization it belongs to.
+#[derive(Clone, Copy)]
+pub struct AccountFacts<'a> {
+    /// macOS's `identityLabel`: the name the reader answers to.
+    pub identity: &'a str,
+    /// macOS's `loginLabel`: what the account signs in with.
+    pub sign_in_as: &'a str,
+    pub organization: &'a str,
+}
+
 /// Shared window navigation, engine state and responsive layout.
 pub struct Chrome<'a> {
     /// The engine this client is talking to.
     pub engine: EngineFacts,
-    /// What the account is called, for the foot of the rail.
-    pub account: Option<&'a str>,
+    /// Whose account this is, for the foot of the rail and the menu behind it.
+    /// Absent while the engine holds no Server session.
+    pub account: Option<AccountFacts<'a>>,
     /// Whether the open screen has somewhere to go back to, and forward to.
     /// The band's arrows are drawn from these two.
     pub can_go_back: bool,
@@ -449,28 +463,62 @@ impl Shell {
                     })
                     .on_click(cx.listener(|app, _event, _window, cx| app.recheck_engine(cx))),
             )
-            .child(
-                div()
-                    .id("account")
-                    .h_flex()
-                    .justify_center()
-                    .items_center()
-                    .size(px(36.))
-                    .rounded(px(ui::RADIUS))
-                    .hover(|this| this.bg(cx.theme().list_hover))
-                    .child(
-                        Icon::new(IconName::CircleUser)
-                            .with_size(px(18.))
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .tooltip({
-                        let label = chrome
-                            .account
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| "Signed in".to_owned());
-                        move |window, cx| Tooltip::new(label.clone()).build(window, cx)
-                    }),
+            .child(self.account_button(chrome, cx))
+            .into_any_element()
+    }
+
+    /// Whose account this is, and the two things a reader does about it: open
+    /// Settings, or sign out. macOS keeps the same menu at the foot of its
+    /// sidebar — the identity, then Settings, then Sign Out under a rule — and
+    /// this is the rail's foot doing that job.
+    fn account_button(&self, chrome: &Chrome<'_>, cx: &mut Context<DesktopApp>) -> AnyElement {
+        // The menu is built once and outlives the frame, so what it names is
+        // owned rather than borrowed from the chrome this frame was drawn with.
+        let identity = chrome.account.map(|account| account.identity.to_owned());
+        let sign_in_as = chrome.account.map(|account| account.sign_in_as.to_owned());
+        let organization = chrome
+            .account
+            .map(|account| account.organization.to_owned());
+        let this = cx.entity();
+        let settings = this.clone();
+        let sign_out = this.clone();
+        let label = identity
+            .map(|identity| match &organization {
+                Some(organization) => format!("{identity} · {organization}"),
+                None => identity,
+            })
+            .unwrap_or_else(|| "Not signed in".to_owned());
+        Button::new("account")
+            .ghost()
+            .h(px(36.))
+            .w(px(36.))
+            .icon(
+                Icon::new(IconName::CircleUser)
+                    .with_size(px(18.))
+                    .text_color(cx.theme().muted_foreground),
             )
+            .tooltip(label)
+            .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
+                let mut menu = menu;
+                // The identity is named, not offered: it is what the two
+                // commands below act on.
+                if let Some(sign_in_as) = sign_in_as.clone() {
+                    menu = menu.item(PopupMenuItem::new(sign_in_as).disabled(true));
+                }
+                menu.separator()
+                    .item(PopupMenuItem::new("Settings…").on_click({
+                        let settings = settings.clone();
+                        move |_event, window, cx| {
+                            settings.update(cx, |app, cx| app.open_settings(window, cx));
+                        }
+                    }))
+                    .item(PopupMenuItem::new("Sign Out").on_click({
+                        let sign_out = sign_out.clone();
+                        move |_event, window, cx| {
+                            sign_out.update(cx, |app, cx| app.sign_out(window, cx));
+                        }
+                    }))
+            })
             .into_any_element()
     }
 }

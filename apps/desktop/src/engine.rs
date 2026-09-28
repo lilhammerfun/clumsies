@@ -529,6 +529,97 @@ pub fn install_session(
         .map_err(|error| error.to_string())
 }
 
+/// Ends the session.
+///
+/// The Server is told to revoke it, which is best effort: a session this machine
+/// cannot revoke is still a session this machine stops using, and macOS forgets
+/// it either way. Then the daemon — the only party that ever held the tokens —
+/// is left with a Server address and nothing else.
+pub fn sign_out(server_url: &str) -> Result<(), String> {
+    match server("DELETE", "/api/v1/auth/session", BTreeMap::new(), None) {
+        Ok(response) if response.status == 204 || response.status == 200 => {}
+        Ok(response) => crate::logging::error(&format!(
+            "the Server would not revoke the session: HTTP {}",
+            response.status
+        )),
+        Err(error) => {
+            crate::logging::error(&format!("could not reach the Server to revoke: {error}"))
+        }
+    }
+    client()
+        .replace_project_config(clumsiesd::DaemonProjectConfigUpdateRequest {
+            server_url: server_url.to_owned(),
+            project_id: None,
+            memory_guidelines_path: None,
+            access_token: None,
+            refresh_token: None,
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Who the daemon's session belongs to: the identity, the Organization it is a
+/// member of, and what its role lets it do.
+#[derive(Clone)]
+pub struct Account {
+    pub user: AccountUser,
+    pub organization: String,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct AccountUser {
+    pub user_id: String,
+    pub email: Option<String>,
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+    pub role: String,
+}
+
+impl AccountUser {
+    /// What a menu calls this account — macOS's `identityLabel`.
+    pub fn identity_label(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .or(self.username.as_deref())
+            .or(self.email.as_deref())
+            .unwrap_or(&self.user_id)
+    }
+
+    /// What this account signs in with — macOS's `loginLabel`.
+    pub fn login_label(&self) -> &str {
+        self.username
+            .as_deref()
+            .or(self.email.as_deref())
+            .unwrap_or(&self.user_id)
+    }
+}
+
+#[derive(Deserialize)]
+struct MeResponse {
+    user: AccountUser,
+    org: OrgName,
+}
+
+#[derive(Deserialize)]
+struct OrgName {
+    name: String,
+}
+
+/// Reads the account the daemon's session belongs to. The daemon holds the
+/// session, so this is its Server proxy answering.
+pub fn account() -> Result<Account, String> {
+    let response = server("GET", "/api/v1/me", BTreeMap::new(), None)?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    let me: MeResponse = serde_json::from_str(&response.body)
+        .map_err(|error| format!("unreadable account: {error}"))?;
+    Ok(Account {
+        user: me.user,
+        organization: me.org.name,
+    })
+}
+
 /// Whether a daemon refusal means the daemon holds no Server session.
 ///
 /// There is no flag to ask for: the daemon refuses every Server request while

@@ -25,8 +25,9 @@ use crate::screens::memory::{MemoryScreen, Move};
 use crate::screens::new_memory::NewMemoryDialog;
 use crate::screens::project_settings::{ProjectSettings, ProjectSettingsDialog};
 use crate::screens::reviews::{ReviewNotice, ReviewsScreen};
+use crate::screens::settings::{self, SettingsDialog};
 use crate::screens::sign_in::{SignInScreen, StagedSetup};
-use crate::shell::{Chrome, EngineFacts, Section, Shell, Slots};
+use crate::shell::{AccountFacts, Chrome, EngineFacts, Section, Shell, Slots};
 use crate::ui::{self, Typography};
 
 /// Which region of the window the keyboard is in. F6 walks these in this
@@ -47,6 +48,9 @@ pub struct DesktopApp {
     projects: Vec<Project>,
     /// Why the Project list could not be read, when it could not be.
     projects_error: Option<String>,
+    /// Whose session the daemon holds, when it holds one. The rail's foot and
+    /// the Settings screen both name it.
+    account: Option<engine::Account>,
     selected_project: Option<usize>,
     memory: MemoryScreen,
     reviews: ReviewsScreen,
@@ -73,6 +77,9 @@ impl DesktopApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
+        // The account is read once at startup, and again whenever the session
+        // changes: it names the rail's foot and fills the Settings screen.
+        let account = read_account();
         let (checkout, checkout_error) = match projects.first() {
             Some(project) => read_checkout(&project.project_id),
             None => (None, None),
@@ -112,6 +119,7 @@ impl DesktopApp {
             selected_project: signed_in.then_some(0),
             projects,
             projects_error,
+            account,
             memory,
             reviews,
             dashboard,
@@ -172,6 +180,77 @@ impl DesktopApp {
         crate::components::header::group()
             .child(button)
             .into_any_element()
+    }
+
+    /// Opens Settings: whose account this window is signed in as, what it is
+    /// talking to, and where this machine keeps what a reader would be asked
+    /// for.
+    ///
+    /// A dialog rather than a window, for the same reason Project settings is
+    /// one: this client has a single window, and a reader who loses the work to
+    /// a settings window has to find their way back to it.
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let facts = self.settings_facts();
+        let view = cx.new(|_| SettingsDialog::new(facts));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view = view.clone();
+            dialog
+                .title("Settings")
+                .w(px(600.))
+                .keyboard(true)
+                .content(move |content, _window, _cx| content.child(view.clone()))
+                .footer(div())
+                .footer(div())
+        });
+    }
+
+    /// What the Settings dialog is shown: the account the daemon's session
+    /// belongs to, and what the engine says about itself. Read before the dialog
+    /// opens, because each line of the dialog is a socket call.
+    fn settings_facts(&mut self) -> settings::Facts {
+        let health = match &self.engine {
+            EngineStatus::Connected(health) => Some(health),
+            EngineStatus::Unreachable(_) => None,
+        };
+        settings::Facts {
+            account: engine::account(),
+            server: health.map(|health| health.server_url.clone()),
+            daemon: health.map(|health| health.daemon_version.clone()),
+            log_dir: health.map(|health| health.log_dir.clone()),
+            client: env!("CARGO_PKG_VERSION"),
+        }
+    }
+
+    /// Ends the session.
+    ///
+    /// What the panes still hold is stored first — the model is that nothing
+    /// typed is lost, and a save still waiting is part of that. The Server is
+    /// then told to revoke the session and the daemon forgets it, which leaves
+    /// the window with nothing to show and the form to sign in again.
+    pub fn sign_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.flush_pending_saves(cx);
+        let server_url = self
+            .account
+            .as_ref()
+            .map(|_| ())
+            .and(engine::configured_server_url())
+            .unwrap_or_default();
+        match engine::sign_out(&server_url) {
+            Ok(()) => crate::logging::info("signed out"),
+            Err(error) => crate::logging::error(&format!("could not sign out: {error}")),
+        }
+        self.account = None;
+        self.projects.clear();
+        self.projects_error = None;
+        self.selected_project = None;
+        self.reviews.set_project(None, cx);
+        self.dashboard.set_project(None, cx);
+        self.memory.set_checkout(None, None, cx);
+        // The window's own state keeps the Project and the documents it had
+        // open: they belong to the account, and signing back in restores them
+        // from the daemon's checkout rather than from a stale page.
+        self.signed_in = false;
+        cx.notify();
     }
 
     /// Opens the Project settings dialog. Settings do not replace the work: a
@@ -1295,6 +1374,7 @@ impl DesktopApp {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
+        self.account = read_account();
         // The Project the reader was in last time, when it is still there:
         // macOS reopens the workspace it left rather than the first Project in
         // the list.
@@ -1814,11 +1894,13 @@ impl DesktopApp {
         Chrome {
             engine: self.engine_facts(),
             // The account this window is signed in to, as the rail's foot names
-            // it: the Server the daemon holds a session with.
-            account: match &self.engine {
-                EngineStatus::Connected(health) => Some(health.server_url.as_str()),
-                EngineStatus::Unreachable(_) => None,
-            },
+            // it. A session the account could not be read for is still a
+            // session: the foot says so and the menu still offers to end it.
+            account: self.account.as_ref().map(|account| AccountFacts {
+                identity: account.user.identity_label(),
+                sign_in_as: account.user.login_label(),
+                organization: account.organization.as_str(),
+            }),
             // Only Memory keeps a history so far; the arrows stay drawn but
             // disabled in a section that has nowhere to go.
             can_go_back: self.shell.section() == Section::Memory && self.memory.can_go_back(),
@@ -1864,6 +1946,17 @@ fn read_projects() -> (Vec<Project>, Option<String>) {
     match engine::projects() {
         Ok(projects) => (projects, None),
         Err(error) => (Vec::new(), Some(error)),
+    }
+}
+
+/// Reads whose session the daemon holds, when it holds one.
+fn read_account() -> Option<engine::Account> {
+    match engine::account() {
+        Ok(account) => Some(account),
+        Err(error) => {
+            crate::logging::error(&format!("could not read the account: {error}"));
+            None
+        }
     }
 }
 

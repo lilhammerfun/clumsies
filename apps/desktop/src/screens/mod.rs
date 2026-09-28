@@ -6,4 +6,5 @@ pub mod memory;
 pub mod new_memory;
 pub mod project_settings;
 pub mod reviews;
+pub mod settings;
 pub mod sign_in;
