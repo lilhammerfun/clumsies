@@ -335,3 +335,60 @@ historical values; `clumsies_db_pool_max_connections` reports the configured
 limit. `clumsies_db_pool_connections{state="idle"|"used"}` samples current pool
 usage at scrape time. These pool readings are approximate concurrent snapshots,
 not an atomic transaction across all gauges.
+
+## Automated configuration delivery
+
+`Observability Delivery` deploys changes under `deploy/observability/` after
+main CI passes. Documentation and test-only edits do not deploy. It waits for
+Site/Server delivery when those components change in the same push; a Server
+image publication without a completed production deployment blocks dependent
+observability delivery. The workflow serializes deployments, rejects outdated
+configuration commits and records the successfully applied commit on the host.
+
+The existing stack must first be installed using the bootstrap instructions
+above. Delivery reuses `SITE_DEPLOY_HOST`, `SITE_DEPLOY_USER`,
+`SITE_DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS`, with the existing `production`
+environment protections. The SSH account needs noninteractive sudo to run the
+configuration deployment, as it already manages production configuration.
+Python 3, Docker Compose v2 and systemd must be available on the host. This is
+not a new public endpoint, monitoring administrator credential, or SSH tunnel.
+
+The workflow uploads the exact commit's files, validates them with the images
+already running on the host, snapshots managed configuration, then applies it.
+Only managed configuration directories and the Compose file are synchronized;
+`.env`, data volumes and unrelated files are preserved. Prometheus and
+Alertmanager receive SIGHUP; other changed services restart. Compose changes
+use the running immutable image IDs with no pulls or builds. Adding/removing
+services or upgrading images remains a separate infrastructure operation.
+
+Delivery checks readiness, a healthy fresh scrape for every discovered target,
+Prometheus reload status, Grafana provisioning errors and Prometheus/Loki
+queries. Empty request results are valid. These are bounded smoke checks, not
+proof that every application path or external website is healthy. The existing
+integration tests cover slow traffic and failure injection without production
+data. A pre-existing monitoring outage can block delivery and require repair.
+
+On application/verification failure, the script restores configuration and the
+installed host collector, reloads affected services, verifies recovery, and
+still fails the workflow. If recovery also fails, it reports that explicitly.
+The latest pre-deployment snapshot is retained at
+`/opt/clumsies/observability/.delivery/previous`; the successful commit is in
+`.delivery/current`. No history volumes are removed. Hard host loss or SIGKILL
+cannot execute rollback; use the retained snapshot for manual recovery. The
+snapshot includes the old Compose configuration and running image IDs in
+`images.json`, but deliberately excludes `.env`.
+
+Use **Actions → Observability Delivery → Run workflow → main** to retry the
+current configuration after its prerequisites have deployed. Manual runs also
+validate configuration/tests. To roll back a successful rollout, revert the
+configuration commit through a PR so the repository remains authoritative;
+the resulting main push deploys the reverted files. For urgent recovery,
+restore the snapshot's managed files into the existing directories (preserve
+mounted directory inodes), restore `installed/` host files to their original
+locations, and reload the affected services before reconciling Git.
+
+Run `python3 deploy/observability/test-delivery.py` and
+`python3 -m unittest discover -s dev -p test_ci_impact.py` for isolated delivery,
+rollback, readiness, and change-selection tests. They never connect to the
+production host. `bash deploy/observability/deploy.sh SSH_ALIAS` deploys the
+current **committed** configuration to an explicitly chosen installed host.

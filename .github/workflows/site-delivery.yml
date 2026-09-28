@@ -14,6 +14,10 @@ name: Site Delivery
 
 on:
   workflow_call:
+    outputs:
+      deployed:
+        description: Whether the site and Caddy deployment actually completed
+        value: ${{ jobs.deploy.outputs.deployed }}
     secrets:
       SITE_DEPLOY_HOST:
         required: true
@@ -55,6 +59,8 @@ jobs:
           fi
 
   deploy:
+    outputs:
+      deployed: ${{ steps.deployed.outputs.deployed }}
     needs: current
     if: needs.current.outputs.current == 'true'
     runs-on: ubuntu-latest
@@ -96,3 +102,7 @@ jobs:
 
       - name: Deploy docs and official site
         run: deploy/site.sh production-site
+
+      - name: Record completed deployment
+        id: deployed
+        run: echo "deployed=true" >> "$GITHUB_OUTPUT"

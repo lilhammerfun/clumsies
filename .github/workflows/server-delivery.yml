@@ -2,6 +2,10 @@ name: Server Delivery
 
 on:
   workflow_call:
+    outputs:
+      deployed:
+        description: Whether the production deployment actually completed
+        value: ${{ jobs.deploy.outputs.deployed }}
     secrets:
       DEPLOY_HOST:
         required: false
@@ -117,6 +121,8 @@ jobs:
           printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
 
   deploy:
+    outputs:
+      deployed: ${{ steps.deployed.outputs.deployed }}
     needs: resolve
     if: >-
       always() && !cancelled() &&
@@ -150,6 +156,10 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "deploy $TARGET_IMAGE $TARGET_COMMIT"
+
+      - name: Record completed deployment
+        id: deployed
+        run: echo "deployed=true" >> "$GITHUB_OUTPUT"
 
   report:
     needs: resolve

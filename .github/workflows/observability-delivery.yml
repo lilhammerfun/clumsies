@@ -1,0 +1,77 @@
+name: Observability Delivery
+
+on:
+  workflow_call:
+    inputs:
+      prerequisites_deployed:
+        type: boolean
+        default: true
+    secrets:
+      SITE_DEPLOY_HOST:
+        required: true
+      SITE_DEPLOY_SSH_KEY:
+        required: true
+      SITE_DEPLOY_USER:
+        required: false
+      DEPLOY_KNOWN_HOSTS:
+        required: true
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-observability
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject superseded configurations
+        id: target
+        run: python3 dev/ci_impact.py current --component observability_delivery
+      - name: Require completed dependency deployment
+        if: steps.target.outputs.current == 'true'
+        env:
+          DEPLOYED: ${{ github.event_name == 'workflow_dispatch' || inputs.prerequisites_deployed }}
+        run: |
+          if [[ "$DEPLOYED" != true ]]; then
+            echo 'A required Server or site/Caddy production deployment did not complete.' >&2
+            exit 1
+          fi
+      - name: Validate manual retry
+        if: github.event_name == 'workflow_dispatch' && steps.target.outputs.current == 'true'
+        run: |
+          python3 deploy/observability/test.py
+          python3 deploy/observability/test-delivery.py
+      - name: Configure deploy SSH
+        if: steps.target.outputs.current == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.SITE_DEPLOY_HOST }}
+          DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_SSH_KEY }}
+          DEPLOY_USER: ${{ secrets.SITE_DEPLOY_USER }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_KEY" && test -n "$KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_observability"
+          chmod 600 "$HOME/.ssh/id_observability"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          {
+            echo 'Host production-observability'
+            echo "  HostName $DEPLOY_HOST"
+            echo "  User ${DEPLOY_USER:-root}"
+            echo '  IdentityFile ~/.ssh/id_observability'
+            echo '  IdentitiesOnly yes'
+            echo '  StrictHostKeyChecking yes'
+          } >> "$HOME/.ssh/config"
+      - name: Deploy and verify configuration
+        if: steps.target.outputs.current == 'true'
+        run: bash deploy/observability/deploy.sh production-observability
