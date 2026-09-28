@@ -26,7 +26,7 @@ enum WorkspaceColumnLayout: Equatable {
 struct WorkspaceView: View {
     @EnvironmentObject private var bundleStore: BundleStore
     let store: WorkspaceCoordinator
-    @ObservedObject private var refreshes: WorkspaceRefreshScheduler
+    private let refreshes: WorkspaceRefreshScheduler
     @EnvironmentObject private var bundleModel: BundlesModel
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     @EnvironmentObject private var workspaceContext: WorkspaceContext
