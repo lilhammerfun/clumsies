@@ -1,346 +1,344 @@
-//! Prometheus exposition for request throughput, latency, and pool state.
+//! Prometheus request metrics and scrape-time connection-pool measurements.
 //!
-//! The registry records only route templates and status classes, so label
-//! cardinality stays bounded no matter how many resources an organization
-//! creates. Derived series such as request rate or latency percentiles belong
-//! to PromQL and are deliberately not stored here.
+//! Route templates bound label cardinality. Handler latency excludes response
+//! body transfer; rates and percentiles are calculated by Prometheus.
 
 use axum::body::Body;
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use std::collections::HashMap;
-use std::fmt::Write as _;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, RwLock};
-use std::time::{Duration, Instant};
+use prometheus::{
+    Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    TextEncoder,
+};
+use std::sync::LazyLock;
+use std::time::Instant;
 
 use crate::state::AppState;
 
-/// Upper bounds of the latency histogram in seconds; the last bucket is +Inf.
+/// Finite latency bounds in seconds; the library adds the +Inf bucket.
 const LATENCY_BUCKETS: [f64; 12] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
 ];
 
-/// Index of the +Inf bucket, which collects requests above every finite bound.
-const OVERFLOW_BUCKET: usize = LATENCY_BUCKETS.len();
-
-/// Response codes recorded per route; anything else lands in `other`.
-///
-/// The list mirrors the codes the Server answers with, so the label stays
-/// bounded while still separating a conflict from a validation failure.
+/// Preserve the existing bounded response-code labels and `other` fallback.
 const STATUS_CODES: [u16; 27] = [
     100, 200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 409, 410, 412,
     413, 415, 422, 429, 500, 501, 502, 503,
 ];
 
-/// Process-wide request metrics shared by the middleware and the scrape route.
-static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::default);
+/// Metrics shared by the request middleware and scrape endpoint.
+static METRICS: LazyLock<Metrics> =
+    LazyLock::new(|| Metrics::new().expect("valid metric definitions"));
 
-/// Request counters and latency samples for one route template.
-#[derive(Default)]
-struct RouteMetrics {
-    /// Completed requests per response code, with a slot for anything else.
-    requests: [AtomicU64; STATUS_CODES.len() + 1],
-    /// Completed requests per latency bucket, accumulated while rendering.
-    buckets: [AtomicU64; OVERFLOW_BUCKET + 1],
-    /// Sum of observed request durations in microseconds.
-    duration_micros: AtomicU64,
-    /// Requests currently executing for this route.
-    in_flight: AtomicI64,
+/// Registered library collectors; no custom aggregation or exposition logic.
+struct Metrics {
+    /// Registry dedicated to Server metrics.
+    registry: Registry,
+    /// Completed requests by route template and bounded response code.
+    requests: IntCounterVec,
+    /// Handler response durations in seconds by route template.
+    durations: HistogramVec,
+    /// Executing handlers, including those whose futures are later cancelled.
+    in_flight: IntGauge,
+    /// Idle and used connections sampled when scraped.
+    pool_connections: IntGaugeVec,
+    /// Current open connections, not the configured limit.
+    pool_size: IntGauge,
+    /// Configured connection limit.
+    pool_max: IntGauge,
+    /// Server version exposed as a label with constant value one.
+    build_info: IntGaugeVec,
 }
 
-impl RouteMetrics {
-    /// Record one completed request.
-    fn observe(&self, status: StatusCode, elapsed: Duration) {
-        self.requests[status_index(status)].fetch_add(1, Ordering::Relaxed);
-        let seconds = elapsed.as_secs_f64();
-        let bucket = LATENCY_BUCKETS
-            .iter()
-            .position(|bound| seconds <= *bound)
-            .unwrap_or(OVERFLOW_BUCKET);
-        self.buckets[bucket].fetch_add(1, Ordering::Relaxed);
-        let micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
-        self.duration_micros.fetch_add(micros, Ordering::Relaxed);
+impl Metrics {
+    /// Register the Server's metric definitions in an independent registry.
+    ///
+    /// # Errors
+    /// Returns an error for invalid or duplicate metric definitions.
+    fn new() -> Result<Self, prometheus::Error> {
+        let registry = Registry::new();
+        let requests = IntCounterVec::new(
+            Opts::new(
+                "clumsies_http_requests_total",
+                "Requests handled per route and response code.",
+            ),
+            &["route", "status"],
+        )?;
+        let durations = HistogramVec::new(
+            HistogramOpts::new(
+                "clumsies_http_request_duration_seconds",
+                "Handler response latency per route; excludes response body transfer.",
+            )
+            .buckets(LATENCY_BUCKETS.to_vec()),
+            &["route"],
+        )?;
+        let in_flight = IntGauge::new(
+            "clumsies_http_requests_in_flight",
+            "Requests currently executing.",
+        )?;
+        let pool_connections = IntGaugeVec::new(
+            Opts::new(
+                "clumsies_db_pool_connections",
+                "Database pool connections by state.",
+            ),
+            &["state"],
+        )?;
+        let pool_size = IntGauge::new(
+            "clumsies_db_pool_size",
+            "Current open database pool connections.",
+        )?;
+        let pool_max = IntGauge::new(
+            "clumsies_db_pool_max_connections",
+            "Configured maximum database pool connections.",
+        )?;
+        let build_info = IntGaugeVec::new(
+            Opts::new("clumsies_build_info", "Build information."),
+            &["version"],
+        )?;
+        registry.register(Box::new(requests.clone()))?;
+        registry.register(Box::new(durations.clone()))?;
+        registry.register(Box::new(in_flight.clone()))?;
+        registry.register(Box::new(pool_connections.clone()))?;
+        registry.register(Box::new(pool_size.clone()))?;
+        registry.register(Box::new(pool_max.clone()))?;
+        registry.register(Box::new(build_info.clone()))?;
+        Ok(Self {
+            registry,
+            requests,
+            durations,
+            in_flight,
+            pool_connections,
+            pool_size,
+            pool_max,
+            build_info,
+        })
+    }
+
+    /// Sample current pool state without reporting the configured limit as usage.
+    fn sample_pool(&self, pool: &sqlx::PgPool) {
+        let size = pool.size();
+        let idle = u32::try_from(pool.num_idle()).unwrap_or(u32::MAX);
+        self.pool_connections
+            .with_label_values(&["idle"])
+            .set(i64::from(idle));
+        self.pool_connections
+            .with_label_values(&["used"])
+            .set(i64::from(size.saturating_sub(idle)));
+        self.pool_size.set(i64::from(size));
+        self.pool_max
+            .set(i64::from(pool.options().get_max_connections()));
     }
 }
 
-/// Request metrics for every route the process has served.
-#[derive(Default)]
-struct Registry {
-    /// Per-route metrics, keyed by the registered route template.
-    routes: RwLock<HashMap<String, Arc<RouteMetrics>>>,
-    /// Requests currently executing across all routes.
-    in_flight: AtomicI64,
-}
-
-/// Resolve the metrics slot for a route, creating it on first use.
-fn route_metrics(route: &str) -> Arc<RouteMetrics> {
-    if let Some(existing) = REGISTRY
-        .routes
-        .read()
-        .expect("metrics lock is not poisoned")
-        .get(route)
-    {
-        return Arc::clone(existing);
-    }
-    let mut routes = REGISTRY
-        .routes
-        .write()
-        .expect("metrics lock is not poisoned");
-    Arc::clone(routes.entry(route.to_owned()).or_default())
-}
-
-/// Resolve the counter slot for a response, falling back to the `other` slot.
-fn status_index(status: StatusCode) -> usize {
-    let code = status.as_u16();
-    STATUS_CODES
-        .iter()
-        .position(|known| *known == code)
-        .unwrap_or(STATUS_CODES.len())
-}
-
-/// Decrement the in-flight gauges however the request future ends.
-struct InFlightGuard {
-    /// Route slot whose gauge to decrement.
-    route: Arc<RouteMetrics>,
-}
+/// Decrement the gauge on completion, cancellation, or unwinding.
+struct InFlightGuard(IntGauge);
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        self.route.in_flight.fetch_sub(1, Ordering::Relaxed);
-        REGISTRY.in_flight.fetch_sub(1, Ordering::Relaxed);
+        self.0.dec();
     }
 }
 
-/// Record one request without changing its response.
+/// Record a handler response without changing its contents or status.
 pub(crate) async fn record_request(request: Request, next: Next) -> Response<Body> {
+    record(&METRICS, request, next).await
+}
+
+/// Measure a handler using route templates rather than resource-specific paths.
+async fn record(metrics: &Metrics, request: Request, next: Next) -> Response<Body> {
     let route = request
         .extensions()
         .get::<MatchedPath>()
         .map_or("unmatched", MatchedPath::as_str)
         .to_owned();
-    let metrics = route_metrics(&route);
-    metrics.in_flight.fetch_add(1, Ordering::Relaxed);
-    REGISTRY.in_flight.fetch_add(1, Ordering::Relaxed);
-    let _guard = InFlightGuard {
-        route: Arc::clone(&metrics),
-    };
+    metrics.in_flight.inc();
+    let _guard = InFlightGuard(metrics.in_flight.clone());
     let started = Instant::now();
-
     let response = next.run(request).await;
-
-    metrics.observe(response.status(), started.elapsed());
+    let code = response.status().as_u16();
+    let status = if STATUS_CODES.contains(&code) {
+        code.to_string()
+    } else {
+        "other".to_owned()
+    };
+    metrics.requests.with_label_values(&[&route, &status]).inc();
+    metrics
+        .durations
+        .with_label_values(&[&route])
+        .observe(started.elapsed().as_secs_f64());
     response
 }
 
-/// Render the current metrics in the Prometheus text exposition format.
+/// Encode library collectors using the Prometheus text format and matching MIME type.
 pub(crate) async fn render(State(state): State<AppState>) -> Response {
-    let routes = snapshot();
-    let mut body = String::with_capacity(4_096);
-
-    render_requests(&mut body, &routes);
-    render_durations(&mut body, &routes);
-    render_in_flight(&mut body);
-    render_pool(&mut body, &state);
-
-    body.push_str("# HELP clumsies_build_info Build information.\n");
-    body.push_str("# TYPE clumsies_build_info gauge\n");
-    let version = escape(state.version);
-    let _ = writeln!(body, "clumsies_build_info{{version=\"{version}\"}} 1");
-
-    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
-}
-
-/// Render per-route request counters.
-fn render_requests(body: &mut String, routes: &[(String, Arc<RouteMetrics>)]) {
-    body.push_str(
-        "# HELP clumsies_http_requests_total Requests handled per route and response code.\n",
-    );
-    body.push_str("# TYPE clumsies_http_requests_total counter\n");
-    for (route, metrics) in routes {
-        let route = escape(route);
-        for (index, counter) in metrics.requests.iter().enumerate() {
-            let count = counter.load(Ordering::Relaxed);
-            if count > 0 {
-                let status = STATUS_CODES
-                    .get(index)
-                    .map_or_else(|| "other".to_owned(), u16::to_string);
-                let _ = writeln!(
-                    body,
-                    "clumsies_http_requests_total{{route=\"{route}\",status=\"{status}\"}} {count}",
-                );
-            }
+    METRICS.sample_pool(&state.pool);
+    METRICS
+        .build_info
+        .with_label_values(&[state.version])
+        .set(1);
+    let encoder = TextEncoder::new();
+    let mut body = Vec::new();
+    match encoder.encode(&METRICS.registry.gather(), &mut body) {
+        Ok(()) => ([(header::CONTENT_TYPE, encoder.format_type())], body).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "metrics encoding failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
-}
-
-/// Render the per-route latency histogram with cumulative buckets.
-fn render_durations(body: &mut String, routes: &[(String, Arc<RouteMetrics>)]) {
-    body.push_str("# HELP clumsies_http_request_duration_seconds Handler response latency per route; excludes response body transfer.\n");
-    body.push_str("# TYPE clumsies_http_request_duration_seconds histogram\n");
-    for (route, metrics) in routes {
-        let route = escape(route);
-        let mut cumulative = 0_u64;
-        for (index, bound) in LATENCY_BUCKETS.iter().enumerate() {
-            cumulative += metrics.buckets[index].load(Ordering::Relaxed);
-            let _ = writeln!(
-                body,
-                "clumsies_http_request_duration_seconds_bucket{{route=\"{route}\",le=\"{bound}\"}} {cumulative}",
-            );
-        }
-        cumulative += metrics.buckets[OVERFLOW_BUCKET].load(Ordering::Relaxed);
-        let _ = writeln!(
-            body,
-            "clumsies_http_request_duration_seconds_bucket{{route=\"{route}\",le=\"+Inf\"}} {cumulative}",
-        );
-        let seconds = metrics.duration_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0;
-        let _ = writeln!(
-            body,
-            "clumsies_http_request_duration_seconds_sum{{route=\"{route}\"}} {seconds}",
-        );
-        let _ = writeln!(
-            body,
-            "clumsies_http_request_duration_seconds_count{{route=\"{route}\"}} {cumulative}",
-        );
-    }
-}
-
-/// Render the process-wide in-flight gauge.
-fn render_in_flight(body: &mut String) {
-    body.push_str("# HELP clumsies_http_requests_in_flight Requests currently executing.\n");
-    body.push_str("# TYPE clumsies_http_requests_in_flight gauge\n");
-    let in_flight = REGISTRY.in_flight.load(Ordering::Relaxed).max(0);
-    let _ = writeln!(body, "clumsies_http_requests_in_flight {in_flight}");
-}
-
-/// Render connection-pool gauges sampled at scrape time.
-fn render_pool(body: &mut String, state: &AppState) {
-    let idle = u32::try_from(state.pool.num_idle()).unwrap_or(u32::MAX);
-    let size = state.pool.size();
-    body.push_str("# HELP clumsies_db_pool_connections Database pool connections by state.\n");
-    body.push_str("# TYPE clumsies_db_pool_connections gauge\n");
-    let _ = writeln!(
-        body,
-        "clumsies_db_pool_connections{{state=\"idle\"}} {idle}"
-    );
-    let used = size.saturating_sub(idle);
-    let _ = writeln!(
-        body,
-        "clumsies_db_pool_connections{{state=\"used\"}} {used}"
-    );
-    body.push_str("# HELP clumsies_db_pool_size Configured maximum pool connections.\n");
-    body.push_str("# TYPE clumsies_db_pool_size gauge\n");
-    let _ = writeln!(body, "clumsies_db_pool_size {size}");
-}
-
-/// Copy the current route metrics so rendering never holds the lock.
-fn snapshot() -> Vec<(String, Arc<RouteMetrics>)> {
-    REGISTRY
-        .routes
-        .read()
-        .expect("metrics lock is not poisoned")
-        .iter()
-        .map(|(route, metrics)| (route.clone(), Arc::clone(metrics)))
-        .collect()
-}
-
-/// Escape a Prometheus label value.
-fn escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '"' => escaped.push_str("\\\""),
-            other => escaped.push(other),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::Router;
-    use axum::routing::get;
+    use axum::{Router, routing::get};
+    use std::sync::Arc;
     use tower::ServiceExt;
 
-    #[test]
-    fn known_codes_resolve_and_unknown_codes_share_one_slot() {
-        assert_eq!(status_index(StatusCode::OK), 1);
-        assert_eq!(status_index(StatusCode::CONFLICT), 16);
-        assert_eq!(status_index(StatusCode::SERVICE_UNAVAILABLE), 26);
+    fn app(metrics: Arc<Metrics>) -> Router {
+        Router::new()
+            .route("/items/{id}", get(|| async { StatusCode::CONFLICT }))
+            .route(
+                "/unknown",
+                get(|| async { StatusCode::from_u16(599).unwrap() }),
+            )
+            .layer(axum::middleware::from_fn(move |request, next| {
+                let metrics = metrics.clone();
+                async move { record(&metrics, request, next).await }
+            }))
+    }
+
+    #[tokio::test]
+    async fn middleware_preserves_labels_counts_and_response() {
+        let metrics = Arc::new(Metrics::new().unwrap());
+        for (path, status) in [
+            ("/items/private-id", 409),
+            ("/unknown", 599),
+            ("/not-found", 404),
+        ] {
+            let response = app(metrics.clone())
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+        }
         assert_eq!(
-            status_index(StatusCode::from_u16(999).unwrap()),
-            STATUS_CODES.len()
+            metrics
+                .requests
+                .with_label_values(&["/items/{id}", "409"])
+                .get(),
+            1
         );
+        assert_eq!(
+            metrics
+                .requests
+                .with_label_values(&["/unknown", "other"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .requests
+                .with_label_values(&["unmatched", "404"])
+                .get(),
+            1
+        );
+        assert_eq!(metrics.in_flight.get(), 0);
+        let text = TextEncoder::new()
+            .encode_to_string(&metrics.registry.gather())
+            .unwrap();
+        assert!(!text.contains("private-id"));
     }
 
     #[test]
-    fn durations_render_cumulative_buckets() {
-        let metrics = Arc::new(RouteMetrics::default());
-        metrics.observe(StatusCode::OK, Duration::from_millis(3));
-        metrics.observe(StatusCode::OK, Duration::from_millis(40));
-        metrics.observe(StatusCode::INTERNAL_SERVER_ERROR, Duration::from_secs(30));
-        metrics.observe(StatusCode::OK, Duration::from_secs(2));
-
-        let routes = vec![("/items/{id}".to_owned(), Arc::clone(&metrics))];
-        let mut body = String::new();
-        render_requests(&mut body, &routes);
-        render_durations(&mut body, &routes);
-
+    fn exposition_keeps_histogram_contract_and_escapes_labels() {
+        let metrics = Metrics::new().unwrap();
+        let histogram = metrics.durations.with_label_values(&["/items/{id}"]);
+        for value in [0.003, 0.04, 2.0, 30.0, 31.0] {
+            histogram.observe(value);
+        }
+        metrics.build_info.with_label_values(&["a\"b\\c\nd"]).set(1);
+        let text = TextEncoder::new()
+            .encode_to_string(&metrics.registry.gather())
+            .unwrap();
+        for (bound, count) in [
+            ("0.005", 1),
+            ("0.05", 2),
+            ("2.5", 3),
+            ("30", 4),
+            ("+Inf", 5),
+        ] {
+            assert!(text.contains(&format!("clumsies_http_request_duration_seconds_bucket{{route=\"/items/{{id}}\",le=\"{bound}\"}} {count}")), "{text}");
+        }
         assert!(
-            body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="200"} 3"#)
+            text.contains("clumsies_http_request_duration_seconds_count{route=\"/items/{id}\"} 5")
         );
-        assert!(
-            body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="500"} 1"#)
-        );
-        assert!(body.contains(
-            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="0.005"} 1"#
-        ));
-        assert!(body.contains(
-            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="0.05"} 2"#
-        ));
-        assert!(body.contains(
-            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="+Inf"} 4"#
-        ));
-        assert!(body.contains(
-            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="2.5"} 3"#
-        ));
-        assert!(body.contains(
-            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="30"} 4"#
-        ));
-        assert!(
-            body.contains(r#"clumsies_http_request_duration_seconds_count{route="/items/{id}"} 4"#)
+        assert!((histogram.get_sample_sum() - 63.043).abs() < 1e-9);
+        assert!(text.contains(r#"version="a\"b\\c\nd""#));
+    }
+
+    #[tokio::test]
+    async fn pool_size_and_configured_limit_are_distinct() {
+        // Lazy pool never connects to a real database.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(17)
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let metrics = Metrics::new().unwrap();
+        metrics.sample_pool(&pool);
+        assert_eq!(metrics.pool_size.get(), 0);
+        assert_eq!(metrics.pool_max.get(), 17);
+        assert_eq!(
+            metrics.pool_connections.with_label_values(&["used"]).get(),
+            0
         );
     }
 
-    #[test]
-    fn label_values_escape_quotes_backslashes_and_newlines() {
-        assert_eq!(escape("a\"b\\c\nd"), r#"a\"b\\c\nd"#);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn middleware_records_the_route_template_not_the_request_path() {
+    #[tokio::test]
+    async fn cancelled_request_releases_in_flight_without_counting_a_response() {
+        let metrics = Arc::new(Metrics::new().unwrap());
+        let entered = Arc::new(tokio::sync::Notify::new());
         let app = Router::new()
-            .route("/metrics-test/{id}", get(|| async { "ok" }))
-            .layer(axum::middleware::from_fn(record_request));
-        let response = app
-            .oneshot(
+            .route(
+                "/pending",
+                get({
+                    let entered = entered.clone();
+                    move || {
+                        let entered = entered.clone();
+                        async move {
+                            entered.notify_one();
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn({
+                let metrics = metrics.clone();
+                move |request, next| {
+                    let metrics = metrics.clone();
+                    async move { record(&metrics, request, next).await }
+                }
+            }));
+        let task = tokio::spawn(
+            app.oneshot(
                 Request::builder()
-                    .uri("/metrics-test/abc123")
+                    .uri("/pending")
                     .body(Body::empty())
                     .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let mut body = String::new();
-        render_requests(&mut body, &snapshot());
-        assert!(body.contains(r#"route="/metrics-test/{id}",status="200""#));
-        assert!(!body.contains("/metrics-test/abc123"));
+            ),
+        );
+        entered.notified().await;
+        assert_eq!(metrics.in_flight.get(), 1);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(metrics.in_flight.get(), 0);
+        assert_eq!(
+            metrics
+                .durations
+                .with_label_values(&["/pending"])
+                .get_sample_count(),
+            0
+        );
     }
 }
