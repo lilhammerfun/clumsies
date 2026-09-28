@@ -1,6 +1,6 @@
 //! SQL queries and persistence for audit event resources.
 
-use crate::app::audit_event::dto::AuditEvent;
+use crate::app::audit_event::dto::{AuditChange, AuditEvent};
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -18,8 +18,12 @@ pub(crate) async fn list_audit_events(
 ) -> Result<Vec<AuditEvent>, ServerError> {
     let rows = sqlx::query(
         "WITH events AS (
-            SELECT e.event_id, e.actor_user_id, CASE WHEN e.labels_recorded THEN e.actor_label ELSE COALESCE(NULLIF(actor.display_name, ''), actor.username, actor.email) END AS actor_display_name,
-                   CASE WHEN e.labels_recorded THEN e.actor_email_snapshot ELSE actor.email END AS actor_email, e.action, e.target_type, e.target_id, e.created_at, e.changes,
+            SELECT e.event_id, e.actor_user_id,
+                   CASE WHEN e.labels_recorded THEN e.actor_label
+                       ELSE COALESCE(NULLIF(actor.display_name, ''), actor.username, actor.email)
+                   END AS actor_display_name,
+                   CASE WHEN e.labels_recorded THEN e.actor_email_snapshot ELSE actor.email END AS actor_email,
+                   e.action, e.target_type, e.target_id, e.created_at, e.changes,
                    CASE WHEN e.labels_recorded THEN e.target_label ELSE CASE e.target_type
                        WHEN 'org' THEN target_org.name
                        WHEN 'project' THEN target_project.name
@@ -65,7 +69,9 @@ pub(crate) async fn list_audit_events(
                 target_type: row.try_get("target_type")?,
                 target_id: row.try_get("target_id")?,
                 target_display_name: row.try_get("target_display_name")?,
-                changes: row.try_get::<sqlx::types::Json<Vec<crate::app::audit_event::dto::AuditChange>>, _>("changes")?.0,
+                changes: row
+                    .try_get::<sqlx::types::Json<Vec<AuditChange>>, _>("changes")?
+                    .0,
                 created_at: row.try_get("created_at")?,
             })
         })
@@ -109,7 +115,7 @@ pub(crate) async fn insert_audit_event_with_changes(
     action: &str,
     target_type: &str,
     target_id: Option<&str>,
-    changes: &[crate::app::audit_event::dto::AuditChange],
+    changes: &[AuditChange],
 ) -> Result<(), ServerError> {
     sqlx::query(
         "INSERT INTO audit_events (

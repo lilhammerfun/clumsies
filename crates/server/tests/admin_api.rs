@@ -1047,4 +1047,46 @@ async fn audit_labels_keep_username_identity_after_rename_and_rollback_with_muta
             .await
             .unwrap();
     assert_eq!(count, 0);
+    postgres.shutdown().await;
+}
+
+#[tokio::test]
+async fn audit_upgrade_preserves_legacy_events_without_inventing_snapshots() {
+    use sqlx::Executor;
+    let postgres = common::postgres_without_migrations().await;
+    let migrations = &server::infra::database::MIGRATOR;
+    for migration in migrations.iter().filter(|m| m.version < 20260928000100) {
+        postgres.pool.execute(migration.sql.as_ref()).await.unwrap();
+    }
+    let bootstrap = common::initialize_installation(
+        postgres.pool.clone(),
+        "Legacy Org",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Legacy Project",
+    )
+    .await;
+    sqlx::query("INSERT INTO audit_events (event_id, org_id, actor_user_id, action, target_type, target_id) VALUES ('evt_legacy_audit', $1, $2, 'admin.project_created', 'project', $3)")
+        .bind(&bootstrap.org_id).bind(&bootstrap.user_id).bind(&bootstrap.project_id).execute(&postgres.pool).await.unwrap();
+    for migration in migrations.iter().filter(|m| m.version >= 20260928000100) {
+        postgres.pool.execute(migration.sql.as_ref()).await.unwrap();
+    }
+    let snapshot: (bool, Option<String>, Option<String>, serde_json::Value) = sqlx::query_as("SELECT labels_recorded, actor_label, target_label, changes FROM audit_events WHERE event_id = 'evt_legacy_audit'")
+        .fetch_one(&postgres.pool).await.unwrap();
+    assert_eq!(snapshot, (false, None, None, serde_json::json!([])));
+    let (app, _) = common::authenticated_router(postgres.pool.clone()).await;
+    let events: AuditEventListResponse =
+        get_json(app, "/api/v1/admin/audit-events?q=Legacy%20Project").await;
+    let legacy = events
+        .items
+        .iter()
+        .find(|e| e.event_id == "evt_legacy_audit")
+        .unwrap();
+    assert_eq!(
+        legacy.target_display_name.as_deref(),
+        Some("Legacy Project")
+    );
+    assert!(legacy.changes.is_empty());
+    postgres.shutdown().await;
 }
