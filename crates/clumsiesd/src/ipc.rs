@@ -513,7 +513,7 @@ fn validate_agent_runtime_request(request: &DaemonIpcRequest) -> Result<(), Daem
             Err(DaemonError::State {
                 code: "agent_runtime_mismatch",
                 message:
-                    "Agent proxy runtime identity is missing; restart Clumsies and the Agent host"
+                    "Agent protocol identity is missing; update Clumsies and reconnect the Clumsies Agent integration. The request was not executed"
                         .to_owned(),
             })
         }
@@ -1272,9 +1272,9 @@ mod tests {
     }
 
     #[test]
-    fn every_agent_method_rejects_a_missing_or_stale_runtime_marker() {
+    fn every_agent_method_requires_a_compatible_protocol_marker() {
         let stale = AgentRuntimeIdentity {
-            protocol_revision: crate::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
+            protocol_revision: crate::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION + 1,
             build_id: "stale-test-build".to_owned(),
         };
         for method in [
@@ -1283,6 +1283,12 @@ mod tests {
             "load_memory",
             "store_draft_operation",
         ] {
+            let mut compatible = DaemonIpcRequest::empty(method);
+            compatible.agent_runtime = Some(AgentRuntimeIdentity {
+                protocol_revision: crate::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
+                build_id: "different-build".to_owned(),
+            });
+            assert!(validate_agent_runtime_request(&compatible).is_ok());
             let missing = DaemonIpcRequest::empty(method);
             assert!(matches!(
                 validate_agent_runtime_request(&missing),

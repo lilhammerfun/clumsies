@@ -285,7 +285,7 @@ For example, a queued local write can return:
 | `memory_resource_not_found` | Check the exact ID/path and current Project; a load does not silently drop missing targets |
 | `memory_content_changed` | Load the complete resource again and reassess the intended edit |
 | `text_replacement_not_found` / `text_replacement_ambiguous` / `text_replacement_overlap` | Correct exact replacement spans using the freshly loaded content; the update is rejected atomically |
-| `agent_runtime_mismatch` | Align the managed proxy and resident daemon builds; restarting a stale host integration may be necessary |
+| `agent_runtime_mismatch` | The Agent protocol identity is missing or incompatible. Update Clumsies and reconnect its Agent integration; restart the host if reconnection is unavailable. The rejected request was not executed |
 
 A failed update does not permit a fallback full-body overwrite. A failed activation does not mean that no relevant Memory exists. Treat those as failed operations, then recover using the explicit error.
 

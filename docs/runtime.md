@@ -134,9 +134,10 @@ keystroke.
 The adapter-managed MCP entrypoint is `clumsiesd mcp serve`. This process owns
 only bounded JSON-RPC framing, the typed `memory` contract, Project binding,
 and XPC forwarding. Before accepting Agent traffic it
-verifies that its Agent runtime protocol revision and build identity match the
-resident daemon. It does not initialize `DaemonState`, open SQLite, load models,
-or start background workers.
+verifies that its Agent runtime protocol revision matches the resident daemon.
+The daemon repeats this check before every dispatch. Build identity is diagnostic
+metadata and does not gate compatible requests. The proxy does not initialize
+`DaemonState`, open SQLite, load models, or start background workers.
 
 MCP keeps the public `memory` (`op.store`) tool shape. Internally it adds the
 current bound Project as the Draft carrier and marks Organization authority as

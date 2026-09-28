@@ -40,7 +40,7 @@ The first use downloads local search models and prepares the Project index. Whil
 | --- | --- |
 | No Clumsies tool in a Codex task | Check the plugin status, restart Codex, and create a new task. |
 | Repository is not bound | Bind the actual directory used by this task to the intended Project. |
-| Runtime version mismatch after an update | Restart Clumsies and the agent host so the bundled runtime and resident daemon use the same build. |
+| Runtime version mismatch after an update | Update Clumsies and reconnect its Agent integration; restart the host if reconnection is unavailable. Matching protocol revisions allow different builds; incompatible requests are rejected before execution. |
 | Retrieval is preparing or a document is missing | Check model preparation, synchronization, and the Project's selected Memory. |
 | Retrieval works but activity records are absent | Check that the bound workspace has a supported Codex or DSH session log containing a Clumsies activation. |
 

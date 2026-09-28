@@ -1,3 +1,5 @@
+//! Exercises proxy compatibility and binding checks over an isolated real XPC service.
+
 #![cfg(target_os = "macos")]
 
 use std::io::{BufRead, BufReader, Write};
@@ -5,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use clumsiesd::{DaemonHealth, DaemonIpcClient, DaemonProjectBindingResolveRequest};
+use clumsiesd::{
+    AgentRuntimeIdentity, DaemonHealth, DaemonIpcClient, DaemonIpcRequest,
+    DaemonProjectBindingResolveRequest,
+};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -98,7 +103,7 @@ impl Drop for LaunchdJob {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
+async fn real_clumsiesd_proxies_accept_compatible_builds_and_reject_incompatible_protocols() {
     let fixture = tempfile::tempdir().unwrap();
     let workspace = fixture.path().join("workspace");
     let daemon_root = fixture.path().join("daemon");
@@ -110,6 +115,10 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_clumsiesd")));
     let binary = stage_test_binary(&source_binary, &daemon_root.join("bin/clumsiesd"));
     let job = LaunchdJob::bootstrap(&binary, &daemon_root, &service_name);
+    // Optionally exercise a separately built proxy against the packaged resident.
+    let proxy_binary = std::env::var_os("CLUMSIES_TEST_PROXY_DAEMON")
+        .map(|source| stage_test_binary(Path::new(&source), &daemon_root.join("proxy/clumsiesd")))
+        .unwrap_or_else(|| binary.clone());
 
     let ordinary_client = DaemonIpcClient::new(&service_name).with_timeout(Duration::from_secs(30));
     let health = wait_for_health(&ordinary_client, &daemon_root, &job.target);
@@ -120,7 +129,7 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
     seed_project_fixture(&daemon_root.join("local.db"), &workspace).await;
 
     let mcp = run_proxy(
-        &binary,
+        &proxy_binary,
         &["mcp", "serve"],
         &workspace,
         &service_name,
@@ -155,7 +164,7 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
     }
 
     let mut plugin_mcp = spawn_proxy(
-        &binary,
+        &proxy_binary,
         &[
             "mcp",
             "serve",
@@ -192,7 +201,7 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
 
     let unbound = tempfile::tempdir().unwrap();
     let unbound_output = run_proxy(
-        &binary,
+        &proxy_binary,
         &["mcp", "serve"],
         unbound.path(),
         &service_name,
@@ -204,7 +213,13 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
         "An unbound global MCP must not use the App's selected Project"
     );
 
-    let mut direct_mcp = spawn_proxy(&binary, &["mcp", "serve"], &workspace, &service_name, &[]);
+    let mut direct_mcp = spawn_proxy(
+        &proxy_binary,
+        &["mcp", "serve"],
+        &workspace,
+        &service_name,
+        &[],
+    );
     let mut direct_stdin = direct_mcp.stdin.take().unwrap();
     let mut direct_stdout = BufReader::new(direct_mcp.stdout.take().unwrap());
     direct_stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"initialize\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").unwrap();
@@ -237,8 +252,8 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
     let plugin_output = plugin_mcp.wait_with_output().unwrap();
     assert_process_succeeded("delivery-gated MCP proxy", &plugin_output);
 
-    let stale_mcp = run_proxy(
-        &binary,
+    let compatible_mcp = run_proxy(
+        &proxy_binary,
         &["mcp", "serve"],
         &workspace,
         &service_name,
@@ -249,20 +264,66 @@ async fn real_clumsiesd_process_proxies_use_xpc_and_reject_stale_identity() {
         ),
         &[(STALE_TOOL_BUILD_ENV, "stale-proxy-build")],
     );
-    assert_process_succeeded("stale MCP proxy", &stale_mcp);
-    let stale_responses = json_lines(&stale_mcp.stdout);
-    assert_eq!(stale_responses.len(), 2);
+    assert_process_succeeded("compatible older-build MCP proxy", &compatible_mcp);
+    let compatible_responses = json_lines(&compatible_mcp.stdout);
+    assert_eq!(compatible_responses.len(), 2);
     assert_eq!(
-        response_with_id(&stale_responses, 10)["result"]["protocolVersion"],
+        response_with_id(&compatible_responses, 10)["result"]["protocolVersion"],
         "2025-06-18"
     );
-    let rejected = response_with_id(&stale_responses, 11);
-    assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+    let accepted = response_with_id(&compatible_responses, 11);
+    assert_eq!(accepted["result"]["isError"], true, "{accepted}");
     assert_eq!(
-        rejected["result"]["structuredContent"]["error"]["code"], "agent_runtime_mismatch",
-        "{rejected}"
+        accepted["result"]["structuredContent"]["error"]["code"], "project_ref_not_synced",
+        "The compatible request must reach business dispatch: {accepted}"
     );
-    assert!(!rejected.to_string().contains("stale-proxy-build"));
+    assert!(!accepted.to_string().contains("stale-proxy-build"));
+
+    // A different-build Agent also passes startup health and binding checks.
+    let compatible = DaemonIpcClient::for_agent_runtime(
+        &service_name,
+        AgentRuntimeIdentity {
+            protocol_revision: resident_identity.protocol_revision,
+            build_id: "another-build".to_owned(),
+        },
+    );
+    assert_eq!(
+        compatible.health().unwrap().agent_runtime,
+        resident_identity
+    );
+    assert_eq!(
+        compatible
+            .resolve_project_binding(DaemonProjectBindingResolveRequest {
+                workspace_path: workspace.display().to_string(),
+                required_adapter: None,
+            })
+            .unwrap()
+            .project_id,
+        REBOUND_PROJECT_ID
+    );
+
+    // Reject incompatible reads and writes before even decoding their business payload.
+    let incompatible = DaemonIpcClient::for_agent_runtime(
+        &service_name,
+        AgentRuntimeIdentity {
+            protocol_revision: resident_identity.protocol_revision + 1,
+            build_id: resident_identity.build_id.clone(),
+        },
+    );
+    for method in [
+        "health",
+        "resolve_project_binding",
+        "activate_memory",
+        "load_memory",
+        "store_draft_operation",
+    ] {
+        let response = incompatible.call(DaemonIpcRequest::empty(method)).unwrap();
+        assert!(!response.ok);
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "agent_runtime_mismatch");
+        assert!(error.message.contains("not executed"));
+        assert!(error.message.contains("reconnect"));
+    }
 
     // A rejected Agent request is scoped to that dispatch; ordinary App IPC
     // remains compatible and the resident process remains healthy.

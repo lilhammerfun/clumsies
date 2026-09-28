@@ -142,8 +142,8 @@ Draft。
 由适配器管理的 MCP 入口是 `clumsiesd mcp serve`。
 该进程只负责有界的 JSON-RPC 组帧、类型化的 `memory` 契约、
 Project 绑定与 XPC 转发。在接受 Agent 流量之前，
-它先核对自己的 Agent runtime 协议 revision 与 build
-身份是否与常驻 daemon 一致。它不会初始化 `DaemonState`、
+它先核对自己的 Agent runtime 协议 revision 是否与常驻 daemon 一致，
+daemon 在每次业务分发前也会校验；build identity 仅用于诊断。它不会初始化 `DaemonState`、
 打开 SQLite、加载模型或启动后台 worker。
 
 MCP 保持公开的 `memory`（`op.store`）工具形状。
