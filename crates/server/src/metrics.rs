@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use crate::state::AppState;
 
 /// Upper bounds of the latency histogram in seconds; the last bucket is +Inf.
-const LATENCY_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0];
+const LATENCY_BUCKETS: [f64; 12] = [
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+];
 
 /// Index of the +Inf bucket, which collects requests above every finite bound.
 const OVERFLOW_BUCKET: usize = LATENCY_BUCKETS.len();
@@ -176,7 +178,7 @@ fn render_requests(body: &mut String, routes: &[(String, Arc<RouteMetrics>)]) {
 
 /// Render the per-route latency histogram with cumulative buckets.
 fn render_durations(body: &mut String, routes: &[(String, Arc<RouteMetrics>)]) {
-    body.push_str("# HELP clumsies_http_request_duration_seconds Request duration per route.\n");
+    body.push_str("# HELP clumsies_http_request_duration_seconds Handler response latency per route; excludes response body transfer.\n");
     body.push_str("# TYPE clumsies_http_request_duration_seconds histogram\n");
     for (route, metrics) in routes {
         let route = escape(route);
@@ -282,6 +284,7 @@ mod tests {
         metrics.observe(StatusCode::OK, Duration::from_millis(3));
         metrics.observe(StatusCode::OK, Duration::from_millis(40));
         metrics.observe(StatusCode::INTERNAL_SERVER_ERROR, Duration::from_secs(30));
+        metrics.observe(StatusCode::OK, Duration::from_secs(2));
 
         let routes = vec![("/items/{id}".to_owned(), Arc::clone(&metrics))];
         let mut body = String::new();
@@ -289,7 +292,7 @@ mod tests {
         render_durations(&mut body, &routes);
 
         assert!(
-            body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="200"} 2"#)
+            body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="200"} 3"#)
         );
         assert!(
             body.contains(r#"clumsies_http_requests_total{route="/items/{id}",status="500"} 1"#)
@@ -301,10 +304,16 @@ mod tests {
             r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="0.05"} 2"#
         ));
         assert!(body.contains(
-            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="+Inf"} 3"#
+            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="+Inf"} 4"#
+        ));
+        assert!(body.contains(
+            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="2.5"} 3"#
+        ));
+        assert!(body.contains(
+            r#"clumsies_http_request_duration_seconds_bucket{route="/items/{id}",le="30"} 4"#
         ));
         assert!(
-            body.contains(r#"clumsies_http_request_duration_seconds_count{route="/items/{id}"} 3"#)
+            body.contains(r#"clumsies_http_request_duration_seconds_count{route="/items/{id}"} 4"#)
         );
     }
 

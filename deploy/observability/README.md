@@ -8,7 +8,7 @@ interface only.
 |---|---|
 | `prometheus` | Scrape, rule evaluation, and 90-day retention |
 | `alertmanager` | Email delivery of firing alerts |
-| `grafana` | Provisioned Prometheus and Loki datasources, and the *Clumsies Overview* dashboards in English and Chinese |
+| `grafana` | Provisioned Prometheus and Loki datasources, and Overview, Business API, and Website Traffic dashboards in English and Chinese |
 | `node-exporter` | Host CPU, memory, filesystem, and the textfile metrics below |
 | `cadvisor` | Per-container CPU, memory, and restart activity |
 | `postgres-exporter` | Connections, transactions, and database size |
@@ -25,7 +25,9 @@ the Compose network and enables metrics:
 ```caddyfile
 {
 	admin :2019
-	metrics
+	metrics {
+		per_host
+	}
 }
 ```
 
@@ -33,7 +35,7 @@ The admin endpoint stays reachable only from the Compose network because
 `compose.production.yml` publishes nothing but ports 80 and 443.
 
 The Server exposes Prometheus metrics on `/metrics` for the same network. Its
-route labels are registered route templates and its status labels are classes,
+route labels are registered route templates and its status labels are bounded response codes,
 so cardinality cannot grow with the number of organizations or resources.
 Caddy answers 404 for that path on the public origin, so the endpoint is never
 reachable from the internet.
@@ -92,21 +94,72 @@ An inactive Prometheus rule is enabled but not currently firing. Alertmanager
 does not list inactive rules or edit Prometheus thresholds. Its Status page
 shows the loaded notification routing configuration.
 
+## Request investigation
+
+Open **Overview** to compare availability, request rate, 5xx rate and entrance
+p95 by site. The four configured hosts remain separate. Click a site series to
+open **Website Traffic** with that host and the current time range. Shared host,
+database, backup and log-delivery health stay on Overview.
+
+**Business API** uses Server route templates. Select a route to compare handler
+p50/p95/p99, sample count, response codes and requests over one second. Health
+checks (`/api/v1/admin/health`) and `/metrics` are excluded in these queries;
+the underlying series remain available for operational investigations. Handler
+latency ends when a Response is returned, not after the body has been sent.
+The separate app entrance slow-log panel covers all app paths regardless of the
+selected backend route, including slow transmission and proxy failures.
+
+**Website Traffic** reuses one dashboard with a host selector for the docs,
+official site, www redirect and app entrance. Caddy queries select only
+`handler="subroute"`, measuring one site-handling layer instead of adding
+nested middleware observations. This includes synthetic availability requests,
+but excludes automatic HTTP-to-HTTPS redirects. Neither this duration nor the
+Server duration measures browser page-load time.
+
+Every percentile is a **rolling five-minute histogram estimate**, not a maximum
+or the duration of a particular request. Small samples make p99 unstable;
+read the count beside it. `increase()` extrapolates at window edges, so counts
+can be fractional. Zero traffic has no latency sample, and must not become a
+zero-latency success. One second is a slow-log investigation filter, not an SLO.
+Server buckets add 2.5, 10 and 30 seconds to improve tail visibility; quantiles
+remain estimates, and durations beyond the last finite bucket remain bounded
+by histogram limitations.
+
 ## Logs
 
-Both dashboards carry a *Logs* row with a `request id` text box. Every response
-from the Server returns the edge request id in the `x-request-id` header, so one
-value follows a request through the whole installation:
+All four sites share the same redacted access-log schema: `site`, original
+`path`, `status`, response `size`, `duration` in **milliseconds**, and
+`request_id`. App entrance records also include `upstream_duration_ms` and
+`upstream_latency_ms`. Headers, URL query strings and bodies are not recorded.
+Paths remain log fields, not metric or Loki stream labels. Website rewrites
+must not replace the original requested path in logs.
 
-1. paste the header value into `request id`; the edge panel and the Server panel
-   then show every line for that request, from both containers;
-2. a client that sends `x-clumsies-request-id` appears as `client_request_id` in
-   the Server log, which links a user report to the same request.
+1. Select an abnormal time interval in the dashboard and inspect its slow-log
+   panel. Website logs filter by site; backend logs filter by route.
+2. Expand a line and click **Related request logs** on the derived Request field.
+   The request panel opens a Loki query for that ID across both `caddy` and
+   `server`, preserving the time range. Static sites naturally have no Server
+   counterpart. This is log correlation, not a distributed trace.
+3. Alternatively paste an `x-request-id` response header into **Request ID**.
+   The dedicated correlation panel ignores site/route filters so it cannot hide
+   the other layer. An empty ID shows all logs in the selected time range.
+4. If both entrance and handler are slow, investigate the backend. If only the
+   entrance is slow, inspect proxy/body transfer. The two timers have different
+   boundaries; their difference is not a measurement of network RTT.
 
-Labels stay low-cardinality (`project`, `service`, `container`). Request ids live
-inside the log lines and are matched with a line filter, never used as a label.
-The existing logging invariant still holds: no bodies and no credentials are
-recorded, and Caddy already drops request headers and query strings.
+Request IDs stay inside log lines; Loki stream labels remain `project`,
+`service`, and `container`. `client_request_id` in Server logs can additionally
+connect a client report to a Server request. Missing internal DB/external-call
+spans cannot be reconstructed from an ID: add targeted timings when necessary.
+A five-minute database snapshot can miss short query/connection waits.
+
+Prometheus also scrapes Alloy and Loki. Overview shows send retries, dropped
+entries and delivered entries; sustained retries and any drops alert. A failed
+scrape uses `ScrapeTargetDown`. Zero delivered logs alone does not prove a
+failure (the source may be idle), and successful delivery does not prove that
+every source was configured correctly. The isolated request test covers that
+configuration boundary. Logs retain 14 days, versus 90 days of metrics; older
+metric anomalies may no longer have request-level evidence.
 
 ## Alert delivery
 
@@ -230,10 +283,41 @@ sudo docker compose --file compose.observability.yml --env-file .env up -d --no-
 Confirm `clumsies_database_collection_success` is 1 and the collection timestamp
 is current before proceeding; the service also writes failure=0 on SQL errors.
 Grafana's file provider reloads the dashboard JSON within 30 seconds.
-Recreation is needed to apply the external URL flags. Confirm 15 rules are
+Recreation is needed to apply the external URL flags. Confirm the updated rules are
 loaded in Prometheus, the five workflow alerts are absent, the Watchdog route
 repeats daily, and newly generated links work through the tunnel. An existing
 workflow alert may send a final resolved email. To roll back, restore the
 backed-up files and collector executable, run the collector once, and repeat
 validation and recreation without deleting volumes. Restore both dashboards
 with the collector so their metric names stay aligned.
+
+## Deploying the request dashboards
+
+These changes are configuration/code only; no database migration or new
+service is needed. Validate with `python3 deploy/observability/test.py` and
+`cargo test -p server --lib metrics::tests`. The request test uses an isolated
+Docker network, synthetic backend and static site, real Caddy/Alloy/Loki, and
+synthetic PromQL series. It verifies site isolation, probe exclusion, idle
+windows, original paths, secret redaction and cross-layer request correlation.
+
+Back up and deploy the following together:
+
+- Production `deploy/Caddyfile`: validate with `caddy validate`, then use Caddy's
+  config reload. Existing traffic need not be interrupted.
+- Server release containing the extended histogram buckets. During the first
+  five minutes after rollout, queries may mix old/new bucket layouts; wait a
+  full window before interpreting the new tail estimate.
+- `prometheus/prometheus.yml`, `rules.yml`: validate with `promtool` then reload
+  Prometheus. This adds Alloy/Loki targets and changes errors to per-site scope.
+- All six `grafana/dashboards/*.json` and
+  `grafana/provisioning/datasources/loki.yml`: dashboards reload automatically;
+  restart Grafana or reload datasource provisioning for request links.
+
+Keep the existing Overview UIDs so saved links remain valid. The old global
+latency panels are replaced, not relabeled as per-site history. Host-tagged
+metrics and newly covered website logs begin only after deployment; historical
+site separation cannot be backfilled. Preserve credentials and storage volumes.
+Roll back the backed-up config and Server release together if validation fails.
+Check all four hosts, an API request, its derived log link, and Alloy/Loki scrape
+health after rollout. Never induce slow traffic or delivery failures in production
+just to test these scenarios.

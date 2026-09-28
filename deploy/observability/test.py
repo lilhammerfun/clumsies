@@ -35,8 +35,25 @@ for service, binary, arguments in (
 # Evaluate the actual dashboard expressions, including decreases and the
 # seconds-to-hours conversion; both languages must keep identical targets.
 dashboards = [json.loads(p.read_text()) for p in sorted((root / "grafana/dashboards").glob("*.json"))]
-assert len(dashboards) == 2
-assert [p.get("targets") for p in dashboards[0]["panels"]] == [p.get("targets") for p in dashboards[1]["panels"]]
+assert len(dashboards) == 6
+def all_panels(dashboard):
+    for panel in dashboard["panels"]:
+        yield panel
+        yield from panel.get("panels", [])
+
+
+for name in ("overview", "api", "web"):
+    pair = [json.loads((root / f"grafana/dashboards/clumsies-{name}{suffix}.json").read_text())
+            for suffix in ("", ".zh")]
+    expressions = [
+        [[t["expr"] for t in panel.get("targets", [])] for panel in all_panels(dashboard)]
+        for dashboard in pair
+    ]
+    assert expressions[0] == expressions[1]
+    panels = list(all_panels(pair[0]))
+    assert len({p["id"] for p in panels}) == len(panels)
+
+api_dashboard = json.loads((root / "grafana/dashboards/clumsies-api.json").read_text())
 series = {
     "clumsies_commits_created_last_hour": "3x359 2",
     "clumsies_drafts_created_last_hour": "10x360",
@@ -50,7 +67,7 @@ series = {
     "clumsies_oldest_open_draft_age_seconds": "6220800x360",
 }
 expected = [2, 10, 1, None, 60, 2, 2, 72]
-expressions = [t["expr"] for p in dashboards[0]["panels"] for t in p.get("targets", [])
+expressions = [t["expr"] for p in all_panels(api_dashboard) for t in p.get("targets", [])
                if any(name.split("{")[0] in t["expr"] for name in series)]
 assert len(expressions) == len(expected)
 checks = [{"expr": f"count(({expr}) == {value})", "eval_time": "6h",
@@ -72,5 +89,7 @@ with tempfile.TemporaryDirectory() as directory:
     ], check=True)
 
 subprocess.run([sys.executable, str(root / "test-collector.py")], check=True)
+
+subprocess.run([sys.executable, str(root / "test-requests.py")], check=True)
 
 print("Observability configuration, collector, tunnel links, and alert behavior passed.")
