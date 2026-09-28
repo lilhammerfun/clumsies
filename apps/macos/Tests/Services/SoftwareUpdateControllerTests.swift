@@ -129,6 +129,34 @@ final class SoftwareUpdateControllerTests: XCTestCase {
         }
     }
 
+    func testInstallOnQuitReminderSurvivesCycleCompletionWithoutTakingOverInstallation() throws {
+        let bundle = try makeBundle(feedURL: "https://updates.invalid/empty")
+        let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
+        let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: nil)
+        let controller = SoftwareUpdateController(updater: updater)
+        let delegate = controller as SPUUpdaterDelegate
+        try updater.start()
+
+        for error in [nil, NSError(domain: SUSparkleErrorDomain, code: Int(SUError.installationError.rawValue))] {
+            // Replay SPUAutomaticUpdateDriver's preparation -> install-on-quit -> cycle-ended handoff.
+            // No installer is launched and Sparkle must retain ownership of automatic installation.
+            let handled = delegate.updater?(updater, willInstallUpdateOnQuit: .empty(), immediateInstallationBlock: {
+                XCTFail("The reminder must not force installation or quit the application")
+            }) ?? false
+            XCTAssertFalse(handled)
+            XCTAssertFalse(controller.hasAvailableUpdate, "Wait until the background cycle releases the updater")
+
+            controller.updater(updater, didFinishUpdateCycleFor: .updatesInBackground, error: error)
+            XCTAssertEqual(controller.hasAvailableUpdate, error == nil, "A prepared update must remain discoverable until dismissed")
+            XCTAssertTrue(controller.canCheckForUpdates)
+
+            controller.standardUserDriverWillFinishUpdateSession()
+            XCTAssertFalse(controller.hasAvailableUpdate)
+            controller.updater(updater, didFinishUpdateCycleFor: .updatesInBackground, error: nil)
+            XCTAssertFalse(controller.hasAvailableUpdate, "An old install-on-quit callback must not revive a dismissed reminder")
+        }
+    }
+
     private func makeFeedServer() async throws -> NWListener {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
