@@ -186,3 +186,31 @@ The regression suite covers failed-save transitions, owner observation, stale
 storage/repository/search/review/Activity/Diagnostics responses, recovery-session
 reset, editor rename preservation and project changes during bulk operations.
 Live tests require the existing explicit opt-in and are skipped by default.
+
+## Dashboard diagnostics
+
+The final two charts use local telemetry, not inferred business outcomes:
+
+- **Delta retrieval reuse** counts selected fragments with recorded `reuse` /
+  (`add` + `replace` + `reuse`) actions in successful retained activations.
+  State supplied is the fraction of all completed retained activation requests
+  carrying a state token; an invalid token still counts as supplied. Empty
+  results and missing actions are not zero-reuse samples. Period totals use
+  fragment counts, not averages of daily percentages. History is limited to
+  500 retrieval requests per project on this Mac, including draft fragments.
+- **Agent Memory usage** counts completed native Codex main-agent turns that
+  invoked `activate`, `load`, or `store`, divided by all observed completed
+  turns, including turns without a Memory call. Failed calls still count as
+  invocations. Runs are grouped by start date; ongoing turns, subagents,
+  other hosts, and logs without reliable run boundaries are excluded. Bound
+  workspace/project scope follows Activity's discovery rules. Missing or
+  unreadable logs cannot establish non-use; unavailable data is not shown as 0%.
+
+Only counts reach the dashboard. The daemon caches per-file run metadata,
+invalidates changed logs, and does not persist or export prompts/tool payloads
+for these metrics. This is observed local usage, not organization-wide coverage,
+answer quality, or evidence that the agent adopted a retrieved memory.
+
+The Markdown source editor preserves marked text while an input method is
+composing. It publishes committed text for autosave only after composition,
+so a SwiftUI refresh cannot replace an unfinished Chinese phrase.

@@ -12,6 +12,8 @@ use crate::{DaemonError, DaemonState, SourceScope};
 
 mod codex;
 mod paging;
+/// Aggregate observed host execution boundaries without exporting transcripts.
+pub mod usage;
 
 pub(crate) use paging::RecallCache;
 pub(super) use paging::{get_recall_session, list_recalls};

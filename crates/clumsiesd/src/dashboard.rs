@@ -52,6 +52,34 @@ pub struct DashboardRetrievalStatistics {
     pub history_start: Option<i64>,
     /// Per-project history ceiling; counts are never advertised as complete usage.
     pub retention_per_project: i64,
+    /// Fragment delta actions and state continuity in retained requests.
+    pub delta: DashboardDeltaStatistics,
+    /// Completed native Codex turns observed in local bound session logs.
+    pub agent_usage: Option<crate::recall::usage::AgentUsageStatistics>,
+}
+
+/// Delta telemetry counts fragments, rather than distinct documents or requests.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DashboardDeltaStatistics {
+    /// Completed requests carrying a state token, including rejected tokens.
+    pub with_state: usize,
+    /// Selected fragments grouped by local day and delta action.
+    pub days: Vec<DashboardDeltaDay>,
+}
+
+/// Counts of selected fragments in successful retained retrievals on one day.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DashboardDeltaDay {
+    /// Local midnight, as Unix seconds.
+    pub date: i64,
+    /// Fragments newly provided relative to the caller's state.
+    pub added: usize,
+    /// Known fragments whose contents changed.
+    pub replaced: usize,
+    /// Unchanged fragments already available to the caller.
+    pub reused: usize,
+    /// Selected fragments without a recorded action; excluded from the ratio.
+    pub unknown: usize,
 }
 
 /// One local calendar day's completed requests.
@@ -89,7 +117,9 @@ impl DaemonState {
         &self,
         request: DashboardRetrievalRequest,
     ) -> Result<DashboardRetrievalStatistics, DaemonError> {
-        aggregate(&self.inner.pool, request).await
+        let mut result = aggregate(&self.inner.pool, request.clone()).await?;
+        result.agent_usage = Some(crate::recall::usage::statistics(self, &request).await?);
+        Ok(result)
     }
 }
 
@@ -139,7 +169,7 @@ async fn aggregate(
     let projects = serde_json::to_string(&r.project_ids)?;
     let mut tx = pool.begin().await?;
     let runs = sqlx::query(
-        "SELECT run_id, CAST(strftime('%s',created_at) AS INTEGER) AS at, status, returned_fragment_count
+        "SELECT run_id, CAST(strftime('%s',created_at) AS INTEGER) AS at, status, returned_fragment_count, activation_state_fingerprint
          FROM retrieval_runs WHERE project_id IN (SELECT value FROM json_each($1))
            AND status IN ('succeeded','failed')
            AND CAST(strftime('%s',created_at) AS INTEGER) BETWEEN $2 AND $3"
@@ -150,7 +180,31 @@ async fn aggregate(
          WHERE r.project_id IN (SELECT value FROM json_each($1)) AND r.status = 'succeeded' AND c.selected = 1
            AND CAST(strftime('%s',r.created_at) AS INTEGER) BETWEEN $2 AND $3"
     ).bind(&projects).bind(quarter).bind(r.generated_at).fetch_all(&mut *tx).await?;
+    let deltas = sqlx::query(
+        "SELECT CAST(strftime('%s',r.created_at) AS INTEGER) AS at, c.delta_action
+         FROM retrieval_run_candidates c JOIN retrieval_runs r ON r.run_id = c.run_id
+         WHERE r.project_id IN (SELECT value FROM json_each($1)) AND r.status = 'succeeded' AND c.selected = 1
+           AND CAST(strftime('%s',r.created_at) AS INTEGER) BETWEEN $2 AND $3"
+    ).bind(&projects).bind(start).bind(r.generated_at).fetch_all(&mut *tx).await?;
     tx.commit().await?;
+    let mut delta = DashboardDeltaStatistics::default();
+    let absent_state = crate::retrieval_history::activation_state_fingerprint(None);
+    let mut delta_days = BTreeMap::new();
+    for row in deltas {
+        let at: i64 = row.try_get("at")?;
+        let date = r.day_bounds[r.day_bounds.partition_point(|bound| *bound <= at) - 1];
+        let day = delta_days.entry(date).or_insert(DashboardDeltaDay {
+            date,
+            ..Default::default()
+        });
+        match row.try_get::<Option<String>, _>("delta_action")?.as_deref() {
+            Some("add") => day.added += 1,
+            Some("replace") => day.replaced += 1,
+            Some("reuse") => day.reused += 1,
+            _ => day.unknown += 1,
+        }
+    }
+    delta.days = delta_days.into_values().collect();
     let mut days = BTreeMap::new();
     let mut history_start: Option<i64> = None;
     let mut retrievals = 0;
@@ -159,6 +213,9 @@ async fn aggregate(
         history_start = Some(history_start.map_or(at, |old| old.min(at)));
         if at < start {
             continue;
+        }
+        if run.try_get::<String, _>("activation_state_fingerprint")? != absent_state {
+            delta.with_state += 1;
         }
         let index = r.day_bounds.partition_point(|bound| *bound <= at) - 1;
         let date = r.day_bounds[index];
@@ -282,6 +339,8 @@ async fn aggregate(
         recency,
         history_start,
         retention_per_project: crate::retrieval_history::RETRIEVAL_RUN_RETENTION_PER_PROJECT,
+        delta,
+        agent_usage: None,
     })
 }
 
@@ -299,7 +358,7 @@ mod tests {
         crate::retrieval_history::migrate(&pool).await.unwrap();
         let today = 1_780_000_000 / 86400 * 86400;
         for (id, project, status, count, at) in [
-            ("ok", "p", "succeeded", 2, today),
+            ("ok", "p", "succeeded", 3, today),
             ("reuse", "p", "succeeded", 1, today + 1),
             ("empty", "p", "succeeded", 0, today),
             ("failed", "p", "failed", 0, today),
@@ -308,20 +367,30 @@ mod tests {
             ("old", "p", "succeeded", 1, today - 10 * 86400),
             ("future", "p", "succeeded", 1, today + 86400),
         ] {
-            sqlx::query("INSERT INTO retrieval_runs (run_id, project_id, query, activation_state_fingerprint, status, returned_fragment_count, created_at) VALUES ($1,$2,'private query','state',$3,$4,strftime('%Y-%m-%dT%H:%M:%fZ',$5,'unixepoch'))")
-                .bind(id).bind(project).bind(status).bind(count).bind(at).execute(&pool).await.unwrap();
+            let fingerprint = crate::retrieval_history::activation_state_fingerprint(
+                (id == "reuse").then_some("previous"),
+            );
+            sqlx::query("INSERT INTO retrieval_runs (run_id, project_id, query, activation_state_fingerprint, status, returned_fragment_count, created_at) VALUES ($1,$2,'private query',$6,$3,$4,strftime('%Y-%m-%dT%H:%M:%fZ',$5,'unixepoch'))")
+                .bind(id).bind(project).bind(status).bind(count).bind(at).bind(fingerprint).execute(&pool).await.unwrap();
         }
         for (run, unit, resource, selected) in [
             ("ok", "a1", "a", 1),
             ("ok", "a2", "a", 1),
+            ("ok", "a3", "a", 1),
             ("ok", "b1", "b", 0),
             ("reuse", "a1", "a", 1),
             ("other", "a1", "a", 1),
             ("old", "b1", "b", 1),
             ("failed", "c1", "c", 1),
         ] {
-            sqlx::query("INSERT INTO retrieval_run_candidates (run_id,candidate_order,unit_key,resource_id,scope,kind,path,heading_path_json,locator_json,content_hash,resource_content_hash,token_count,evidence_excerpt,selected,exclusion_reason,delta_action) VALUES ($1,0,$2,$3,'org','memory','knowledge/a.md','[]','{}','hash','hash',1,'private excerpt',$4,'selected','reuse')")
-                .bind(run).bind(unit).bind(resource).bind(selected).execute(&pool).await.unwrap();
+            let action = match (run, unit) {
+                ("ok", "a1") => Some("add"),
+                ("ok", "a2") => Some("replace"),
+                ("ok", "a3") => None,
+                _ => Some("reuse"),
+            };
+            sqlx::query("INSERT INTO retrieval_run_candidates (run_id,candidate_order,unit_key,resource_id,scope,kind,path,heading_path_json,locator_json,content_hash,resource_content_hash,token_count,evidence_excerpt,selected,exclusion_reason,delta_action) VALUES ($1,0,$2,$3,'org','memory','knowledge/a.md','[]','{}','hash','hash',1,'private excerpt',$4,'selected',$5)")
+                .bind(run).bind(unit).bind(resource).bind(selected).bind(action).execute(&pool).await.unwrap();
         }
         let request = DashboardRetrievalRequest {
             project_ids: vec!["p".into()],
@@ -339,6 +408,12 @@ mod tests {
         };
         let result = aggregate(&pool, request.clone()).await.unwrap();
         assert_eq!(result.retrievals, 4);
+        assert_eq!(result.delta.with_state, 1);
+        let day = &result.delta.days[0];
+        assert_eq!(
+            (day.added, day.replaced, day.reused, day.unknown),
+            (1, 1, 1, 1)
+        );
         assert_eq!(result.days.len(), 1);
         assert_eq!(
             (
