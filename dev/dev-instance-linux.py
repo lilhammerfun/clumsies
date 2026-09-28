@@ -146,7 +146,15 @@ class Instance:
         self.compose_project = f"clumsies-dev-{self.instance_id}"
         self.server_binary = os.path.join(self.bin, "clumsies-server")
         self.daemon_binary = os.path.join(REPO_ROOT, "target", "debug", "clumsiesd")
-        self.client_binary = os.path.join(REPO_ROOT, "target", "debug", "clumsies-desktop")
+        # The client is built for release even in a dev instance: it paints,
+        # shapes text and lays out on every frame, and an unoptimized GPUI
+        # cannot hold a 60Hz window. Measured on a 1181x1296 window: 49ms of CPU
+        # per frame in the dev profile against 5ms in release, where the frame
+        # budget is 16.7ms. The daemon and the Server stay in debug, where a
+        # rebuild matters more than a frame.
+        self.client_binary = os.path.join(
+            REPO_ROOT, "target", "release", "clumsies-desktop"
+        )
         self.client_pid = os.path.join(self.root, "client.pid")
 
     # -- files
@@ -293,7 +301,7 @@ class Instance:
         it."""
         if running(self.client_pid):
             return
-        run(["cargo", "build", "-p", "desktop"], cwd=REPO_ROOT)
+        run(["cargo", "build", "-p", "desktop", "--release"], cwd=REPO_ROOT)
         spawn(
             [self.client_binary],
             log=os.path.join(self.logs, "client.log"),
