@@ -65,6 +65,14 @@ guessed from the client's side: the Server's own `/api/v1/auth/methods` decides
 which controls exist, and the four shapes this client mirrors are pinned by
 tests.
 
+**Settings** opens on the Account pane, which is what the account block in the
+sidebar is in macOS: the username, the local password, and the identity provider,
+each with the one thing that can be done about it. Both changes — setting or
+changing a password, and connecting a provider — answer with a fresh session
+that goes to the daemon before the change is reported, because a password change
+signs every other session out. General and Support say what this window is
+signed in as, what it is talking to, and where the engine keeps its logs.
+
 **Settings and the account menu** are the macOS client's own two: the identity
 at the foot of the rail opens Settings — a dialog here, because this client has
 one window — and ends the session from the same menu. Signing out stores what

@@ -195,7 +195,8 @@ impl DesktopApp {
     /// a settings window has to find their way back to it.
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let facts = self.settings_facts();
-        let view = cx.new(|_| SettingsDialog::new(facts));
+        let app = cx.entity().downgrade();
+        let view = cx.new(|cx| SettingsDialog::new(app, facts, window, cx));
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let view = view.clone();
             dialog
@@ -1491,6 +1492,14 @@ impl DesktopApp {
         if self.dashboard.set_period(period) {
             self.refresh_dashboard(cx);
         }
+    }
+
+    /// Re-reads whose session the daemon holds, which is what the Account pane
+    /// changes: a password change or a connected identity provider hands the
+    /// window a new session, and the rail's foot names it.
+    pub fn reload_account(&mut self, cx: &mut Context<Self>) {
+        self.account = read_account();
+        cx.notify();
     }
 
     /// The pointer entered or left one day of one of the Dashboard's charts.

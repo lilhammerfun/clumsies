@@ -282,7 +282,7 @@ pub fn authenticate(origin: &str) -> Result<Session, String> {
 }
 
 /// Opens the browser, waits for the callback, and exchanges the code.
-fn finish_authorization(
+pub(crate) fn finish_authorization(
     client: &reqwest::blocking::Client,
     origin: &str,
     redirect: Callback,
@@ -362,9 +362,33 @@ fn read_callback(mut stream: std::net::TcpStream, expected_state: &str) -> Resul
         .ok_or_else(|| "the callback carried no authorization code".to_owned())
 }
 
-struct Callback {
+pub(crate) struct Callback {
     listener: TcpListener,
-    uri: String,
+    /// The loopback URL the Server sends the browser back to.
+    pub uri: String,
+}
+
+/// A browser authorization in progress: what the request that starts it has to
+/// send, and what the callback that finishes it has to check. Signing in and
+/// connecting an identity provider are the same round trip with a different
+/// first request, so both hold these.
+pub(crate) struct Authorization {
+    pub redirect: Callback,
+    pub verifier: String,
+    pub state: String,
+    pub challenge: String,
+}
+
+/// Opens the loopback listener and picks the PKCE pair, which is everything the
+/// first request needs.
+pub(crate) fn begin_authorization() -> Result<Authorization, String> {
+    let (verifier, challenge, state) = pkce();
+    Ok(Authorization {
+        redirect: loopback_redirect()?,
+        verifier,
+        state,
+        challenge,
+    })
 }
 
 fn loopback_redirect() -> Result<Callback, String> {
@@ -400,7 +424,7 @@ fn random_bytes_b64() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes())
 }
 
-fn client() -> Result<reqwest::blocking::Client, String> {
+pub(crate) fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()

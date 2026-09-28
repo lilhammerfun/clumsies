@@ -620,6 +620,102 @@ pub fn account() -> Result<Account, String> {
     })
 }
 
+/// What an account signs in with, and whether it has a local password — macOS's
+/// `AccountCredentialStatus`.
+#[derive(Clone, Deserialize)]
+pub struct Credentials {
+    /// The local username, when the account has one.
+    pub username: Option<String>,
+    /// Whether a local password has been established.
+    pub password_set: bool,
+    /// The email the identity provider recorded when the account was connected.
+    pub oidc_email: Option<String>,
+}
+
+/// Reads what the signed-in account signs in with. The daemon holds the
+/// session, so this is its Server proxy answering.
+pub fn credentials() -> Result<Credentials, String> {
+    let response = server("GET", "/api/v1/auth/credentials", BTreeMap::new(), None)?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    serde_json::from_str(&response.body).map_err(|error| format!("unreadable credentials: {error}"))
+}
+
+/// Sets or changes the local password.
+///
+/// The Server answers with a fresh session, because changing a password signs
+/// out every other session — this one included — so the caller has to hand the
+/// new tokens to the daemon before the old ones stop working.
+pub fn change_password(
+    username: Option<&str>,
+    current_password: Option<&str>,
+    password: &str,
+) -> Result<crate::sign_in::Session, String> {
+    let body = serde_json::json!({
+        "username": username,
+        "current_password": current_password,
+        "password": password,
+    })
+    .to_string();
+    let response = server("POST", "/api/v1/auth/password", json_headers(), Some(body))?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    serde_json::from_str(&response.body).map_err(|error| format!("unreadable session: {error}"))
+}
+
+/// Connects an identity provider to the account that is signed in — macOS's
+/// `bindOIDC`. The authorization is opened through the daemon's proxy, because
+/// the daemon holds the session and an authenticated call is its to make; the
+/// browser round trip and the token exchange that follow are the sign-in flow's
+/// own, and they answer with a session for the same reason a password change
+/// does.
+pub fn bind_identity(current_password: Option<&str>) -> Result<crate::sign_in::Session, String> {
+    let origin = configured_server_url()
+        .ok_or_else(|| "the daemon is not pointed at a Server".to_owned())?;
+    let authorization = crate::sign_in::begin_authorization()?;
+    let body = serde_json::json!({
+        "authorization": {
+            "client_kind": "desktop",
+            "redirect_uri": authorization.redirect.uri,
+            "state": authorization.state,
+            "code_challenge": authorization.challenge,
+            "code_challenge_method": "S256",
+        },
+        "current_password": current_password,
+    })
+    .to_string();
+    let response = server(
+        "POST",
+        "/api/v1/auth/oidc-bindings",
+        json_headers(),
+        Some(body),
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    #[derive(Deserialize)]
+    struct Binding {
+        authorization_url: String,
+    }
+    let binding: Binding = serde_json::from_str(&response.body)
+        .map_err(|error| format!("unreadable binding: {error}"))?;
+    crate::sign_in::finish_authorization(
+        &crate::sign_in::client()?,
+        &origin,
+        authorization.redirect,
+        &binding.authorization_url,
+        &authorization.verifier,
+        &authorization.state,
+    )
+}
+
+/// The headers a JSON body travels with, which the Server needs to read it.
+fn json_headers() -> BTreeMap<String, String> {
+    BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())])
+}
+
 /// Whether a daemon refusal means the daemon holds no Server session.
 ///
 /// There is no flag to ask for: the daemon refuses every Server request while
