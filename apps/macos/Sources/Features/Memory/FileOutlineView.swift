@@ -255,18 +255,19 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
 
         func activateRow(_ row: Int, modifiers: NSEvent.ModifierFlags) {
             guard modifiers.intersection([.command, .shift, .control, .option]).isEmpty,
-                  row >= 0, outline.selectedRowIndexes.contains(row) else { return }
-            openSelection()
-        }
-
-        @objc private func doubleClicked() {
-            guard let node = outline.item(atRow: outline.clickedRow) as? Node else { return }
+                  row >= 0, outline.selectedRowIndexes.contains(row), selection.count == 1,
+                  let node = outline.item(atRow: row) as? Node else { return }
             if node.value.children != nil {
                 if outline.isItemExpanded(node) { outline.collapseItem(node) }
                 else { outline.expandItem(node) }
             } else {
                 openSelection()
             }
+        }
+
+        @objc private func doubleClicked() {
+            // The first click already toggled the folder. Files still open on double-click.
+            openSelection()
         }
     }
 }
@@ -275,6 +276,19 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
 final class FileOutlineControl: NSOutlineView {
     var openSelection: (() -> Void)?
     var renameSelection: (() -> Void)?
+
+    // Hide only the triangle; disabling disclosure through the delegate also disables keyboard expansion.
+    override func frameOfOutlineCell(atRow row: Int) -> NSRect { .zero }
+
+    override func frameOfCell(atColumn column: Int, row: Int) -> NSRect {
+        var frame = super.frameOfCell(atColumn: column, row: row)
+        guard column == 0, row >= 0, row < numberOfRows else { return frame }
+        // Reclaim the triangle gutter while retaining the hierarchy's indentation.
+        let leading = CGFloat(level(forRow: row)) * indentationPerLevel
+        frame.size.width += frame.minX - leading
+        frame.origin.x = leading
+        return frame
+    }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 125, event.modifierFlags.contains(.command) {

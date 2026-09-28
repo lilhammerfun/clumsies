@@ -52,6 +52,44 @@ final class FileOutlineViewTests: XCTestCase {
         XCTAssertTrue(opened.isEmpty)
     }
 
+    func testFoldersToggleOnClickWithoutTrianglesAndRetainKeyboardNavigation() throws {
+        let view = tree([memory("a", "notes/a.md")])
+        let coordinator = view.makeCoordinator()
+        coordinator.update(view)
+        let outline = coordinator.outline
+        outline.frame = NSRect(x: 0, y: 0, width: 300, height: 200)
+        let folder = try XCTUnwrap(outline.item(atRow: 0))
+        outline.selectRowIndexes([0], byExtendingSelection: false)
+        XCTAssertEqual(outline.frameOfOutlineCell(atRow: 0), .zero)
+        XCTAssertEqual(outline.frameOfCell(atColumn: 0, row: 0).minX, 0)
+        for modifier: NSEvent.ModifierFlags in [.command, .shift, .control, .option] {
+            coordinator.activateRow(0, modifiers: modifier)
+            XCTAssertFalse(outline.isItemExpanded(folder))
+        }
+        coordinator.activateRow(0, modifiers: [])
+        XCTAssertTrue(outline.isItemExpanded(folder))
+        XCTAssertEqual(outline.frameOfCell(atColumn: 0, row: 1).minX, outline.indentationPerLevel)
+        outline.selectRowIndexes([0, 1], byExtendingSelection: false)
+        coordinator.activateRow(0, modifiers: [])
+        XCTAssertTrue(outline.isItemExpanded(folder), "A multi-selection must not toggle folders.")
+        outline.selectRowIndexes([0], byExtendingSelection: false)
+        NSApp.sendAction(try XCTUnwrap(outline.doubleAction), to: coordinator, from: outline)
+        XCTAssertTrue(outline.isItemExpanded(folder), "A double-click must not undo the first click.")
+        coordinator.activateRow(0, modifiers: [])
+        XCTAssertFalse(outline.isItemExpanded(folder))
+
+        for (code, character, expanded) in [(UInt16(124), "\u{F703}", true), (UInt16(123), "\u{F702}", false)] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, characters: character,
+                charactersIgnoringModifiers: character, isARepeat: false, keyCode: code
+            ))
+            outline.keyDown(with: event)
+            XCTAssertEqual(outline.isItemExpanded(folder), expanded)
+        }
+        XCTAssertTrue(opened.isEmpty)
+    }
+
     func testReloadKeepsStableNodesAndDoesNotExpandCollapsedDirectories() throws {
         let view = tree([memory("a", "notes/a.md")])
         let coordinator = view.makeCoordinator()
