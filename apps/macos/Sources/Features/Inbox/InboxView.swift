@@ -218,19 +218,6 @@ struct InboxView: View {
         if #available(macOS 26.0, *) {
             ToolbarSpacer(.flexible, placement: .automatic)
         }
-        ToolbarItem(id: "inbox.select-all", placement: .trailingPinned) {
-            Button {
-                selection = allVisibleSelected ? [] : Set(visibleItems.map(\.id))
-            } label: {
-                Label(allVisibleSelected ? "Deselect All" : "Select All",
-                      systemImage: allVisibleSelected ? "checkmark.square" : (selectedItems.isEmpty ? "square" : "minus.square"))
-            }
-            .labelStyle(.iconOnly)
-            .toolbarHelp(allVisibleSelected ? String(localized: "Deselect All") : String(localized: "Select All"))
-            .accessibilityValue(Text("\(selectedItems.count) / \(visibleItems.count)"))
-            .accessibilityIdentifier("inbox-toolbar-select-all")
-            .disabled(visibleItems.isEmpty || isBusy)
-        }
         ToolbarItem(id: "inbox.read", placement: .trailingPinned) {
             Button(readAction == .read ? "Mark as Read" : "Mark as Unread",
                    systemImage: readAction == .read ? "envelope.open" : "envelope.badge") {
@@ -250,6 +237,19 @@ struct InboxView: View {
             .keyboardShortcut("a", modifiers: [.control, .command])
             .accessibilityIdentifier("inbox-toolbar-archive")
             .disabled(selectedItems.isEmpty || isBusy)
+        }
+        ToolbarItem(id: "inbox.select-all", placement: .trailingPinned) {
+            Button {
+                selection = allVisibleSelected ? [] : Set(visibleItems.map(\.id))
+            } label: {
+                Label(allVisibleSelected ? "Deselect All" : "Select All",
+                      systemImage: allVisibleSelected ? "checkmark.square" : (selectedItems.isEmpty ? "square" : "minus.square"))
+            }
+            .labelStyle(.iconOnly)
+            .toolbarHelp(allVisibleSelected ? String(localized: "Deselect All") : String(localized: "Select All"))
+            .accessibilityValue(Text("\(selectedItems.count) / \(visibleItems.count)"))
+            .accessibilityIdentifier("inbox-toolbar-select-all")
+            .disabled(visibleItems.isEmpty || isBusy)
         }
         if #available(macOS 26.0, *) {
             ToolbarSpacer(.fixed, placement: .automatic)
