@@ -109,9 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return softwareUpdateController.canCheckForUpdates
         }
         if menuItem.action == #selector(refreshWorkspace(_:)) {
-            return mainWindow?.isKeyWindow == true && store.context.phase == .ready
-                && [.memory, .reviews, .inbox, .dashboard].contains(store.navigation.selectedSection)
-                && store.refreshes.statuses[store.refreshes.visible]?.isRefreshing == false
+            return settingsWindowController.canRefresh || (mainWindow?.isKeyWindow == true && store.context.phase == .ready
+                && [.memory, .reviews, .inbox, .dashboard, .sessions].contains(store.navigation.selectedSection)
+                && store.refreshes.statuses[store.refreshes.visible]?.isRefreshing == false)
         }
         if menuItem.action == #selector(newProject(_:)) {
             return store.context.canCreateProject && store.context.phase == .ready
@@ -618,7 +618,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func refreshWorkspace(_ sender: Any?) {
-        store.refreshes.request(store.refreshes.visible)
+        if settingsWindowController.canRefresh { settingsWindowController.refreshCurrentPage() }
+        else { store.refreshes.request(store.refreshes.visible) }
     }
 
     @objc private func showSearch(_ sender: Any?) {

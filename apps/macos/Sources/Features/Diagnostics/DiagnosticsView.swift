@@ -56,6 +56,9 @@ struct NativeRetrievalDiagnosticsView: View {
         .task(id: workspaceContext.activeProjectId) {
             await retrieval.load(projectId: workspaceContext.activeProjectId)
         }
+        .automaticRefresh(id: workspaceContext.activeProjectId, initially: false) {
+            await retrieval.refreshInBackground()
+        }
     }
 }
 
@@ -300,12 +303,6 @@ private struct RetrievalRunList: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
-                Button(action: onRefresh) {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .toolbarHelp(String(localized: "Refresh Retrieval Runs"))
-                .accessibilityLabel("Refresh Retrieval Runs")
-
                 Button(role: .destructive, action: onClearHistory) {
                     Image(systemName: "trash")
                 }

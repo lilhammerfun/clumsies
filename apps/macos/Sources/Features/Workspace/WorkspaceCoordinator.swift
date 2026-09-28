@@ -498,6 +498,7 @@ final class WorkspaceCoordinator {
         case .reviews: domain = refreshes.statuses[.reviewDetail] == nil ? .reviews : .reviewDetail
         case .inbox: domain = .inbox
         case .dashboard: domain = .dashboard
+        case .sessions: domain = .activity
         default: domain = .sync
         }
         guard context.phase == .ready else {

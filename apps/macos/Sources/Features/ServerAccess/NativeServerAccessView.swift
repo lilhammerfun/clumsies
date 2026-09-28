@@ -234,14 +234,7 @@ private struct NativeAdministratorRecoveryPanel: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    Task { await state.load() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(state.isLoading || state.mutatingID != nil)
-                .help("Refresh recovery data")
+
             }
 
             if state.isLoading && state.health == nil {
@@ -261,8 +254,11 @@ private struct NativeAdministratorRecoveryPanel: View {
 
         }
         .frame(maxWidth: 430, alignment: .leading)
-        .pageFeedback(state.errorMessage)
-        .task { await state.load() }
+        .pageFeedback(state.errorMessage) { Task { await state.load() } }
+        .automaticRefresh(id: identity) {
+            guard !state.isLoading, state.mutatingID == nil else { return }
+            await state.load()
+        }
     }
 }
 

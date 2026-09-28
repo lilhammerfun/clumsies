@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class WorkspaceRefreshScheduler: ObservableObject {
     enum Domain: String, CaseIterable {
-        case sync, memory, reviews, inbox, dashboard, reviewDetail
+        case sync, memory, reviews, inbox, dashboard, reviewDetail, activity
     }
 
     enum Result: Equatable { case updated, retained, deferred }
@@ -155,9 +155,9 @@ struct WorkspaceRefreshStatusView: View {
         Group {
             if status.isStale {
                 HStack(spacing: 8) {
-                    Label("Showing previous data. Refresh to check for changes.", systemImage: "clock.badge.exclamationmark")
+                    Label("Showing previous data. Updates will resume automatically.", systemImage: "clock.badge.exclamationmark")
                     Spacer()
-                    Button("Refresh", systemImage: "arrow.clockwise") { scheduler.request(domain) }
+                    Button("Retry") { scheduler.request(domain) }
                         .disabled(status.isRefreshing)
                         .accessibilityIdentifier("workspace-refresh")
                 }

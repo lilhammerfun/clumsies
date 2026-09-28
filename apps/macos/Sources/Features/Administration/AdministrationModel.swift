@@ -83,7 +83,8 @@ final class AdministrationModel: ObservableObject {
         section: AdministrationSection,
         force: Bool = false,
         loadMore: Bool = false,
-        query: String? = nil
+        query: String? = nil,
+        canApply: @escaping @MainActor () -> Bool = { true }
     ) async {
         guard !Task.isCancelled else { return }
         guard context.canAdministerOrganization, context.phase != .authenticationRequired else { return }
@@ -108,16 +109,22 @@ final class AdministrationModel: ObservableObject {
         if appending, previous.nextCursor == nil { return }
 
         let task = Task {
-            await performLoad(section: section, previous: previous, loadMore: appending)
+            await performLoad(section: section, previous: previous, loadMore: appending, canApply: canApply)
         }
         loadTasks[section] = task
         await task.value
     }
 
+    func refreshInBackground(section: AdministrationSection, canApply: @escaping @MainActor () -> Bool = { true }) async {
+        guard canApply(), !context.isMutatingAdministration, !state(for: section).isLoading else { return }
+        await load(section: section, force: true, canApply: canApply)
+    }
+
     private func performLoad(
         section: AdministrationSection,
         previous: AdministrationPageState,
-        loadMore: Bool
+        loadMore: Bool,
+        canApply: @escaping @MainActor () -> Bool
     ) async {
         guard !Task.isCancelled, context.canAdministerOrganization, context.phase != .authenticationRequired else { return }
         let generation = UUID()
@@ -132,15 +139,31 @@ final class AdministrationModel: ObservableObject {
         }
 
         do {
-            let page = try await Self.loadAdministrationPage(
+            var page = try await Self.loadAdministrationPage(
                 section: section,
                 cursor: loadMore ? previous.nextCursor : nil,
                 seenCursors: loadMore ? previous.seenCursors : [],
                 query: previous.query,
                 request: fetchPage
             )
+            var seenCursors = loadMore
+                ? previous.seenCursors.union(previous.nextCursor.map { [$0] } ?? []) : []
+            // Refresh all previously visible pages atomically, preserving scroll and failure recovery.
+            if !loadMore {
+                for _ in 0..<previous.seenCursors.count {
+                    guard let cursor = page.nextCursor else { break }
+                    guard canApply(), loadGenerations[section] == generation else { return }
+                    try Task.checkCancellation()
+                    let next = try await Self.loadAdministrationPage(section: section, cursor: cursor,
+                        seenCursors: seenCursors, query: previous.query, request: fetchPage)
+                    seenCursors.insert(cursor)
+                    page.snapshot.apply(next.snapshot, section: section, appending: true)
+                    page.nextCursor = next.nextCursor
+                    page.isStale = page.isStale || next.isStale
+                }
+            }
             try Task.checkCancellation()
-            guard loadGenerations[section] == generation,
+            guard loadGenerations[section] == generation, canApply(),
                   context.canAdministerOrganization, context.phase != .authenticationRequired else { return }
             var snapshot = self.snapshot ?? AdministrationSnapshot()
             snapshot.apply(page.snapshot, section: section, appending: loadMore)
@@ -150,9 +173,7 @@ final class AdministrationModel: ObservableObject {
                 isLoading: true,
                 isStale: page.isStale || (loadMore && previous.isStale),
                 nextCursor: page.nextCursor,
-                seenCursors: loadMore
-                    ? previous.seenCursors.union(previous.nextCursor.map { [$0] } ?? [])
-                    : [],
+                seenCursors: seenCursors,
                 query: previous.query
             )
             if section == .access, loadTasks[.organization] == nil {

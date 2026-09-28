@@ -63,20 +63,21 @@ struct SettingsWindowView: View {
                     if navigation.isSaving {
                         ToolbarItem { ProgressView().controlSize(.small).toolbarHelp(String(localized: "Saving changes…")) }
                     }
-                    if case .organization(let section) = navigation.destination {
-                        ToolbarItem {
-                            Button {
-                                Task { await administration.load(section: section, force: true) }
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            .disabled(navigation.hasUnsavedChanges || workspaceContext.isMutatingAdministration
-                                || administration.state(for: section).isLoading)
-                            .toolbarHelp(navigation.hasUnsavedChanges ? String(localized: "Save or discard changes before refreshing") : String(localized: "Refresh"))
-                            .accessibilityLabel("Refresh \(navigation.destination.title)")
-                        }
-                    }
                 }
+        }
+        .automaticRefresh(id: navigation.destination) {
+            guard !navigation.hasUnsavedChanges, !navigation.isSaving, !showsAccountSecurity,
+                  !workspaceContext.isMutatingAdministration else { return }
+            let destination = navigation.destination
+            let canApply: @MainActor () -> Bool = { !navigation.hasUnsavedChanges && !navigation.isSaving
+                && !workspaceContext.isMutatingAdministration && navigation.destination == destination }
+            switch destination {
+            case .organization(let section):
+                await administration.refreshInBackground(section: section, canApply: canApply)
+            case .pane(.organization):
+                await administration.refreshInBackground(section: .organization, canApply: canApply)
+            default: break
+            }
         }
         .sheet(isPresented: $showsAccountSecurity) { AccountSecurityView() }
         .navigationSplitViewStyle(.balanced)

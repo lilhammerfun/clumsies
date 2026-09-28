@@ -43,6 +43,7 @@ struct WorkspaceView: View {
     let onOpenSettings: () -> Void
     let loadsReviewDetail: Bool
     @StateObject private var activityModel: ActivityModel
+    @State private var activityRefreshRegistration: UUID?
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
     @State private var dashboardSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var reviewSplitVisibility: NavigationSplitViewVisibility = .all
@@ -113,7 +114,7 @@ struct WorkspaceView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if [.memory, .reviews, .inbox, .dashboard].contains(workspaceNavigation.selectedSection) {
+            if [.memory, .reviews, .inbox, .dashboard, .sessions].contains(workspaceNavigation.selectedSection) {
                 WorkspaceRefreshStatusView(scheduler: refreshes)
             }
         }
@@ -724,7 +725,14 @@ struct WorkspaceView: View {
                 preferredProjectId: workspaceContext.activeProjectId,
                 scope: activityPreferenceScope
             )
-            if !activityModel.hasLoaded { await activityModel.load() }
+            activityRefreshRegistration = refreshes.register(.activity) {
+                await activityModel.load()
+                return activityModel.hasLoaded && activityModel.errorMessage == nil ? .updated : .retained
+            }
+            refreshes.request(.activity)
+        }
+        .onDisappear {
+            if let activityRefreshRegistration { refreshes.unregister(.activity, id: activityRefreshRegistration) }
         }
         .onChange(of: activitySplitVisibility) { _, visibility in
             deferSidebarExpansionUpdate(visibility != .detailOnly)
@@ -749,25 +757,6 @@ struct WorkspaceView: View {
     private var activityToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             ActivityProjectFilter(store: store, model: activityModel)
-        }
-
-        if #available(macOS 26.0, *) {
-            ToolbarSpacer(.flexible, placement: .automatic)
-        }
-
-        ToolbarItem(placement: .trailingPinned) {
-            Button {
-                Task { await activityModel.load() }
-            } label: {
-                if activityModel.isLoading && !activityModel.sessions.isEmpty {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                }
-            }
-            .disabled(activityModel.isLoading)
-            .toolbarHelp(String(localized: "Refresh Activity"))
-            .accessibilityLabel("Refresh Activity")
         }
     }
 

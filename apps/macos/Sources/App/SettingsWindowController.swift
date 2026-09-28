@@ -79,6 +79,30 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var refreshSection: AdministrationSection? {
+        switch navigation.destination {
+        case .organization(let section): section
+        case .pane(.organization): .organization
+        default: nil
+        }
+    }
+
+    var canRefresh: Bool {
+        guard let section = refreshSection else { return false }
+        return window?.isKeyWindow == true && !navigation.hasUnsavedChanges && !navigation.isSaving
+            && store.context.phase == .ready && !store.context.isMutatingAdministration
+            && !administration.state(for: section).isLoading
+    }
+
+    func refreshCurrentPage() {
+        guard canRefresh, let section = refreshSection else { return }
+        Task { await administration.refreshInBackground(section: section) { [weak self] in
+            guard let self else { return false }
+            return !self.navigation.hasUnsavedChanges && !self.navigation.isSaving
+                && !self.store.context.isMutatingAdministration && self.refreshSection == section
+        } }
+    }
+
     override func showWindow(_ sender: Any?) {
         if navigation.destination.pane == .organization,
            !store.context.canAdministerOrganization || store.context.phase == .authenticationRequired {
