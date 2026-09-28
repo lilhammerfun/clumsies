@@ -26,6 +26,7 @@ enum WorkspaceColumnLayout: Equatable {
 struct WorkspaceView: View {
     @EnvironmentObject private var bundleStore: BundleStore
     let store: WorkspaceCoordinator
+    private let refreshes: WorkspaceRefreshScheduler
     @EnvironmentObject private var bundleModel: BundlesModel
     @EnvironmentObject private var memoryCatalog: MemoryCatalog
     @EnvironmentObject private var workspaceContext: WorkspaceContext
@@ -37,10 +38,12 @@ struct WorkspaceView: View {
     @EnvironmentObject private var reviewModel: ReviewsModel
     @EnvironmentObject private var documentSessions: DocumentSessions
     @EnvironmentObject private var inbox: InboxStore
+    @EnvironmentObject private var administration: AdministrationModel
     let onSignOut: () -> Void
     let onOpenSettings: () -> Void
     let loadsReviewDetail: Bool
     @StateObject private var activityModel: ActivityModel
+    @State private var activityRefreshRegistration: UUID?
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
     @State private var dashboardSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var reviewSplitVisibility: NavigationSplitViewVisibility = .all
@@ -69,6 +72,7 @@ struct WorkspaceView: View {
         loadsReviewDetail: Bool = true
     ) {
         self.store = store
+        self.refreshes = store.refreshes
         self.onSignOut = onSignOut
         self.onOpenSettings = onOpenSettings
         self.loadsReviewDetail = loadsReviewDetail
@@ -109,6 +113,21 @@ struct WorkspaceView: View {
                 regularWorkspace
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if [.memory, .reviews, .inbox, .dashboard, .sessions].contains(workspaceNavigation.selectedSection) {
+                WorkspaceRefreshStatusView(scheduler: refreshes)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            store.refreshVisiblePage(isForeground: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            store.refreshVisiblePage(isForeground: false)
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+            store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
+        }
+        .pageFeedback(administration.statusMessage, isStatus: true, dismiss: { administration.statusMessage = nil })
         .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
         .sheet(isPresented: $workspaceNavigation.showsLocalProjectRecovery) {
             LocalProjectRecoveryView(store: inbox, retry: { await store.refresh.retrySync(allProjects: true, reportFailure: false) })
@@ -117,6 +136,7 @@ struct WorkspaceView: View {
             ProjectCreationSheet(model: ProjectCreationModel(projects: store.projects))
         }
         .onChange(of: workspaceNavigation.selectedSection) { _, _ in
+            store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
             DispatchQueue.main.async {
                 workspaceNavigation.searchQuery = ""
                 if workspaceNavigation.selectedSection != .memory {
@@ -125,6 +145,7 @@ struct WorkspaceView: View {
             }
         }
         .task {
+            store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
             await store.runRefreshLoop()
         }
     }
@@ -134,7 +155,7 @@ struct WorkspaceView: View {
             GlobalSidebar(store: store, onSignOut: onSignOut, onOpenSettings: onOpenSettings)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
-            DashboardPage(context: workspaceContext) { id in
+            DashboardPage(context: workspaceContext, refreshes: refreshes) { id in
                 guard let item = workspaceNavigation.memoryItems.first(where: { $0.id == id }) else { return }
                 workspaceNavigation.selectedSection = .memory
                 workspaceNavigation.open(item)
@@ -159,7 +180,7 @@ struct WorkspaceView: View {
             GlobalSidebar(store: store, onSignOut: onSignOut, onOpenSettings: onOpenSettings)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
-            InboxView(store: inbox,
+            InboxView(store: inbox, onRefresh: { refreshes.request(.inbox) },
                 searchFocusToken: workspaceNavigation.workspaceSearchFocusToken,
                 open: { try await store.openInboxDestination($0) })
                 .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
@@ -416,6 +437,7 @@ struct WorkspaceView: View {
                 .navigationDestination(for: ReviewRoute.self) { route in
                     ReviewDetailPage(reviewId: route.reviewId,
                         loadsRemoteContent: loadsReviewDetail,
+                        refreshes: refreshes,
                         model: ReviewDetailModel(reviewId: route.reviewId, context: store.context, feedback: store.feedback, reviews: store.reviews)
                     )
                     .toolbar {
@@ -512,7 +534,7 @@ struct WorkspaceView: View {
         let needle = reviewSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
         guard !needle.isEmpty else { return byFilters }
         return byFilters.filter {
-            "\($0.title) \($0.description) \($0.author.email) \($0.status)"
+            "\($0.title) \($0.description) \($0.author.identityLabel) \($0.status)"
                 .localizedLowercase.contains(needle)
         }
     }
@@ -703,7 +725,14 @@ struct WorkspaceView: View {
                 preferredProjectId: workspaceContext.activeProjectId,
                 scope: activityPreferenceScope
             )
-            if !activityModel.hasLoaded { await activityModel.load() }
+            activityRefreshRegistration = refreshes.register(.activity) {
+                await activityModel.load()
+                return activityModel.hasLoaded && activityModel.errorMessage == nil ? .updated : .retained
+            }
+            refreshes.request(.activity)
+        }
+        .onDisappear {
+            if let activityRefreshRegistration { refreshes.unregister(.activity, id: activityRefreshRegistration) }
         }
         .onChange(of: activitySplitVisibility) { _, visibility in
             deferSidebarExpansionUpdate(visibility != .detailOnly)
@@ -728,25 +757,6 @@ struct WorkspaceView: View {
     private var activityToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             ActivityProjectFilter(store: store, model: activityModel)
-        }
-
-        if #available(macOS 26.0, *) {
-            ToolbarSpacer(.flexible, placement: .automatic)
-        }
-
-        ToolbarItem(placement: .trailingPinned) {
-            Button {
-                Task { await activityModel.load() }
-            } label: {
-                if activityModel.isLoading && !activityModel.sessions.isEmpty {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                }
-            }
-            .disabled(activityModel.isLoading)
-            .toolbarHelp(String(localized: "Refresh Activity"))
-            .accessibilityLabel("Refresh Activity")
         }
     }
 
@@ -1000,7 +1010,7 @@ private struct GlobalSidebar: View {
            !displayName.isEmpty {
             return displayName
         }
-        return workspaceContext.account?.email ?? String(localized: "Account")
+        return workspaceContext.account?.loginLabel ?? String(localized: "Account")
     }
 
     private var selection: Binding<GlobalSidebarDestination?> {

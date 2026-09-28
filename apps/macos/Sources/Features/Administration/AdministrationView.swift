@@ -14,7 +14,7 @@ struct AdministrationView: View {
             ? String(localized: "Changes on this page are disabled until a live refresh succeeds.") : nil, isStatus: true) {
             Task { await administration.load(section: section, force: true) }
         }
-        .pageFeedback(state.isLoaded ? state.errorMessage : nil, isStatus: true) {
+        .pageFeedback(state.errorMessage, isStatus: true) {
             Task { await administration.load(section: section, force: true) }
         }
         .font(.system(size: 13))
@@ -56,7 +56,7 @@ struct AdministrationView: View {
                 "\(section.title) Unavailable",
                 systemImage: "building.2.crop.circle",
                 description: Text(state.errorMessage ?? (workspaceContext.canAdministerOrganization
-                    ? String(localized: "Refresh to try again.") : String(localized: "Organization administrator access is required.")))
+                    ? String(localized: "The page could not be loaded. Try again.") : String(localized: "Organization administrator access is required.")))
             )
         }
     }
@@ -189,6 +189,7 @@ private struct AdministrationMembersView: View {
     @State private var query = ""
     @State private var completedQuery: String?
     @State private var showsAddMember = false
+    @State private var issuedCredential: AccountActionCredential?
     @State private var pendingDisable: AdminOrganizationMemberRecord?
     @State private var errorMessage: String?
 
@@ -214,10 +215,10 @@ private struct AdministrationMembersView: View {
 
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(member.displayName ?? member.email)
+                            Text(member.identityLabel)
                                 .lineLimit(1)
                             if member.displayName != nil {
-                                Text(member.email)
+                                Text(member.loginLabel)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
@@ -226,7 +227,7 @@ private struct AdministrationMembersView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         VStack(alignment: .trailing, spacing: 3) {
                             Text(member.role.title + (isCurrentUser ? String(localized: " · You") : ""))
-                            if member.status == .disabled || !member.externalIdentityBound {
+                            if member.status != .active {
                                 Text(member.status == .disabled ? "Disabled" : "Not signed in")
                                     .foregroundStyle(.secondary)
                             }
@@ -241,6 +242,14 @@ private struct AdministrationMembersView: View {
                             }
                             .disabled(!canEditMember)
                             Divider()
+                            if member.status == .invited || (member.status == .active && member.username != nil) {
+                                Button(member.status == .invited ? "Reissue invitation…" : "Reset password…") {
+                                    Task {
+                                        do { issuedCredential = try await administration.issueAccountAction(for: member) }
+                                        catch { errorMessage = error.actionMessage }
+                                    }
+                                }.disabled(!canEditMember || (member.role != .member && workspaceContext.account?.role != "owner"))
+                            }
                             if member.status == .disabled {
                                 Button("Reactivate") {
                                     mutate { try await administration.updateAdminOrganizationMember(member, status: .active) }
@@ -256,7 +265,7 @@ private struct AdministrationMembersView: View {
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
                         .fixedSize()
-                        .accessibilityLabel("Manage \(member.displayName ?? member.email)")
+                        .accessibilityLabel("Manage \(member.identityLabel)")
                     }
                     .padding(.vertical, 2)
                 }
@@ -285,6 +294,7 @@ private struct AdministrationMembersView: View {
                 if requestedQuery == query { completedQuery = requestedQuery }
             } catch {}
         }
+        .sheet(item: $issuedCredential) { credential in AccountActionCredentialView(credential: credential) }
         .sheet(isPresented: $showsAddMember) {
             AdministrationAddMemberSheet(onUnsavedChangesChange: onUnsavedChangesChange)
         }
@@ -296,12 +306,12 @@ private struct AdministrationMembersView: View {
             ),
             presenting: pendingDisable
         ) { member in
-            Button("Disable \(member.displayName ?? member.email)", role: .destructive) {
+            Button("Disable \(member.identityLabel)", role: .destructive) {
                 mutate { try await administration.disableAdminOrganizationMember(member) }
                 pendingDisable = nil
             }
         } message: { member in
-            Text("This disables \(member.email) and revokes their active sessions.")
+            Text("This disables \(member.loginLabel) and revokes their active sessions.")
         }
     }
 
@@ -348,15 +358,20 @@ private struct AdministrationAddMemberSheet: View {
     @EnvironmentObject private var administration: AdministrationModel
     let onUnsavedChangesChange: (Bool) -> Void
     @State private var email = ""
+    @State private var usesEmail = false
+    @State private var credential: AccountActionCredential?
     @State private var role: AdminOrganizationRole = .member
     @State private var errorMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
+            if let credential {
+                AccountActionCredentialView(credential: credential)
+            } else {
             Form {
                 Section {
-                    TextField("Email", text: $email)
-                        .textContentType(.emailAddress)
+                    Toggle("Admit an email for identity-provider login", isOn: $usesEmail)
+                    if usesEmail { TextField("Email", text: $email).textContentType(.emailAddress) }
                     Picker("Organization role", selection: $role) {
                         ForEach(assignableRoles) { role in
                             Text(role.title).tag(role)
@@ -366,7 +381,7 @@ private struct AdministrationAddMemberSheet: View {
                     Text("Add member")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("This person can sign in with this email using your organization's single sign-on. No invitation email is sent.")
+                        Text(usesEmail ? "This person can sign in with this email using your organization's single sign-on. No invitation email is sent." : "Create a one-time invitation and send it to the member yourself. No email is required.")
                         FormErrorMessage(message: errorMessage)
                     }
                 }
@@ -379,8 +394,9 @@ private struct AdministrationAddMemberSheet: View {
                 isWorking: workspaceContext.isMutatingAdministration, canConfirm: canAdd,
                 cancel: { dismiss() }, confirm: add
             )
+            }
         }
-        .frame(width: 460, height: 285)
+        .frame(width: 480, height: 340)
         .interactiveDismissDisabled(workspaceContext.isMutatingAdministration)
         .onChange(of: email.isEmpty) { _, empty in onUnsavedChangesChange(!empty) }
         .onDisappear { onUnsavedChangesChange(false) }
@@ -388,13 +404,13 @@ private struct AdministrationAddMemberSheet: View {
 
     private var canAdd: Bool {
         administration.canMutate(.members)
-            && email.contains("@")
-            && !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!usesEmail || email.contains("@"))
     }
 
     private var assignableRoles: [AdminOrganizationRole] {
-        var roles: [AdminOrganizationRole] = [.member, .admin]
+        var roles: [AdminOrganizationRole] = usesEmail ? [.member, .admin] : [.member]
         if workspaceContext.account?.role == AdminOrganizationRole.owner.rawValue {
+            if !roles.contains(.admin) { roles.append(.admin) }
             roles.append(.owner)
         }
         return roles
@@ -405,6 +421,11 @@ private struct AdministrationAddMemberSheet: View {
         errorMessage = nil
         Task {
             do {
+                if !usesEmail {
+                    credential = try await administration.createLocalInvitation(role: role)
+                    onUnsavedChangesChange(false)
+                    return
+                }
                 try await administration.inviteAdminOrganizationMember(
                     email: email.trimmingCharacters(in: .whitespacesAndNewlines),
                     role: role
@@ -463,15 +484,15 @@ private struct AdministrationAuditView: View {
     var body: some View {
         Form {
             Section {
-                ClassicSearchField(text: $query, prompt: String(localized: "Search activity"), width: 300,
+                ClassicSearchField(text: $query, prompt: String(localized: "Search audit log"), width: 300,
                     accessibilityIdentifier: "organization-audit-events-search")
                     .frame(height: 24)
             }
-            Section("Activity") {
+            Section("Audit Log") {
                 if completedQuery != query || state.isLoading && events.isEmpty {
-                    ProgressView("Loading activity…")
+                    ProgressView("Loading audit log…")
                 } else if events.isEmpty, state.errorMessage == nil {
-                    Text(query.isEmpty ? "No activity yet." : "No activity found.")
+                    Text(query.isEmpty ? "No audit events yet." : "No audit events found.")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(completedQuery == query ? events : []) { event in
@@ -479,6 +500,10 @@ private struct AdministrationAuditView: View {
                         Text(actionTitle(event.action))
                         Text(targetName(event))
                             .foregroundStyle(.secondary)
+                        ForEach(Array((event.changes ?? []).enumerated()), id: \.offset) { _, change in
+                            Text("\(fieldTitle(change.field)): \(changeValue(change.before, field: change.field)) → \(changeValue(change.after, field: change.field))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         HStack(alignment: .firstTextBaseline) {
                             Text(actorName(event))
                             Spacer(minLength: 8)
@@ -528,12 +553,52 @@ private struct AdministrationAuditView: View {
         case "admin.project_member_updated": String(localized: "Updated project member")
         case "admin.project_member_deleted": String(localized: "Removed project member")
         case "admin.token_revoked": String(localized: "Revoked sign-in credential")
-        default: String(localized: "Organization activity")
+        case "installation.completed": String(localized: "Completed setup")
+        case "project_memory_authority_migrated": String(localized: "Migrated project memory")
+        case "auth.session_created": String(localized: "Signed in")
+        case "auth.session_revoked": String(localized: "Revoked session")
+        case "auth.oidc_login_completed": String(localized: "Signed in with SSO")
+        case "auth.oidc_identity_bound": String(localized: "Connected sign-in account")
+        case "auth.invitation_created": String(localized: "Created invitation")
+        case "auth.invitation_reissued": String(localized: "Reissued invitation")
+        case "auth.password_reset_issued": String(localized: "Issued password reset")
+        case "auth.action_issued": String(localized: "Issued account action")
+        case "auth.action_revoked": String(localized: "Revoked account action")
+        case "auth.invitation_accepted": String(localized: "Accepted invitation")
+        case "auth.password_reset": String(localized: "Reset password")
+        case "auth.password_changed": String(localized: "Changed password")
+        case "auth.owner_recovery_issued": String(localized: "Issued owner recovery")
+        default: action
+        }
+    }
+
+    private func changeValue(_ value: String, field: String) -> String {
+        if field == "allowed_email_domains", value.isEmpty { return String(localized: "Any domain") }
+        if field == "role", let role = AdminOrganizationRole(rawValue: value) { return role.title }
+        if field == "status" {
+            switch value {
+            case "active": return String(localized: "Active")
+            case "disabled": return String(localized: "Disabled")
+            case "invited": return String(localized: "Invited")
+            default: break
+            }
+        }
+        return value.isEmpty ? String(localized: "None") : value
+    }
+
+    private func fieldTitle(_ field: String) -> String {
+        switch field {
+        case "name": String(localized: "Name")
+        case "role": String(localized: "Role")
+        case "status": String(localized: "Status")
+        case "allowed_email_domains": String(localized: "Allowed email domains")
+        default: field
         }
     }
 
     private func targetName(_ event: AdminAuditEventRecord) -> String {
         if let name = event.targetDisplayName, !name.isEmpty { return name }
+        if let id = event.targetId { return id }
         switch event.targetType {
         case "org": return workspaceContext.organization?.name ?? String(localized: "Unavailable organization")
         case "user": return String(localized: "Unavailable member")
@@ -546,7 +611,7 @@ private struct AdministrationAuditView: View {
 
     private func actorName(_ event: AdminAuditEventRecord) -> String {
         if let name = event.actorDisplayName ?? event.actorEmail { return name }
-        return event.actorUserId == nil ? String(localized: "System") : String(localized: "Unavailable member")
+        return event.actorUserId ?? String(localized: "System")
     }
 }
 

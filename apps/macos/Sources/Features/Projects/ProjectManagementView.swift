@@ -179,11 +179,11 @@ struct ProjectUnavailableView: View {
                     self.workspaceNavigation.presentProjectCreation()
                 }
                 .keyboardShortcut(.defaultAction)
-            } else {
-                Button("Refresh") {
-                    Task { await workspaceActions.reload() }
-                }
             }
+        }
+        .automaticRefresh(id: "no-projects", initially: false) {
+            guard workspaceContext.phase == .ready, workspaceContext.projects.isEmpty else { return }
+            await workspaceActions.reload()
         }
     }
 }
@@ -220,7 +220,7 @@ struct ProjectSettingsView: View {
                 ProgressView("Loading project…")
             } else {
                 ContentUnavailableView("Project Unavailable", systemImage: "folder",
-                    description: Text("Refresh to check your access to this project."))
+                    description: Text("Project access could not be verified."))
                 Button("Retry") { Task { await administration.loadProject(id: projectId, force: true) } }
             }
         }
@@ -313,10 +313,10 @@ private struct ProjectConfigurationSections: View {
                     ForEach(self.projectMembers) { member in
                         HStack(spacing: 10) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(member.user.displayName ?? member.user.email)
+                                Text(member.user.identityLabel)
                                     .lineLimit(1)
                                 if member.user.displayName != nil {
-                                    Text(member.user.email)
+                                    Text(member.user.loginLabel)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                 }
@@ -351,7 +351,7 @@ private struct ProjectConfigurationSections: View {
                                 .menuStyle(.borderlessButton)
                                 .menuIndicator(.hidden)
                                 .fixedSize()
-                                .accessibilityLabel("Manage \(member.user.displayName ?? member.user.email)")
+                                .accessibilityLabel("Manage \(member.user.identityLabel)")
                             }
                         }
                     }
@@ -370,7 +370,7 @@ private struct ProjectConfigurationSections: View {
         }
         .pageFeedback(errorMessage ?? administration.projectDetailStates[project.id]?.errorMessage)
         .pageFeedback(administration.projectDetailStates[project.id]?.isStale == true
-            ? String(localized: "These project details are cached. Refresh before making changes.") : nil, isStatus: true) {
+            ? String(localized: "These project details are cached. Changes will be available after a live update.") : nil, isStatus: true) {
             Task { await administration.loadProject(id: project.id, force: true) }
         }
         .sheet(isPresented: $showsEdit) {
@@ -395,14 +395,14 @@ private struct ProjectConfigurationSections: View {
             ),
             presenting: pendingMemberRemoval
         ) { member in
-            Button("Remove \(member.user.displayName ?? member.user.email)", role: .destructive) {
+            Button("Remove \(member.user.identityLabel)", role: .destructive) {
                 self.mutate {
                     try await self.administration.deleteAdminProjectMember(projectId: self.project.id, userId: member.id)
                 }
                 self.pendingMemberRemoval = nil
             }
         } message: { member in
-            Text("\(member.user.email) will lose access to this project.")
+            Text("\(member.user.loginLabel) will lose access to this project.")
         }
     }
 
@@ -537,9 +537,9 @@ private struct ProjectMemberSheet: View {
             List(selection: self.$model.selectedId) {
                 ForEach(self.model.availableMembers) { member in
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(member.displayName ?? member.email)
+                        Text(member.identityLabel)
                         if member.displayName != nil {
-                            Text(member.email).foregroundStyle(.secondary)
+                            Text(member.loginLabel).foregroundStyle(.secondary)
                         }
                     }
                     .tag(member.id)

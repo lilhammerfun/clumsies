@@ -1,79 +1,7 @@
 import AppKit
 import SwiftUI
 
-struct FileTreeDirectoryClickResult {
-    let selection: Set<String>
-    let anchorId: String?
-    let togglesDirectory: Bool
-}
-
-enum FileTreeSelectionInteraction {
-    static func directoryClick(
-        nodeId: String,
-        visibleNodeIds: [String],
-        currentSelection: Set<String>,
-        anchorId: String?,
-        modifierFlags: NSEvent.ModifierFlags
-    ) -> FileTreeDirectoryClickResult {
-        if modifierFlags.contains(.shift) {
-            let effectiveAnchor = anchorId ?? nodeId
-            guard let anchorIndex = visibleNodeIds.firstIndex(of: effectiveAnchor),
-                  let nodeIndex = visibleNodeIds.firstIndex(of: nodeId) else {
-                return .init(
-                    selection: [nodeId],
-                    anchorId: nodeId,
-                    togglesDirectory: false
-                )
-            }
-            let range = min(anchorIndex, nodeIndex) ... max(anchorIndex, nodeIndex)
-            let rangeSelection = Set(range.map { visibleNodeIds[$0] })
-            return .init(
-                selection: modifierFlags.contains(.command)
-                    ? currentSelection.union(rangeSelection)
-                    : rangeSelection,
-                anchorId: effectiveAnchor,
-                togglesDirectory: false
-            )
-        }
-
-        if modifierFlags.contains(.command) {
-            var selection = currentSelection
-            if selection.contains(nodeId) {
-                selection.remove(nodeId)
-            } else {
-                selection.insert(nodeId)
-            }
-            return .init(
-                selection: selection,
-                anchorId: nodeId,
-                togglesDirectory: false
-            )
-        }
-
-        guard modifierFlags.intersection([.option, .control]).isEmpty else {
-            return .init(
-                selection: currentSelection,
-                anchorId: anchorId,
-                togglesDirectory: false
-            )
-        }
-
-        return .init(
-            selection: [nodeId],
-            anchorId: nodeId,
-            togglesDirectory: true
-        )
-    }
-}
-
-struct VisibleFileTreeNode: Identifiable {
-    let node: FileTreeNode
-    let depth: Int
-
-    var id: String { node.id }
-}
-
-struct FileTreeNode: Identifiable {
+struct FileTreeNode: Identifiable, Equatable {
     let id: String
     let name: String
     let item: MemoryListItem?
@@ -86,7 +14,8 @@ struct FileTreeNode: Identifiable {
             return PathTreeItem(
                 id: item.id,
                 path: treePath(for: item),
-                fallbackName: item.document.title
+                fallbackName: item.document.title,
+                isDirectory: item.document.isDirectory
             )
         }
 
@@ -129,14 +58,6 @@ struct FileTreeNode: Identifiable {
         return path.isEmpty ? nil : path
     }
 
-    static func directoryIds(in nodes: [FileTreeNode]) -> Set<String> {
-        nodes.reduce(into: Set<String>()) { result, node in
-            guard let children = node.children else { return }
-            result.insert(node.id)
-            result.formUnion(directoryIds(in: children))
-        }
-    }
-
     static func allIds(in nodes: [FileTreeNode]) -> [String] {
         nodes.flatMap { node in
             [node.id] + (node.children.map { allIds(in: $0) } ?? [])
@@ -161,7 +82,7 @@ struct FileTreeNode: Identifiable {
         guard selectedNodeIds.count == 1,
               let id = selectedNodeIds.first,
               let node = node(withId: id, in: nodes),
-              node.item == nil else {
+              node.children != nil else {
             return nil
         }
         return node
@@ -194,23 +115,6 @@ struct FileTreeNode: Identifiable {
         }
     }
 
-    static func visibleNodes(
-        _ nodes: [FileTreeNode],
-        expandedDirectoryIds: Set<String>,
-        depth: Int = 0
-    ) -> [VisibleFileTreeNode] {
-        nodes.flatMap { node in
-            var result = [VisibleFileTreeNode(node: node, depth: depth)]
-            if expandedDirectoryIds.contains(node.id), let children = node.children {
-                result.append(contentsOf: visibleNodes(
-                    children,
-                    expandedDirectoryIds: expandedDirectoryIds,
-                    depth: depth + 1
-                ))
-            }
-            return result
-        }
-    }
 }
 
 struct MemoryDirectoryRenameChange: Hashable, Sendable {
@@ -232,17 +136,20 @@ enum MemoryDirectoryMutationError: UserFacingError, Equatable {
     case invalidName
     case readOnly
     case pathCollision(String)
+    case invalidDestination
 
     var errorDescription: String? {
         switch self {
         case .invalidDirectory:
-            String(localized: "This folder no longer contains any memory.")
+            String(localized: "This folder no longer exists.")
         case .invalidName:
             String(localized: "Choose a different folder name without a slash.")
         case .readOnly:
-            String(localized: "Every memory in the folder must be editable before the folder can be changed.")
+            String(localized: "Every item in the folder must be editable before the folder can be changed.")
         case .pathCollision(let path):
-            String(localized: "The folder cannot be renamed because \(path) already exists.")
+            String(localized: "The destination already contains \(path).")
+        case .invalidDestination:
+            String(localized: "Choose a different destination outside the selected folders.")
         }
     }
 }
@@ -310,7 +217,9 @@ enum MemoryFileTreeMenu {
         items: [MemoryListItem],
         occupiedPaths: Set<String>,
         occupiedTreePaths: Set<String>,
-        inOrgView: Bool
+        inOrgView: Bool,
+        destinationParent: String? = nil,
+        directoryPaths: Set<String> = [], directoryTreePaths: Set<String> = []
     ) throws -> MemoryDirectoryRenamePlan {
         let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
@@ -324,7 +233,7 @@ enum MemoryFileTreeMenu {
             throw MemoryDirectoryMutationError.readOnly
         }
 
-        let parent = sourceDirectory.split(separator: "/").dropLast().joined(separator: "/")
+        let parent = destinationParent ?? sourceDirectory.split(separator: "/").dropLast().joined(separator: "/")
         let destinationDirectory = parent.isEmpty ? name : "\(parent)/\(name)"
         guard destinationDirectory != sourceDirectory else {
             throw MemoryDirectoryMutationError.invalidName
@@ -349,11 +258,11 @@ enum MemoryFileTreeMenu {
         for item in items {
             let treePath = FileTreeNode.treePath(for: item)
             let sourcePrefix = sourceDirectory + "/"
-            guard treePath.hasPrefix(sourcePrefix) else {
+            guard treePath.hasPrefix(sourcePrefix) || (item.document.isDirectory && treePath == sourceDirectory) else {
                 throw MemoryDirectoryMutationError.invalidDirectory
             }
             let relativePath = String(treePath.dropFirst(sourcePrefix.count))
-            let destinationTreePath = destinationDirectory + "/" + relativePath
+            let destinationTreePath = treePath == sourceDirectory ? destinationDirectory : destinationDirectory + "/" + relativePath
             let destinationPath = FileTreeNode.documentPath(
                 fromTreePath: destinationTreePath,
                 for: item
@@ -364,10 +273,10 @@ enum MemoryFileTreeMenu {
             )
             let normalizedDestinationRoot = destinationRoot.lowercased()
             let normalizedDestinationDirectory = destinationDirectory.lowercased()
-            if containsPathConflict(externalPaths, at: normalizedDestinationRoot)
+            if containsPathConflict(externalPaths, at: normalizedDestinationRoot, directories: directoryPaths)
                 || containsPathConflict(
                     externalTreePaths,
-                    at: normalizedDestinationDirectory
+                    at: normalizedDestinationDirectory, directories: directoryTreePaths
                 )
                 || !destinationPaths.insert(destinationPath.lowercased()).inserted
                 || !destinationTreePaths.insert(destinationTreePath.lowercased()).inserted {
@@ -382,11 +291,85 @@ enum MemoryFileTreeMenu {
         })
     }
 
-    private static func containsPathConflict(_ paths: Set<String>, at root: String) -> Bool {
+    private static func containsPathConflict(_ paths: Set<String>, at root: String, directories: Set<String> = []) -> Bool {
+        let directories = Set(directories.map { $0.lowercased() })
         let prefix = root + "/"
         return paths.contains {
-            $0 == root || $0.hasPrefix(prefix) || root.hasPrefix($0 + "/")
+            $0 == root || $0.hasPrefix(prefix) || (!directories.contains($0) && root.hasPrefix($0 + "/"))
         }
+    }
+
+    static func movePlan(
+        selectedNodeIds: Set<String>, to directoryId: String?, roots: [FileTreeNode],
+        occupiedPaths: Set<String>, occupiedTreePaths: Set<String>, inOrgView: Bool,
+        directoryPaths: Set<String> = [], directoryTreePaths: Set<String> = []
+    ) throws -> MemoryDirectoryRenamePlan {
+        let destination: String
+        if let directoryId {
+            guard let node = FileTreeNode.node(withId: directoryId, in: roots), node.children != nil,
+                  let path = FileTreeNode.directoryPath(from: directoryId) else {
+                throw MemoryDirectoryMutationError.invalidDestination
+            }
+            destination = path
+        } else {
+            destination = ""
+        }
+        // Selecting a folder and one of its children moves that child once.
+        func topLevelSelection(_ nodes: [FileTreeNode]) -> [FileTreeNode] {
+            nodes.flatMap { node in
+                selectedNodeIds.contains(node.id) ? [node] : topLevelSelection(node.children ?? [])
+            }
+        }
+        let selected = topLevelSelection(roots)
+        guard !selected.isEmpty, selectedNodeIds.isSubset(of: Set(FileTreeNode.allIds(in: roots))) else {
+            throw MemoryDirectoryMutationError.invalidDestination
+        }
+        var changes: [MemoryDirectoryRenameChange] = []
+        var destinationRoots = Set<String>()
+        for node in selected {
+            guard let source = node.item.map({ FileTreeNode.treePath(for: $0) })
+                ?? FileTreeNode.directoryPath(from: node.id) else {
+                throw MemoryDirectoryMutationError.invalidDestination
+            }
+            if node.children != nil,
+               destination.lowercased() == source.lowercased()
+                || destination.lowercased().hasPrefix(source.lowercased() + "/") {
+                throw MemoryDirectoryMutationError.invalidDestination
+            }
+            let target = destination.isEmpty ? node.name : destination + "/" + node.name
+            if source == target { continue }
+            if containsPathConflict(destinationRoots, at: target.lowercased()) {
+                throw MemoryDirectoryMutationError.pathCollision(target)
+            }
+            destinationRoots.insert(target.lowercased())
+            if let item = node.item, node.children == nil {
+                guard canRename(item, inOrgView: inOrgView) else {
+                    throw MemoryDirectoryMutationError.readOnly
+                }
+                let path = FileTreeNode.documentPath(fromTreePath: target, for: item)
+                let sourcePaths = [item.resource?.document.path, item.draft?.document.path].compactMap { $0 }
+                let externalPaths = Set(occupiedPaths.map { $0.lowercased() })
+                    .subtracting(sourcePaths.map { $0.lowercased() })
+                let externalTreePaths = Set(occupiedTreePaths.map { $0.lowercased() })
+                    .subtracting(sourcePaths.map { FileTreeNode.treePath(for: $0, kind: item.kind).lowercased() })
+                guard !containsPathConflict(externalPaths, at: path.lowercased(), directories: directoryPaths),
+                      !containsPathConflict(externalTreePaths, at: target.lowercased(), directories: directoryTreePaths) else {
+                    throw MemoryDirectoryMutationError.pathCollision(path)
+                }
+                changes.append(.init(item: item, newPath: path))
+            } else {
+                let plan = try directoryRenamePlan(
+                    directoryId: node.id, newName: node.name,
+                    items: FileTreeNode.items(in: roots, selectedNodeIds: [node.id]),
+                    occupiedPaths: occupiedPaths, occupiedTreePaths: occupiedTreePaths,
+                    inOrgView: inOrgView, destinationParent: destination,
+                    directoryPaths: directoryPaths, directoryTreePaths: directoryTreePaths
+                )
+                changes.append(contentsOf: plan.changes)
+            }
+        }
+        guard !changes.isEmpty else { throw MemoryDirectoryMutationError.invalidDestination }
+        return .init(changes: changes)
     }
 
     static func directoryDeletionPlan(

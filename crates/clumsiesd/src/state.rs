@@ -1502,6 +1502,7 @@ impl DaemonState {
                     )
                 });
             let mut content = content;
+            content.is_directory = resource.is_directory;
             content.org_source = Some(crate::types::OrgMemorySource {
                 resource_id: resource.resource_id,
                 commit_id: commit_id.clone(),
@@ -1547,7 +1548,50 @@ impl DaemonState {
                 known_hashes: BTreeMap::new(),
             },
         )
-        .await?;
+        .await;
+        // Directories are absent from semantic retrieval, but remain mutation
+        // targets in the installed Project snapshot under the same locks.
+        let loaded = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) if matches!(&error, DaemonError::Search { code, .. } if code == "memory_resource_not_found") =>
+            {
+                let checkout = commit_sync::project_checkout(
+                    self,
+                    DaemonProjectCheckoutRequest {
+                        project_id: request.project_id.clone(),
+                    },
+                )
+                .await?;
+                let directory = checkout
+                    .resources
+                    .into_iter()
+                    .find(|resource| {
+                        checkout.ready
+                            && resource.resource_id == target_id
+                            && resource.content.is_directory
+                    })
+                    .ok_or(error)?;
+                LoadMemoryResponse {
+                    resources: vec![LoadedMemoryResource {
+                        is_directory: true,
+                        resource_id: directory.resource_id,
+                        scope: if directory.scope == DaemonDraftScope::Org {
+                            SourceScope::Org
+                        } else {
+                            SourceScope::Project
+                        },
+                        kind: search::MemoryKind::Memory,
+                        path: directory.path.clone(),
+                        title: directory.path,
+                        description: String::new(),
+                        content_hash: directory.content_hash,
+                        changed: true,
+                        content: Some(directory.content.content),
+                    }],
+                }
+            }
+            Err(error) => return Err(error),
+        };
         let resource = loaded.resources.into_iter().next().ok_or_else(|| {
             DaemonError::NotFound(format!("memory resource {target_id} is not available"))
         })?;
@@ -1581,6 +1625,11 @@ impl DaemonState {
         let resource = self
             .load_stable_mutation_target(&request, &update.id)
             .await?;
+        if resource.is_directory {
+            return Err(DaemonError::InvalidRequest(
+                "directories do not support text edits".to_owned(),
+            ));
+        }
         if resource.scope == SourceScope::Project
             || request.source == Some(DaemonDraftOperationSource::McpStore)
         {

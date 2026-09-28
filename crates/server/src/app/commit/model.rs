@@ -13,6 +13,9 @@ pub(crate) struct PendingTreeEntry {
     /// Explicit immutable origin of a Project adaptation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) org_source: Option<crate::app::memory::dto::OrgMemorySource>,
+    /// Explicit directory marker participating in the immutable tree identity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) is_directory: bool,
     /// Stable identity of the resource or configuration item in a tree.
     pub(crate) item_id: String,
     /// Stored content category used to validate and materialize the payload.
@@ -52,7 +55,13 @@ pub(crate) fn validate_tree_materialization_paths(
         })?;
         validate_resource_path(path)?;
         let output_path = materialization_output_path(path)?;
-        insert_materialization_path(&mut paths, &entry.item_id, &output_path, "Commit Tree")?;
+        insert_materialization_path(
+            &mut paths,
+            &entry.item_id,
+            &output_path,
+            "Commit Tree",
+            entry.is_directory,
+        )?;
     }
     Ok(())
 }
@@ -127,6 +136,7 @@ mod tests {
     fn pending_context_entry(id: &str, path: &str) -> PendingTreeEntry {
         PendingTreeEntry {
             org_source: None,
+            is_directory: false,
             item_id: id.to_owned(),
             resource_kind: "memory".to_owned(),
             scope: "project".to_owned(),

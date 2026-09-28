@@ -50,7 +50,7 @@ final class LiveWorkspaceIntegrationTests: XCTestCase {
         )
         let snapshot = try await loader.load()
 
-        XCTAssertFalse(snapshot.account.email.isEmpty)
+        XCTAssertFalse(snapshot.account.identityLabel.isEmpty)
         XCTAssertFalse(snapshot.organization.name.isEmpty)
         XCTAssertFalse(snapshot.projects.isEmpty)
         XCTAssertTrue(snapshot.runtime.health.localDb.ready)

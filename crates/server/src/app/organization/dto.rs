@@ -10,7 +10,9 @@ pub struct UserRef {
     /// Stable identity of the user represented or targeted by this record.
     pub user_id: String,
     /// User email used for organization admission and identity display.
-    pub email: String,
+    pub email: Option<String>,
+    /// Optional normalized username for local password authentication.
+    pub username: Option<String>,
     /// Optional human-readable name supplied by the identity provider or administrator.
     pub display_name: Option<String>,
     /// Optional image URL supplied by the verified identity provider.
@@ -56,7 +58,7 @@ impl OrgRole {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberStatus {
-    /// The email is admitted but has not yet completed external identity binding.
+    /// The account is admitted but has not yet established password or external credentials.
     Invited,
     /// The established member may authenticate while credentials remain valid.
     Active,
@@ -125,7 +127,9 @@ pub struct Member {
     /// Stable identity of the user represented or targeted by this record.
     pub user_id: String,
     /// User email used for organization admission and identity display.
-    pub email: String,
+    pub email: Option<String>,
+    /// Optional normalized username for local password authentication.
+    pub username: Option<String>,
     /// Optional human-readable name supplied by the identity provider or administrator.
     pub display_name: Option<String>,
     /// Organization-wide privileges; project membership is checked separately.

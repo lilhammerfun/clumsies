@@ -16,6 +16,7 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=90d
       - --web.enable-lifecycle
+      - --web.external-url=http://localhost:9090
     volumes:
       - ./prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
@@ -30,6 +31,7 @@ services:
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
+      - --web.external-url=http://localhost:9093
     volumes:
       - ./alertmanager:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
@@ -103,6 +105,34 @@ services:
       - ./blackbox:/etc/blackbox_exporter:ro
     networks: [observability, clumsies]
 
+  loki:
+    image: grafana/loki:latest
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki:/etc/loki:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks: [observability]
+
+  alloy:
+    image: grafana/alloy:latest
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy:/etc/alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    networks: [observability]
+
 networks:
   observability:
   clumsies:
@@ -113,3 +143,5 @@ volumes:
   prometheus-data:
   alertmanager-data:
   grafana-data:
+  loki-data:
+  alloy-data:

@@ -221,11 +221,14 @@ final class AdministrationLoadingTests: XCTestCase {
         XCTAssertNil(audit.actorDisplayName)
         XCTAssertNil(audit.actorEmail)
         XCTAssertNil(audit.targetDisplayName)
+        XCTAssertNil(audit.changes)
         var named = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(legacy.utf8)) as? [String: Any])
         named["target_display_name"] = "Ada"
+        named["changes"] = [["field": "role", "before": "member", "after": "admin"]]
         let enriched = try JSONCoding.decoder().decode(AdminAuditEventRecord.self,
             from: JSONSerialization.data(withJSONObject: named))
         XCTAssertEqual(enriched.targetDisplayName, "Ada")
+        XCTAssertEqual(enriched.changes, [AdminAuditChange(field: "role", before: "member", after: "admin")])
     }
 
     @MainActor
@@ -267,6 +270,46 @@ final class AdministrationLoadingTests: XCTestCase {
         XCTAssertNil(model.snapshot)
         XCTAssertTrue(model.pageStates.isEmpty)
         XCTAssertFalse(model.canMutate(.members))
+    }
+
+    @MainActor
+    func testBackgroundRefreshPreservesExpandedMemberPages() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.apply(Self.workspaceSnapshot())
+        let model = AdministrationModel(context: workspace.context, onWorkspaceChanged: {}) { path, query in
+            let more = query.contains { $0.name == "cursor" && $0.value != nil }
+            return Self.response(path: path, nextCursor: more ? nil : "next", memberId: more ? "second" : "first")
+        }
+        await model.load(section: .members)
+        await model.load(section: .members, loadMore: true)
+        await model.refreshInBackground(section: .members)
+        XCTAssertEqual(model.snapshot?.members.map(\.id), ["first", "second"])
+        XCTAssertNil(model.state(for: .members).nextCursor)
+    }
+
+    @MainActor
+    func testBackgroundResponseIsDiscardedWhenEditingStartsDuringRequest() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.apply(Self.workspaceSnapshot())
+        let gate = AdministrationResponseGate()
+        let requests = AdministrationRequests()
+        var editing = false
+        let model = AdministrationModel(context: workspace.context, onWorkspaceChanged: {}) { path, query in
+            await requests.record(path: path, query: query)
+            if await requests.paths.count > 1 {
+                await gate.waitForRelease()
+                return Self.response(path: path, memberId: "changed")
+            }
+            return Self.response(path: path, memberId: "original")
+        }
+        await model.load(section: .members)
+        let task = Task { await model.refreshInBackground(section: .members, canApply: { !editing }) }
+        await gate.waitUntilRequested()
+        editing = true
+        await gate.release()
+        await task.value
+        XCTAssertEqual(model.snapshot?.members.map(\.id), ["original"])
+        XCTAssertFalse(model.state(for: .members).isLoading)
     }
 
     private static func workspaceSnapshot(capabilities: Set<String> = ["admin:write"]) -> WorkspaceSnapshot {

@@ -1,0 +1,853 @@
+{
+  "uid": "clumsies-api",
+  "title": "Clumsies Business API",
+  "tags": [
+    "clumsies",
+    "en"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "description": "Server handler response latency; excludes response body transfer. Health checks and /metrics are excluded. Does not include requests rejected at the proxy.",
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/clumsies-overview/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Business API",
+      "type": "link",
+      "url": "/d/clumsies-api/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Website traffic",
+      "type": "link",
+      "url": "/d/clumsies-web/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Handler latency · 5m",
+      "type": "timeseries",
+      "description": "Rolling 5-minute histogram estimate, not the maximum or a single request. Read alongside the sample count. Empty means no samples, not zero latency. Server handler response latency; excludes response body transfer. Health checks and /metrics are excluded. Does not include requests rejected at the proxy.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m])) > 0)",
+          "legendFormat": "p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m])) > 0)",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m])) > 0)",
+          "legendFormat": "p99",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "links": [
+        {
+          "title": "Inspect requests in this time range",
+          "url": "/d/clumsies-api/view?${__url_time_range}&viewPanel=5",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Requests observed · 5m",
+      "type": "timeseries",
+      "description": "Extrapolated window count, not an exact log count. Few requests make high percentiles unstable.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m]))",
+          "legendFormat": "Requests observed · 5m",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Requests by status / second",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(status)(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m]))",
+          "legendFormat": "{{status}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Requests over 1s by route · 5m",
+      "type": "timeseries",
+      "description": "1s is an investigation filter, not a latency SLO.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, sum by(route)(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m])) - sum by(route)(increase(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",le=~\"1|1[.]0\"}[5m])))",
+          "legendFormat": "{{route}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples",
+          "links": [
+            {
+              "title": "Inspect this route",
+              "url": "/d/clumsies-api/view?${__url_time_range}&var-route=${__field.labels.route}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Slow backend requests > 1s",
+      "type": "logs",
+      "description": "Expand a log line and open Related request logs to correlate the same request at the entrance and backend.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=\"server\"} | json route=\"span.route\", duration_ms=\"fields.duration_ms\", message=\"fields.message\", request_id=\"span.request_id\", status=\"fields.status\" | message=\"http request completed\" | route!~\"/metrics|/api/v1/admin/health\" | route=~\"${route:regex}\" | duration_ms > 1000 | __error__=\"\" | line_format \"{{.route}} · {{.duration_ms}} ms · HTTP {{.status}} · request_id={{.request_id}}\"",
+          "legendFormat": "",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "showLabels": false
+      }
+    },
+    {
+      "id": 6,
+      "title": "Slow app entrance requests > 1s",
+      "type": "logs",
+      "description": "All app entrance paths, independent of the backend route filter. Duration is milliseconds. Captures slow transfer even when the backend is fast.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=\"caddy\"} | json | site=\"app.clumsies.ai\" | path!~\"/metrics|/api/v1/admin/health\" | duration > 1000 | __error__=\"\" | line_format \"{{.path}} · {{.duration}} ms · HTTP {{.status}} · request_id={{.request_id}}\"",
+          "legendFormat": "",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "showLabels": false
+      }
+    },
+    {
+      "id": 7,
+      "title": "Logs for request ID",
+      "type": "logs",
+      "description": "Paste a request ID to see both layers. Empty shows all logs. This view ignores route selection to preserve the full request context.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=~\"caddy|server\"} |= ${request_id:doublequote}",
+          "legendFormat": "",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "showLabels": false
+      }
+    },
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Workflow and database",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 8,
+          "title": "Server connection pool",
+          "type": "timeseries",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 33,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_db_pool_connections",
+              "legendFormat": "{{state}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 9,
+          "title": "Busiest routes (top 8)",
+          "type": "timeseries",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 33,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "topk(8,sum by(route)(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\"}[5m])))",
+              "legendFormat": "{{route}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 10,
+          "title": "Commits created in the last hour",
+          "type": "timeseries",
+          "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency. Includes bootstrap and system commits.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 40,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_commits_created_last_hour",
+              "legendFormat": "commits / last 60m",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 11,
+          "title": "Drafts created in the last hour",
+          "type": "timeseries",
+          "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 40,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_drafts_created_last_hour",
+              "legendFormat": "drafts / last 60m",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 12,
+          "title": "Reviews created in the last hour",
+          "type": "timeseries",
+          "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 47,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_reviews_created_last_hour",
+              "legendFormat": "reviews / last 60m",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 13,
+          "title": "Drafts by lifecycle state",
+          "type": "timeseries",
+          "description": "Includes open, submitted, merged and discarded. Merged/discarded are historical states; open Drafts can remain in active use. Counts do not imply a service backlog.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 47,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_drafts",
+              "legendFormat": "{{status}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 14,
+          "title": "Open Draft net change per hour",
+          "type": "timeseries",
+          "description": "Hourly slope of the last 6 hours of stored open Draft counts. Includes creation, reopening, submission, discard and deletion; not creation throughput or processing latency.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 54,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "deriv(clumsies_drafts{status=\"open\"}[6h]) * 3600",
+              "legendFormat": "drafts/h",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 15,
+          "title": "Drafts with current reconciliation conflicts",
+          "type": "timeseries",
+          "description": "Open/submitted Drafts with a non-invalidated conflicting candidate matching the current Draft version, base commit and main ref. Historical candidates are excluded. Unevaluated Drafts are not counted; zero does not prove every Draft is conflict-free.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 54,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_drafts_with_reconciliation_conflicts",
+              "legendFormat": "drafts",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 16,
+          "title": "Stored unread notification records",
+          "type": "timeseries",
+          "description": "Stored receipts with read_version below version, including archived or inaccessible notifications. Not the visible inbox badge or a notification delivery failure.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 61,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_inbox_unread_records",
+              "legendFormat": "unread",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": null,
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 17,
+          "title": "Oldest open Draft age since creation (days)",
+          "type": "timeseries",
+          "description": "Time since created_at; recent edits do not reset this age. Zero when no open Draft exists. Not inactivity, synchronization latency or a processing deadline.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 61,
+            "w": 12,
+            "h": 7
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "clumsies_oldest_open_draft_age_seconds / 86400",
+              "legendFormat": "days",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No samples"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "route",
+        "label": "Route",
+        "type": "query",
+        "query": "label_values(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}, route)",
+        "current": {
+          "text": "$__all",
+          "value": "$__all"
+        },
+        "options": [],
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "refresh": 1
+      },
+      {
+        "name": "request_id",
+        "label": "Request ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      }
+    ]
+  }
+}

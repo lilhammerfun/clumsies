@@ -1,0 +1,15 @@
+apiVersion: 1
+datasources:
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000
+      timeout: 60
+      derivedFields:
+        - name: Request
+          matcherRegex: '(?:"request_id"\s*:\s*"|request_id=)([A-Za-z0-9_-]+)'
+          url: '/d/clumsies-api/view?var-request_id=$${__value.raw}&from=$${__from}&to=$${__to}&viewPanel=7'
+          urlDisplayLabel: 'Related request logs'

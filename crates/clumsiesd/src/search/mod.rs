@@ -171,6 +171,8 @@ pub struct LoadMemoryResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct LoadedMemoryResource {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_directory: bool,
     pub resource_id: String,
     pub scope: SourceScope,
     pub kind: MemoryKind,
@@ -772,6 +774,7 @@ pub(crate) async fn load_memory(
             .or_else(|| request.known_hashes.get(requested));
         let changed = known_hash != Some(&resource.content_hash);
         resources.push(LoadedMemoryResource {
+            is_directory: false,
             resource_id: resource.resource_id.clone(),
             scope: resource.scope,
             kind: resource.kind,
@@ -932,6 +935,9 @@ async fn load_effective_memory_under_storage_guard(
             .map(|blob| (blob.blob_id, blob.content))
             .collect::<HashMap<_, _>>();
         for entry in payload.tree.entries {
+            if entry.is_directory {
+                continue;
+            }
             if let Some(source) = &entry.org_source {
                 adaptations.insert(entry.id.clone(), source.resource_id.clone());
             }
@@ -1843,6 +1849,7 @@ mod tests {
                         id: "rule_testing".to_owned(),
                         content: DaemonDraftContent {
                             org_source: None,
+                            is_directory: false,
                             description: None,
                             content: "# Testing\n\nTesting now covers BM25, vectors, RRF, and reranking."
                                 .to_owned(),
@@ -2461,6 +2468,7 @@ mod tests {
             update.content,
             DaemonDraftContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "# Testing\n\nApply when changing retrieval behavior.\n\nRun integration, regression, and smoke tests.\n\nTags: testing"
                     .to_owned()
@@ -2639,6 +2647,7 @@ mod tests {
                         path: "project/new.md".to_owned(),
                         content: DaemonDraftContent {
                             org_source: None,
+                            is_directory: false,
                             description: Some("Project authority".to_owned()),
                             content: "# New".to_owned(),
                         },
@@ -2668,6 +2677,7 @@ mod tests {
         let service = DaemonIpcService::new(state.clone());
         let original_content = DaemonDraftContent {
             org_source: None,
+            is_directory: false,
             description: Some("Keep this semantic description.".to_owned()),
             content: "# New Memory\n\nOriginal body.".to_owned(),
         };
@@ -2923,6 +2933,7 @@ mod tests {
                             id: "ctx_target".to_owned(),
                             content: DaemonDraftContent {
                                 org_source: None,
+                                is_directory: false,
                                 description: None,
                                 content: "# Personal Draft".to_owned(),
                             },
@@ -3003,6 +3014,7 @@ mod tests {
                         path: "context/new.md".to_owned(),
                         content: DaemonDraftContent {
                             org_source: None,
+                            is_directory: false,
                             description: None,
                             content: "# New Draft".to_owned(),
                         },
@@ -3027,6 +3039,7 @@ mod tests {
                 path: "context/new.md".to_owned(),
                 content: DaemonDraftContent {
                     org_source: None,
+                    is_directory: false,
                     description: None,
                     content: "# New context".to_owned(),
                 },
@@ -3067,6 +3080,7 @@ mod tests {
                 path: "context/new.md".to_owned(),
                 content: DaemonDraftContent {
                     org_source: None,
+                    is_directory: false,
                     description: Some("Semantic metadata".to_owned()),
                     content: "# Initial".to_owned(),
                 },
@@ -3084,6 +3098,7 @@ mod tests {
                     id: "draft_provisional".to_owned(),
                     content: DaemonDraftContent {
                         org_source: None,
+                        is_directory: false,
                         description: None,
                         content: "# Updated".to_owned(),
                     },

@@ -52,8 +52,3 @@ enum WorkspaceLoadError: UserFacingError, Sendable {
         }
     }
 }
-
-enum WorkspaceRefreshCadence {
-    static let syncStatus: Duration = .seconds(2)
-    static let synchronizedData: Duration = .seconds(30)
-}

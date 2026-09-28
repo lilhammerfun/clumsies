@@ -148,9 +148,19 @@ final class MemoryModel: ObservableObject {
         }
     }
 
-    func createMemory(kind: MemoryKind, scope: MemoryScope) async {
+    func createMemory(kind: MemoryKind, scope: MemoryScope, parentPath: String? = nil) async {
         do {
-            _ = try await createMemoryDraft(kind: kind, scope: scope)
+            _ = try await createMemoryDraft(kind: kind, scope: scope, parentPath: parentPath)
+        } catch {
+            feedback.errorMessage = error.actionMessage
+        }
+    }
+
+    func createFolder(path: String) async {
+        do {
+            _ = try await createMemoryDraft(kind: .context, scope: .project,
+                requestedDocument: .init(title: path.split(separator: "/").last.map(String.init) ?? path,
+                                         path: path, body: "", isDirectory: true))
         } catch {
             feedback.errorMessage = error.actionMessage
         }
@@ -158,7 +168,9 @@ final class MemoryModel: ObservableObject {
 
     private func createMemoryDraft(
         kind: MemoryKind,
-        scope: MemoryScope
+        scope: MemoryScope,
+        parentPath: String? = nil,
+        requestedDocument: EditableMemoryDocument? = nil
     ) async throws -> String? {
         guard scope == .project, edits.canCreateMemory(kind: kind, scope: scope),
               let projectId = context.activeProjectId else { return nil }
@@ -178,9 +190,23 @@ final class MemoryModel: ObservableObject {
                 for: kind,
                 scope: scope,
                 authoritativeOrgResources: self.catalog.resources,
-                projectId: projectId
+                projectId: projectId,
+                parentPath: parentPath
             )
-            let document = Self.defaultDocument(kind: kind, path: path)
+            let document = requestedDocument ?? Self.defaultDocument(kind: kind, path: path)
+            try self.edits.validate(kind: kind, document: document)
+            let occupied = self.navigation.memoryItems.map(\.document) + self.edits.drafts.filter {
+                $0.projectId == projectId && $0.status != .discarded && $0.status != .merged
+            }.map(\.document)
+            let normalizedPath = document.path.lowercased()
+            if occupied.contains(where: {
+                let existing = $0.path.lowercased()
+                return existing == normalizedPath
+                    || (!$0.isDirectory && normalizedPath.hasPrefix(existing + "/"))
+                    || (!document.isDirectory && existing.hasPrefix(normalizedPath + "/"))
+            }) {
+                throw MemoryDirectoryMutationError.pathCollision(document.path)
+            }
             let response = try await self.context.daemon.store(
                 .init(
                     draftId: nil,
@@ -207,7 +233,9 @@ final class MemoryModel: ObservableObject {
                 activeProjectId: self.context.activeProjectId,
                 expectedProjectId: projectId
             ), self.context.workspaceReloadGeneration == generation else { return nil }
-            self.navigation.selectedItemId = response.draftId
+            if let item = self.navigation.memoryItems.first(where: { $0.id == response.draftId }) {
+                self.navigation.open(item, mode: .source)
+            }
             return response.draftId
         }
     }
@@ -284,9 +312,9 @@ final class MemoryModel: ObservableObject {
             organizationResources: authorityResources
         )
         setup.organizationCommitId = authorityCommitId
-        setup.occupiedPaths = Set(authorityResources.map(\.document.path))
-            .union(visibleMemoryItems.map(\.document.path))
-            .union(MemoryTreeProjection.memoryTreeDrafts(edits.drafts, activeProjectId: projectId).map(\.document.path))
+        setup.occupiedPaths.formUnion(
+            MemoryTreeProjection.memoryTreeDrafts(edits.drafts, activeProjectId: projectId).map(\.document.path)
+        )
         return setup
     }
 
@@ -603,13 +631,17 @@ final class MemoryModel: ObservableObject {
         for kind: MemoryKind,
         scope: MemoryScope,
         authoritativeOrgResources: [MemoryResource]? = nil,
-        projectId: String? = nil
+        projectId: String? = nil,
+        parentPath: String? = nil
     ) -> String {
-        let base: String
+        var base: String
         switch kind {
         case .context: base = "untitled.md"
         case .rules: base = "untitled.md"
         case .workflows: base = "workflow/untitled.md"
+        }
+        if let parentPath, !parentPath.isEmpty {
+            base = parentPath + "/untitled.md"
         }
         let scopedResources: [MemoryResource]
         let scopedDrafts: [LocalDraft]

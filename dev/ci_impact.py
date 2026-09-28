@@ -11,7 +11,7 @@ import sys
 
 
 CHECKS = ("docs", "scripts", "server", "daemon", "macos", "runtime", "package", "server_image")
-DELIVERIES = ("server_delivery", "site_delivery")
+DELIVERIES = ("server_delivery", "site_delivery", "observability_delivery")
 COMPONENTS = CHECKS + DELIVERIES
 NATIVE = {"macos", "runtime", "package"}
 SERVER = {"server", "daemon", "server_image", "server_delivery"}
@@ -36,6 +36,8 @@ def classify(paths):
             selected.update(COMPONENTS)
         elif path == ".github/workflows/server-delivery.yml":
             selected.update(SERVER | {"scripts"})
+        elif path == ".github/workflows/observability-delivery.yml":
+            selected.update({"scripts", "observability_delivery"})
         elif path == ".github/workflows/site-delivery.yml":
             selected.update({"docs", "scripts", "site_delivery"})
         elif path == ".github/workflows/release.yml":
@@ -66,6 +68,10 @@ def classify(paths):
             selected.update(SERVER | {"docs", "scripts", "site_delivery"})
         elif path in {"deploy/Caddyfile", "deploy/site.sh"}:
             selected.update({"docs", "scripts", "site_delivery"})
+        elif path.startswith("deploy/observability/"):
+            selected.add("scripts")
+            if not (path.endswith(".md") or Path(path).name.startswith("test") or path.endswith(".test.yml")):
+                selected.add("observability_delivery")
         elif path.startswith("deploy/server/"):
             selected.add("scripts")
         elif path in {"docker-compose.yml", "justfile"} or path.startswith(("dev/dev-", "dev/oidc/")):

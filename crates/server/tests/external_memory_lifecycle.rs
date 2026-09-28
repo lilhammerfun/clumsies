@@ -57,6 +57,7 @@ async fn draft_created_resource_must_be_discarded_instead_of_deleted() {
         resource: resource.clone(),
         content: Some(DraftResourceContent {
             org_source: None,
+            is_directory: false,
             description: None,
             content: "# New rule".to_owned(),
         }),
@@ -3923,6 +3924,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
             },
             content: Some(DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "# Valid Workflow".to_owned(),
             }),
@@ -3958,6 +3960,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
             },
             content: Some(DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "   ".to_owned(),
             }),
@@ -3991,6 +3994,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
             },
             content: Some(DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "  ".to_owned(),
             }),
@@ -4024,6 +4028,7 @@ async fn invalid_memory_paths_and_rule_shapes_are_rejected_before_draft_storage(
             },
             content: Some(DraftResourceContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "# Invalid".to_owned(),
             }),
@@ -4085,7 +4090,7 @@ async fn markdown_rule_and_workflow_survive_draft_review_and_commit_round_trip()
                     id: None,
                     path: Some("rules/coding".to_owned()),
                 },
-                content: Some(DraftResourceContent { org_source: None, description: None,
+                content: Some(DraftResourceContent { org_source: None, is_directory: false, description: None,
                     content: "# Coding discipline\n\nApply while changing production code.\n\nRun the focused tests before committing.\n\nTags: coding, quality"
                         .to_owned(),
                 }),
@@ -4163,7 +4168,7 @@ async fn markdown_rule_and_workflow_survive_draft_review_and_commit_round_trip()
                     id: None,
                     path: Some("workflow/coding".to_owned()),
                 },
-                content: Some(DraftResourceContent { org_source: None, description: None,
+                content: Some(DraftResourceContent { org_source: None, is_directory: false, description: None,
                     content: format!(
                         "# Coding workflow\n\nPrepare a production change.\n\n- Apply rule `{rule_id}`.\n- Summarize verification evidence."
                     ),
@@ -4234,6 +4239,7 @@ async fn markdown_rule_and_workflow_survive_draft_review_and_commit_round_trip()
 fn context_draft_content(content: &str) -> Option<DraftResourceContent> {
     Some(DraftResourceContent {
         org_source: None,
+        is_directory: false,
         description: None,
         content: content.to_owned(),
     })

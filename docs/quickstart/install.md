@@ -14,16 +14,16 @@ next:
 
 Supports **macOS 14 or later on Apple Silicon Macs (M1 or newer)**, without build tools.
 
-1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) and download `Clumsies-*-macos-arm64.dmg` from the newest **Clumsies macOS Preview**.
+1. Open [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases/latest) and download `Clumsies-*-macos-arm64.dmg` from the **Latest release**.
 2. Open the DMG, drag `Clumsies.app` into `Applications`, and eject the disk image.
-3. Open the App. The preview is not notarized by Apple. If macOS blocks it, verify that you trust the download, then use **System Settings → Privacy & Security → Open Anyway**. [Apple's instructions](https://support.apple.com/102445)
+3. Open the App. This download is not notarized by Apple. If macOS blocks it, verify that you trust the download, then use **System Settings → Privacy & Security → Open Anyway**. [Apple's instructions](https://support.apple.com/102445)
 4. Continue to [Connect to your organization](/quickstart/connect). The default Server is `https://app.clumsies.ai`; sign-in requires an admitted account. First use downloads the retrieval models.
 
-::: warning Preview
-The DMG is ad-hoc signed and not notarized by Apple. Managed Macs may restrict first-open exceptions. It uses the regular App's accounts, Memory, and settings; it is not a stable release.
+::: warning Apple notarization
+The DMG is ad-hoc signed and not notarized by Apple. Managed Macs may restrict first-open exceptions. It uses the regular App's accounts, Memory, and settings; GitHub release status and Apple notarization are independent.
 :::
 
-To update, quit the App, download a newer DMG, and replace the existing application. Your data is retained. If your source installation is at `~/Applications/Clumsies.app`, replace it there to avoid keeping two copies. Preview updates use a new DMG download.
+To update, quit the App, download a newer DMG, and replace the existing application. Your data is retained. If your source installation is at `~/Applications/Clumsies.app`, replace it there to avoid keeping two copies. You can also use Settings → General → Check for Updates. Existing Preview installations receive the next signed release through their update feed, then follow the regular release channel.
 
 ## Install from source
 

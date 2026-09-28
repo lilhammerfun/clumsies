@@ -19,6 +19,7 @@ mod common;
 fn memory_content(content: &str) -> Option<DraftResourceContent> {
     Some(DraftResourceContent {
         org_source: None,
+        is_directory: false,
         description: None,
         content: content.to_owned(),
     })

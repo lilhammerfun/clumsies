@@ -3,7 +3,10 @@ import Foundation
 struct UserReference: Codable, Identifiable, Hashable, Sendable {
     var id: String { userId }
     let userId: String
-    let email: String
+    let email: String?
+    var username: String? = nil
+    var identityLabel: String { displayName ?? username ?? email ?? userId }
+    var loginLabel: String { username ?? email ?? userId }
     let displayName: String?
     let avatarUrl: String?
     let role: String
@@ -132,7 +135,10 @@ struct AdminOrganizationMemberRecord: Codable, Identifiable, Hashable, Sendable 
     var id: String { userId }
 
     let userId: String
-    let email: String
+    let email: String?
+    var username: String? = nil
+    var identityLabel: String { displayName ?? username ?? email ?? userId }
+    var loginLabel: String { username ?? email ?? userId }
     let displayName: String?
     let role: AdminOrganizationRole
     let status: AdminMemberStatus
@@ -179,6 +185,12 @@ struct AdminAccessTokenRecord: Codable, Identifiable, Hashable, Sendable {
     let createdAt: String
 }
 
+struct AdminAuditChange: Codable, Hashable, Sendable {
+    let field: String
+    let before: String
+    let after: String
+}
+
 struct AdminAuditEventRecord: Codable, Identifiable, Hashable, Sendable {
     var id: String { eventId }
 
@@ -190,6 +202,7 @@ struct AdminAuditEventRecord: Codable, Identifiable, Hashable, Sendable {
     let targetType: String
     let targetId: String?
     let targetDisplayName: String?
+    var changes: [AdminAuditChange]? = nil
     let createdAt: String
 }
 
@@ -252,6 +265,7 @@ struct ListResponse<Item: Decodable & Sendable>: Decodable, Sendable {
 
 struct MemoryMetadata: Codable, Identifiable, Hashable, Sendable {
     var orgSource: OrgMemorySource? = nil
+    var isDirectory: Bool? = nil
     var id: String { memoryId }
 
     let memoryId: String
@@ -365,6 +379,7 @@ enum ServerTreeEntryKind: String, Codable, Hashable, Sendable {
 }
 
 struct CommitTreeEntry: Codable, Sendable {
+    var isDirectory: Bool? = nil
     let id: String
     let type: ServerTreeEntryKind
     let scope: String

@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(health.database.status, HealthStatus::Down);
         assert_eq!(health.schema.status, HealthStatus::Down);
         assert_eq!(health.commit_service.status, HealthStatus::Down);
-        assert_eq!(health.oidc.status, HealthStatus::Down);
+        assert_eq!(health.oidc.status, HealthStatus::Ok);
     }
 
     fn openapi_operations(source: &str) -> BTreeSet<(String, String)> {

@@ -6,12 +6,15 @@ struct ReviewDetailPage: View {
     @EnvironmentObject private var reviewModel: ReviewsModel
     let reviewId: String
     let loadsRemoteContent: Bool
+    let refreshes: WorkspaceRefreshScheduler?
+    @State private var refreshRegistration: UUID?
 
     @StateObject private var model: ReviewDetailModel
 
-    init(reviewId: String, loadsRemoteContent: Bool = true, model: @autoclosure @escaping () -> ReviewDetailModel) {
+    init(reviewId: String, loadsRemoteContent: Bool = true, refreshes: WorkspaceRefreshScheduler? = nil, model: @autoclosure @escaping () -> ReviewDetailModel) {
         self.reviewId = reviewId
         self.loadsRemoteContent = loadsRemoteContent
+        self.refreshes = refreshes
         _model = StateObject(wrappedValue: model())
     }
 
@@ -49,12 +52,16 @@ struct ReviewDetailPage: View {
                 return
             }
             await self.model.load()
+            guard !Task.isCancelled else { return }
+            refreshRegistration = refreshes?.register(.reviewDetail) { await model.refreshInBackground() }
+            refreshes?.visible = .reviewDetail
         }
         .task(id: reviewModel.updates[reviewId].map(ObjectIdentifier.init)) {
             guard loadsRemoteContent, let update = reviewModel.updates[reviewId] else { return }
             await reviewModel.prepareUpdate(update.review)
         }
         .onDisappear {
+            if let refreshRegistration { refreshes?.unregister(.reviewDetail, id: refreshRegistration) }
             self.model.invalidateDetailRequests()
         }
         .navigationTitle(model.review?.title ?? String(localized: "Review"))
@@ -176,17 +183,17 @@ struct ReviewDetailPage: View {
                             .foregroundStyle(.secondary)
                         UserIdentityLabel(
                             account: decider,
-                            displayName: decider.displayName ?? decider.email
+                            displayName: decider.identityLabel
                         )
                     }
                     .font(.caption)
                     .help(
                         TimestampFormatting.absoluteText(review.decidedAt).map {
-                            "Merged by \(decider.displayName ?? decider.email) at \($0)"
-                        } ?? "Merged by \(decider.displayName ?? decider.email)"
+                            "Merged by \(decider.identityLabel) at \($0)"
+                        } ?? "Merged by \(decider.identityLabel)"
                     )
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Merged by \(decider.displayName ?? decider.email)")
+                    .accessibilityLabel("Merged by \(decider.identityLabel)")
                 } else {
                     ReviewStatusIndicator(status: review.status)
                 }
@@ -221,7 +228,7 @@ struct ReviewDetailPage: View {
     }
 
     private func metadata(_ review: ReviewRecord) -> some View {
-        let author = review.author.displayName ?? review.author.email
+        let author = review.author.identityLabel
         let project = workspaceContext.projects.first { $0.id == review.projectId }?.name
         let context = [author, project]
             .compactMap { $0 }
@@ -249,7 +256,7 @@ struct ReviewDetailPage: View {
                     Text(self.decisionTitle(review.status))
                         .font(.callout.weight(.semibold))
                     if let decider = review.decidedBy {
-                        let deciderName = decider.displayName ?? decider.email
+                        let deciderName = decider.identityLabel
                         Text("· Decision by \(deciderName)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -419,7 +426,8 @@ private struct ReviewFileNavigator: View {
             items: files.map { file in
                 PathTreeItem(id: file.id, path: file.path,
                              badge: file.reconciliationState?.title,
-                             badgeColor: file.reconciliationState?.badgeColor)
+                             badgeColor: file.reconciliationState?.badgeColor,
+                             isDirectory: file.isDirectory)
             },
             selection: $selection
         )

@@ -38,7 +38,7 @@ enum MemoryArchive {
             for index in components.indices {
                 let path = components[...index].joined(separator: "/")
                 let key = path.precomposedStringWithCanonicalMapping.lowercased()
-                let isDirectory = index < components.count - 1
+                let isDirectory = index < components.count - 1 || document.isDirectory
                 if let existing = entries[key],
                    !isDirectory || !existing.isDirectory || existing.path != path {
                     throw MemoryExportError.conflictingPath(document.path)
@@ -59,8 +59,12 @@ enum MemoryArchive {
         try fm.createDirectory(at: contents, withIntermediateDirectories: false)
         for document in documents {
             let file = contents.appending(path: document.path)
-            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(document.body.utf8).write(to: file, options: .withoutOverwriting)
+            if document.isDirectory {
+                try fm.createDirectory(at: file, withIntermediateDirectories: true)
+            } else {
+                try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(document.body.utf8).write(to: file, options: .withoutOverwriting)
+            }
         }
 
         let archive = temporary.appending(path: "memory.zip")

@@ -1,3 +1,8 @@
 # 已归档的 Zig TUI
 
-旧 Zig TUI 已归档，不属于当前产品面。当前交互入口是 macOS App、MCP 和受支持的 Agent Adapter。
+Zig TUI 不是当前活跃或受支持的产品面。Desktop 是面向人的客户端。
+先前的实现仍可从 Git 提交
+`4b18f7947a977dbc6b62f560b698dc992597f19d` 恢复；
+它不在活跃构建、打包、测试、发布与文档导航之内。
+
+当前产品面见[总览](/zh/overview)。

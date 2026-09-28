@@ -12,6 +12,77 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /api/v1/admin/invitations:
+    post:
+      operationId: createMemberInvitation
+      summary: createMemberInvitation
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionTokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationRequest'
+  /api/v1/admin/members/{user_id}/invitation:
+    post:
+      operationId: reissueMemberInvitation
+      summary: reissueMemberInvitation
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionTokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/admin/members/{user_id}/password-reset:
+    post:
+      operationId: createPasswordReset
+      summary: createPasswordReset
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionTokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/v1/admin/action-tokens/{token_id}:
+    delete:
+      operationId: revokeAccountAction
+      parameters:
+      - name: token_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Credential revoked.
+        default:
+          $ref: '#/components/responses/Error'
   /api/v1/setup:
     get:
       operationId: getSetup
@@ -558,6 +629,30 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    InvitationRequest:
+      type: object
+      required:
+      - role
+      properties:
+        role:
+          $ref: '#/components/schemas/OrgRole'
+    ActionTokenResponse:
+      type: object
+      required:
+      - token_id
+      - user_id
+      - token
+      - expires_at
+      properties:
+        token_id:
+          type: string
+        user_id:
+          type: string
+        token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
     InstallationState:
       type: string
       enum: [setup_required, initialized]
@@ -721,12 +816,14 @@ components:
           $ref: "#/components/schemas/MemberStatus"
     Member:
       type: object
-      required: [user_id, email, display_name, role, status, external_identity_bound, revision]
+      required: [user_id, username, email, display_name, role, status, external_identity_bound, revision]
       properties:
         user_id:
           type: string
+        username:
+          type: [string, "null"]
         email:
-          type: string
+          type: [string, "null"]
           format: email
         display_name:
           type: [string, "null"]
@@ -935,6 +1032,10 @@ components:
           properties:
             resource_id: {type: string}
             commit_id: {type: string}
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         memory_id:
           type: string
           description: >-
@@ -1095,12 +1196,14 @@ components:
       enum: [owner, admin, member]
     UserRef:
       type: object
-      required: [user_id, email, display_name, avatar_url, role]
+      required: [user_id, username, email, display_name, avatar_url, role]
       properties:
         user_id:
           type: string
+        username:
+          type: [string, "null"]
         email:
-          type: string
+          type: [string, "null"]
           format: email
         display_name:
           type: [string, "null"]

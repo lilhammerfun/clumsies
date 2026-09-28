@@ -370,19 +370,6 @@ final class FileTreeSelectionTests: XCTestCase {
         }
     }
 
-    func testPlainDirectoryClickSelectsAndTogglesDirectory() {
-        let result = FileTreeSelectionInteraction.directoryClick(
-            nodeId: "directory:design",
-            visibleNodeIds: ["directory:design", "a", "b"],
-            currentSelection: ["a"],
-            anchorId: "a",
-            modifierFlags: []
-        )
-
-        XCTAssertEqual(result.selection, ["directory:design"])
-        XCTAssertEqual(result.anchorId, "directory:design")
-        XCTAssertTrue(result.togglesDirectory)
-    }
 
     @MainActor
     private func descendantScrollViews(in view: NSView) -> [NSScrollView] {
@@ -390,33 +377,7 @@ final class FileTreeSelectionTests: XCTestCase {
         return current + view.subviews.flatMap(descendantScrollViews)
     }
 
-    func testShiftClickDirectorySelectsRangeWithoutTogglingDirectory() {
-        let result = FileTreeSelectionInteraction.directoryClick(
-            nodeId: "directory:other",
-            visibleNodeIds: ["a", "b", "directory:other", "c"],
-            currentSelection: ["a"],
-            anchorId: "a",
-            modifierFlags: .shift
-        )
 
-        XCTAssertEqual(result.selection, ["a", "b", "directory:other"])
-        XCTAssertEqual(result.anchorId, "a")
-        XCTAssertFalse(result.togglesDirectory)
-    }
-
-    func testCommandClickDirectoryTogglesSelectionWithoutTogglingDirectory() {
-        let result = FileTreeSelectionInteraction.directoryClick(
-            nodeId: "directory:design",
-            visibleNodeIds: ["directory:design", "a"],
-            currentSelection: ["a"],
-            anchorId: "a",
-            modifierFlags: .command
-        )
-
-        XCTAssertEqual(result.selection, ["a", "directory:design"])
-        XCTAssertEqual(result.anchorId, "directory:design")
-        XCTAssertFalse(result.togglesDirectory)
-    }
 
     func testDirectorySelectionExpandsToEveryDescendantWithoutDuplicates() {
         let items = [

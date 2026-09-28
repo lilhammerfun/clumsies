@@ -55,6 +55,7 @@ async fn proposal(
                 resource,
                 new_path: None,
                 content: (action != DraftOperationAction::Delete).then(|| DraftResourceContent {
+                    is_directory: false,
                     org_source: origin,
                     description: None,
                     content: text.to_owned(),
@@ -174,6 +175,7 @@ async fn project_maintainer_publishes_adaptation_without_org_authority() {
                 resource: forged_resource,
                 new_path: None,
                 content: Some(DraftResourceContent {
+                    is_directory: false,
                     description: None,
                     content: "Invalid origin".to_owned(),
                     org_source: Some(OrgMemorySource {
@@ -312,6 +314,7 @@ async fn contribution_retries_use_one_fixed_project_publication_and_independent_
                 resource,
                 new_path: None,
                 content: Some(DraftResourceContent {
+                    is_directory: false,
                     org_source: None,
                     description: None,
                     content: "Reviewed Project v1".to_owned(),

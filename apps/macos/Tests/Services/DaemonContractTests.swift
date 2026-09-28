@@ -806,8 +806,6 @@ final class DaemonContractTests: XCTestCase {
     }
 
     func testWorkspaceRefreshLoopHasOneOwnerAndBoundedCadence() throws {
-        XCTAssertEqual(WorkspaceRefreshCadence.syncStatus, .seconds(2))
-        XCTAssertEqual(WorkspaceRefreshCadence.synchronizedData, .seconds(30))
         let view = try source("Features/Workspace/WorkspaceView.swift")
         XCTAssertEqual(view.components(separatedBy: "await store.runRefreshLoop()").count - 1, 1)
         let status = try source("Services/Daemon/DaemonSyncService.swift", method: "func refreshSyncStatus()")
@@ -2113,6 +2111,29 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(sources.proposedPath, "notes/b.md")
     }
 
+    func testFolderReviewKeepsItsEntryTypeThroughCreateAndRename() throws {
+        let resource = ServerDraftResourceReference(scope: "org", id: "folder-1", path: "notes")
+        let renamed = reviewDetail(resource: resource, operations: [
+            .init(action: "rename", resource: resource, content: nil, newPath: "guides",
+                  operationId: "rename", createdAt: timestamp)
+        ])
+        let sources = try ReviewFileLoader.mapReviewChangeSources(
+            detail: renamed, base: commit(id: "base", resource: resource, body: "", isDirectory: true), current: nil)
+        XCTAssertTrue(sources.isDirectory)
+        XCTAssertEqual(sources.proposedPath, "guides")
+        let descriptor = ReviewFileDescriptor.resolve(reviewId: "review", detail:
+            .init(draft: renamed.draft, operations: renamed.operations), loadedIsDirectory: sources.isDirectory)
+        XCTAssertTrue(descriptor.isDirectory)
+        let created = reviewDetail(resource: resource, operations: [
+            .init(action: "create", resource: resource,
+                  content: .init(description: nil, content: "", isDirectory: true), newPath: nil,
+                  operationId: "create", createdAt: timestamp)
+        ])
+        XCTAssertTrue(try ReviewFileLoader.mapReviewChangeSources(detail: created, base: nil, current: nil).isDirectory)
+        XCTAssertTrue(ReviewFileDescriptor.resolve(reviewId: "review", detail:
+            .init(draft: created.draft, operations: created.operations)).isDirectory)
+    }
+
     func testReviewReconciliationTargetsOnlyActiveFilesThatNeedUpdating() {
         func file(_ id: String, status: String = "submitted", freshness: DraftFreshness = .behind,
                   reconciliation: DraftReconciliationStatus = .unknown) -> ReviewFileDescriptor {
@@ -2874,7 +2895,8 @@ final class DaemonContractTests: XCTestCase {
         id: String,
         resource: ServerDraftResourceReference,
         body: String,
-        treePath: String? = nil
+        treePath: String? = nil,
+        isDirectory: Bool = false
     ) -> CommitPayload {
         let isOrgResource = resource.scope == "org"
         return .init(
@@ -2892,6 +2914,7 @@ final class DaemonContractTests: XCTestCase {
                 treeId: "tree-\(id)",
                 entries: [
                     .init(
+                        isDirectory: isDirectory ? true : nil,
                         id: resource.id ?? "context-1",
                         type: .memory,
                         scope: resource.scope,

@@ -10,6 +10,7 @@ final class AdministrationModel: ObservableObject {
     @Published private(set) var pageStates: [AdministrationSection: AdministrationPageState] = [:]
     @Published private(set) var refreshGeneration = UUID()
     @Published private(set) var loadingProjectIds: Set<String> = []
+    @Published var statusMessage: String?
     private var loadGenerations: [AdministrationSection: UUID] = [:]
     private var loadTasks: [AdministrationSection: Task<Void, Never>] = [:]
     private var projectMemberLoadGenerations: [String: UUID] = [:]
@@ -82,7 +83,8 @@ final class AdministrationModel: ObservableObject {
         section: AdministrationSection,
         force: Bool = false,
         loadMore: Bool = false,
-        query: String? = nil
+        query: String? = nil,
+        canApply: @escaping @MainActor () -> Bool = { true }
     ) async {
         guard !Task.isCancelled else { return }
         guard context.canAdministerOrganization, context.phase != .authenticationRequired else { return }
@@ -107,16 +109,22 @@ final class AdministrationModel: ObservableObject {
         if appending, previous.nextCursor == nil { return }
 
         let task = Task {
-            await performLoad(section: section, previous: previous, loadMore: appending)
+            await performLoad(section: section, previous: previous, loadMore: appending, canApply: canApply)
         }
         loadTasks[section] = task
         await task.value
     }
 
+    func refreshInBackground(section: AdministrationSection, canApply: @escaping @MainActor () -> Bool = { true }) async {
+        guard canApply(), !context.isMutatingAdministration, !state(for: section).isLoading else { return }
+        await load(section: section, force: true, canApply: canApply)
+    }
+
     private func performLoad(
         section: AdministrationSection,
         previous: AdministrationPageState,
-        loadMore: Bool
+        loadMore: Bool,
+        canApply: @escaping @MainActor () -> Bool
     ) async {
         guard !Task.isCancelled, context.canAdministerOrganization, context.phase != .authenticationRequired else { return }
         let generation = UUID()
@@ -131,15 +139,31 @@ final class AdministrationModel: ObservableObject {
         }
 
         do {
-            let page = try await Self.loadAdministrationPage(
+            var page = try await Self.loadAdministrationPage(
                 section: section,
                 cursor: loadMore ? previous.nextCursor : nil,
                 seenCursors: loadMore ? previous.seenCursors : [],
                 query: previous.query,
                 request: fetchPage
             )
+            var seenCursors = loadMore
+                ? previous.seenCursors.union(previous.nextCursor.map { [$0] } ?? []) : []
+            // Refresh all previously visible pages atomically, preserving scroll and failure recovery.
+            if !loadMore {
+                for _ in 0..<previous.seenCursors.count {
+                    guard let cursor = page.nextCursor else { break }
+                    guard canApply(), loadGenerations[section] == generation else { return }
+                    try Task.checkCancellation()
+                    let next = try await Self.loadAdministrationPage(section: section, cursor: cursor,
+                        seenCursors: seenCursors, query: previous.query, request: fetchPage)
+                    seenCursors.insert(cursor)
+                    page.snapshot.apply(next.snapshot, section: section, appending: true)
+                    page.nextCursor = next.nextCursor
+                    page.isStale = page.isStale || next.isStale
+                }
+            }
             try Task.checkCancellation()
-            guard loadGenerations[section] == generation,
+            guard loadGenerations[section] == generation, canApply(),
                   context.canAdministerOrganization, context.phase != .authenticationRequired else { return }
             var snapshot = self.snapshot ?? AdministrationSnapshot()
             snapshot.apply(page.snapshot, section: section, appending: loadMore)
@@ -149,9 +173,7 @@ final class AdministrationModel: ObservableObject {
                 isLoading: true,
                 isStale: page.isStale || (loadMore && previous.isStale),
                 nextCursor: page.nextCursor,
-                seenCursors: loadMore
-                    ? previous.seenCursors.union(previous.nextCursor.map { [$0] } ?? [])
-                    : [],
+                seenCursors: seenCursors,
                 query: previous.query
             )
             if section == .access, loadTasks[.organization] == nil {
@@ -499,6 +521,7 @@ final class AdministrationModel: ObservableObject {
     func deleteAdminProject(_ project: AdminProjectRecord, onDeleted: () -> Void = {}) async throws {
         let generation = try beginAdministrationMutation(.projects, projectId: project.id)
         defer { context.finishAdministrationMutation(generation) }
+        statusMessage = nil
         let _: DeleteResult = try await server.send(
             method: "DELETE",
             path: "/api/v1/admin/projects/\(project.id)",
@@ -506,7 +529,11 @@ final class AdministrationModel: ObservableObject {
             body: EmptyPayload()
         )
         try context.ensureCurrentAdministrationMutation(generation)
-        context.removeProjectRole(project.id)
+        loadTasks[.projects]?.cancel()
+        loadTasks[.projects] = nil
+        loadGenerations[.projects] = UUID()
+        pageStates[.projects, default: .init()].isLoading = false
+        context.removeProject(project.id)
         let isInDirectory = snapshot?.projects.contains(where: { $0.id == project.id }) == true
         snapshot?.projects.removeAll { $0.id == project.id }
         projectDetails[project.id] = nil
@@ -518,6 +545,7 @@ final class AdministrationModel: ObservableObject {
         if isInDirectory {
             pageStates[.projects, default: .init()].offsetProjectCursor(by: -1)
         }
+        statusMessage = String(localized: "Project “\(project.name)” was deleted.")
         onDeleted()
         try await refreshAfterAdministrationMutation(
             generation: generation,
@@ -694,6 +722,7 @@ final class AdministrationModel: ObservableObject {
     }
 
     private func reset() {
+        statusMessage = nil
         loadTasks.values.forEach { $0.cancel() }
         loadTasks.removeAll()
         loadGenerations.removeAll()
@@ -708,4 +737,32 @@ final class AdministrationModel: ObservableObject {
         loadingProjectIds.removeAll()
     }
 
+}
+
+extension AdministrationModel {
+    func createLocalInvitation(role: AdminOrganizationRole) async throws -> AccountActionCredential {
+        let generation = try beginAdministrationMutation(.members)
+        defer { context.finishAdministrationMutation(generation) }
+        let credential: AccountActionCredential = try await server.send(method: "POST", path: "/api/v1/admin/invitations", body: CreateMemberInvitation(role: role))
+        try context.ensureCurrentAdministrationMutation(generation)
+        try await refreshAfterAdministrationMutation(generation: generation, section: .members, invalidating: [.members, .audit])
+        return credential
+    }
+
+    func issueAccountAction(for member: AdminOrganizationMemberRecord) async throws -> AccountActionCredential {
+        let generation = try beginAdministrationMutation(.members)
+        defer { context.finishAdministrationMutation(generation) }
+        let action = member.status == .invited ? "invitation" : "password-reset"
+        let credential: AccountActionCredential = try await server.send(method: "POST", path: "/api/v1/admin/members/\(member.userId)/\(action)", body: [String: String]())
+        try context.ensureCurrentAdministrationMutation(generation)
+        return credential
+    }
+
+    func revokeAccountAction(_ credential: AccountActionCredential) async throws {
+        let generation = try beginAdministrationMutation(.members)
+        defer { context.finishAdministrationMutation(generation) }
+        let response = try await server.raw(method: "DELETE", path: "/api/v1/admin/action-tokens/\(credential.tokenId)")
+        guard response.status == 204 else { throw ServerClientError.response(status: response.status, message: "Could not revoke credential.") }
+        try context.ensureCurrentAdministrationMutation(generation)
+    }
 }

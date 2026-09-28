@@ -91,6 +91,7 @@ async fn metadata_and_draft_reads_skip_payloads_and_ref_locks() {
                 },
                 content: Some(DraftResourceContent {
                     org_source: None,
+                    is_directory: false,
                     description: None,
                     content: "# Read paths".to_owned(),
                 }),

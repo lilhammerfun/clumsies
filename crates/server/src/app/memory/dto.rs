@@ -32,6 +32,9 @@ pub struct MemoryExportItem {
     /// Immutable origin of a Project adaptation, preserved across export.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_source: Option<OrgMemorySource>,
+    /// Whether this resource is an explicit directory entry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_directory: bool,
     /// Stable identifier of a Memory resource.
     pub memory_id: String,
     /// Ownership boundary determining which reference and resource set apply.
@@ -167,6 +170,9 @@ pub struct MemoryMeta {
     /// Explicit immutable origin of a Project adaptation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_source: Option<OrgMemorySource>,
+    /// Whether this resource is an explicit directory entry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_directory: bool,
     /// Stable identifier of a Memory resource.
     pub memory_id: String,
     /// Ownership boundary determining which reference and resource set apply.

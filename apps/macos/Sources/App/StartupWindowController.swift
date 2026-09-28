@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class StartupWindowController: NSWindowController {
-    static let contentSize = NSSize(width: 540, height: 690)
+    static let contentSize = NSSize(width: 540, height: 440)
 
     init() {
         super.init(window: nil)
@@ -11,14 +11,13 @@ final class StartupWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { nil }
 
-    func show<Content: View>(_ content: Content, height: CGFloat = contentSize.height) {
-        let size = NSSize(width: Self.contentSize.width, height: height)
+    func show<Content: View>(_ content: Content) {
+        let size = Self.contentSize
         let window = window ?? NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered, defer: false
         )
-        let previousFrame = window.frame
         window.title = ClumsiesIdentifiers.appDisplayName
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -34,11 +33,6 @@ final class StartupWindowController: NSWindowController {
         if self.window == nil {
             window.center()
             self.window = window
-        } else {
-            window.setFrameOrigin(NSPoint(
-                x: previousFrame.midX - window.frame.width / 2,
-                y: previousFrame.midY - window.frame.height / 2
-            ))
         }
         window.makeKeyAndOrderFront(nil)
     }

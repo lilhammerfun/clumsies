@@ -1,3 +1,5 @@
+//! Runs the resident daemon or its bounded Agent protocol proxy.
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -183,14 +185,13 @@ fn run_mcp_proxy(
     Ok(())
 }
 
+/// Verifies the resident protocol before binding the proxy to a Project.
+///
+/// # Errors
+/// Returns transport or protocol incompatibility errors without retrying business requests.
 fn verify_agent_runtime(client: &DaemonIpcClient) -> Result<(), Box<dyn std::error::Error>> {
     let resident = client.health()?.agent_runtime;
-    if !agent_runtime_matches(&resident) {
-        return Err(
-            "Agent runtime does not match the resident daemon; restart Clumsies and the Agent host"
-                .into(),
-        );
-    }
+    clumsiesd::agent_runtime::validate_identity(&resident)?;
     Ok(())
 }
 
@@ -303,11 +304,6 @@ fn stale_tool_identity_for_test(
         protocol_revision: clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
         build_id,
     }))
-}
-
-fn agent_runtime_matches(resident: &clumsiesd::AgentRuntimeIdentity) -> bool {
-    resident.protocol_revision == clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION
-        && resident.build_id == clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID
 }
 
 async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -520,18 +516,6 @@ mod tests {
             ProcessMode::McpServe(Some(plugin_requirement))
         );
         assert_eq!(process_mode(&[]).unwrap(), ProcessMode::Daemon);
-    }
-
-    #[test]
-    fn proxy_rejects_a_different_resident_build() {
-        assert!(agent_runtime_matches(&clumsiesd::AgentRuntimeIdentity {
-            protocol_revision: clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
-            build_id: clumsiesd::agent_runtime::AGENT_RUNTIME_BUILD_ID.to_owned(),
-        }));
-        assert!(!agent_runtime_matches(&clumsiesd::AgentRuntimeIdentity {
-            protocol_revision: clumsiesd::agent_runtime::AGENT_RUNTIME_PROTOCOL_REVISION,
-            build_id: "different-build".to_owned(),
-        }));
     }
 
     #[test]

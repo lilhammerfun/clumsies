@@ -6,6 +6,16 @@ use thiserror::Error;
 /// Authentication and identity-provider failures with stable public codes.
 #[derive(Debug, Error)]
 pub enum AuthError {
+    /// Local authentication attempts exceeded the bounded server budget.
+    #[error("too many authentication attempts; try again later")]
+    RateLimited,
+    /// Password work failed without exposing implementation details.
+    #[error("password authentication is temporarily unavailable")]
+    PasswordUnavailable,
+    /// A privileged credential operation was not authorized.
+    #[error("credential operation is not permitted")]
+    Forbidden,
+
     /// No identity-provider dependency was configured for this server.
     #[error("OIDC is not configured")]
     NotConfigured,
@@ -63,6 +73,10 @@ impl AuthError {
     /// Return the stable public error category without leaking internal diagnostics.
     pub fn code(&self) -> &'static str {
         match self {
+            Self::RateLimited => "auth_rate_limited",
+            Self::PasswordUnavailable => "password_unavailable",
+            Self::Forbidden => "forbidden",
+
             Self::NotConfigured => "oidc_not_configured",
             Self::Configuration(_) => "auth_configuration_invalid",
             Self::InvalidRequest(_) => "validation_failed",

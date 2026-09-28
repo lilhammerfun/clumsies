@@ -195,7 +195,7 @@ pub async fn update_admin_project(
     }
     let name = match request.name {
         Some(name) => normalize_project_name(&name)?,
-        None => current.name,
+        None => current.name.clone(),
     };
     repository::ensure_project_name_available(&mut tx, &principal.org_id, &name, Some(project_id))
         .await?;
@@ -204,13 +204,14 @@ pub async fn update_admin_project(
         None => current.description,
     };
     repository::update_project(&mut tx, project_id, &name, &description).await?;
-    audit_event::insert_audit_event(
+    audit_event::insert_audit_event_with_changes(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
         "admin.project_updated",
         "project",
         Some(project_id),
+        &audit_event::changes(&[("name", &current.name, &name)]),
     )
     .await?;
     tx.commit().await?;
@@ -249,7 +250,7 @@ pub async fn delete_admin_project(
         Some(project_id),
     )
     .await?;
-    repository::delete_admin_project(&mut tx, &principal.org_id, project_id).await?;
+    repository::delete_project(&mut tx, project_id).await?;
     tx.commit().await?;
     Ok(DeleteResult {
         deleted: true,
@@ -390,13 +391,14 @@ pub async fn update_admin_project_member(
     )
     .await?;
     let target_id = format!("{project_id}:{user_id}");
-    audit_event::insert_audit_event(
+    audit_event::insert_audit_event_with_changes(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
         "admin.project_member_updated",
         "project_member",
         Some(&target_id),
+        &audit_event::changes(&[("role", &previous_role, request.role.as_str())]),
     )
     .await?;
     tx.commit().await?;

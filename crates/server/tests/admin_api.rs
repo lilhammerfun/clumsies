@@ -119,7 +119,7 @@ async fn owner_can_operate_the_complete_admin_contract() {
     )
     .await;
     assert_eq!(member.role, OrgRole::Admin);
-    assert_eq!(member.status, MemberStatus::Active);
+    assert_eq!(member.status, MemberStatus::Invited);
 
     let project_member: ProjectMember = post_json(
         app.clone(),
@@ -258,6 +258,46 @@ async fn owner_can_operate_the_complete_admin_contract() {
 
     let audit_events: AuditEventListResponse =
         get_json(app.clone(), "/api/v1/admin/audit-events").await;
+    let created = audit_events
+        .items
+        .iter()
+        .find(|e| e.action == "admin.project_created")
+        .unwrap();
+    assert_eq!(created.target_display_name.as_deref(), Some("Research"));
+    let deleted = audit_events
+        .items
+        .iter()
+        .find(|e| e.action == "admin.project_deleted")
+        .unwrap();
+    assert_eq!(deleted.target_display_name.as_deref(), Some("Research Lab"));
+    let updated = audit_events
+        .items
+        .iter()
+        .find(|e| e.action == "admin.org_updated")
+        .unwrap();
+    assert!(
+        updated
+            .changes
+            .iter()
+            .any(|c| c.field == "name" && c.before == "Acme Memory" && c.after == "Acme Knowledge")
+    );
+    assert!(
+        updated
+            .changes
+            .iter()
+            .any(|c| c.field == "allowed_email_domains" && c.after == "example.com")
+    );
+    let member_update = audit_events
+        .items
+        .iter()
+        .find(|e| e.action == "admin.member_updated")
+        .unwrap();
+    assert!(
+        member_update
+            .changes
+            .iter()
+            .any(|c| c.field == "role" && c.before == "member" && c.after == "admin")
+    );
     let system_event = audit_events
         .items
         .iter()
@@ -958,5 +998,95 @@ async fn memory_export_contains_verifiable_full_state() {
         export.bundles[0].resource_ids,
         vec![org_memory_id.to_owned(), project_memory_id.to_owned()]
     );
+    postgres.shutdown().await;
+}
+
+#[tokio::test]
+async fn audit_labels_keep_username_identity_after_rename_and_rollback_with_mutations() {
+    let postgres = common::migrated_postgres().await;
+    let bootstrap = common::initialize_installation(
+        postgres.pool.clone(),
+        "Audit",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Project",
+    )
+    .await;
+    let (app, _) = common::authenticated_router(postgres.pool.clone()).await;
+    sqlx::query("INSERT INTO users (user_id, username, role, status) VALUES ('usr_audit_local', 'local-person', 'member', 'active')")
+        .execute(&postgres.pool).await.unwrap();
+    sqlx::query("INSERT INTO audit_events (event_id, org_id, actor_user_id, action, target_type, target_id) VALUES ('evt_local_snapshot', $1, 'usr_audit_local', 'auth.password_changed', 'user', 'usr_audit_local')")
+        .bind(&bootstrap.org_id).execute(&postgres.pool).await.unwrap();
+    sqlx::query("UPDATE users SET username = 'renamed-person' WHERE user_id = 'usr_audit_local'")
+        .execute(&postgres.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE user_id = 'usr_audit_local'")
+        .execute(&postgres.pool)
+        .await
+        .unwrap();
+    let mut tx = postgres.pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO audit_events (event_id, org_id, action, target_type) VALUES ('evt_rollback', $1, 'test', 'org')")
+        .bind(&bootstrap.org_id).execute(&mut *tx).await.unwrap();
+    tx.rollback().await.unwrap();
+    let events: AuditEventListResponse =
+        get_json(app, "/api/v1/admin/audit-events?q=local-person").await;
+    assert_eq!(events.items.len(), 1);
+    assert_eq!(
+        events.items[0].actor_display_name.as_deref(),
+        Some("local-person")
+    );
+    assert_eq!(
+        events.items[0].target_display_name.as_deref(),
+        Some("local-person")
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE event_id = 'evt_rollback'")
+            .fetch_one(&postgres.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    postgres.shutdown().await;
+}
+
+#[tokio::test]
+async fn audit_upgrade_preserves_legacy_events_without_inventing_snapshots() {
+    use sqlx::Executor;
+    let postgres = common::postgres_without_migrations().await;
+    let migrations = &server::infra::database::MIGRATOR;
+    for migration in migrations.iter().filter(|m| m.version < 20260928000100) {
+        postgres.pool.execute(migration.sql.as_ref()).await.unwrap();
+    }
+    let bootstrap = common::initialize_installation(
+        postgres.pool.clone(),
+        "Legacy Org",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Legacy Project",
+    )
+    .await;
+    sqlx::query("INSERT INTO audit_events (event_id, org_id, actor_user_id, action, target_type, target_id) VALUES ('evt_legacy_audit', $1, $2, 'admin.project_created', 'project', $3)")
+        .bind(&bootstrap.org_id).bind(&bootstrap.user_id).bind(&bootstrap.project_id).execute(&postgres.pool).await.unwrap();
+    for migration in migrations.iter().filter(|m| m.version >= 20260928000100) {
+        postgres.pool.execute(migration.sql.as_ref()).await.unwrap();
+    }
+    let snapshot: (bool, Option<String>, Option<String>, serde_json::Value) = sqlx::query_as("SELECT labels_recorded, actor_label, target_label, changes FROM audit_events WHERE event_id = 'evt_legacy_audit'")
+        .fetch_one(&postgres.pool).await.unwrap();
+    assert_eq!(snapshot, (false, None, None, serde_json::json!([])));
+    let (app, _) = common::authenticated_router(postgres.pool.clone()).await;
+    let events: AuditEventListResponse =
+        get_json(app, "/api/v1/admin/audit-events?q=Legacy%20Project").await;
+    let legacy = events
+        .items
+        .iter()
+        .find(|e| e.event_id == "evt_legacy_audit")
+        .unwrap();
+    assert_eq!(
+        legacy.target_display_name.as_deref(),
+        Some("Legacy Project")
+    );
+    assert!(legacy.changes.is_empty());
     postgres.shutdown().await;
 }

@@ -128,6 +128,13 @@ struct NativeServerSetupClient: @unchecked Sendable {
         ).authenticate(using: grant)
     }
 
+    func completePasswordSetup(setupCode: String, configuration: NativeSetupConfiguration, username: String, password: String) async throws -> NativeAuthenticatedSession {
+        let session = try await createSession(setupCode: setupCode)
+        _ = try await replaceConfiguration(configuration, csrfToken: session.csrfToken)
+        let tokens: TokenResponse = try await sendJSON(path: "/api/v1/setup/password-owner", method: "POST", body: NativePasswordLogin(username: username, password: password), csrfToken: session.csrfToken)
+        return try await AuthenticationClient(serverURL: origin.url, transport: transport).authenticatedSession(tokens: tokens)
+    }
+
     func createSession(setupCode: String) async throws -> NativeSetupSessionResponse {
         try await sendJSON(
             path: "/api/v1/setup/sessions",

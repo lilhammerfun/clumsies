@@ -3,6 +3,39 @@ import XCTest
 @testable import Clumsies
 
 final class NativeServerBootstrapTests: XCTestCase {
+    func testPasswordAndInvitationUseNativeEndpointsAndAcceptAccountsWithoutEmail() async throws {
+        NativeSetupURLProtocol.handler = { request in
+            let path = try XCTUnwrap(request.url?.path)
+            let body: String
+            if path == "/api/v1/auth/methods" {
+                body = #"{"password_enabled":true,"oidc_enabled":false,"google":false}"#
+            } else if path == "/api/v1/me" {
+                XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer local-access")
+                body = #"{"user":{"user_id":"usr_local","username":"alice","email":null,"display_name":null,"avatar_url":null,"role":"member"},"org":{"org_id":"org_1","name":"Test"},"projects":[],"default_project_id":null,"capabilities":[]}"#
+            } else {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertTrue(["/api/v1/auth/password/sessions", "/api/v1/auth/invitations/accept", "/api/v1/auth/password/reset"].contains(path))
+                body = #"{"access_token":"local-access","refresh_token":"local-refresh"}"#
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: [:])!, Data(body.utf8))
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NativeSetupURLProtocol.self]
+        let transport = URLSession(configuration: configuration)
+        defer { transport.invalidateAndCancel(); NativeSetupURLProtocol.handler = nil }
+        let client = AuthenticationClient(serverURL: URL(string: "https://clumsies.example.com")!, transport: transport)
+        let methods = try await client.loginMethods()
+        XCTAssertTrue(methods.passwordEnabled)
+        XCTAssertFalse(methods.oidcEnabled)
+        let session = try await client.passwordLogin(username: "alice", password: "long test password")
+        XCTAssertNil(session.currentUser.user.email)
+        XCTAssertEqual(session.currentUser.user.identityLabel, "alice")
+        for invitation in [true, false] {
+            let accepted = try await client.redeemAction(token: "one-time", username: invitation ? "alice" : nil, password: "long test password", invitation: invitation)
+            XCTAssertEqual(accepted.currentUser.user.userId, session.currentUser.user.userId)
+        }
+    }
+
     func testNativeFailuresHaveCorrelatedSanitizedDiagnostics() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

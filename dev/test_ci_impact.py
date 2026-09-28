@@ -57,6 +57,10 @@ class ImpactTests(unittest.TestCase):
         for path in ("deploy/site.sh", "deploy/Caddyfile", ".github/workflows/site-delivery.yml"):
             self.assertEqual(self.selected(path), {"docs", "scripts", "site_delivery"})
         self.assertEqual(self.selected("deploy/server/server-release.sh"), {"scripts"})
+        for path in ("deploy/observability/test.py", "deploy/observability/test-delivery.py", "deploy/observability/README.md", "deploy/observability/prometheus/rules.test.yml"):
+            self.assertEqual(self.selected(path), {"scripts"})
+        for path in ("deploy/observability/prometheus/rules.yml", "deploy/observability/compose.observability.yml", "deploy/observability/delivery.py", ".github/workflows/observability-delivery.yml"):
+            self.assertEqual(self.selected(path), {"scripts", "observability_delivery"})
         self.assertTrue({"scripts", "server", "server_image", "server_delivery"} <= self.selected(".github/workflows/server-delivery.yml"))
         self.assertTrue({"scripts", "runtime", "macos", "package"} <= self.selected(".github/workflows/release.yml"))
         for path in ("compose.production.yml", ".env.example"):
@@ -158,6 +162,13 @@ class GitRangeTests(unittest.TestCase):
         self.assertFalse(delivery_is_current("server_delivery", server, newer))
         self.assertTrue(delivery_is_current("site_delivery", docs, newer))
         self.assertTrue(delivery_is_current("server_delivery", newer, newer))
+
+    def test_observability_delivery_rejects_newer_configuration_but_not_docs(self):
+        first = self.commit("deploy/observability/prometheus/rules.yml", "rules v1")
+        docs = self.commit("deploy/observability/README.md", "docs")
+        self.assertTrue(delivery_is_current("observability_delivery", first, docs))
+        latest = self.commit("deploy/observability/prometheus/rules.yml", "rules v2")
+        self.assertFalse(delivery_is_current("observability_delivery", first, latest))
 
     def test_force_pushed_away_commits_are_not_deployed(self):
         self.run_git("checkout", "-qb", "old")

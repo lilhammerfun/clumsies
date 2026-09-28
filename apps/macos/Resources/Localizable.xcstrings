@@ -1,6 +1,1014 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Delta retrieval reuse": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delta retrieval reuse"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delta 检索复用率"
+          }
+        }
+      }
+    },
+    "Agent Memory usage": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent Memory usage"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent Memory 使用率"
+          }
+        }
+      }
+    },
+    "Reuse / (Add + Replace + Reuse)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reuse / (Add + Replace + Reuse)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reuse / (Add + Replace + Reuse)"
+          }
+        }
+      }
+    },
+    "Completed main-agent runs · Codex on this Mac": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed main-agent runs · Codex on this Mac"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已结束的主 Agent run · 本机 Codex"
+          }
+        }
+      }
+    },
+    "State supplied does not guarantee matching fragments": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "State supplied does not guarantee matching fragments"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "携带 state 不代表一定命中已有片段"
+          }
+        }
+      }
+    },
+    "Calls include activate, load and store, even when they fail": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calls include activate, load and store, even when they fail"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "包括 activate、load、store 调用，失败调用也计入"
+          }
+        }
+      }
+    },
+    "%lld / %lld fragments": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld / %lld fragments"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld / %lld 个片段"
+          }
+        }
+      }
+    },
+    "%lld / %lld runs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld / %lld runs"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld / %lld 次 run"
+          }
+        }
+      }
+    },
+    "State supplied: %@ · %lld / %lld requests": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "State supplied: %@ · %lld / %lld requests"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "State 携带率：%@ · %lld / %lld 次请求"
+          }
+        }
+      }
+    },
+    "%lld fragments have no recorded delta action": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld fragments have no recorded delta action"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 个片段缺少 delta action 记录"
+          }
+        }
+      }
+    },
+    "No delta samples": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No delta samples"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂无 Delta 样本"
+          }
+        }
+      }
+    },
+    "No recorded fragment actions in this period.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No recorded fragment actions in this period."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选时段没有已记录的片段 action。"
+          }
+        }
+      }
+    },
+    "Add · Newly provided": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add · Newly provided"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add · 新提供"
+          }
+        }
+      }
+    },
+    "Replace · Updated": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace · Updated"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace · 内容更新"
+          }
+        }
+      }
+    },
+    "Reuse · Already available": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reuse · Already available"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reuse · 已有未变"
+          }
+        }
+      }
+    },
+    "Delta statistics unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delta statistics unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delta 统计不可用"
+          }
+        }
+      }
+    },
+    "Update the local runtime to collect these statistics.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update the local runtime to collect these statistics."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请更新本地运行时以获取这些统计数据。"
+          }
+        }
+      }
+    },
+    "%lld session logs excluded: incomplete or missing run boundaries": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld session logs excluded: incomplete or missing run boundaries"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已排除 %lld 份会话日志：记录不完整或缺少 run 边界"
+          }
+        }
+      }
+    },
+    "No observed agent runs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No observed agent runs"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂无可观测的 Agent run"
+          }
+        }
+      }
+    },
+    "Completed local Codex runs with recorded boundaries will appear here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed local Codex runs with recorded boundaries will appear here."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本机 Codex 有完整边界记录且已结束的 run 会显示在这里。"
+          }
+        }
+      }
+    },
+    "Called Memory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Called Memory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "调用过 Memory"
+          }
+        }
+      }
+    },
+    "No Memory call": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Memory call"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未调用 Memory"
+          }
+        }
+      }
+    },
+    "%lld with Memory · %lld without": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld with Memory · %lld without"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 次调用过 Memory · %lld 次未调用"
+          }
+        }
+      }
+    },
+    "Agent usage unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent usage unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 使用统计不可用"
+          }
+        }
+      }
+    },
+    "Share": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "占比"
+          }
+        }
+      }
+    },
+    "Reuse is an unchanged selected fragment already represented in the caller’s state. Add is absent from that state, not necessarily newly created memory. Replace has a changed content hash. The ratio counts recorded fragments in successful retained retrievals, including drafts; missing actions and empty results do not count as zero reuse. State supplied counts all completed requests carrying a token, including invalid tokens. Period totals are weighted by fragment counts.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reuse is an unchanged selected fragment already represented in the caller’s state. Add is absent from that state, not necessarily newly created memory. Replace has a changed content hash. The ratio counts recorded fragments in successful retained retrievals, including drafts; missing actions and empty results do not count as zero reuse. State supplied counts all completed requests carrying a token, including invalid tokens. Period totals are weighted by fragment counts."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reuse 表示本次选中的片段已在调用方 state 中且内容未变。Add 表示片段不在 state 中，不一定是新创建的记忆。Replace 表示内容 hash 已变化。比例按保留的成功检索中的已记录片段计算，也包含草稿；缺少 action 的片段和空结果不会被当作零复用。State 携带率统计所有携带 token 的已结束请求，包括 token 无效的请求。期间总比例按片段数量加权计算。"
+          }
+        }
+      }
+    },
+    "A run is a native Codex turn with both start and terminal events, grouped by start date. Repeated calls count once per run; calls that fail still count as usage. Ongoing runs, subagents, other hosts, and logs without reliable boundaries are excluded. Only local sessions belonging to the selected projects are observed. Missing logs cannot establish non-use. This measures calling Memory, not answer quality or whether retrieved content was adopted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A run is a native Codex turn with both start and terminal events, grouped by start date. Repeated calls count once per run; calls that fail still count as usage. Ongoing runs, subagents, other hosts, and logs without reliable boundaries are excluded. Only local sessions belonging to the selected projects are observed. Missing logs cannot establish non-use. This measures calling Memory, not answer quality or whether retrieved content was adopted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一次 run 是具有开始和结束事件的 Codex 原生执行轮次，按开始日期分组。同一 run 重复调用只计一次，失败调用也计为使用。正在执行的 run、子 Agent、其他宿主以及没有可靠边界的日志不计入。仅统计所选项目在本机可观测的会话。日志缺失不代表未使用。该指标衡量是否调用过 Memory，不衡量回答质量或检索内容是否被采纳。"
+          }
+        }
+      }
+    },
+    "Deselect All": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deselect All"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取消全选"
+          }
+        }
+      }
+    },
+    "Select or deselect all notifications matching the current filters": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select or deselect all notifications matching the current filters"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全选或取消选择符合当前筛选条件的所有通知"
+          }
+        }
+      }
+    },
+    "Completed setup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed setup"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成初始设置"
+          }
+        }
+      }
+    },
+    "Migrated project memory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Migrated project memory"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迁移项目记忆"
+          }
+        }
+      }
+    },
+    "%@: %@ → %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@ → %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@ → %@"
+          }
+        }
+      }
+    },
+    "Search audit log": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search audit log"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索审计日志"
+          }
+        }
+      }
+    },
+    "Loading audit log…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading audit log…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载审计日志…"
+          }
+        }
+      }
+    },
+    "No audit events yet.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No audit events yet."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂无审计记录。"
+          }
+        }
+      }
+    },
+    "No audit events found.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No audit events found."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未找到审计记录。"
+          }
+        }
+      }
+    },
+    "Signed in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed in"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已登录"
+          }
+        }
+      }
+    },
+    "Revoked session": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoked session"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "撤销会话"
+          }
+        }
+      }
+    },
+    "Signed in with SSO": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed in with SSO"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通过单点登录登录"
+          }
+        }
+      }
+    },
+    "Connected sign-in account": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected sign-in account"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关联登录账号"
+          }
+        }
+      }
+    },
+    "Created invitation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Created invitation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建邀请"
+          }
+        }
+      }
+    },
+    "Issued account action": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issued account action"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "签发账号操作凭证"
+          }
+        }
+      }
+    },
+    "Revoked account action": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoked account action"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "撤销账号操作凭证"
+          }
+        }
+      }
+    },
+    "Accepted invitation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accepted invitation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接受邀请"
+          }
+        }
+      }
+    },
+    "Changed password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changed password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修改密码"
+          }
+        }
+      }
+    },
+    "Issued owner recovery": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issued owner recovery"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "签发所有者恢复凭证"
+          }
+        }
+      }
+    },
+    "Reissued invitation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reissued invitation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新签发邀请"
+          }
+        }
+      }
+    },
+    "Issued password reset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issued password reset"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "签发密码重置凭证"
+          }
+        }
+      }
+    },
+    "Showing previous data. Refresh to check for changes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing previous data. Refresh to check for changes."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前显示上次的数据。请刷新以检查更新。"
+          }
+        }
+      }
+    },
+    "Every item in the folder must be editable before the folder can be changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every item in the folder must be editable before the folder can be changed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件夹中的所有项目均可编辑时，才能修改文件夹。"
+          }
+        }
+      }
+    },
+    "This folder no longer exists.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder no longer exists."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此文件夹已不存在。"
+          }
+        }
+      }
+    },
+    "The folder is saved as a draft and shared after review and merge.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The folder is saved as a draft and shared after review and merge."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件夹将保存为草稿，经评审合并后同步共享。"
+          }
+        }
+      }
+    },
+    "Untitled Folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Untitled Folder"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未命名文件夹"
+          }
+        }
+      }
+    },
+    "New Folder…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Folder…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新建文件夹…"
+          }
+        }
+      }
+    },
+    "New Folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Folder"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新建文件夹"
+          }
+        }
+      }
+    },
+    "Updated %lld of %lld paths. ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updated %lld of %lld paths. "
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已更新 %1$lld 个路径，共 %2$lld 个。 "
+          }
+        }
+      }
+    },
+    "Updating path %lld of %lld…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating path %lld of %lld…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在更新第 %1$lld 个路径，共 %2$lld 个…"
+          }
+        }
+      }
+    },
+    "Updating %lld paths…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating %lld paths…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在更新 %1$lld 个路径…"
+          }
+        }
+      }
+    },
+    "Open a file from the navigator": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a file from the navigator"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从导航栏打开文件"
+          }
+        }
+      }
+    },
+    "The destination already contains %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The destination already contains %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目标位置已存在 %1$@。"
+          }
+        }
+      }
+    },
+    "Choose a different destination outside the selected folders.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a different destination outside the selected folders."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请选择所选文件夹以外的其他目标位置。"
+          }
+        }
+      }
+    },
+    "Top Level": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Top Level"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "根目录"
+          }
+        }
+      }
+    },
+    "Move To": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move To"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移动到"
+          }
+        }
+      }
+    },
     " (request %@)": {
       "localizations": {
         "en": {
@@ -3549,6 +4557,22 @@
         }
       }
     },
+    "Connect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接"
+          }
+        }
+      }
+    },
     "Connect Your Agents": {
       "localizations": {
         "en": {
@@ -6089,6 +7113,22 @@
         }
       }
     },
+    "Files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件"
+          }
+        }
+      }
+    },
     "Filter Activity by Project": {
       "localizations": {
         "en": {
@@ -8138,6 +9178,22 @@
         }
       }
     },
+    "New File": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New File"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新建文件"
+          }
+        }
+      }
+    },
     "New Memory": {
       "localizations": {
         "en": {
@@ -9993,6 +11049,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "预览指南及其来源"
+          }
+        }
+      }
+    },
+    "Project “%@” was deleted.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project “%@” was deleted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目“%@”已删除。"
           }
         }
       }
@@ -18308,6 +19380,854 @@
           "stringUnit": {
             "state": "translated",
             "value": "项目合并后，本次 PR 中所有新增或更新的文件将提交组织单独审核。项目中的删除不会删除组织记忆。"
+          }
+        }
+      }
+    },
+    "Username": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Username"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户名"
+          }
+        }
+      }
+    },
+    "Password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "密码"
+          }
+        }
+      }
+    },
+    "Confirm password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认密码"
+          }
+        }
+      }
+    },
+    "Sign in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录"
+          }
+        }
+      }
+    },
+    "Sign in with Google": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in with Google"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用 Google 登录"
+          }
+        }
+      }
+    },
+    "Sign in with identity provider": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in with identity provider"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用身份提供方登录"
+          }
+        }
+      }
+    },
+    "Accept invitation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accept invitation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接受邀请"
+          }
+        }
+      }
+    },
+    "Back to sign in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back to sign in"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "返回登录"
+          }
+        }
+      }
+    },
+    "Forgot password?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Forgot password?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "忘记密码？"
+          }
+        }
+      }
+    },
+    "Reset password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重置密码"
+          }
+        }
+      }
+    },
+    "One-time credential": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One-time credential"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一次性凭据"
+          }
+        }
+      }
+    },
+    "Paste the invitation from your administrator.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste the invitation from your administrator."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "粘贴管理员发给你的邀请凭据。"
+          }
+        }
+      }
+    },
+    "Ask your administrator for a password reset credential.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask your administrator for a password reset credential."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请联系管理员获取密码重置凭据。"
+          }
+        }
+      }
+    },
+    "Use at least 15 characters. Usernames use 3–32 letters, digits, dots, underscores or hyphens.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use at least 15 characters. Usernames use 3–32 letters, digits, dots, underscores or hyphens."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "密码至少 15 个字符。用户名为 3–32 位字母、数字、点、下划线或连字符。"
+          }
+        }
+      }
+    },
+    "Create owner": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create owner"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建所有者账号"
+          }
+        }
+      }
+    },
+    "Continue with identity provider": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue with identity provider"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通过身份提供方继续"
+          }
+        }
+      }
+    },
+    "Set up with username and password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up with username and password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用用户名密码初始化"
+          }
+        }
+      }
+    },
+    "Login methods…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login methods…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录方式…"
+          }
+        }
+      }
+    },
+    "Login methods": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login methods"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录方式"
+          }
+        }
+      }
+    },
+    "Identity provider": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity provider"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "身份提供方"
+          }
+        }
+      }
+    },
+    "Not set": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not set"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未设置"
+          }
+        }
+      }
+    },
+    "Not bound": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not bound"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未绑定"
+          }
+        }
+      }
+    },
+    "Current password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前密码"
+          }
+        }
+      }
+    },
+    "New password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新密码"
+          }
+        }
+      }
+    },
+    "Bind Google account": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bind Google account"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "绑定 Google 账号"
+          }
+        }
+      }
+    },
+    "Bind identity provider": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bind identity provider"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "绑定身份提供方"
+          }
+        }
+      }
+    },
+    "Add password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加密码"
+          }
+        }
+      }
+    },
+    "Change password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修改密码"
+          }
+        }
+      }
+    },
+    "Save password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save password"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存密码"
+          }
+        }
+      }
+    },
+    "Use at least 15 characters.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use at least 15 characters."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "至少使用 15 个字符。"
+          }
+        }
+      }
+    },
+    "Changing your password signs out your other sessions.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changing your password signs out your other sessions."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修改密码后，其他会话将退出登录。"
+          }
+        }
+      }
+    },
+    "Sign in again before adding a password or binding an identity provider. Your sign-in must be less than five minutes old.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in again before adding a password or binding an identity provider. Your sign-in must be less than five minutes old."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加密码或绑定身份提供方之前，请重新登录。需在登录后五分钟内操作。"
+          }
+        }
+      }
+    },
+    "Login methods updated.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login methods updated."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录方式已更新。"
+          }
+        }
+      }
+    },
+    "Admit an email for identity-provider login": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Admit an email for identity-provider login"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许指定邮箱通过身份提供方登录"
+          }
+        }
+      }
+    },
+    "Create a one-time invitation and send it to the member yourself. No email is required.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a one-time invitation and send it to the member yourself. No email is required."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建一次性邀请并自行发给成员，无需邮箱。"
+          }
+        }
+      }
+    },
+    "Reissue invitation…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reissue invitation…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新签发邀请…"
+          }
+        }
+      }
+    },
+    "Reset password…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset password…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重置密码…"
+          }
+        }
+      }
+    },
+    "Send this credential privately to the member. It is shown only once.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send this credential privately to the member. It is shown only once."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请私下将此凭据发给成员。凭据仅显示一次。"
+          }
+        }
+      }
+    },
+    "Expires: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expires: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "过期时间：%@"
+          }
+        }
+      }
+    },
+    "Passwords do not match.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwords do not match."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "两次输入的密码不一致。"
+          }
+        }
+      }
+    },
+    "The username or password is incorrect.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The username or password is incorrect."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户名或密码不正确。"
+          }
+        }
+      }
+    },
+    "The invitation or reset credential is invalid, expired, or already used.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The invitation or reset credential is invalid, expired, or already used."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "邀请或重置凭据无效、已过期或已使用。"
+          }
+        }
+      }
+    },
+    "This username is already in use.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This username is already in use."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此用户名已被使用。"
+          }
+        }
+      }
+    },
+    "Use 3–32 letters, digits, dots, underscores or hyphens for your username.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use 3–32 letters, digits, dots, underscores or hyphens for your username."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户名请使用 3–32 位字母、数字、点、下划线或连字符。"
+          }
+        }
+      }
+    },
+    "Too many attempts. Try again later.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Try again later."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尝试次数过多，请稍后重试。"
+          }
+        }
+      }
+    },
+    "This identity is already bound to another account.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This identity is already bound to another account."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此身份已绑定其他账号。"
+          }
+        }
+      }
+    },
+    "Change Server": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change Server"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更换服务器"
+          }
+        }
+      }
+    },
+    "Project access could not be verified.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project access could not be verified."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法确认项目访问权限。"
+          }
+        }
+      }
+    },
+    "Showing cached server statistics. Updates will resume when the server is available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing cached server statistics. Updates will resume when the server is available."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在显示缓存的服务端统计数据，服务恢复后将自动更新。"
+          }
+        }
+      }
+    },
+    "Showing previous data. Updates will resume automatically.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing previous data. Updates will resume automatically."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在显示之前的数据，更新将自动恢复。"
+          }
+        }
+      }
+    },
+    "The page could not be loaded. Try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The page could not be loaded. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载此页面，请重试。"
+          }
+        }
+      }
+    },
+    "These project details are cached. Changes will be available after a live update.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These project details are cached. Changes will be available after a live update."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在显示缓存的项目详情，获取最新数据后即可修改。"
+          }
+        }
+      }
+    },
+    "This project's statistics could not be loaded.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This project's statistics could not be loaded."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载此项目的统计数据。"
           }
         }
       }

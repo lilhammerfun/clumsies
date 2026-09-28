@@ -342,6 +342,7 @@ struct WorkspaceLoader: Sendable {
         guard detail.memory.memoryId == resource.id,
               detail.memory.contentHash == resource.contentHash,
               detail.memory.path == resource.document.path,
+              (detail.memory.isDirectory == true) == resource.document.isDirectory,
               actualContentHash == resource.contentHash else {
             throw ServerClientError.invalidResponse(
                 String(localized: "The memory body no longer matches the requested remote version.")
@@ -594,11 +595,12 @@ struct WorkspaceLoader: Sendable {
                 contentHash: metadata.contentHash,
                 updatedAt: metadata.updatedAt,
                 refCommitId: refCommitId,
-                contentLoaded: false,
+                contentLoaded: metadata.isDirectory == true,
                 document: .init(
                     title: metadata.name,
                     path: metadata.path,
-                    body: ""
+                    body: "",
+                    isDirectory: metadata.isDirectory == true
                 ),
                 orgSource: metadata.orgSource
             )
@@ -773,6 +775,7 @@ struct WorkspaceLoader: Sendable {
     ) -> EditableMemoryDocument {
         var document = document
         document.body = content.content
+        document.isDirectory = content.isDirectory == true
         return document
     }
 

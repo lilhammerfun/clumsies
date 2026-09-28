@@ -14,6 +14,7 @@ final class DraftStore: ObservableObject {
     private let context: WorkspaceContext
     private let feedback: WorkspaceFeedback
     private let sessions: DocumentSessions
+    let didMutate = PassthroughSubject<Void, Never>()
     let documentsChanged = PassthroughSubject<Void, Never>()
     let didSaveDocument = PassthroughSubject<String, Never>()
     let didDiscardDocument = PassthroughSubject<Void, Never>()
@@ -507,6 +508,7 @@ final class DraftStore: ObservableObject {
         let authority = context.authorityGeneration
         let response = try await writeDraft(request)
         try context.ensureAuthority(authority)
+        didMutate.send()
         return response
     }
 
@@ -733,6 +735,7 @@ final class DraftStore: ObservableObject {
             return
         }
         for mapped in mappedDrafts {
+            guard pendingDocumentSaves[.init(projectId: mapped.projectId, itemId: mapped.targetId ?? mapped.id)] == nil else { continue }
             if let index = drafts.firstIndex(where: { $0.id == mapped.id }) {
                 guard originalById[mapped.id] == drafts[index] else { continue }
                 drafts[index] = mapped
@@ -745,7 +748,7 @@ final class DraftStore: ObservableObject {
     }
 
     func daemonContent(kind: MemoryKind, document: EditableMemoryDocument) -> DaemonDraftContent {
-        .init(description: nil, content: document.body)
+        .init(description: nil, content: document.body, isDirectory: document.isDirectory ? true : nil)
     }
 
     private func validatePath(kind: MemoryKind, path: String) throws {
@@ -766,7 +769,7 @@ final class DraftStore: ObservableObject {
 
     func validate(kind: MemoryKind, document: EditableMemoryDocument) throws {
         try validatePath(kind: kind, path: document.path)
-        if kind == .rules && document.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !document.isDirectory && kind == .rules && document.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw MemoryValidationError.emptyRule
         }
     }

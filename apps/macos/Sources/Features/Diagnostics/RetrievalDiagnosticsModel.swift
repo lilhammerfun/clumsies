@@ -58,7 +58,15 @@ final class RetrievalDiagnosticsModel: ObservableObject {
         self.fetchRun = fetchRun ?? { try await daemon.retrievalRun($0) }
     }
 
-    func load(projectId: String?) async {
+    func refreshInBackground() async {
+        guard !isLoading, !isLoadingMore, !isMutating,
+              evidenceDrafts == (detail?.evidence.map(EvaluationEvidenceDraft.init) ?? []) else { return }
+        await load(projectId: projectId, preservingEdits: true)
+    }
+
+    func load(projectId: String?, preservingEdits: Bool = false) async {
+        let originalEvidence = evidenceDrafts
+        let retainedCount = self.projectId == projectId ? runs.count : 0
         if self.projectId != projectId {
             runs = []
             nextCursor = nil
@@ -80,7 +88,7 @@ final class RetrievalDiagnosticsModel: ObservableObject {
             }
         }
         do {
-            let response = try await fetchRuns(
+            var response = try await fetchRuns(
                 RetrievalRunListRequest(
                     projectId: projectId,
                     status: nil,
@@ -88,19 +96,27 @@ final class RetrievalDiagnosticsModel: ObservableObject {
                     limit: 100
                 )
             )
-            guard selectionGeneration == generation, !Task.isCancelled else { return }
-            runs = response.items
+            var refreshed = response.items
+            var seenCursors = Set<String>()
+            while refreshed.count < retainedCount, let cursor = response.nextCursor, seenCursors.insert(cursor).inserted {
+                try Task.checkCancellation()
+                response = try await fetchRuns(.init(projectId: projectId, status: nil, cursor: cursor, limit: 100))
+                refreshed.append(contentsOf: response.items)
+            }
+            guard selectionGeneration == generation, !Task.isCancelled,
+                  !preservingEdits || evidenceDrafts == originalEvidence else { return }
+            runs = refreshed
             nextCursor = response.nextCursor
             let selected = selectedRunId.flatMap { selected in
-                response.items.first(where: { $0.runId == selected })?.runId
-            } ?? response.items.first?.runId
+                refreshed.first(where: { $0.runId == selected })?.runId
+            } ?? refreshed.first?.runId
             if selectedRunId != selected {
                 detail = nil
                 evidenceDrafts = []
             }
             selectedRunId = selected
             if let selected {
-                try await loadDetail(runId: selected, generation: generation)
+                try await loadDetail(runId: selected, generation: generation, preservingEdits: preservingEdits)
             } else {
                 detail = nil
                 evidenceDrafts = []
@@ -235,10 +251,12 @@ final class RetrievalDiagnosticsModel: ObservableObject {
         )
     }
 
-    private func loadDetail(runId: String, generation: UUID) async throws {
+    private func loadDetail(runId: String, generation: UUID, preservingEdits: Bool = false) async throws {
+        let originalEvidence = evidenceDrafts
         let loaded = try await fetchRun(runId)
         guard selectionGeneration == generation,
               selectedRunId == loaded.run.runId,
+              !preservingEdits || evidenceDrafts == originalEvidence,
               !Task.isCancelled else { return }
         detail = loaded
         evidenceDrafts = loaded.evidence.map(EvaluationEvidenceDraft.init)

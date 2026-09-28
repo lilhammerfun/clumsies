@@ -19,7 +19,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .general: "gearshape"
-        case .agent: "puzzlepiece.extension"
+        case .agent: "terminal"
         case .organization: "building.2"
         case .advanced: "questionmark.circle"
         }

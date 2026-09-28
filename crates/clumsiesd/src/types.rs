@@ -291,9 +291,12 @@ pub struct DaemonHealth {
     pub local_db: LocalDbStatus,
 }
 
+/// Agent IPC compatibility and build provenance, carried on every proxy request.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AgentRuntimeIdentity {
+    /// Wire and semantic compatibility revision, independent of product versions.
     pub protocol_revision: u32,
+    /// Build provenance for diagnostics; differing builds may share one protocol.
     pub build_id: String,
 }
 
@@ -746,6 +749,8 @@ pub struct DaemonDraftContent {
     /// Explicit source of a Project adaptation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_source: Option<OrgMemorySource>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_directory: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub content: String,
@@ -757,11 +762,18 @@ impl DaemonDraftContent {
             org_source: None,
             description: None,
             content,
+            is_directory: false,
         }
     }
 
     pub(crate) fn validate(&self) -> Result<(), DaemonError> {
-        if self.content.trim().is_empty() {
+        if self.is_directory {
+            if !self.content.is_empty() {
+                return Err(DaemonError::InvalidRequest(
+                    "directory content must be empty".to_owned(),
+                ));
+            }
+        } else if self.content.trim().is_empty() {
             return Err(DaemonError::InvalidRequest(
                 "memory content must not be empty".to_owned(),
             ));
@@ -793,6 +805,7 @@ mod draft_operation_validation_tests {
     fn rejects_blank_memory_content_before_storage() {
         let operation = create_operation(DaemonDraftContent {
             org_source: None,
+            is_directory: false,
             description: None,
             content: "  ".to_owned(),
         });
@@ -804,6 +817,7 @@ mod draft_operation_validation_tests {
     fn accepts_non_blank_memory_content() {
         let operation = create_operation(DaemonDraftContent {
             org_source: None,
+            is_directory: false,
             description: None,
             content: "# Memory".to_owned(),
         });
@@ -821,6 +835,7 @@ mod draft_operation_validation_tests {
         ] {
             let mut operation = create_operation(DaemonDraftContent {
                 org_source: None,
+                is_directory: false,
                 description: None,
                 content: "# Memory".to_owned(),
             });

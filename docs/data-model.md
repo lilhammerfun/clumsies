@@ -69,6 +69,27 @@ The domain calls it Memory; the database table is still `resources`. An HTTP det
 
 Three names have different jobs: `name` comes from the path; the daemon's display `title` comes from the first Markdown heading, falling back to the filename; Draft `title` describes the proposal. Editing a Markdown heading does not rename the resource.
 
+## Files and directories
+
+An explicit folder uses a stable resource ID, `is_directory: true`, a
+normalized relative path, and an empty body. It follows its owner's Draft,
+Review, and publication lifecycle. New folders in the macOS navigator are
+Project-owned; sharing them with the Organization requires the existing
+separate contribution and approval flow.
+
+The marker is preserved in immutable Trees, synchronized snapshots, and
+exports. Missing/false markers retain the existing file encoding. The
+daemon materializes real directories but excludes them from semantic
+retrieval. Historical files still produce implicit parent folders without
+creating extra resource records.
+
+Files cannot contain descendant paths, files and folders cannot occupy the
+same path, and an existing resource cannot change its entry type. Folder
+rename, move, and delete collect the explicit record and descendants from
+the unfiltered Project tree. Each resource keeps its Draft, and a grouped
+Review publishes them atomically. Selecting an Org folder does not select
+future child resources automatically.
+
 ## Selection and Bundle: ID sets with different jobs
 
 | | Project Org Selection | Bundle |

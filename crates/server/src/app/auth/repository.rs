@@ -129,7 +129,7 @@ pub(super) async fn login_transaction(
 ) -> Result<LoginTransaction, AuthError> {
     let row = sqlx::query(
         "SELECT transaction_id, nonce, provider_pkce_verifier, client_redirect_uri,
-                client_state, client_code_challenge, flow, setup_session_id
+                client_state, client_code_challenge, flow, setup_session_id, binding_session_id
          FROM oidc_login_transactions
          WHERE provider_state_hash = $1 AND consumed_at IS NULL AND expires_at > now()",
     )
@@ -146,6 +146,7 @@ pub(super) async fn login_transaction(
         client_code_challenge: row.try_get("client_code_challenge")?,
         flow: login_flow(row.try_get::<String, _>("flow")?.as_str())?,
         setup_session_id: row.try_get("setup_session_id")?,
+        binding_session_id: row.try_get("binding_session_id")?,
     })
 }
 
@@ -362,19 +363,39 @@ pub(super) async fn exchange_authorization_code(
         .bind(&code_id)
         .execute(&mut **tx)
         .await?;
-    crate::app::inbox::notify_welcome(tx, &user_id, &org_id).await?;
+    create_session(tx, &user_id, &org_id).await
+}
+
+/// Create credentials for an active member while holding its row lock through commit.
+///
+/// # Errors
+/// Rejects disabled or missing members and propagates persistence failures.
+pub(super) async fn create_session(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: &str,
+    org_id: &str,
+) -> Result<TokenResponse, AuthError> {
+    let active =
+        sqlx::query_scalar::<_, String>("SELECT status FROM users WHERE user_id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if active.as_deref() != Some("active") {
+        return Err(AuthError::Unauthorized);
+    }
+    crate::app::inbox::notify_welcome(tx, user_id, org_id).await?;
     let session_id = prefixed_id("ses");
     sqlx::query("INSERT INTO auth_sessions (session_id, user_id, org_id) VALUES ($1, $2, $3)")
         .bind(&session_id)
-        .bind(&user_id)
-        .bind(&org_id)
+        .bind(user_id)
+        .bind(org_id)
         .execute(&mut **tx)
         .await?;
-    let response = issue_token_pair(tx, &session_id, &user_id, &org_id).await?;
+    let response = issue_token_pair(tx, &session_id, user_id, org_id).await?;
     insert_audit_event(
         tx,
-        &org_id,
-        Some(&user_id),
+        org_id,
+        Some(user_id),
         "auth.session_created",
         "session",
         Some(&session_id),
@@ -455,7 +476,7 @@ async fn issue_token_pair(
         .await?;
     }
     let user_row = sqlx::query(
-        "SELECT user_id, email, display_name, avatar_url, role FROM users WHERE user_id = $1",
+        "SELECT user_id, username, email, display_name, avatar_url, role FROM users WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut **tx)
@@ -468,6 +489,7 @@ async fn issue_token_pair(
     let user = UserRef {
         user_id: user_row.try_get("user_id")?,
         email: user_row.try_get("email")?,
+        username: user_row.try_get("username")?,
         display_name: user_row.try_get("display_name")?,
         avatar_url: user_row.try_get("avatar_url")?,
         role: role.clone(),
@@ -526,7 +548,8 @@ pub(super) async fn resolve_external_identity(
     let user = sqlx::query(
         "SELECT user_id, status
          FROM users
-         WHERE lower(email) = lower($1)
+         WHERE lower(email) = lower($1) AND status IN ('invited', 'active') AND username IS NULL
+           AND NOT EXISTS (SELECT 1 FROM password_credentials p WHERE p.user_id = users.user_id)
          FOR UPDATE",
     )
     .bind(&identity.email)
@@ -637,4 +660,40 @@ pub(super) async fn insert_audit_event(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// Bind a verified identity only to the account established by the initiating live session.
+///
+/// # Errors
+/// Rejects revoked sessions, disabled accounts and identities already bound elsewhere.
+pub(super) async fn bind_external_identity(
+    tx: &mut Transaction<'_, Postgres>,
+    session_id: &str,
+    identity: &OidcIdentity,
+) -> Result<String, AuthError> {
+    let user_id: String = sqlx::query_scalar("SELECT u.user_id FROM auth_sessions s JOIN users u USING(user_id) WHERE s.session_id = $1 AND s.revoked_at IS NULL AND u.status = 'active' FOR UPDATE OF u")
+        .bind(session_id).fetch_optional(&mut **tx).await?.ok_or(AuthError::Unauthorized)?;
+    // Reset and disable also take the user lock; recheck after any lock wait.
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM auth_sessions WHERE session_id = $1 AND revoked_at IS NULL)",
+    )
+    .bind(session_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !valid {
+        return Err(AuthError::Unauthorized);
+    }
+    let result = sqlx::query("INSERT INTO external_identities(external_identity_id,user_id,protocol,issuer,subject,email_at_binding) VALUES($1,$2,'oidc',$3,$4,$5) ON CONFLICT DO NOTHING")
+        .bind(prefixed_id("idn")).bind(&user_id).bind(&identity.issuer).bind(&identity.subject).bind(&identity.email).execute(&mut **tx).await?;
+    if result.rows_affected() != 1 {
+        let already_bound: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM external_identities WHERE user_id = $1 AND issuer = $2 AND subject = $3)")
+            .bind(&user_id).bind(&identity.issuer).bind(&identity.subject).fetch_one(&mut **tx).await?;
+        if !already_bound {
+            return Err(AuthError::ProviderIdentityConflict);
+        }
+    }
+    // Provider email is descriptive; an existing email invitation must never be reassigned.
+    sqlx::query("UPDATE users SET email = $2, updated_at = now(), revision = revision + 1 WHERE user_id = $1 AND email IS NULL AND NOT EXISTS(SELECT 1 FROM users WHERE lower(email) = lower($2))")
+        .bind(&user_id).bind(&identity.email).execute(&mut **tx).await?;
+    Ok(user_id)
 }

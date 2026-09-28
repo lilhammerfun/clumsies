@@ -37,7 +37,10 @@ async fn oidc_identity_survives_an_email_claim_change() {
     )
     .await;
     assert_eq!(second_token.user.user_id, bootstrap.user_id);
-    assert_eq!(second_token.user.email, "owner@example.com");
+    assert_eq!(
+        second_token.user.email.as_deref(),
+        Some("owner@example.com")
+    );
 
     let identity_count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM external_identities

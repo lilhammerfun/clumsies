@@ -33,7 +33,29 @@ final class NativeServerAccessModel: ObservableObject {
         case memoryOnly
     }
 
-    @Published var serverOrigin: String
+    @Published var serverOrigin: String {
+        didSet {
+            guard serverOrigin != oldValue else { return }
+            password = ""
+            confirmPassword = ""
+            actionToken = ""
+            setupCode = ""
+            errorMessage = nil
+        }
+    }
+    private var checkedOrigin: ServerOrigin?
+    var serverReady: Bool {
+        guard let checkedOrigin else { return false }
+        return (try? ServerOrigin(validating: serverOrigin)) == checkedOrigin
+    }
+    enum LocalAction { case signIn, invitation, reset }
+    @Published var localAction: LocalAction = .signIn
+    @Published var username = ""
+    @Published var password = ""
+    @Published var actionToken = ""
+    @Published var confirmPassword = ""
+    @Published var setupWithPassword = true
+    @Published private(set) var loginMethods: NativeLoginMethods?
     @Published var setupCode = ""
     @Published var organizationName = ""
     @Published var defaultProjectName = String(localized: "Default")
@@ -58,10 +80,13 @@ final class NativeServerAccessModel: ObservableObject {
         destination: Destination,
         recoveryState: NativeAdministratorRecoveryState,
         initialSetupStatus: NativeSetupStatus? = nil,
+        initialLoginMethods: NativeLoginMethods? = nil,
         developmentInstanceID: String? = ClumsiesIdentifiers.developmentInstanceID,
         onCompleted: @escaping @MainActor () -> Void = {}
     ) {
         serverOrigin = serverURL.absoluteString
+        self.loginMethods = initialLoginMethods
+        self.checkedOrigin = initialLoginMethods == nil ? nil : try? ServerOrigin(validating: serverURL.absoluteString)
         self.purpose = purpose
         self.destination = destination
         self.developmentInstanceID = developmentInstanceID
@@ -73,7 +98,7 @@ final class NativeServerAccessModel: ObservableObject {
     }
 
     var usesAutomaticDevelopmentLogin: Bool {
-        purpose == .appSignIn && developmentInstanceID != nil
+        purpose == .appSignIn && developmentInstanceID != nil && loginMethods == nil
             && URL(string: serverOrigin)?.host.map(ServerOrigin.isLoopback) == true
     }
 
@@ -107,10 +132,47 @@ final class NativeServerAccessModel: ObservableObject {
 
     var recoveryIdentity: String? {
         guard let session = recoveryState.session else { return nil }
-        return "\(session.currentUser.user.email) · \(session.currentUser.org.name)"
+        return "\(session.currentUser.user.loginLabel) · \(session.currentUser.org.name)"
+    }
+
+    func loadLoginMethods() {
+        run {
+            self.username = ""
+            self.localAction = .signIn
+            self.password = ""
+            self.confirmPassword = ""
+            self.actionToken = ""
+            let origin = try ServerOrigin(validating: self.serverOrigin)
+            let status = try await NativeServerSetupClient(origin: origin).status()
+            self.loginMethods = try await AuthenticationClient(serverURL: origin.url).loginMethods()
+            self.checkedOrigin = origin
+            self.apply(status)
+            self.setupWithPassword = self.loginMethods?.passwordEnabled == true
+        }
+    }
+
+    func signInWithPassword() {
+        guard serverReady else { return }
+        run {
+            defer { self.password = ""; self.confirmPassword = ""; self.actionToken = "" }
+            let origin = try ServerOrigin(validating: self.serverOrigin)
+            let client = AuthenticationClient(serverURL: origin.url)
+            let session: NativeAuthenticatedSession
+            if self.localAction == .signIn {
+                session = try await client.passwordLogin(username: self.username, password: self.password)
+            } else {
+                guard self.password == self.confirmPassword else {
+                    throw AuthenticationError.localValidation(String(localized: "Passwords do not match."))
+                }
+                session = try await client.redeemAction(token: self.actionToken.trimmingCharacters(in: .whitespacesAndNewlines), username: self.localAction == .invitation ? self.username : nil, password: self.password, invitation: self.localAction == .invitation)
+            }
+            try self.persist(origin)
+            try await self.finish(session)
+        }
     }
 
     func continueFromServer() {
+        guard serverReady else { return }
         run {
             let origin = try ServerOrigin(validating: self.serverOrigin)
             let setup = NativeServerSetupClient(origin: origin)
@@ -129,6 +191,7 @@ final class NativeServerAccessModel: ObservableObject {
     }
 
     func completeSetup() {
+        guard serverReady else { return }
         run {
             let organizationName = self.organizationName
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -155,18 +218,18 @@ final class NativeServerAccessModel: ObservableObject {
                 defaultProjectName: defaultProjectName,
                 allowedEmailDomains: Self.emailDomains(from: self.allowedEmailDomains)
             )
-            let session = try await setup.completeSetup(
-                setupCode: setupCode,
-                configuration: configuration
-            )
+            let session: NativeAuthenticatedSession
+            if self.setupWithPassword {
+                guard self.password == self.confirmPassword else {
+                    throw AuthenticationError.localValidation(String(localized: "Passwords do not match."))
+                }
+                defer { self.password = ""; self.confirmPassword = "" }
+                session = try await setup.completePasswordSetup(setupCode: setupCode, configuration: configuration, username: self.username, password: self.password)
+            } else {
+                session = try await setup.completeSetup(setupCode: setupCode, configuration: configuration)
+            }
             try await self.finish(session)
         }
-    }
-
-    func chooseAnotherServer() {
-        guard !isBusy else { return }
-        showsSetup = false
-        errorMessage = nil
     }
 
     private func apply(_ status: NativeSetupStatus) {
@@ -203,7 +266,6 @@ final class NativeServerAccessModel: ObservableObject {
 
     private func persist(_ origin: ServerOrigin) throws {
         _ = try ClumsiesIdentifiers.persistServerOrigin(origin.url.absoluteString)
-        serverOrigin = origin.url.absoluteString
     }
 
     private func run(_ operation: @escaping @MainActor () async throws -> Void) {

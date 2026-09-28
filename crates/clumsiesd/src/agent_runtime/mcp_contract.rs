@@ -184,6 +184,7 @@ impl StoreResource {
     fn content(self, body: String, description: Option<String>) -> DaemonDraftContent {
         DaemonDraftContent {
             org_source: None,
+            is_directory: false,
             description,
             content: body,
         }

@@ -35,18 +35,28 @@ scp compose.production.yml "${SSH_TARGET}:${DEPLOY_DIR}/compose.production.yml"
 echo "==> Applying the Caddy configuration"
 # The Caddyfile is a mounted file: changing its contents does not make Docker
 # recreate the container, and Caddy does not watch it by default. Start the
-# container, then reload so a synced configuration takes effect.
+# container without restarting Server/PostgreSQL, then reload the synced configuration.
 # shellcheck disable=SC2029 # DEPLOY_DIR intentionally expands client-side
-ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml up -d caddy"
+ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml up -d --no-deps caddy"
 # shellcheck disable=SC2029 # DEPLOY_DIR intentionally expands client-side
 ssh "${SSH_TARGET}" "cd ${DEPLOY_DIR} && docker compose -f compose.production.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
 
 echo "==> Verifying locally reachable endpoints"
 ssh "${SSH_TARGET}" <<'EOF'
+set -euo pipefail
 for host in docs.clumsies.ai clumsies.ai www.clumsies.ai app.clumsies.ai; do
   code=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${host}:443:127.0.0.1" "https://${host}/" || true)
   echo "${host} -> ${code}"
 done
+
+# A missing docs path must answer 404. try_files must never rewrite to the 404
+# page with status 200, or crawlers and uptime checks treat misses as content.
+missing=$(curl -s -o /dev/null -w "%{http_code}" --resolve "docs.clumsies.ai:443:127.0.0.1" "https://docs.clumsies.ai/missing-page-check" || true)
+if [[ "${missing}" != "404" ]]; then
+  echo "docs.clumsies.ai missing path -> ${missing} (want 404)"
+  exit 1
+fi
+echo "docs.clumsies.ai missing path -> 404"
 EOF
 
 echo "==> Done. Public DNS must point docs.clumsies.ai and clumsies.ai at the server (see issue notes)."

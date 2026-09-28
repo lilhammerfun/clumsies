@@ -49,6 +49,8 @@ pub(super) struct CachedTree {
 pub(super) struct CachedTreeEntry {
     #[serde(default)]
     pub(super) org_source: Option<crate::types::OrgMemorySource>,
+    #[serde(default)]
+    pub(super) is_directory: bool,
     pub(super) id: String,
     #[serde(rename = "type")]
     pub(super) kind: CachedMemoryKind,
@@ -182,7 +184,8 @@ async fn load_draft_base_resource(
         .first()
         .is_some_and(|(_, _, operation)| operation.create.is_some());
     let entry = tree.entries.into_iter().find(|entry| {
-        cached_memory_kind(entry.kind) == Some(kind)
+        !entry.is_directory
+            && cached_memory_kind(entry.kind) == Some(kind)
             && cached_scope(entry.scope) == Some(draft.scope)
             && match draft.target_id.as_deref() {
                 Some(target_id) => entry.id == target_id,
@@ -234,6 +237,12 @@ pub(super) fn apply_draft_overlay(
         .iter()
         .any(|(_, _, operation)| operation.discard.is_some())
     {
+        return Ok(());
+    }
+    if draft.operations.iter().any(|(_, _, operation)| {
+        operation.create.as_ref().is_some_and(|create| create.content.is_directory)
+            || matches!(&operation.update, Some(DaemonUpdateDraftOperation::Content(update)) if update.content.is_directory)
+    }) {
         return Ok(());
     }
     // Draft synchronization acknowledgements update metadata timestamps but

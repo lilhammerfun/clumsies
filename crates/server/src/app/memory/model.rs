@@ -70,35 +70,39 @@ pub(crate) fn materialization_output_path(path: &str) -> Result<String, ServerEr
 /// # Errors
 /// Rejects unsafe paths and collisions with a previously registered output destination.
 pub(crate) fn insert_materialization_path(
-    paths: &mut BTreeMap<String, (String, String)>,
+    paths: &mut BTreeMap<String, (String, String, bool)>,
     resource_id: &str,
     output_path: &str,
     owner: &str,
+    is_directory: bool,
 ) -> Result<(), ServerError> {
     let normalized = output_path.to_lowercase();
-    if let Some((existing_id, existing_path)) = paths.get(&normalized) {
+    if let Some((existing_id, existing_path, _)) = paths.get(&normalized) {
         return Err(ServerError::InvalidRequest(format!(
             "{owner} materializes {existing_id} at {existing_path} and {resource_id} at {output_path}, which conflict"
         )));
     }
     for (index, _) in normalized.rmatch_indices('/') {
-        if let Some((existing_id, existing_path)) = paths.get(&normalized[..index]) {
+        if let Some((existing_id, existing_path, false)) = paths.get(&normalized[..index]) {
             return Err(ServerError::InvalidRequest(format!(
                 "{owner} materializes {existing_id} at {existing_path} and {resource_id} at {output_path}, which conflict"
             )));
         }
     }
     let descendant_prefix = format!("{normalized}/");
-    if let Some((_, (existing_id, existing_path))) = paths
+    if let Some((_, (existing_id, existing_path, _))) = paths
         .range(descendant_prefix.clone()..)
         .next()
-        .filter(|(path, _)| path.starts_with(&descendant_prefix))
+        .filter(|(path, _)| !is_directory && path.starts_with(&descendant_prefix))
     {
         return Err(ServerError::InvalidRequest(format!(
             "{owner} materializes {existing_id} at {existing_path} and {resource_id} at {output_path}, which conflict"
         )));
     }
-    paths.insert(normalized, (resource_id.to_owned(), output_path.to_owned()));
+    paths.insert(
+        normalized,
+        (resource_id.to_owned(), output_path.to_owned(), is_directory),
+    );
     Ok(())
 }
 
@@ -142,6 +146,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_directories_allow_children_but_not_files_at_the_same_path() {
+        for reverse in [false, true] {
+            let mut paths = BTreeMap::new();
+            let mut entries = [("dir", "notes", true), ("file", "notes/readme.md", false)];
+            if reverse {
+                entries.reverse();
+            }
+            for (id, path, directory) in entries {
+                insert_materialization_path(&mut paths, id, path, "test", directory).unwrap();
+            }
+            assert!(
+                insert_materialization_path(&mut paths, "collision", "NOTES", "test", false)
+                    .is_err()
+            );
+            assert!(
+                insert_materialization_path(
+                    &mut paths,
+                    "collision",
+                    "notes/readme.md/child",
+                    "test",
+                    true
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn resource_paths_follow_the_portable_file_contract() {
         assert!(validate_resource_path("spec/API.md").is_ok());
         assert!(validate_resource_path("workflow/CODING").is_ok());
@@ -182,6 +214,11 @@ pub(crate) fn prepare_resource_content(
     content: &DraftResourceContent,
     existing: Option<&TargetResource>,
 ) -> Result<PreparedResourceContent, ServerError> {
+    if existing.is_some_and(|resource| resource.is_directory != content.is_directory) {
+        return Err(ServerError::InvalidRequest(
+            "a file cannot be converted to a directory or vice versa".to_owned(),
+        ));
+    }
     let body = &content.content;
     Ok(PreparedResourceContent {
         name: existing
@@ -203,6 +240,8 @@ pub(crate) struct OrgResourceImpact {
 /// Persisted resource identity and content loaded before applying a draft mutation.
 #[derive(Debug)]
 pub(crate) struct TargetResource {
+    /// Persisted resource entry type, immutable across content edits.
+    pub(crate) is_directory: bool,
     /// Stable identity of the persisted resource.
     pub(crate) resource_id: String,
     /// Resource path within its ownership scope, used to determine the materialized destination.
@@ -231,6 +270,8 @@ pub(crate) fn resource_status(value: &str) -> Result<dto::ResourceStatus, Server
 pub(crate) struct CommitResource {
     /// Explicit immutable origin of a Project adaptation.
     pub(crate) org_source: Option<sqlx::types::Json<crate::app::memory::dto::OrgMemorySource>>,
+    /// Whether the snapshot entry must materialize as a directory.
+    pub(crate) is_directory: bool,
     /// Stable identity of the persisted resource.
     pub(crate) resource_id: String,
     /// Stored text content, including Markdown where the resource contract permits it.

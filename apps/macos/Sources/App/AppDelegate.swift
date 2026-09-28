@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private let store = WorkspaceCoordinator()
+    private let store = WorkspaceCoordinator(navigationDefaults: .standard)
     private lazy var administration = AdministrationModel(
         context: store.context, onWorkspaceChanged: { [weak store] in await store?.reload() }
     )
@@ -107,6 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(checkForUpdates(_:)) {
             return softwareUpdateController.canCheckForUpdates
+        }
+        if menuItem.action == #selector(refreshWorkspace(_:)) {
+            return settingsWindowController.canRefresh || (mainWindow?.isKeyWindow == true && store.context.phase == .ready
+                && [.memory, .reviews, .inbox, .dashboard, .sessions].contains(store.navigation.selectedSection)
+                && store.refreshes.statuses[store.refreshes.visible]?.isRefreshing == false)
         }
         if menuItem.action == #selector(newProject(_:)) {
             return store.context.canCreateProject && store.context.phase == .ready
@@ -267,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentMainLoading() {
-        startupWindowController.show(LaunchView(), height: 360)
+        startupWindowController.show(LaunchView())
     }
 
     private func presentMainFailure(message: String, retry: @escaping () -> Void) {
@@ -467,7 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let fileItem = NSMenuItem()
         mainMenu.addItem(fileItem)
         let fileMenu = NSMenu(title: String(localized: "File"))
-        let newMemory = fileMenu.addItem(withTitle: String(localized: "New Memory"), action: #selector(newMemory(_:)), keyEquivalent: "n")
+        let newMemory = fileMenu.addItem(withTitle: String(localized: "New File"), action: #selector(newMemory(_:)), keyEquivalent: "n")
         newMemory.target = self
         let newProject = fileMenu.addItem(
             withTitle: String(localized: "New Project…"),
@@ -528,6 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let sidebar = viewMenu.addItem(withTitle: String(localized: "Toggle Sidebar"), action: #selector(toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .option]
         sidebar.target = self
+        let refresh = viewMenu.addItem(withTitle: String(localized: "Refresh"), action: #selector(refreshWorkspace(_:)), keyEquivalent: "r")
+        refresh.target = self
         viewItem.submenu = viewMenu
 
         let reviewItem = NSMenuItem()
@@ -608,6 +615,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func checkForUpdates(_ sender: Any?) {
         softwareUpdateController.checkForUpdates()
+    }
+
+    @objc private func refreshWorkspace(_ sender: Any?) {
+        if settingsWindowController.canRefresh { settingsWindowController.refreshCurrentPage() }
+        else { store.refreshes.request(store.refreshes.visible) }
     }
 
     @objc private func showSearch(_ sender: Any?) {

@@ -14,16 +14,16 @@ next:
 
 支持 **macOS 14 及以上版本、Apple Silicon Mac（M1 及更新机型）**，无需安装编译工具。
 
-1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases)，选择最新 **Clumsies macOS Preview** 中的 `Clumsies-*-macos-arm64.dmg`。
+1. 打开 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases/latest)，选择标记为 **Latest** 的正式版本 中的 `Clumsies-*-macos-arm64.dmg`。
 2. 打开 DMG，将 `Clumsies.app` 拖入 `Applications`，然后推出磁盘映像。
-3. 打开应用。当前体验版尚未经过 Apple 公证；若 macOS 拦截，确认下载来源可信后，到 **系统设置 → 隐私与安全 → 仍要打开**。[Apple 说明](https://support.apple.com/zh-cn/102445)
+3. 打开应用。当前版本尚未经过 Apple 公证；若 macOS 拦截，确认下载来源可信后，到 **系统设置 → 隐私与安全 → 仍要打开**。[Apple 说明](https://support.apple.com/zh-cn/102445)
 4. 继续[连接组织](/zh/quickstart/connect)。默认 Server 地址为 `https://app.clumsies.ai`，登录需要组织准入的账号。首次使用会联网下载检索模型。
 
-::: warning 体验版
-当前 DMG 使用本地签名，尚未经过 Apple 公证。受管理的 Mac 可能不允许手动放行。它使用正常 App 的账号、Memory 和设置；不是稳定发行版。
+::: warning Apple 公证
+当前 DMG 使用本地签名，尚未经过 Apple 公证。受管理的 Mac 可能不允许手动放行。它使用正常 App 的账号、Memory 和设置；GitHub 正式发布与 Apple 公证是两件独立的事。
 :::
 
-更新时先退出 App，下载新的 DMG 并替换原位置的应用，用户数据会保留。此前通过源码安装到 `~/Applications/Clumsies.app` 的用户，请继续在该位置替换，避免安装两份。体验版通过下载 DMG 手动更新。
+更新时先退出 App，下载新的 DMG 并替换原位置的应用，用户数据会保留。此前通过源码安装到 `~/Applications/Clumsies.app` 的用户，请继续在该位置替换，避免安装两份。也可以使用「设置 → 通用 → 检查更新」。现有 Preview 安装可通过原更新源收到下一个签名的正式版本，随后使用正式版本更新源。
 
 ## 从源码安装
 

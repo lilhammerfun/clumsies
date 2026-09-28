@@ -3,56 +3,127 @@ import SwiftUI
 struct NativeServerAccessView: View {
     @ObservedObject var model: NativeServerAccessModel
 
-    private let brandAccent = Color(red: 0.78, green: 0.24, blue: 0.52)
+    @State private var serverExpanded = false
+    @FocusState private var focusedField: Field?
+    private enum Field { case username, password, confirmation, credential, server }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                BrandLogoView(size: 68, isBreathing: model.isBusy)
-
-                VStack(spacing: 7) {
-                    Text(model.title)
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                    Text(model.subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 390)
+            VStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    BrandLogoView(size: 40, isBreathing: model.isBusy)
+                    Text(model.title).font(.system(size: 20, weight: .semibold))
                 }
-
+                .padding(.bottom, 4)
                 if model.recoveryReady {
                     recoveryContent
-                } else if !model.usesAutomaticDevelopmentLogin {
-                    serverField
+                } else {
                     if model.showsSetup {
                         setupFields
+                        if model.loginMethods?.passwordEnabled == true && model.oidcConfigured {
+                            Toggle("Set up with username and password", isOn: $model.setupWithPassword)
+                        }
+                        if model.setupWithPassword { localFields }
+                        Button(model.setupWithPassword ? "Create owner" : "Continue with identity provider") { model.completeSetup() }
+                            .buttonStyle(SignInButtonStyle(primary: true)).disabled(model.isBusy || !model.serverReady || !model.setupCodeConfigured)
+                    } else {
+                        if model.loginMethods?.passwordEnabled == true {
+                            localFields
+                            Button(model.localAction == .signIn ? "Sign in" : model.localAction == .invitation ? "Accept invitation" : "Reset password") { model.signInWithPassword() }
+                                .buttonStyle(SignInButtonStyle(primary: true))
+                                .disabled(model.isBusy || !model.serverReady || model.password.isEmpty)
+                                .keyboardShortcut(.defaultAction)
+                        }
+                        if model.localAction == .signIn && model.loginMethods?.oidcEnabled == true {
+                            if model.loginMethods?.passwordEnabled == true {
+                                HStack(spacing: 12) {
+                                    Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 0.5)
+                                    Text("or").font(.system(size: 11)).foregroundStyle(.secondary)
+                                    Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 0.5)
+                                }.padding(.vertical, 1)
+                            }
+                            Button { model.continueFromServer() } label: {
+                                HStack(spacing: 12) {
+                                    if model.loginMethods?.google == true {
+                                        Image("GoogleG").resizable().scaledToFit().frame(width: 20, height: 20)
+                                    }
+                                    Text(model.loginMethods?.google == true ? "Sign in with Google" : "Sign in with identity provider")
+                                        .font(model.loginMethods?.google == true
+                                              ? .custom("GoogleSans-Regular_Medium", size: 14)
+                                              : .system(size: 14, weight: .medium))
+                                    if model.loginMethods?.google == true { Spacer(minLength: 0) }
+                                }.padding(.horizontal, 16)
+                            }
+                            .buttonStyle(SignInButtonStyle(primary: false))
+                            .disabled(model.isBusy || !model.serverReady)
+                        }
+                        if model.loginMethods?.passwordEnabled == true {
+                            HStack {
+                                Button(model.localAction == .signIn ? "Accept invitation" : "Back to sign in") {
+                                    model.password = ""; model.confirmPassword = ""; model.actionToken = ""
+                                    model.localAction = model.localAction == .signIn ? .invitation : .signIn
+                                }
+                                Spacer()
+                                if model.localAction == .signIn {
+                                    Button("Forgot password?") { model.password = ""; model.localAction = .reset }
+                                }
+                            }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor).disabled(model.isBusy)
+                        }
                     }
-                    FormErrorMessage(message: model.errorMessage).frame(maxWidth: 410)
-                    primaryAction
-                } else {
-                    FormErrorMessage(message: model.errorMessage).frame(maxWidth: 410)
+                    serverField
+                    FormErrorMessage(message: model.errorMessage)
                 }
-
-            }
-            .padding(36)
-            .frame(maxWidth: .infinity)
+            }.frame(maxWidth: 320).padding(.vertical, 28).frame(maxWidth: .infinity)
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .task { if model.loginMethods == nil { model.loadLoginMethods() } }
+    }
+
+    private var localFields: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if model.localAction != .signIn && !model.showsSetup {
+                Text(model.localAction == .invitation ? "Paste the invitation from your administrator." : "Ask your administrator for a password reset credential.")
+                    .font(.caption).foregroundStyle(.secondary)
+                SecureField("One-time credential", text: $model.actionToken)
+                    .focused($focusedField, equals: .credential).modifier(LoginFieldStyle(focused: focusedField == .credential))
+            }
+            if model.localAction != .reset || model.showsSetup {
+                TextField("Username", text: $model.username).textContentType(.username)
+                    .focused($focusedField, equals: .username).modifier(LoginFieldStyle(focused: focusedField == .username))
+            }
+            SecureField("Password", text: $model.password).textContentType(.password)
+                .focused($focusedField, equals: .password).modifier(LoginFieldStyle(focused: focusedField == .password))
+            if model.localAction != .signIn || model.showsSetup {
+                SecureField("Confirm password", text: $model.confirmPassword)
+                    .focused($focusedField, equals: .confirmation).modifier(LoginFieldStyle(focused: focusedField == .confirmation))
+                Text("Use at least 15 characters. Usernames use 3–32 letters, digits, dots, underscores or hyphens.").font(.caption2).foregroundStyle(.secondary)
+            }
+        }.disabled(model.isBusy)
     }
 
     private var serverField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Server address")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            TextField("https://clumsies.example.com", text: $model.serverOrigin)
-                .textFieldStyle(.roundedBorder)
-                .disabled(model.isBusy)
-            Text("Remote Servers require HTTPS. HTTP is accepted only on this Mac's loopback address.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+        DisclosureGroup(isExpanded: $serverExpanded) {
+            HStack(spacing: 8) {
+                TextField("https://clumsies.example.com", text: $model.serverOrigin)
+                    .focused($focusedField, equals: .server)
+                    .modifier(LoginFieldStyle(focused: focusedField == .server))
+                    .accessibilityLabel("Server address")
+                    .onSubmit { model.loadLoginMethods() }
+                Button("Connect") { model.loadLoginMethods() }
+                    .buttonStyle(SignInButtonStyle(primary: true))
+                    .frame(width: 88)
+                    .disabled(model.serverReady)
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 8) {
+                Text("Server address")
+                Spacer(minLength: 0)
+                Text(model.serverOrigin).lineLimit(1).truncationMode(.middle)
+            }.font(.system(size: 10)).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: 410)
+        .disabled(model.isBusy)
+        .padding(.top, 4)
     }
 
     private var setupFields: some View {
@@ -60,7 +131,7 @@ struct NativeServerAccessView: View {
             if !model.setupCodeConfigured {
                 setupWarning(String(localized: "Set CLUMSIES_SETUP_CODE in the Server deployment before continuing."))
             }
-            if !model.oidcConfigured {
+            if !model.oidcConfigured && !model.setupWithPassword {
                 setupWarning(String(localized: "Configure the Server's OIDC deployment settings before continuing."))
             }
             labeledSecureField(String(localized: "Setup code"), placeholder: String(localized: "Deployment setup code"), text: $model.setupCode)
@@ -73,41 +144,6 @@ struct NativeServerAccessView: View {
             )
         }
         .frame(maxWidth: 410)
-    }
-
-    private var primaryAction: some View {
-        VStack(spacing: 10) {
-            Button {
-                if model.showsSetup {
-                    model.completeSetup()
-                } else {
-                    model.continueFromServer()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    if model.isBusy {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(model.showsSetup ? "Save and Continue in Browser" : "Continue in Browser")
-                        .fontWeight(.medium)
-                }
-                .frame(minWidth: 230)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(brandAccent)
-            .disabled(
-                model.isBusy
-                    || (model.showsSetup
-                        && (!model.setupCodeConfigured || !model.oidcConfigured))
-            )
-
-            if model.showsSetup {
-                Button("Use a different Server") { model.chooseAnotherServer() }
-                    .buttonStyle(.link)
-                    .disabled(model.isBusy)
-            }
-        }
     }
 
     private var recoveryContent: some View {
@@ -147,6 +183,38 @@ struct NativeServerAccessView: View {
     }
 }
 
+private struct LoginFieldStyle: ViewModifier {
+    let focused: Bool
+
+    func body(content: Content) -> some View {
+        content.textFieldStyle(.plain).font(.system(size: 13))
+            .padding(.horizontal, 12).frame(height: 36)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(focused ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: 1))
+    }
+}
+
+private struct SignInButtonStyle: ButtonStyle {
+    let primary: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        let dark = colorScheme == .dark
+        let fill = primary ? (isEnabled ? Color.accentColor : Color.primary.opacity(0.06))
+            : (dark ? Color(red: 0.075, green: 0.075, blue: 0.078) : .white)
+        configuration.label.font(.system(size: 14, weight: .semibold))
+            .frame(maxWidth: .infinity).frame(height: 40)
+            .foregroundStyle(!isEnabled ? Color.secondary : primary ? .white : (dark ? Color(red: 0.89, green: 0.89, blue: 0.89) : Color(red: 0.12, green: 0.12, blue: 0.12)))
+            .background(fill, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(
+                primary ? .clear : (dark ? Color(red: 0.56, green: 0.57, blue: 0.56) : Color(red: 0.455, green: 0.467, blue: 0.459)), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(configuration.isPressed ? 0.08 : 0)))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
 private struct NativeAdministratorRecoveryPanel: View {
     @ObservedObject var state: NativeAdministratorRecoveryState
     let identity: String?
@@ -166,14 +234,7 @@ private struct NativeAdministratorRecoveryPanel: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    Task { await state.load() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(state.isLoading || state.mutatingID != nil)
-                .help("Refresh recovery data")
+
             }
 
             if state.isLoading && state.health == nil {
@@ -193,8 +254,11 @@ private struct NativeAdministratorRecoveryPanel: View {
 
         }
         .frame(maxWidth: 430, alignment: .leading)
-        .pageFeedback(state.errorMessage)
-        .task { await state.load() }
+        .pageFeedback(state.errorMessage) { Task { await state.load() } }
+        .automaticRefresh(id: identity) {
+            guard !state.isLoading, state.mutatingID == nil else { return }
+            await state.load()
+        }
     }
 }
 
@@ -267,10 +331,10 @@ private struct NativeRecoveryMemberRow: View {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(member.displayName ?? member.email)
+                Text(member.identityLabel)
                     .font(.caption.weight(.medium))
                     .lineLimit(1)
-                Text(member.email)
+                Text(member.loginLabel)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

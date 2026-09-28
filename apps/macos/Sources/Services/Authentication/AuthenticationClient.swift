@@ -4,6 +4,7 @@ import Darwin
 import Foundation
 
 enum AuthenticationError: UserFacingError, Sendable {
+    case localValidation(String)
     case callbackServer(String)
     case invalidAuthorizationURL
     case invalidRequestPath
@@ -16,6 +17,7 @@ enum AuthenticationError: UserFacingError, Sendable {
 
     var errorDescription: String? {
         switch self {
+        case .localValidation(let message): message
         case .callbackServer: String(localized: "Clumsies couldn’t start sign-in. Close other sign-in windows and try again.")
         case .invalidAuthorizationURL: String(localized: "Could not create the organization sign-in URL.")
         case .invalidRequestPath: String(localized: "The authenticated Server request path is invalid.")
@@ -23,7 +25,8 @@ enum AuthenticationError: UserFacingError, Sendable {
         case .callbackTimedOut: String(localized: "Organization sign-in timed out.")
         case .invalidCallback: String(localized: "The organization sign-in callback is invalid.")
         case .stateMismatch: String(localized: "The organization sign-in state did not match.")
-        case .provider: String(localized: "Sign-in wasn’t completed. Try again with your organization account.")
+        case .provider(let code):
+            code == "oidc_identity_conflict" ? String(localized: "This identity is already bound to another account.") : String(localized: "Sign-in wasn’t completed. Try again with your organization account.")
         case .server(let status, _): ClientFailure(status: status).message
         }
     }
@@ -113,11 +116,11 @@ struct NativeAuthenticatedSession: @unchecked Sendable {
         self.transport = transport
     }
 
-    func install(on daemon: DaemonXPCClient) async throws -> DaemonProjectConfig {
+    func install(on daemon: DaemonXPCClient, projectId: String? = nil) async throws -> DaemonProjectConfig {
         try await daemon.replaceProjectConfig(
             .init(
                 serverUrl: serverURL.absoluteString,
-                projectId: currentUser.defaultProjectId ?? currentUser.projects.first?.projectId,
+                projectId: projectId ?? currentUser.defaultProjectId ?? currentUser.projects.first?.projectId,
                 accessToken: accessToken,
                 refreshToken: refreshToken
             )
@@ -210,6 +213,10 @@ struct AuthenticationClient: @unchecked Sendable {
     func authenticate(using grant: NativeAuthorizationGrant) async throws
         -> NativeAuthenticatedSession {
         let tokens = try await exchangeCode(grant)
+        return try await authenticatedSession(tokens: tokens)
+    }
+
+    func authenticatedSession(tokens: TokenResponse) async throws -> NativeAuthenticatedSession {
         let currentUser = try await loadCurrentUser(accessToken: tokens.accessToken)
         return .init(
             serverURL: origin,
@@ -218,6 +225,41 @@ struct AuthenticationClient: @unchecked Sendable {
             refreshToken: tokens.refreshToken,
             transport: transport
         )
+    }
+
+    func loginMethods() async throws -> NativeLoginMethods {
+        try await send(URLRequest(url: origin.appending(path: "/api/v1/auth/methods")))
+    }
+
+    func passwordLogin(username: String, password: String) async throws -> NativeAuthenticatedSession {
+        let tokens: TokenResponse = try await post(path: "/api/v1/auth/password/sessions", body: NativePasswordLogin(username: username, password: password))
+        return try await authenticatedSession(tokens: tokens)
+    }
+
+    func redeemAction(token: String, username: String?, password: String, invitation: Bool) async throws -> NativeAuthenticatedSession {
+        let path = invitation ? "/api/v1/auth/invitations/accept" : "/api/v1/auth/password/reset"
+        let tokens: TokenResponse = try await post(path: path, body: NativeRedeemAction(token: token, username: username, password: password))
+        return try await authenticatedSession(tokens: tokens)
+    }
+
+    private func post<Body: Encodable & Sendable, Response: Decodable & Sendable>(path: String, body: Body) async throws -> Response {
+        var request = URLRequest(url: origin.appending(path: path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONCoding.encoder().encode(body)
+        do { return try await send(request) }
+        catch AuthenticationError.server(let status, let message) {
+            let explanation: String?
+            if status == 401 { explanation = String(localized: "The username or password is incorrect.") }
+            else if status == 429 { explanation = String(localized: "Too many attempts. Try again later.") }
+            else if message.hasPrefix("invalid_grant:") { explanation = String(localized: "The invitation or reset credential is invalid, expired, or already used.") }
+            else if message.contains("username is already in use") { explanation = String(localized: "This username is already in use.") }
+            else if message.contains("username must contain") { explanation = String(localized: "Use 3–32 letters, digits, dots, underscores or hyphens for your username.") }
+            else if message.contains("password must contain") { explanation = String(localized: "Use at least 15 characters.") }
+            else { explanation = nil }
+            if let explanation { throw AuthenticationError.localValidation(explanation) }
+            throw AuthenticationError.server(status: status, message: message)
+        }
     }
 
     static func authorizationURL(

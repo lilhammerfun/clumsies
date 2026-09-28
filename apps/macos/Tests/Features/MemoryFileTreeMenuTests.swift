@@ -2,6 +2,78 @@ import XCTest
 @testable import Clumsies
 
 final class MemoryFileTreeMenuTests: XCTestCase {
+    func testExplicitDirectoriesKeepIdentityChildrenAndMoveIntoOtherDirectories() throws {
+        let items = [
+            resourceItem("folder", scope: .project, inherited: false, projectId: "p1", path: "guides", isDirectory: true),
+            resourceItem("file", scope: .project, inherited: false, projectId: "p1", path: "guides/readme.md"),
+            resourceItem("empty", scope: .project, inherited: false, projectId: "p1", path: "archive", isDirectory: true)
+        ]
+        let roots = FileTreeNode.build(items)
+        let folder = try XCTUnwrap(FileTreeNode.node(withId: "directory:guides", in: roots))
+        XCTAssertEqual(folder.item?.id, "folder")
+        XCTAssertEqual(folder.children?.map(\.id), ["file"])
+        XCTAssertEqual(FileTreeNode.node(withId: "directory:archive", in: roots)?.children, [])
+        let paths = Set(items.map(\.document.path))
+        let directories: Set<String> = ["guides", "archive"]
+        let plan = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["directory:guides", "file"], to: "directory:archive", roots: roots,
+            occupiedPaths: paths, occupiedTreePaths: paths, inOrgView: false,
+            directoryPaths: directories, directoryTreePaths: directories
+        )
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: plan.changes.map { ($0.item.id, $0.newPath) }),
+                       ["folder": "archive/guides", "file": "archive/guides/readme.md"])
+        let fileMove = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["file"], to: "directory:archive", roots: roots,
+            occupiedPaths: paths, occupiedTreePaths: paths, inOrgView: false,
+            directoryPaths: directories, directoryTreePaths: directories
+        )
+        XCTAssertEqual(fileMove.changes.first?.newPath, "archive/readme.md")
+        let deletion = try XCTUnwrap(MemoryFileTreeMenu.directoryDeletionPlan(
+            FileTreeNode.items(in: roots, selectedNodeIds: ["directory:archive"]), inOrgView: false))
+        XCTAssertEqual(deletion.itemsToDelete.map(\.id), ["empty"])
+    }
+
+    func testMovePreservesNestedPathsAndDeduplicatesSelectedChildren() throws {
+        let items = [
+            resourceItem("a", scope: .org, inherited: true, path: "guides/nested/a.md"),
+            resourceItem("b", scope: .org, inherited: true, path: "workflow/guides/b.md", kind: .workflows),
+            resourceItem("c", scope: .org, inherited: true, path: "archive/c.md")
+        ]
+        let plan = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["directory:guides", "a"], to: "directory:archive",
+            roots: FileTreeNode.build(items), occupiedPaths: Set(items.map(\.document.path)),
+            occupiedTreePaths: Set(items.map { FileTreeNode.treePath(for: $0) }), inOrgView: false
+        )
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: plan.changes.map { ($0.item.id, $0.newPath) }),
+                       ["a": "archive/guides/nested/a.md", "b": "workflow/archive/guides/b.md"])
+        let top = try MemoryFileTreeMenu.movePlan(
+            selectedNodeIds: ["a"], to: nil, roots: FileTreeNode.build(items),
+            occupiedPaths: Set(items.map(\.document.path)),
+            occupiedTreePaths: Set(items.map { FileTreeNode.treePath(for: $0) }), inOrgView: false
+        )
+        XCTAssertEqual(top.changes.first?.newPath, "a.md")
+    }
+
+    func testMoveRejectsCyclesCollisionsReadOnlyAndNoOpDestinations() {
+        let items = [
+            resourceItem("a", scope: .org, inherited: true, path: "notes/nested/a.md"),
+            resourceItem("b", scope: .org, inherited: true, path: "other/A.md")
+        ]
+        func plan(_ ids: Set<String>, _ destination: String?, org: Bool = false) throws {
+            _ = try MemoryFileTreeMenu.movePlan(
+                selectedNodeIds: ids, to: destination, roots: FileTreeNode.build(items),
+                occupiedPaths: Set(items.map(\.document.path)),
+                occupiedTreePaths: Set(items.map(\.document.path)), inOrgView: org
+            )
+        }
+        XCTAssertThrowsError(try plan(["directory:notes"], "directory:notes/nested"))
+        XCTAssertThrowsError(try plan(["a"], "directory:other"))
+        XCTAssertThrowsError(try plan(["a"], "directory:notes/nested"))
+        XCTAssertThrowsError(try plan(["a"], nil, org: true))
+        XCTAssertThrowsError(try plan(["a", "b"], nil))
+        XCTAssertThrowsError(try plan(["missing"], nil))
+    }
+
     private func resourceItem(
         _ id: String,
         scope: MemoryScope,
@@ -9,7 +81,8 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         projectId: String? = nil,
         draft: LocalDraft? = nil,
         path: String? = nil,
-        kind: MemoryKind = .context
+        kind: MemoryKind = .context,
+        isDirectory: Bool = false
     ) -> MemoryListItem {
         MemoryListItem(
             id: id,
@@ -26,7 +99,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
                 document: EditableMemoryDocument(
                     title: id,
                     path: path ?? "\(id).md",
-                    body: ""
+                    body: "", isDirectory: isDirectory
                 )
             ),
             draft: draft,
@@ -533,22 +606,83 @@ final class MemoryFileTreeMenuTests: XCTestCase {
         XCTAssertEqual(MemoryFileTreeMenu.trashable([item], inOrgView: false), [item])
     }
 
-    func testAdaptationAndOrganizationProposalKeepIndependentIdentities() {
+    func testAdaptationShadowsOrganizationProposalOnlyInTheProjectTree() {
         let source = resourceItem("org-source", scope: .org, inherited: true, path: "guide.md").resource!
         var adaptation = localDraft("adaptation", scope: .project, path: "guide.md")
         adaptation.orgSource = .init(resourceId: source.id, commitId: "project-v1")
         let proposal = localDraft("org-proposal", scope: .org, targetId: source.id, path: "guide.md")
         for drafts in [[adaptation, proposal], [proposal, adaptation]] {
             let items = MemoryTreeProjection.items(resources: [source], drafts: drafts, activeProjectId: "p1", selectedOrgResourceIds: [source.id])
-            XCTAssertEqual(items.count, 2)
-            XCTAssertEqual(Set(items.compactMap { $0.draft?.id }), [adaptation.id, proposal.id])
-            XCTAssertEqual(Set(items.map(\.id)).count, 2)
+            XCTAssertEqual(items.count, 1)
+            XCTAssertEqual(items.compactMap { $0.draft?.id }, [adaptation.id])
             XCTAssertEqual(items.first { $0.id == source.id }?.draft?.id, adaptation.id)
+            XCTAssertEqual(Set(MemoryTreeProjection.preferredMemoryTreeDrafts(drafts).map(\.id)), [adaptation.id, proposal.id])
             XCTAssertEqual(MemoryTreeProjection.memoryTabDraft(itemId: proposal.id, projectId: "p1", drafts: drafts)?.scope, .org)
         }
         var published = resourceItem("project-adaptation", scope: .project, inherited: false, projectId: "p1", path: "guide.md").resource!
         published.orgSource = adaptation.orgSource
         XCTAssertEqual(MemoryTreeProjection.memoryTreeResources([source, published], activeProjectId: "p1", selectedOrgResourceIds: [source.id]).map(\.id), [published.id])
+        XCTAssertEqual(MemoryTreeProjection.items(resources: [source, published], drafts: [proposal],
+            activeProjectId: "p1", selectedOrgResourceIds: [source.id]).map(\.id), [published.id])
+        XCTAssertEqual(MemoryTreeProjection.items(resources: [source, published], drafts: [adaptation, proposal],
+            activeProjectId: nil, selectedOrgResourceIds: []).map(\.resource), [source])
+        XCTAssertEqual(MemoryTreeProjection.items(resources: [source, published], drafts: [adaptation, proposal],
+            activeProjectId: "p2", selectedOrgResourceIds: [source.id]).map(\.resource), [source])
+        for status in [DaemonLocalDraftStatus.discarded, .merged] {
+            var inactive = localDraft("inactive", scope: .project, status: status)
+            inactive.orgSource = adaptation.orgSource
+            XCTAssertEqual(MemoryTreeProjection.items(resources: [source], drafts: [inactive, proposal],
+                activeProjectId: "p1", selectedOrgResourceIds: [source.id]).compactMap { $0.draft?.id }, [proposal.id])
+        }
+    }
+
+    @MainActor
+    func testSyncedMCPMigrationReplacesOldSkillPathsAfterInventoryRefresh() throws {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "p1"
+        workspace.navigation.selectedSection = .memory
+        let paths = ["coding/SKILL.md", "koal-coding/SKILL.md", "koal-coding/references/issue.md", "rust-best-practice/SKILL.md"]
+        var details: [DaemonDraftDetail] = []
+        for (index, path) in paths.enumerated() {
+            let source = resourceItem("source-\(index)", scope: .org, inherited: true, path: "skills/\(path)").resource!
+            workspace.catalog.resources.append(source)
+            workspace.edits.drafts.append(localDraft("proposal-\(index)", scope: .org, targetId: source.id,
+                syncStatus: .synced, path: source.document.path))
+            let detail = try JSONCoding.decoder().decode(DaemonDraftDetail.self, from: Data("""
+                {"draft": {
+                  "draft_id": "migration-\(index)", "project_id": "p1", "server_version": 1,
+                  "freshness": "current", "has_upstream_resource_changes": false, "reconciliation": "clean",
+                  "scope": "project", "resource_kind": "memory", "target_id": null,
+                  "path": "procedures/\(path)", "status": "open",
+                  "created_at": "2026-09-27T00:00:00Z", "updated_at": "2026-09-27T00:00:00Z",
+                  "pending_operation_count": 0, "failed_operation_count": 0
+                }, "operations": [{
+                  "local_operation_id": "op-\(index)", "resource_kind": "memory",
+                  "operation": {"create": {"path": "procedures/\(path)", "content": {
+                    "content": "Migrated content", "org_source": {"resource_id": "\(source.id)", "commit_id": "org-base"}
+                  }}}, "source": "mcp_store", "sync_status": "synced",
+                  "created_at": "2026-09-27T00:00:00Z", "updated_at": "2026-09-27T00:00:00Z"
+                }]}
+                """.utf8))
+            details.append(detail)
+        }
+        workspace.context.projects = [.init(id: "p1", name: "Project", refCommitId: "base", refEtag: "base",
+            selectedOrgResourceIds: Set(workspace.catalog.resources.map(\.id)), orgSelectionRevision: 1, isLoaded: true)]
+        XCTAssertEqual(Set(workspace.memory.visibleMemoryItems.map { $0.document.path }), Set(paths.map { "skills/\($0)" }))
+
+        let plan = DraftStore.draftInventoryPlan(summaries: details.map(\.draft), currentDrafts: workspace.edits.drafts, includeFailed: false)
+        XCTAssertEqual(plan.refreshIds, Set(details.map { $0.draft.draftId }), "Already-synced external creates must still be discovered.")
+        workspace.edits.drafts += details.map { WorkspaceLoader.mapDraft($0, resources: workspace.catalog.resources) }
+        workspace.edits.documentsChanged.send()
+
+        let items = workspace.memory.visibleMemoryItems
+        XCTAssertEqual(items.count, 4)
+        XCTAssertEqual(Set(items.map { $0.document.path }), Set(paths.map { "procedures/\($0)" }))
+        XCTAssertNil(FileTreeNode.node(withId: "directory:skills", in: FileTreeNode.build(items)))
+        XCTAssertTrue(items.allSatisfy { $0.draft?.targetId == nil && $0.draft?.orgSource != nil && $0.draft?.syncStatus == .synced })
+        XCTAssertEqual(workspace.edits.drafts.count, 8, "Organization proposals remain available for review.")
+        workspace.context.activeProjectId = nil
+        XCTAssertEqual(Set(workspace.memory.visibleMemoryItems.map { $0.document.path }), Set(paths.map { "skills/\($0)" }))
     }
 
     // MARK: - Mixed selection stays predictable
@@ -638,7 +772,7 @@ final class MemoryFileTreeMenuTests: XCTestCase {
             source.range(of: "if !isOrgView, let draft = singleItem.draft {")
         )
         let end = try XCTUnwrap(
-            source[start.lowerBound...].range(of: "\n        if targetItems.isEmpty {")
+            source[start.lowerBound...].range(of: "\n        if targetItems.isEmpty || selectedDirectory != nil {")
         )
         let discardAction = source[start.lowerBound..<end.lowerBound]
 

@@ -59,6 +59,7 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     let needsUpdate: Bool
     let hasConflicts: Bool
     var autoRebased = false
+    var isDirectory = false
 
     var reconciliationState: ReviewReconciliationState? {
         .resolve(freshness: needsUpdate ? .behind : .current,
@@ -68,7 +69,8 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     static func resolve(
         reviewId: String,
         detail: ReviewDraftDetail,
-        loadedPath: String? = nil
+        loadedPath: String? = nil,
+        loadedIsDirectory: Bool? = nil
     ) -> ReviewFileDescriptor {
         let initialPath = detail.operations.first?.resource.path ?? detail.draft.resource.path
         let proposedPath = detail.operations.reduce(initialPath) { path, operation in
@@ -86,7 +88,8 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
             path: path,
             needsUpdate: needsUpdate,
             hasConflicts: needsUpdate && detail.draft.coordination.reconciliation == .conflicts,
-            autoRebased: ["open", "submitted"].contains(detail.draft.status) && detail.draft.coordination.autoRebased == true
+            autoRebased: ["open", "submitted"].contains(detail.draft.status) && detail.draft.coordination.autoRebased == true,
+            isDirectory: loadedIsDirectory ?? detail.operations.compactMap { $0.content?.isDirectory }.last ?? false
         )
     }
 }
@@ -94,6 +97,7 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
 @MainActor
 final class ReviewDetailModel: ObservableObject {
     private let fetchDetail: (String) async throws -> ReviewDetail
+    private let fetchBackgroundDetail: (String) async throws -> ReviewDetail
     private var authorityObservation: AnyCancellable?
     let reviewId: String
     private let workspaceContext: WorkspaceContext
@@ -108,10 +112,12 @@ final class ReviewDetailModel: ObservableObject {
         workspaceFeedback = feedback
         reviewModel = reviews
         self.fetchDetail = fetchDetail ?? { try await reviews.reviewDetail($0) }
+        self.fetchBackgroundDetail = fetchDetail ?? { try await reviews.reviewDetail($0, requiresFresh: true) }
         authorityObservation = context.$authorityGeneration.dropFirst().sink { [weak self] _ in
             self?.invalidateDetailRequests()
             self?.detail = nil
             self?.loadedPaths = [:]
+            self?.loadedDirectoryTypes = [:]
             self?.loading = false
             self?.loadError = nil
         }
@@ -121,6 +127,7 @@ final class ReviewDetailModel: ObservableObject {
     private var fileLoader: ReviewFileLoader?
     private var fileLoadTask: Task<Void, Never>?
     @Published var loadedPaths: [String: String] = [:]
+    @Published var loadedDirectoryTypes: [String: Bool] = [:]
     @Published var loadingFile = false
     @Published var fileLoadError: String?
     @Published var changeSources: ReviewChangeSources?
@@ -162,7 +169,8 @@ final class ReviewDetailModel: ObservableObject {
             ReviewFileDescriptor.resolve(
                 reviewId: self.reviewId,
                 detail: $0,
-                loadedPath: self.loadedPaths[$0.draft.draftId]
+                loadedPath: self.loadedPaths[$0.draft.draftId],
+                loadedIsDirectory: self.loadedDirectoryTypes[$0.draft.draftId]
             )
         }
     }
@@ -227,6 +235,7 @@ final class ReviewDetailModel: ObservableObject {
         loadError = nil
         detail = nil
         loadedPaths = [:]
+        loadedDirectoryTypes = [:]
         changeSources = nil
         diffModel = nil
         composing = nil
@@ -270,6 +279,43 @@ final class ReviewDetailModel: ObservableObject {
             } else if let message = error.backgroundMessage {
                 workspaceFeedback.errorMessage = message
             }
+        }
+    }
+
+    /// Comments can change without changing the file proposal. Keep the editor,
+    /// selection and loaded Diff alive when polling that unchanged proposal.
+    func refreshInBackground() async -> WorkspaceRefreshScheduler.Result {
+        guard !loading, !isSubmittingComment else { return .deferred }
+        let generation = detailRequestGeneration
+        let baseline = storedReviewDecisionSignature
+        do {
+            let loaded = try await fetchBackgroundDetail(reviewId)
+            guard !Task.isCancelled, detailRequestGeneration == generation,
+                  !isSubmittingComment, storedReviewDecisionSignature == baseline else { return .deferred }
+            guard loaded.review.version >= (baseline?.reviewVersion ?? 0) else { return .retained }
+            let oldDrafts = detail.map { ($0.drafts ?? [.init(draft: $0.draft, operations: $0.operations)]).map(\.draft) } ?? []
+            let newDrafts = (loaded.drafts ?? [.init(draft: loaded.draft, operations: loaded.operations)]).map(\.draft)
+            let sameFiles = oldDrafts.count == newDrafts.count && zip(oldDrafts, newDrafts).allSatisfy {
+                $0.draftId == $1.draftId && $0.version == $1.version && $0.baseCommitId == $1.baseCommitId
+                    && $0.coordination == $1.coordination
+            }
+            if let current = detail, current.review.version == loaded.review.version,
+               current.review.coordination == loaded.review.coordination, sameFiles {
+                detail = loaded
+                loadError = nil
+                reviewModel.replaceReview(with: WorkspaceLoader.mapReview(loaded.review))
+            } else {
+                guard reviewModel.updates[reviewId] == nil else { return .retained }
+                let request = beginDetailRequest()
+                applyLoadedDetail(loaded, request: request)
+            }
+            return .updated
+        } catch where error.isUserCancellation { return .deferred }
+        catch {
+            guard detailRequestGeneration == generation, !Task.isCancelled else { return .deferred }
+            if detail == nil { loadError = error.actionMessage }
+            else if let message = error.backgroundMessage { workspaceFeedback.errorMessage = message }
+            return .retained
         }
     }
 
@@ -318,6 +364,7 @@ final class ReviewDetailModel: ObservableObject {
 
         detail = loadedDetail
         loadedPaths = [:]
+        loadedDirectoryTypes = [:]
         let client = workspaceContext.server
         fileLoader = ReviewFileLoader { id in
             try await client.get("/api/v1/commits/\(id)")
@@ -356,6 +403,7 @@ final class ReviewDetailModel: ObservableObject {
                 self.changeSources = content.sources
                 self.diffModel = content.diff
                 self.loadedPaths[selectedDraftDetail.draft.draftId] = content.sources.proposedPath
+                self.loadedDirectoryTypes[selectedDraftDetail.draft.draftId] = content.sources.isDirectory
                 self.loadingFile = false
                 self.markCurrentDetailDecisionReady()
                 let elapsed = started.duration(to: .now).components

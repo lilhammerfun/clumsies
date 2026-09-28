@@ -8,6 +8,151 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /api/v1/auth/methods:
+    get:
+      operationId: getLoginMethods
+      summary: getLoginMethods
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginMethods'
+        default:
+          $ref: '#/components/responses/Error'
+      security: []
+  /api/v1/auth/password/sessions:
+    post:
+      operationId: createPasswordSession
+      summary: createPasswordSession
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordLoginRequest'
+  /api/v1/auth/invitations/accept:
+    post:
+      operationId: acceptInvitation
+      summary: acceptInvitation
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedeemActionRequest'
+  /api/v1/auth/password/reset:
+    post:
+      operationId: resetPassword
+      summary: resetPassword
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedeemActionRequest'
+  /api/v1/auth/password:
+    post:
+      operationId: changePassword
+      summary: changePassword
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+  /api/v1/auth/credentials:
+    get:
+      operationId: getAccountCredentials
+      summary: getAccountCredentials
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountCredentials'
+        default:
+          $ref: '#/components/responses/Error'
+  /api/v1/auth/oidc-bindings:
+    post:
+      operationId: createOidcBinding
+      summary: createOidcBinding
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OidcBindingResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BindOidcRequest'
+  /api/v1/setup/password-owner:
+    post:
+      operationId: createPasswordOwner
+      summary: createPasswordOwner
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordLoginRequest'
   /api/v1/me/inbox:
     get:
       operationId: listInbox
@@ -1256,6 +1401,122 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    PasswordLoginRequest:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+          writeOnly: true
+    RedeemActionRequest:
+      type: object
+      required:
+      - token
+      - password
+      properties:
+        token:
+          type: string
+          writeOnly: true
+        username:
+          type:
+          - string
+          - 'null'
+        password:
+          type: string
+          format: password
+          writeOnly: true
+    ChangePasswordRequest:
+      type: object
+      required:
+      - password
+      properties:
+        username:
+          type:
+          - string
+          - 'null'
+        current_password:
+          type:
+          - string
+          - 'null'
+          writeOnly: true
+        password:
+          type: string
+          format: password
+          writeOnly: true
+    LoginMethods:
+      type: object
+      required:
+      - password_enabled
+      - oidc_enabled
+      - google
+      properties:
+        password_enabled:
+          type: boolean
+        oidc_enabled:
+          type: boolean
+        google:
+          type: boolean
+    AccountCredentials:
+      type: object
+      required:
+      - username
+      - password_set
+      - oidc_email
+      properties:
+        username:
+          type:
+          - string
+          - 'null'
+        password_set:
+          type: boolean
+        oidc_email:
+          type:
+          - string
+          - 'null'
+    OidcBindingResponse:
+      type: object
+      required:
+      - authorization_url
+      properties:
+        authorization_url:
+          type: string
+          format: uri
+    BindOidcRequest:
+      type: object
+      required:
+      - authorization
+      properties:
+        authorization:
+          type: object
+          required:
+          - client_kind
+          - redirect_uri
+          - state
+          - code_challenge
+          - code_challenge_method
+          properties:
+            client_kind:
+              $ref: '#/components/schemas/ClientKind'
+            redirect_uri:
+              type: string
+            state:
+              type: string
+            code_challenge:
+              type: string
+            code_challenge_method:
+              type: string
+              enum:
+              - S256
+        current_password:
+          type:
+          - string
+          - 'null'
+          writeOnly: true
     TokenRequest:
       type: object
       oneOf:
@@ -1641,12 +1902,16 @@ components:
           oneOf:
             - $ref: "#/components/schemas/OrgMemorySource"
             - type: "null"
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         description:
           type: [string, "null"]
           description: Optional semantic summary updated with the content.
         content:
           type: string
-          minLength: 1
+          description: Nonblank file text, or an empty string when is_directory is true.
     DraftResourceRef:
       type: object
       required: [scope, id, path]
@@ -2168,6 +2433,10 @@ components:
           oneOf:
             - $ref: "#/components/schemas/OrgMemorySource"
             - type: "null"
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         memory_id:
           type: string
         scope:
@@ -2287,11 +2556,15 @@ components:
           oneOf:
             - $ref: "#/components/schemas/OrgMemorySource"
             - type: "null"
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
         id:
           type: string
         type:
           type: string
-          enum: [rule, context, workflow, project_org_selection]
+          enum: [memory, rule, context, workflow, project_org_selection]
         scope:
           type: string
           enum: [org, project, daemon]
@@ -2369,12 +2642,14 @@ components:
           type: boolean
     UserRef:
       type: object
-      required: [user_id, email, display_name, avatar_url, role]
+      required: [user_id, username, email, display_name, avatar_url, role]
       properties:
         user_id:
           type: string
+        username:
+          type: [string, "null"]
         email:
-          type: string
+          type: [string, "null"]
           format: email
         display_name:
           type: [string, "null"]

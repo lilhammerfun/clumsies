@@ -32,23 +32,6 @@ final class SoftwareUpdateControllerTests: XCTestCase {
         XCTAssertTrue(controller.canCheckForUpdates)
         XCTAssertFalse(controller.hasAvailableUpdate, "Being ready to check must not advertise an update")
 
-        var availability: [Bool] = []
-        let availabilityObservation = controller.$hasAvailableUpdate.sink { availability.append($0) }
-        // Sparkle owns version comparison; exercise its availability and session callbacks.
-        let item = SUAppcastItem.empty()
-        controller.updater(updater, didFindValidUpdate: item)
-        XCTAssertTrue(controller.hasAvailableUpdate)
-        controller.standardUserDriverWillFinishUpdateSession()
-        XCTAssertFalse(controller.hasAvailableUpdate, "Dismissed or skipped updates must clear the reminder")
-        controller.updater(updater, didFindValidUpdate: item)
-        controller.updater(updater, didFinishUpdateCycleFor: .updatesInBackground, error: NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse))
-        XCTAssertFalse(controller.hasAvailableUpdate, "A failed update check must not leave a stale reminder")
-        controller.updater(updater, didFindValidUpdate: item)
-        controller.updater(updater, didFinishUpdateCycleFor: .updatesInBackground, error: nil)
-        XCTAssertFalse(controller.hasAvailableUpdate)
-        XCTAssertEqual(availability, [false, true, false, true, false, true, false])
-        availabilityObservation.cancel()
-
         controller.automaticallyChecksForUpdates = true
         controller.automaticallyDownloadsUpdates = true
         XCTAssertTrue(controller.allowsAutomaticUpdates)
@@ -98,9 +81,88 @@ final class SoftwareUpdateControllerTests: XCTestCase {
 
             XCTAssertEqual(observer.version, version, path)
             XCTAssertEqual(observer.error?.code, errorCode, path)
-            XCTAssertEqual(advertisedUpdate, version != nil, path)
+            XCTAssertFalse(advertisedUpdate, "A version probe cannot present an update: \(path)")
             XCTAssertFalse(controller.hasAvailableUpdate, "Completed probes do not leave stale reminders")
             observation.cancel()
+        }
+    }
+
+    func testReminderWaitsForAnActionableUpdateInsteadOfBackgroundDownload() async throws {
+        let server = try await makeFeedServer()
+        defer { server.cancel() }
+        let port = try XCTUnwrap(server.port)
+
+        for automaticallyDownloads in [true, false] {
+            let bundle = try makeBundle(feedURL: "http://127.0.0.1:\(port.rawValue)/new")
+            let observer = UpdateCheckObserver(finished: expectation(description: "Update cycle finishes"))
+            let driver = UpdateTestUserDriver(hostBundle: bundle, delegate: observer)
+            let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: observer)
+            let controller = SoftwareUpdateController(updater: updater)
+            observer.controller = controller
+            observer.presented = automaticallyDownloads ? nil : expectation(description: "Update can be presented")
+            updater.automaticallyChecksForUpdates = true
+            updater.automaticallyDownloadsUpdates = automaticallyDownloads
+            try updater.start()
+            updater.checkForUpdatesInBackground()
+
+            if automaticallyDownloads {
+                // The local download returns 404; no user-facing update is ready in this cycle.
+                await fulfillment(of: [observer.finished], timeout: 5)
+                XCTAssertEqual(observer.reminderWhileDownloading, false)
+                XCTAssertEqual(observer.canCheckWhileDownloading, false)
+                XCTAssertEqual(observer.error?.code, Int(SUError.downloadError.rawValue))
+                XCTAssertFalse(controller.hasAvailableUpdate)
+                // Sparkle may briefly become busy again while asynchronously scheduling
+                // its next check after the completion delegate returns.
+                let retryReady = expectation(description: "Failed download becomes retryable")
+                let readiness = updater.publisher(for: \.canCheckForUpdates, options: [.initial, .new])
+                    .filter { $0 }
+                    .prefix(1)
+                    .sink { _ in retryReady.fulfill() }
+                await fulfillment(of: [retryReady], timeout: 5)
+                readiness.cancel()
+                XCTAssertTrue(controller.canCheckForUpdates, "A failed download must allow retrying")
+            } else {
+                await fulfillment(of: [try XCTUnwrap(observer.presented)], timeout: 5)
+                XCTAssertTrue(controller.hasAvailableUpdate)
+                XCTAssertTrue(controller.canCheckForUpdates, "The reminder must open an existing update")
+                controller.checkForUpdates()
+                XCTAssertEqual(driver.focusRequests, 1, "Clicking the reminder must focus the prepared update")
+                let reply = try XCTUnwrap(driver.reply)
+                driver.reply = nil
+                reply(.dismiss)
+                await fulfillment(of: [observer.finished], timeout: 5)
+                XCTAssertFalse(controller.hasAvailableUpdate, "Dismissing an update must clear the reminder")
+            }
+            driver.dismissUpdateInstallation()
+        }
+    }
+
+    func testInstallOnQuitReminderSurvivesCycleCompletionWithoutTakingOverInstallation() throws {
+        let bundle = try makeBundle(feedURL: "https://updates.invalid/empty")
+        let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
+        let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: nil)
+        let controller = SoftwareUpdateController(updater: updater)
+        let delegate = controller as SPUUpdaterDelegate
+        try updater.start()
+
+        for error in [nil, NSError(domain: SUSparkleErrorDomain, code: Int(SUError.installationError.rawValue))] {
+            // Replay SPUAutomaticUpdateDriver's preparation -> install-on-quit -> cycle-ended handoff.
+            // No installer is launched and Sparkle must retain ownership of automatic installation.
+            let handled = delegate.updater?(updater, willInstallUpdateOnQuit: .empty(), immediateInstallationBlock: {
+                XCTFail("The reminder must not force installation or quit the application")
+            }) ?? false
+            XCTAssertFalse(handled)
+            XCTAssertFalse(controller.hasAvailableUpdate, "Wait until the background cycle releases the updater")
+
+            controller.updater(updater, didFinishUpdateCycleFor: .updatesInBackground, error: error)
+            XCTAssertEqual(controller.hasAvailableUpdate, error == nil, "A prepared update must remain discoverable until dismissed")
+            XCTAssertTrue(controller.canCheckForUpdates)
+
+            controller.standardUserDriverWillFinishUpdateSession()
+            XCTAssertFalse(controller.hasAvailableUpdate)
+            controller.updater(updater, didFinishUpdateCycleFor: .updatesInBackground, error: nil)
+            XCTAssertFalse(controller.hasAvailableUpdate, "An old install-on-quit callback must not revive a dismissed reminder")
         }
     }
 
@@ -110,7 +172,8 @@ final class SoftwareUpdateControllerTests: XCTestCase {
         let listener = try NWListener(using: parameters)
         let ready = expectation(description: "Local update feed server")
         listener.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
-        listener.newConnectionHandler = { connection in
+        listener.newConnectionHandler = { [weak listener] connection in
+            guard let port = listener?.port else { connection.cancel(); return }
             connection.start(queue: .global())
             // All fixture paths fit in the first 16 bytes of the request line.
             connection.receive(minimumIncompleteLength: 16, maximumLength: 8192) { data, _, _, _ in
@@ -120,7 +183,7 @@ final class SoftwareUpdateControllerTests: XCTestCase {
                 let version = path == "/new" ? "2" : "1"
                 let item = ["/current", "/new"].contains(path) ? """
                     <item><sparkle:version>\(version)</sparkle:version>
-                    <enclosure url="https://updates.invalid/Clumsies.zip" length="1" type="application/octet-stream" /></item>
+                    <enclosure url="http://127.0.0.1:\(port.rawValue)/missing" length="1" type="application/octet-stream" /></item>
                     """ : ""
                 let xml = """
                     <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -161,22 +224,62 @@ final class SoftwareUpdateControllerTests: XCTestCase {
 }
 
 @MainActor
-private final class UpdateCheckObserver: NSObject, SPUUpdaterDelegate {
+private final class UpdateCheckObserver: NSObject, SPUUpdaterDelegate, @preconcurrency SPUStandardUserDriverDelegate {
     let finished: XCTestExpectation
     var controller: SoftwareUpdateController?
     var version: String?
     var error: NSError?
+    var presented: XCTestExpectation?
+    var reminderWhileDownloading: Bool?
+    var canCheckWhileDownloading: Bool?
+
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
+        false
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
+        controller?.standardUserDriverWillHandleShowingUpdate(handleShowingUpdate, forUpdate: update, state: state)
+        presented?.fulfill()
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        controller?.standardUserDriverWillFinishUpdateSession()
+    }
+
+    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+        reminderWhileDownloading = controller?.hasAvailableUpdate
+        canCheckWhileDownloading = controller?.canCheckForUpdates
+    }
 
     init(finished: XCTestExpectation) { self.finished = finished }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         version = item.versionString
-        controller?.updater(updater, didFindValidUpdate: item)
+        if let controller {
+            (controller as SPUUpdaterDelegate).updater?(updater, didFindValidUpdate: item)
+        }
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
         self.error = error as NSError?
         controller?.updater(updater, didFinishUpdateCycleFor: updateCheck, error: error)
         finished.fulfill()
+    }
+}
+
+@MainActor
+private final class UpdateTestUserDriver: SPUStandardUserDriver {
+    var reply: ((SPUUserUpdateChoice) -> Void)?
+    var focusRequests = 0
+
+    override func showUpdateInFocus() {
+        focusRequests += 1
+    }
+
+    override func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        self.reply = reply
+        super.showUpdateFound(with: appcastItem, state: state, reply: reply)
     }
 }

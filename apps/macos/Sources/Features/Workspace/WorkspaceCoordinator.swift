@@ -16,12 +16,15 @@ final class WorkspaceCoordinator {
     let projects: ProjectService
     let reconciliation: DraftReconciliationService
     let refresh: DaemonSyncService
+    let refreshes = WorkspaceRefreshScheduler()
     let reviews: ReviewsModel
     let sessions: DocumentSessions
     let sync: MemorySyncService
+    private var refreshLoopIsRunning = false
     private var observations: Set<AnyCancellable> = []
 
-    init(storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil) {
+    init(storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil,
+         navigationDefaults: UserDefaults? = nil) {
         let context = WorkspaceContext()
         self.context = context
         let catalog = MemoryCatalog(context: context)
@@ -43,7 +46,7 @@ final class WorkspaceCoordinator {
         self.sync = sync
         let bundleSelection = BundlesModel(bundles: bundles)
         self.bundleSelection = bundleSelection
-        let navigation = WorkspaceNavigation(catalog: catalog, context: context, edits: edits, feedback: feedback, sessions: sessions)
+        let navigation = WorkspaceNavigation(catalog: catalog, context: context, edits: edits, feedback: feedback, sessions: sessions, defaults: navigationDefaults)
         self.navigation = navigation
         let projects = ProjectService(agents: agents, bundles: bundles, catalog: catalog, context: context, edits: edits, refresh: refresh, sessions: sessions)
         self.projects = projects
@@ -59,7 +62,32 @@ final class WorkspaceCoordinator {
         context.projectSelectionChanges.sink { [weak feedback] in
             feedback?.clearIrrelevantScopedErrorPresentation()
         }.store(in: &observations)
+        context.projectDeletions.sink { [weak self] deletion in
+            guard let self else { return }
+            let projectId = deletion.projectId
+            cancelPostReadyWork()
+            for key in Array(edits.pendingDocumentSaves.keys) where key.projectId == projectId {
+                edits.cancelDocumentSave(key)
+            }
+            let accessible = Set(context.projects.map(\.id))
+            edits.retainAccessibleProjects(accessible)
+            reviews.retainAccessibleProjects(accessible)
+            catalog.clearStaleResourceState(for: projectId)
+            catalog.replaceProjectResources(projectId: projectId, with: [])
+            navigation.pruneOrphanedMemoryTabs()
+            if deletion.wasActive {
+                navigation.showsProjectSettings = false
+                navigation.selectedItemId = nil
+                navigation.activeTabId = nil
+                navigation.clearPendingDocumentSessionPresentation()
+            }
+        }.store(in: &observations)
         catalog.documentsChanged.merge(with: edits.documentsChanged).sink { [weak navigation] in
+            navigation?.pruneOrphanedMemoryTabs()
+            navigation?.refreshAllDocumentTabs()
+        }.store(in: &observations)
+        edits.$draftInventoryLoadState.receive(on: RunLoop.main).sink { [weak navigation] state in
+            guard case .loaded = state else { return }
             navigation?.pruneOrphanedMemoryTabs()
             navigation?.refreshAllDocumentTabs()
         }.store(in: &observations)
@@ -84,6 +112,14 @@ final class WorkspaceCoordinator {
             await self?.reload(allowsDuringDocumentReconciliation: true)
         }
         reviews.onMerged = { [weak self] in await self?.reload() }
+        configureRefreshes()
+        edits.didMutate
+            .sink { [weak self] in self?.refreshes.invalidate([.memory, .reviews, .inbox, .dashboard], immediately: self?.refreshLoopIsRunning == true) }
+            .store(in: &observations)
+        reviews.didMutate.sink { [weak self] in
+            self?.refreshes.invalidate([.memory, .reviews, .inbox, .dashboard, .reviewDetail], immediately: self?.refreshLoopIsRunning == true)
+        }.store(in: &observations)
+        context.projectSelectionChanges.sink { [weak self] in self?.refreshes.reset() }.store(in: &observations)
     }
 
     var hasPendingChanges: Bool {
@@ -215,9 +251,7 @@ final class WorkspaceCoordinator {
         context.activeProjectId = nil
         catalog.refreshVisibleStaleResourceIds()
         navigation.showsProjectSettings = false
-        navigation.selectedItemId = nil
-        let tab = navigation.visibleTabs.last
-        navigation.activeTabId = tab?.id
+        navigation.activateCurrentProjectTab()
     }
 
     func selectProject(_ projectId: String) async {
@@ -269,9 +303,7 @@ final class WorkspaceCoordinator {
             navigation.clearPendingDocumentSessionPresentation()
             context.activeProjectId = projectId
             catalog.refreshVisibleStaleResourceIds()
-            let tab = navigation.visibleTabs.last
-            navigation.activeTabId = tab?.id
-            navigation.selectedItemId = tab?.itemId
+            navigation.activateCurrentProjectTab()
 
             let loader = WorkspaceLoader(daemon: context.daemon, bootstrap: context.bootstrap, server: context.server)
             var loadedProject: (state: ProjectState, resources: [MemoryResource])?
@@ -436,57 +468,86 @@ final class WorkspaceCoordinator {
         }
     }
 
-    func runRefreshLoop() async {
-        let clock = ContinuousClock()
-        var nextSynchronizedDataRefresh = clock.now
-        while !Task.isCancelled {
-            if context.phase == .ready {
-                await refresh.refreshSyncStatus()
-                guard !Task.isCancelled else { return }
-                if clock.now >= nextSynchronizedDataRefresh {
-                    await refreshSynchronizedWorkspaceData()
-                    await inbox.refresh()
-                    nextSynchronizedDataRefresh = clock.now.advanced(
-                        by: WorkspaceRefreshCadence.synchronizedData
-                    )
-                }
-            }
-            do {
-                try await Task.sleep(for: WorkspaceRefreshCadence.syncStatus)
-            } catch {
-                return
-            }
+    private func configureRefreshes() {
+        refreshes.register(.sync) { [weak self] in
+            guard let self, self.context.phase == .ready else { return .deferred }
+            await self.refresh.refreshSyncStatus()
+            return self.refresh.syncStatusAvailable ? .updated : .retained
+        }
+        refreshes.register(.memory) { [weak self] in
+            guard let self, self.context.phase == .ready,
+                  self.context.activeProjectId != nil || self.navigation.selectedSection == .memory else { return .deferred }
+            return await self.refreshSynchronizedWorkspaceData()
+        }
+        refreshes.register(.reviews) { [weak self] in
+            guard let self, self.context.phase == .ready else { return .deferred }
+            return await self.reviews.refreshList()
+        }
+        refreshes.register(.inbox) { [weak self] in
+            guard let self, self.context.phase == .ready, !self.inbox.isLoading else { return .deferred }
+            await self.inbox.refresh()
+            return self.inbox.hasLoaded && self.inbox.errorMessage == nil && !self.inbox.isShowingSavedContent
+                ? .updated : .retained
         }
     }
 
-    func refreshSynchronizedWorkspaceData() async {
-        guard context.phase == .ready, !refresh.isRefreshingSynchronizedWorkspaceData else { return }
+    func refreshVisiblePage(isForeground: Bool) {
+        let domain: WorkspaceRefreshScheduler.Domain
+        switch navigation.selectedSection {
+        case .memory: domain = .memory
+        case .reviews: domain = refreshes.statuses[.reviewDetail] == nil ? .reviews : .reviewDetail
+        case .inbox: domain = .inbox
+        case .dashboard: domain = .dashboard
+        case .sessions: domain = .activity
+        default: domain = .sync
+        }
+        guard context.phase == .ready else {
+            refreshes.isForeground = isForeground
+            return
+        }
+        refreshes.show(domain, isForeground: isForeground)
+        refreshes.tick()
+    }
+
+    func runRefreshLoop() async {
+        guard !refreshLoopIsRunning else { return }
+        refreshLoopIsRunning = true
+        defer { refreshLoopIsRunning = false; refreshes.cancel() }
+        while !Task.isCancelled {
+            refreshVisiblePage(isForeground: refreshes.isForeground)
+            do { try await Task.sleep(for: .seconds(1)) }
+            catch { return }
+        }
+    }
+
+    @discardableResult
+    func refreshSynchronizedWorkspaceData() async -> WorkspaceRefreshScheduler.Result {
+        guard context.phase == .ready, !refresh.isRefreshingSynchronizedWorkspaceData else { return .deferred }
         refresh.isRefreshingSynchronizedWorkspaceData = true
         defer { self.refresh.isRefreshingSynchronizedWorkspaceData = false }
         let generation = context.workspaceReloadGeneration
         let projectId = context.activeProjectId
-        await self.sync.refreshOrgResourcesIfNeeded(isActive: { self.navigation.selectedSection == .memory })
+        let orgCurrent = await self.sync.refreshOrgResourcesIfNeeded(isActive: { self.navigation.selectedSection == .memory })
         guard context.workspaceReloadGeneration == generation,
               context.activeProjectId == projectId,
               context.phase == .ready,
               !Task.isCancelled,
               let sync = refresh.runtime?.sync else {
-            return
+            return .deferred
         }
-        if edits.draftInventoryLoadTask == nil {
-            await edits.refreshDraftInventory(
-                includeFailed: sync.pendingOperationCount > 0
-                    || sync.failedOperationCount > 0,
-                generation: generation
-            )
-        }
+        guard edits.draftInventoryLoadTask == nil else { return .deferred }
+        await edits.refreshDraftInventory(
+            includeFailed: sync.pendingOperationCount > 0 || sync.failedOperationCount > 0,
+            generation: generation
+        )
         guard context.workspaceReloadGeneration == generation,
               context.activeProjectId == projectId,
               context.phase == .ready,
               !Task.isCancelled else {
-            return
+            return .deferred
         }
-        await self.sync.refreshStaleResourcesIfNeeded(sync: sync)
+        let projectCurrent = await self.sync.refreshStaleResourcesIfNeeded(sync: sync)
+        return orgCurrent && projectCurrent && edits.draftInventoryLoadState == .loaded ? .updated : .retained
     }
 
     func clearAuthorityScopedWorkspace() {
@@ -534,6 +595,7 @@ final class WorkspaceCoordinator {
     }
 
     private func cancelPostReadyWork() {
+        refreshes.reset()
         edits.cancelLoading()
         bundles.cancelLoading()
         reviews.cancelLoading()

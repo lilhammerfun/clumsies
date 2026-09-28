@@ -133,8 +133,12 @@ final class InboxTests: XCTestCase {
             }
         }
         let hosting = NSHostingView(rootView: root(UUID()))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
+        // Exercise the workspace's minimum width with its production titlebar configuration.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 820),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         window.makeKeyAndOrderFront(nil)
@@ -150,12 +154,15 @@ final class InboxTests: XCTestCase {
             if let field = view as? NSSearchField { return field }
             return view.subviews.lazy.compactMap { searchField(in: $0) }.first
         }
+        XCTAssertFalse(items.contains { $0.itemIdentifier.rawValue.contains("inbox.refresh") })
         let search = try XCTUnwrap(searchField(in: XCTUnwrap(item("search").view)))
         XCTAssertEqual(search.accessibilityIdentifier(), "inbox-toolbar-search")
         XCTAssertEqual(search.placeholderString, "Search Inbox")
-        for (leading, trailing) in [("filter", "type"), ("type", "read"), ("read", "archive"), ("archive", "refresh"), ("refresh", "search")] {
+        for (leading, trailing) in [("filter", "type"), ("type", "read"), ("read", "archive"), ("archive", "select-all"), ("select-all", "search")] {
             let left = try XCTUnwrap(item(leading).view)
             let right = try XCTUnwrap(item(trailing).view)
+            XCTAssertTrue(left.window === window, "\(leading) must remain visible.")
+            XCTAssertTrue(right.window === window, "\(trailing) must remain visible.")
             XCTAssertLessThan(left.convert(left.bounds, to: nil).midX,
                 right.convert(right.bounds, to: nil).midX, "\(leading) must precede \(trailing).")
         }
@@ -212,6 +219,9 @@ final class InboxTests: XCTestCase {
         }))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -239,8 +249,18 @@ final class InboxTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(list.selectedRowIndexes, IndexSet(integer: 1))
         XCTAssertTrue(receipts.isEmpty, "Deselecting down to one item must not read the remaining item.")
-        try toggle(0)
-        try await Task.sleep(for: .milliseconds(100))
+        func toggleAll(expectedCount: Int) async throws {
+            let control = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue.contains("inbox.select-all") }?.view)
+            try click(control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil), in: window)
+            for _ in 0..<40 where list.selectedRowIndexes.count != expectedCount {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTAssertEqual(list.selectedRowIndexes.count, expectedCount)
+            XCTAssertTrue(receipts.isEmpty, "Bulk selection must not mark messages as read.")
+        }
+        try await toggleAll(expectedCount: 2)
+        try await toggleAll(expectedCount: 0)
+        try await toggleAll(expectedCount: 2)
         let archive = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue.contains("inbox.archive") }?.view)
         let point = archive.convert(NSPoint(x: archive.bounds.midX, y: archive.bounds.midY), to: nil)
         try click(point, in: window)
@@ -868,6 +888,7 @@ final class InboxTests: XCTestCase {
         responses.unavailable = true
         await store.refresh()
         XCTAssertEqual(store.items.count, 1)
+        XCTAssertTrue(store.isShowingSavedContent)
         XCTAssertNil(store.errorMessage, "A background failure should not duplicate the window's connection state.")
     }
 

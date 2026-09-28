@@ -1,0 +1,156 @@
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+
+tests:
+  - name: workflow activity is not an operational failure
+    interval: 1m
+    input_series:
+      # Old, growing drafts, human conflicts/unread items, and reads without
+      # publication remain dashboard data even beyond every former alert delay.
+      - series: 'clumsies_oldest_open_draft_age_seconds{job="node",instance="node-exporter:9100"}'
+        values: '6220800+60x780'
+      - series: 'clumsies_drafts{status="open",job="node",instance="node-exporter:9100"}'
+        values: '205+60x780'
+      - series: 'clumsies_drafts_with_reconciliation_conflicts{job="node",instance="node-exporter:9100"}'
+        values: '21x780'
+      - series: 'clumsies_inbox_unread_records{job="node",instance="node-exporter:9100"}'
+        values: '101x780'
+      - series: 'caddy_http_request_duration_seconds_count{code="200",job="caddy"}'
+        values: '0+60x780'
+      - series: 'clumsies_commits_created_last_hour{job="node",instance="node-exporter:9100"}'
+        values: '10x780'
+      - series: 'up{job="node",instance="node-exporter:9100"}'
+        values: '1x780'
+      - series: 'clumsies_database_collection_success{job="node",instance="node-exporter:9100"}'
+        values: '1x780'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x780'
+    promql_expr_test:
+      - expr: 'ALERTS{alertstate="firing",alertname!="Watchdog"}'
+        eval_time: 13h
+        exp_samples: []
+      - expr: 'count(ALERTS{alertstate="firing",alertname="Watchdog"})'
+        eval_time: 13h
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  - name: database failures still respect their delay and resolve
+    interval: 1m
+    input_series:
+      - series: 'pg_up{job="postgres",instance="postgres:5432"}'
+        values: '0x5 1x5'
+      - series: 'clumsies_db_longest_query_seconds{job="node",instance="node-exporter:9100"}'
+        values: '61x5 0x5'
+    promql_expr_test:
+      - expr: 'ALERTS{alertstate="firing",alertname!="Watchdog"}'
+        eval_time: 1m
+        exp_samples: []
+      - expr: 'ALERTS{alertstate="firing",alertname!="Watchdog"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresDown",alertstate="firing",job="postgres",instance="postgres:5432",severity="critical"}'
+            value: 1
+      - expr: 'ALERTS{alertstate="firing",alertname!="Watchdog"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresDown",alertstate="firing",job="postgres",instance="postgres:5432",severity="critical"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DatabaseLongRunningQuery",alertstate="firing",job="node",instance="node-exporter:9100",severity="critical"}'
+            value: 1
+      - expr: 'ALERTS{alertstate="firing",alertname!="Watchdog"}'
+        eval_time: 6m
+        exp_samples: []
+
+  - name: failed collector alerts and recovers
+    interval: 1m
+    input_series:
+      - series: 'up{job="node",instance="node-exporter:9100"}'
+        values: '1x11'
+      - series: 'clumsies_database_collection_success{job="node",instance="node-exporter:9100"}'
+        values: '0x5 1x5'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x11'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
+        eval_time: 4m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="node-exporter:9100",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples: []
+
+  - name: stopped timer and missing metrics are detected per reachable node
+    interval: 1m
+    input_series:
+      - series: 'up{job="node",instance="stale"}'
+        values: '1x25'
+      - series: 'clumsies_database_collection_success{job="node",instance="stale"}'
+        values: '1x25'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="stale"}'
+        values: '0x25'
+      - series: 'up{job="node",instance="missing"}'
+        values: '1x25'
+      - series: 'up{job="node",instance="down"}'
+        values: '0x25'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="missing",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
+        eval_time: 21m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="missing",severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="stale",severity="warning"}'
+            value: 1
+
+  - name: a failing site cannot be diluted by healthy traffic or duplicate middleware
+    interval: 1m
+    input_series:
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host="docs.clumsies.ai",code="500"}'
+        values: '0+2x10 20x10'
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host="docs.clumsies.ai",code="200"}'
+        values: '0+98x20'
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="file_server",host="docs.clumsies.ai",code="200"}'
+        values: '0+10000x20'
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host="app.clumsies.ai",code="200"}'
+        values: '0+10000x20'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpServerErrorRate",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpServerErrorRate",alertstate="firing",host="docs.clumsies.ai",severity="critical"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HttpServerErrorRate",alertstate="firing"}'
+        eval_time: 16m
+        exp_samples: []
+
+  - name: log delivery failures are visible and resolve
+    interval: 1m
+    input_series:
+      - series: 'loki_write_batch_retries_total{job="alloy"}'
+        values: '0+1x8 8x12'
+      - series: 'loki_write_dropped_entries_total{job="alloy"}'
+        values: '0x3 1x17'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="LogDeliveryRetries",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="LogDeliveryRetries",alertstate="firing",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname="LogEntriesDropped",alertstate="firing"}'
+        eval_time: 4m
+        exp_samples:
+          - labels: 'ALERTS{alertname="LogEntriesDropped",alertstate="firing",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname=~"LogDeliveryRetries|LogEntriesDropped",alertstate="firing"}'
+        eval_time: 16m
+        exp_samples: []

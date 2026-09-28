@@ -1098,6 +1098,14 @@ fn validate_commit_payload(
                 entry.id
             )));
         }
+        if entry.is_directory
+            && (entry.kind != ServerTreeEntryKind::Memory
+                || !blobs[entry.blob_id.as_str()].content.is_empty())
+        {
+            return Err(DaemonError::Server(
+                "directory entries must be memories with empty content".to_owned(),
+            ));
+        }
         referenced_blobs.insert(entry.blob_id.as_str());
         validate_tree_entry_ownership(entry, &payload.commit)?;
         if entry.kind == ServerTreeEntryKind::ProjectOrgSelection {
@@ -1220,14 +1228,14 @@ fn validate_relative_path(value: &str) -> Result<(), DaemonError> {
 }
 
 fn validate_materialization_paths(entries: &[ServerTreeEntry]) -> Result<(), DaemonError> {
-    let mut paths = BTreeMap::<String, (String, String)>::new();
+    let mut paths = BTreeMap::<String, (String, String, bool)>::new();
     for entry in entries {
         if entry.kind == ServerTreeEntryKind::ProjectOrgSelection {
             continue;
         }
         validate_resource_path(entry)?;
         let output_path = materialization_output_path(entry)?;
-        insert_materialization_path(&mut paths, &entry.id, &output_path)?;
+        insert_materialization_path(&mut paths, &entry.id, &output_path, entry.is_directory)?;
     }
     Ok(())
 }
@@ -1249,34 +1257,38 @@ fn materialization_output_path(entry: &ServerTreeEntry) -> Result<String, Daemon
 }
 
 fn insert_materialization_path(
-    paths: &mut BTreeMap<String, (String, String)>,
+    paths: &mut BTreeMap<String, (String, String, bool)>,
     entry_id: &str,
     output_path: &str,
+    is_directory: bool,
 ) -> Result<(), DaemonError> {
     let normalized = output_path.to_lowercase();
-    if let Some((existing_id, existing_path)) = paths.get(&normalized) {
+    if let Some((existing_id, existing_path, _)) = paths.get(&normalized) {
         return Err(DaemonError::Server(format!(
             "Tree materializes {existing_id} at {existing_path} and {entry_id} at {output_path}, which conflict"
         )));
     }
     for (index, _) in normalized.rmatch_indices('/') {
-        if let Some((existing_id, existing_path)) = paths.get(&normalized[..index]) {
+        if let Some((existing_id, existing_path, false)) = paths.get(&normalized[..index]) {
             return Err(DaemonError::Server(format!(
                 "Tree materializes {existing_id} at {existing_path} and {entry_id} at {output_path}, which conflict"
             )));
         }
     }
     let descendant_prefix = format!("{normalized}/");
-    if let Some((_, (existing_id, existing_path))) = paths
+    if let Some((_, (existing_id, existing_path, _))) = paths
         .range(descendant_prefix.clone()..)
         .next()
-        .filter(|(path, _)| path.starts_with(&descendant_prefix))
+        .filter(|(path, _)| !is_directory && path.starts_with(&descendant_prefix))
     {
         return Err(DaemonError::Server(format!(
             "Tree materializes {existing_id} at {existing_path} and {entry_id} at {output_path}, which conflict"
         )));
     }
-    paths.insert(normalized, (entry_id.to_owned(), output_path.to_owned()));
+    paths.insert(
+        normalized,
+        (entry_id.to_owned(), output_path.to_owned(), is_directory),
+    );
     Ok(())
 }
 
@@ -1853,6 +1865,7 @@ fn load_project_checkout(
             content_hash: content_hash(&blob.content),
             content: DaemonDraftContent {
                 org_source: entry.org_source.clone(),
+                is_directory: entry.is_directory,
                 ..project_checkout_content(entry.kind, &blob.content)?
             },
         });
@@ -1880,6 +1893,7 @@ fn project_checkout_content(
         | ServerTreeEntryKind::Workflow
         | ServerTreeEntryKind::Memory => Ok(DaemonDraftContent {
             org_source: None,
+            is_directory: false,
             description: None,
             content: blob.to_owned(),
         }),
@@ -1913,6 +1927,15 @@ fn materialize_payload(
             DaemonError::Server(format!("Tree entry {} references a missing Blob", entry.id))
         })?;
         let materialized_content = materialized_resource_content(entry.kind, &blob.content)?;
+        if entry.is_directory {
+            if !blob.content.is_empty() {
+                return Err(DaemonError::Server(
+                    "directory content must be empty".to_owned(),
+                ));
+            }
+            std::fs::create_dir_all(root.join(materialization_output_path(entry)?))?;
+            continue;
+        }
         let manifest_entry = MaterializedManifestEntry {
             path,
             hash: content_hash(&materialized_content),
@@ -2044,6 +2067,8 @@ struct ServerTree {
 struct ServerTreeEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     org_source: Option<crate::types::OrgMemorySource>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    is_directory: bool,
     id: String,
     #[serde(rename = "type")]
     kind: ServerTreeEntryKind,
@@ -2187,6 +2212,7 @@ mod tests {
         fn context_entry(id: &str, path: &str) -> ServerTreeEntry {
             ServerTreeEntry {
                 org_source: None,
+                is_directory: false,
                 id: id.to_owned(),
                 kind: ServerTreeEntryKind::Memory,
                 scope: ServerTreeEntryScope::Project,
@@ -2284,6 +2310,7 @@ mod tests {
             .zip(&blobs)
             .map(|(entry, blob)| ServerTreeEntry {
                 org_source: None,
+                is_directory: false,
                 id: entry.0.to_owned(),
                 kind: entry.1,
                 scope: entry.2,

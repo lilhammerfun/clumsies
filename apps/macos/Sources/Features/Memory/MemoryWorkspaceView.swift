@@ -22,16 +22,17 @@ struct MemoryNavigator: View {
             }
     }
 
-    @ViewBuilder
     private var content: some View {
-        if !query.isEmpty, items.isEmpty, memoryCatalog.isPreparingWorkspaceIndex {
-            ProgressView("Preparing Search…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if !memoryModel.visibleMemoryItems.isEmpty, !query.isEmpty, items.isEmpty {
-            ContentUnavailableView.search(text: query)
-        } else {
-            FileTreeView(items: items, operations: MemoryFileOperationsModel(context: workspaceContext, feedback: workspaceFeedback, drafts: draftStore, projects: projectService))
-        }
+        FileTreeView(items: items, operations: MemoryFileOperationsModel(context: workspaceContext, feedback: workspaceFeedback, drafts: draftStore, projects: projectService))
+            .overlay {
+                // Keep the navigator alive so empty search results preserve its state.
+                if !query.isEmpty, items.isEmpty, memoryCatalog.isPreparingWorkspaceIndex {
+                    ProgressView("Preparing Search…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !memoryModel.visibleMemoryItems.isEmpty, !query.isEmpty, items.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                }
+            }
     }
 
     private var query: String {
@@ -169,7 +170,7 @@ private struct EmptyWorkspaceView: View {
             Image(systemName: "doc.text")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Open a memory from the navigator")
+            Text("Open a file from the navigator")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
