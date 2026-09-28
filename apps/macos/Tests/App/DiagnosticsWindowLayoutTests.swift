@@ -193,6 +193,39 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, ClientFailure.missing.message)
     }
 
+    func testBackgroundRefreshKeepsPagesAndDoesNotOverwriteEvidenceEditedDuringRead() async throws {
+        let first = try retrievalDetail(runId: "first"), second = try retrievalDetail(runId: "second")
+        let started = expectation(description: "Background read")
+        var blocked = false
+        var pending: CheckedContinuation<RetrievalRunListResponse, Never>?
+        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(serviceName: "unused"), fetchRuns: { request in
+            if blocked && request.cursor == nil {
+                return await withCheckedContinuation { pending = $0; started.fulfill() }
+            }
+            return .init(items: [request.cursor == nil ? first.run : second.run],
+                         nextCursor: request.cursor == nil ? "page-2" : nil)
+        }, fetchRun: { $0 == "first" ? first : second })
+        await model.load(projectId: "project")
+        await model.loadMore()
+        await model.select(runId: "second")
+        await model.refreshInBackground()
+        XCTAssertEqual(model.runs.map(\.runId), ["first", "second"])
+        XCTAssertEqual(model.selectedRunId, "second")
+        blocked = true
+        let refresh = Task { await model.refreshInBackground() }
+        await fulfillment(of: [started], timeout: 1)
+        let suggestion = EvaluationEvidenceSuggestion(resourceId: "resource", unitKey: "unit", path: "memory.md",
+            headingPath: [], evidenceExcerpt: "fixture", modelRelevance: nil,
+            likelyFailureStage: .assembly, exclusionReason: .tokenBudget)
+        model.setEvidenceSelected(true, suggestion: suggestion)
+        pending?.resume(returning: .init(items: [first.run, second.run], nextCursor: nil))
+        await refresh.value
+        XCTAssertTrue(model.isEvidenceSelected(suggestion))
+        XCTAssertEqual(model.selectedRunId, "second")
+        await model.refreshInBackground() // Must defer while evidence is dirty, not start another read.
+        XCTAssertFalse(model.isLoading)
+    }
+
     private func retrievalDetail(
         runId: String,
         selected: Bool = true,

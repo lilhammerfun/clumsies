@@ -107,7 +107,6 @@ struct ActivitySessionDetail: View {
                         if let error = model.detailError {
                             Text(error).foregroundStyle(.secondary)
                             Button("Try Again") { Task { await self.model.loadSelectedSession() } }
-                            Button("Refresh Activity") { Task { await self.model.load() } }
                             Spacer()
                         } else {
                             ContentLoadingView(title: String(localized: "Activity details"))

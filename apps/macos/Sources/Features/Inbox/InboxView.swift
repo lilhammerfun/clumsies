@@ -76,7 +76,7 @@ struct InboxView: View {
     private var notificationList: some View {
         List(selection: $selection) {
             if store.isShowingSavedContent {
-                Label("Showing previous data. Refresh to check for changes.", systemImage: "clock.badge.exclamationmark")
+                Label("Showing previous data. Updates will resume automatically.", systemImage: "clock.badge.exclamationmark")
                     .font(.callout).foregroundStyle(.secondary)
             }
             ForEach(visibleItems) { item in
@@ -250,16 +250,6 @@ struct InboxView: View {
             .accessibilityValue(Text("\(selectedItems.count) / \(visibleItems.count)"))
             .accessibilityIdentifier("inbox-toolbar-select-all")
             .disabled(visibleItems.isEmpty || isBusy)
-        }
-        if #available(macOS 26.0, *) {
-            ToolbarSpacer(.fixed, placement: .automatic)
-        }
-        ToolbarItem(id: "inbox.refresh", placement: .trailingPinned) {
-            Button { refreshInbox() } label: { Image(systemName: "arrow.clockwise") }
-                .toolbarHelp(String(localized: "Refresh Inbox"))
-                .accessibilityLabel("Refresh Inbox")
-                .accessibilityIdentifier("inbox-toolbar-refresh")
-                .disabled(store.isLoading || isBusy)
         }
         if #available(macOS 26.0, *) {
             ToolbarSpacer(.fixed, placement: .automatic)

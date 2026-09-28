@@ -214,3 +214,21 @@ answer quality, or evidence that the agent adopted a retrieved memory.
 The Markdown source editor preserves marked text while an input method is
 composing. It publishes committed text for autosave only after composition,
 so a SwiftUI refresh cannot replace an unfinished Chinese phrase.
+
+### Automatic page updates
+
+Pages do not expose persistent Refresh buttons. The workspace scheduler refreshes
+visible Memory, Reviews, Inbox and Activity on its existing five-second cadence
+(Dashboard: 60 seconds), with foreground re-entry and mutation invalidations.
+Activity retains loaded pages and selection. Independent administration,
+retrieval diagnostics and recovery views check every 30 seconds while the app
+is active; returning to the foreground or waking triggers another check. Failed
+reads retain existing content and offer Retry; network recovery is discovered by
+the next scheduled attempt, not a separate reachability dependency.
+
+View → Refresh (⌘R) remains available for supported workspace pages and the
+organization Settings pages. Background administration responses are discarded
+if editing starts while the request is in flight. Diagnostics similarly protects
+unsubmitted evidence selection. Expanded paginated lists are refreshed before
+replacement so updates do not collapse the list to its first page. The Markdown
+composition and pending document-save guards remain in place.

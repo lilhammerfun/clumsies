@@ -20135,6 +20135,102 @@
           }
         }
       }
+    },
+    "Project access could not be verified.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project access could not be verified."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法确认项目访问权限。"
+          }
+        }
+      }
+    },
+    "Showing cached server statistics. Updates will resume when the server is available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing cached server statistics. Updates will resume when the server is available."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在显示缓存的服务端统计数据，服务恢复后将自动更新。"
+          }
+        }
+      }
+    },
+    "Showing previous data. Updates will resume automatically.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing previous data. Updates will resume automatically."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在显示之前的数据，更新将自动恢复。"
+          }
+        }
+      }
+    },
+    "The page could not be loaded. Try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The page could not be loaded. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载此页面，请重试。"
+          }
+        }
+      }
+    },
+    "These project details are cached. Changes will be available after a live update.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These project details are cached. Changes will be available after a live update."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在显示缓存的项目详情，获取最新数据后即可修改。"
+          }
+        }
+      }
+    },
+    "This project's statistics could not be loaded.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This project's statistics could not be loaded."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载此项目的统计数据。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

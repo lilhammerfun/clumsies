@@ -14,7 +14,7 @@ struct AdministrationView: View {
             ? String(localized: "Changes on this page are disabled until a live refresh succeeds.") : nil, isStatus: true) {
             Task { await administration.load(section: section, force: true) }
         }
-        .pageFeedback(state.isLoaded ? state.errorMessage : nil, isStatus: true) {
+        .pageFeedback(state.errorMessage, isStatus: true) {
             Task { await administration.load(section: section, force: true) }
         }
         .font(.system(size: 13))
@@ -56,7 +56,7 @@ struct AdministrationView: View {
                 "\(section.title) Unavailable",
                 systemImage: "building.2.crop.circle",
                 description: Text(state.errorMessage ?? (workspaceContext.canAdministerOrganization
-                    ? String(localized: "Refresh to try again.") : String(localized: "Organization administrator access is required.")))
+                    ? String(localized: "The page could not be loaded. Try again.") : String(localized: "Organization administrator access is required.")))
             )
         }
     }

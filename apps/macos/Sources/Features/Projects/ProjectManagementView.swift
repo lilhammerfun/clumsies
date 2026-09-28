@@ -179,11 +179,11 @@ struct ProjectUnavailableView: View {
                     self.workspaceNavigation.presentProjectCreation()
                 }
                 .keyboardShortcut(.defaultAction)
-            } else {
-                Button("Refresh") {
-                    Task { await workspaceActions.reload() }
-                }
             }
+        }
+        .automaticRefresh(id: "no-projects", initially: false) {
+            guard workspaceContext.phase == .ready, workspaceContext.projects.isEmpty else { return }
+            await workspaceActions.reload()
         }
     }
 }
@@ -220,7 +220,7 @@ struct ProjectSettingsView: View {
                 ProgressView("Loading project…")
             } else {
                 ContentUnavailableView("Project Unavailable", systemImage: "folder",
-                    description: Text("Refresh to check your access to this project."))
+                    description: Text("Project access could not be verified."))
                 Button("Retry") { Task { await administration.loadProject(id: projectId, force: true) } }
             }
         }
@@ -370,7 +370,7 @@ private struct ProjectConfigurationSections: View {
         }
         .pageFeedback(errorMessage ?? administration.projectDetailStates[project.id]?.errorMessage)
         .pageFeedback(administration.projectDetailStates[project.id]?.isStale == true
-            ? String(localized: "These project details are cached. Refresh before making changes.") : nil, isStatus: true) {
+            ? String(localized: "These project details are cached. Changes will be available after a live update.") : nil, isStatus: true) {
             Task { await administration.loadProject(id: project.id, force: true) }
         }
         .sheet(isPresented: $showsEdit) {

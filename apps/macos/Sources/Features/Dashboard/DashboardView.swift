@@ -84,7 +84,7 @@ struct DashboardView: View {
                             Label(notice, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
                         }
                         if model.isShowingSavedContent && summary.snapshot.notice == nil {
-                            Label("Showing previous data. Refresh to check for changes.", systemImage: "clock.badge.exclamationmark")
+                            Label("Showing previous data. Updates will resume automatically.", systemImage: "clock.badge.exclamationmark")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                         metrics(summary, width: geometry.size.width)
@@ -103,7 +103,7 @@ struct DashboardView: View {
                         ContentUnavailableView {
                             Label("Dashboard unavailable", systemImage: "chart.bar.xaxis")
                         } description: {
-                            Text(model.errorMessage ?? String(localized: "Refresh to load this project's statistics."))
+                            Text(model.errorMessage ?? String(localized: "This project's statistics could not be loaded."))
                         } actions: {
                             Button("Retry", action: onRefresh)
                         }
@@ -127,17 +127,6 @@ struct DashboardView: View {
                 .pickerStyle(.segmented)
                 .help("Dashboard period")
                 .accessibilityLabel("Dashboard period")
-            }
-            if #available(macOS 26.0, *) {
-                ToolbarSpacer(.fixed, placement: .automatic)
-            }
-            ToolbarItemGroup(placement: .trailingPinned) {
-                Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                    .help(model.snapshot.map {
-                        "Refresh dashboard · Updated \($0.generatedAt.formatted(date: .abbreviated, time: .shortened))"
-                    } ?? "Refresh dashboard")
-                    .accessibilityLabel("Refresh dashboard")
-                    .disabled(model.isLoading)
             }
         }
         .sheet(item: $definition) { metric in

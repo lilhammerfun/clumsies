@@ -272,6 +272,46 @@ final class AdministrationLoadingTests: XCTestCase {
         XCTAssertFalse(model.canMutate(.members))
     }
 
+    @MainActor
+    func testBackgroundRefreshPreservesExpandedMemberPages() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.apply(Self.workspaceSnapshot())
+        let model = AdministrationModel(context: workspace.context, onWorkspaceChanged: {}) { path, query in
+            let more = query.contains { $0.name == "cursor" && $0.value != nil }
+            return Self.response(path: path, nextCursor: more ? nil : "next", memberId: more ? "second" : "first")
+        }
+        await model.load(section: .members)
+        await model.load(section: .members, loadMore: true)
+        await model.refreshInBackground(section: .members)
+        XCTAssertEqual(model.snapshot?.members.map(\.id), ["first", "second"])
+        XCTAssertNil(model.state(for: .members).nextCursor)
+    }
+
+    @MainActor
+    func testBackgroundResponseIsDiscardedWhenEditingStartsDuringRequest() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.apply(Self.workspaceSnapshot())
+        let gate = AdministrationResponseGate()
+        let requests = AdministrationRequests()
+        var editing = false
+        let model = AdministrationModel(context: workspace.context, onWorkspaceChanged: {}) { path, query in
+            await requests.record(path: path, query: query)
+            if await requests.paths.count > 1 {
+                await gate.waitForRelease()
+                return Self.response(path: path, memberId: "changed")
+            }
+            return Self.response(path: path, memberId: "original")
+        }
+        await model.load(section: .members)
+        let task = Task { await model.refreshInBackground(section: .members, canApply: { !editing }) }
+        await gate.waitUntilRequested()
+        editing = true
+        await gate.release()
+        await task.value
+        XCTAssertEqual(model.snapshot?.members.map(\.id), ["original"])
+        XCTAssertFalse(model.state(for: .members).isLoading)
+    }
+
     private static func workspaceSnapshot(capabilities: Set<String> = ["admin:write"]) -> WorkspaceSnapshot {
         .init(
             account: .init(userId: "user", email: "user@example.com", displayName: nil, avatarUrl: nil, role: "admin"),

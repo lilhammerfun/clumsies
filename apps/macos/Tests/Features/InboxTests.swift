@@ -154,10 +154,11 @@ final class InboxTests: XCTestCase {
             if let field = view as? NSSearchField { return field }
             return view.subviews.lazy.compactMap { searchField(in: $0) }.first
         }
+        XCTAssertFalse(items.contains { $0.itemIdentifier.rawValue.contains("inbox.refresh") })
         let search = try XCTUnwrap(searchField(in: XCTUnwrap(item("search").view)))
         XCTAssertEqual(search.accessibilityIdentifier(), "inbox-toolbar-search")
         XCTAssertEqual(search.placeholderString, "Search Inbox")
-        for (leading, trailing) in [("filter", "type"), ("type", "select-all"), ("select-all", "read"), ("read", "archive"), ("archive", "refresh"), ("refresh", "search")] {
+        for (leading, trailing) in [("filter", "type"), ("type", "read"), ("read", "archive"), ("archive", "select-all"), ("select-all", "search")] {
             let left = try XCTUnwrap(item(leading).view)
             let right = try XCTUnwrap(item(trailing).view)
             XCTAssertTrue(left.window === window, "\(leading) must remain visible.")
