@@ -20,6 +20,8 @@ const DSH_PREVIEW_BYTES: u64 = 64 * 1024;
 /// Ephemeral per-daemon snapshots. No session transcripts are persisted by Activity.
 #[derive(Default)]
 pub(crate) struct RecallCache {
+    /// Transcript-free per-file run summaries, invalidated by file changes.
+    pub(super) usage: Arc<std::sync::Mutex<super::usage::UsageCache>>,
     /// Recent listings keep continuation tokens stable while files are appended.
     listings: VecDeque<Arc<Listing>>,
     /// Only selected sessions are parsed; pages reuse their raw task snapshot.
@@ -385,7 +387,7 @@ pub(crate) async fn get_recall_session(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{CredentialStore, CredentialStoreError, DaemonConfig, ServerCredentials};
 
@@ -404,7 +406,7 @@ mod tests {
 
     // Every writable path and the Codex home belong to this fixture. No credentials
     // or resident daemon are used, and its synthetic workspace has no DSH history.
-    async fn fixture(temp: &tempfile::TempDir) -> (DaemonState, PathBuf, String) {
+    pub(crate) async fn fixture(temp: &tempfile::TempDir) -> (DaemonState, PathBuf, String) {
         let mut config = DaemonConfig::for_root(temp.path().join("daemon"));
         config.codex_home = Some(temp.path().join("codex"));
         let directory = temp.path().join("codex/sessions");

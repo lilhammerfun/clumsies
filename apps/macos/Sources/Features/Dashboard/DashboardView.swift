@@ -57,6 +57,8 @@ struct DashboardView: View {
     @State private var definition: DashboardMetric?
     @State private var hoveredGrowth: Date?
     @State private var hoveredRetrieval: Date?
+    @State private var hoveredDelta: Date?
+    @State private var hoveredUsage: Date?
     @Environment(\.colorScheme) private var colorScheme
 
     private let blue = Color(red: 0.29, green: 0.48, blue: 0.94)
@@ -92,8 +94,8 @@ struct DashboardView: View {
                             retrieval(summary)
                             directories(summary)
                             topMemories(summary)
-                            maintenance(summary)
-                            recency(summary)
+                            delta(summary)
+                            agentUsage(summary)
                         }
                     } else if model.isLoading {
                         ProgressView("Loading dashboard…").frame(maxWidth: .infinity, minHeight: 400)
@@ -143,7 +145,7 @@ struct DashboardView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Label(metric.title, systemImage: "chart.bar.doc.horizontal").font(.title3.weight(.semibold))
                     Text(metric.explanation).font(.body).foregroundStyle(.secondary).lineSpacing(5)
-                    if [.retrieval, .directories, .top, .recency].contains(metric),
+                    if [.retrieval, .directories, .top, .delta].contains(metric),
                        let limit = model.snapshot?.retrieval.retentionPerProject {
                         Text("Based on retrieval history retained on this Mac, up to \(limit) requests per project. Activity on other devices is not included.")
                             .font(.callout).foregroundStyle(.secondary).lineSpacing(5)
@@ -188,7 +190,7 @@ struct DashboardView: View {
             .accessibilityElement(children: .combine)
     }
 
-    private func panel<Content: View>(_ metric: DashboardMetric, context: String? = nil,
+    private func panel<Content: View>(_ metric: DashboardMetric, context: String? = nil, contentHeight: CGFloat = 205,
                                       @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -201,7 +203,7 @@ struct DashboardView: View {
                     Text(context).font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
-            content().frame(height: 205)
+            content().frame(height: contentHeight)
             Divider().opacity(0.55)
             HStack(spacing: 12) {
                 Text(metric.footnote).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -345,49 +347,116 @@ struct DashboardView: View {
         }.padding(.top, 7)
     }
 
-    private func maintenance(_ summary: DashboardSummary) -> some View {
-        panel(.maintenance, context: model.period == 7 ? String(localized: "Daily") : String(localized: "7-day buckets")) {
-            if summary.changeBuckets.allSatisfy({ $0.count == 0 }) { empty(String(localized: "No changes in this period"), detail: String(localized: "Published memory changes will appear here.")) }
-            else {
-                Chart(summary.changeBuckets) { bucket in
-                    BarMark(x: .value("Starting", bucket.date.formatted(.dateTime.month(.abbreviated).day())),
-                            y: .value("Documents", bucket.count))
-                        .foregroundStyle(by: .value("Change", bucket.kind.title))
-                        .position(by: .value("Change", bucket.kind.title))
-                        .cornerRadius(2)
-                        .accessibilityLabel("\(bucket.kind.title), \(bucket.date.formatted(date: .abbreviated, time: .omitted))")
-                        .accessibilityValue("\(bucket.count) documents")
-                }.chartForegroundStyleScale([String(localized: "Added"): green, String(localized: "Updated"): blue, String(localized: "Deleted"): amber])
-                    .chartLegend(position: .bottom, alignment: .leading, spacing: 10)
-                    .chartXAxis { AxisMarks { _ in AxisValueLabel().font(.system(size: 9)) } }
-                    .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
+    private func delta(_ summary: DashboardSummary) -> some View {
+        let stats = summary.snapshot.retrieval.delta
+        return panel(.delta, contentHeight: 260) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let stats {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(stats.reuseRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
+                            .font(.title2.weight(.semibold)).monospacedDigit()
+                        Text("\(stats.reused) / \(stats.total) fragments").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    if summary.retrievals > 0 {
+                        Text("State supplied: \((Double(stats.withState) / Double(summary.retrievals)).formatted(.percent.precision(.fractionLength(0)))) · \(stats.withState) / \(summary.retrievals) requests")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if stats.unknown > 0 {
+                        Text("\(stats.unknown) fragments have no recorded delta action")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if stats.total == 0 {
+                        empty(String(localized: "No delta samples"), detail: String(localized: "No recorded fragment actions in this period."))
+                    } else {
+                        Chart {
+                            ForEach(stats.days.filter { $0.total > 0 }) { day in
+                                let date = Date(timeIntervalSince1970: day.date)
+                                BarMark(x: .value("Date", date, unit: .day), y: .value("Share", Double(day.added) / Double(day.total)))
+                                    .foregroundStyle(by: .value("Action", String(localized: "Add · Newly provided")))
+                                BarMark(x: .value("Date", date, unit: .day), y: .value("Share", Double(day.replaced) / Double(day.total)))
+                                    .foregroundStyle(by: .value("Action", String(localized: "Replace · Updated")))
+                                BarMark(x: .value("Date", date, unit: .day), y: .value("Share", Double(day.reused) / Double(day.total)))
+                                    .foregroundStyle(by: .value("Action", String(localized: "Reuse · Already available")))
+                            }
+                            if let hoveredDelta, let day = stats.days.first(where: {
+                                Calendar.current.isDate(Date(timeIntervalSince1970: $0.date), inSameDayAs: hoveredDelta)
+                            }) {
+                                RuleMark(x: .value("Date", Date(timeIntervalSince1970: day.date), unit: .day))
+                                    .foregroundStyle(.secondary.opacity(0.25))
+                                    .annotation(position: .top, alignment: .leading, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                                        chartTip(Date(timeIntervalSince1970: day.date), text: "Add \(day.added) · Replace \(day.replaced) · Reuse \(day.reused)")
+                                    }
+                            }
+                        }
+                        .chartForegroundStyleScale([String(localized: "Add · Newly provided"): blue,
+                            String(localized: "Replace · Updated"): amber, String(localized: "Reuse · Already available"): green])
+                        .chartLegend(position: .bottom, alignment: .leading, spacing: 10)
+                        .chartYScale(domain: 0...1)
+                        .chartYAxis { AxisMarks(position: .leading, values: [0.0, 0.5, 1.0]) { value in
+                            AxisGridLine(); AxisValueLabel { Text((value.as(Double.self) ?? 0).formatted(.percent)) }
+                        } }
+                        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+                        .chartXScale(domain: summary.chartStart...summary.chartEnd)
+                        .chartXSelection(value: $hoveredDelta)
+                    }
+                } else {
+                    empty(String(localized: "Delta statistics unavailable"), detail: String(localized: "Update the local runtime to collect these statistics."))
+                }
             }
         }
     }
 
-    private func recency(_ summary: DashboardSummary) -> some View {
-        panel(.recency, context: String(localized: "90 days")) {
-            if summary.resources.isEmpty { empty(String(localized: "No memory yet"), detail: String(localized: "The distribution will appear after adding memory.")) }
-            else {
-                Chart(summary.recency) { row in
-                    BarMark(x: .value("Last retrieval", recencyTitle(row)), y: .value("Memories", row.value))
-                        .foregroundStyle(blue.opacity([1.0, 0.65, 0.42, 0.23][Int(row.id) ?? 0]))
-                        .cornerRadius(4)
-                        .annotation(position: .top) { Text(row.value.formatted()).font(.system(size: 10)).monospacedDigit() }
-                }.chartYScale(domain: 0...(max(summary.recency.map(\.value).max() ?? 1, 1) * 12 / 10 + 1))
-                    .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
-                    .chartXAxis { AxisMarks { _ in AxisValueLabel().font(.system(size: 9)) } }
+    private func agentUsage(_ summary: DashboardSummary) -> some View {
+        let stats = summary.snapshot.retrieval.agentUsage
+        return panel(.agentUsage, contentHeight: 260) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let stats {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(stats.usageRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
+                            .font(.title2.weight(.semibold)).monospacedDigit()
+                        Text("\(stats.withMemory) / \(stats.total) runs").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    if stats.unreadableSessions + stats.unsupportedSessions > 0 {
+                        Text("\(stats.unreadableSessions + stats.unsupportedSessions) session logs excluded: incomplete or missing run boundaries")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if stats.total == 0 {
+                        empty(String(localized: "No observed agent runs"), detail: String(localized: "Completed local Codex runs with recorded boundaries will appear here."))
+                    } else {
+                        Chart {
+                            ForEach(stats.days.filter { $0.total > 0 }) { day in
+                                let date = Date(timeIntervalSince1970: day.date)
+                                BarMark(x: .value("Date", date, unit: .day), y: .value("Share", Double(day.withMemory) / Double(day.total)))
+                                    .foregroundStyle(by: .value("Usage", String(localized: "Called Memory")))
+                                BarMark(x: .value("Date", date, unit: .day), y: .value("Share", Double(day.withoutMemory) / Double(day.total)))
+                                    .foregroundStyle(by: .value("Usage", String(localized: "No Memory call")))
+                            }
+                            if let hoveredUsage, let day = stats.days.first(where: {
+                                Calendar.current.isDate(Date(timeIntervalSince1970: $0.date), inSameDayAs: hoveredUsage)
+                            }) {
+                                RuleMark(x: .value("Date", Date(timeIntervalSince1970: day.date), unit: .day))
+                                    .foregroundStyle(.secondary.opacity(0.25))
+                                    .annotation(position: .top, alignment: .leading, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                                        chartTip(Date(timeIntervalSince1970: day.date), text: String(localized: "\(day.withMemory) with Memory · \(day.withoutMemory) without"))
+                                    }
+                            }
+                        }
+                        .chartForegroundStyleScale([String(localized: "Called Memory"): blue, String(localized: "No Memory call"): Color.secondary.opacity(0.3)])
+                        .chartLegend(position: .bottom, alignment: .leading, spacing: 10)
+                        .chartYScale(domain: 0...1)
+                        .chartYAxis { AxisMarks(position: .leading, values: [0.0, 0.5, 1.0]) { value in
+                            AxisGridLine(); AxisValueLabel { Text((value.as(Double.self) ?? 0).formatted(.percent)) }
+                        } }
+                        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+                        .chartXScale(domain: summary.chartStart...summary.chartEnd)
+                        .chartXSelection(value: $hoveredUsage)
+                    }
+                } else {
+                    empty(String(localized: "Agent usage unavailable"), detail: String(localized: "Update the local runtime to collect these statistics."))
+                }
             }
-        }
-    }
-
-    private func recencyTitle(_ row: DashboardBar) -> String {
-        switch row.id {
-        case "0": String(localized: "Last 7 days")
-        case "1": String(localized: "8–30 days")
-        case "2": String(localized: "31–90 days")
-        case "3": String(localized: "Not observed")
-        default: row.label
         }
     }
 
@@ -411,7 +480,7 @@ struct DashboardView: View {
 }
 
 private enum DashboardMetric: String, Identifiable {
-    case growth, retrieval, directories, top, maintenance, recency
+    case growth, retrieval, directories, top, delta, agentUsage
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -419,8 +488,8 @@ private enum DashboardMetric: String, Identifiable {
         case .retrieval: String(localized: "Retrieval activity")
         case .directories: String(localized: "Directory distribution & coverage")
         case .top: String(localized: "Frequently retrieved memories")
-        case .maintenance: String(localized: "Memory maintenance")
-        case .recency: String(localized: "Last retrieval distribution")
+        case .delta: String(localized: "Delta retrieval reuse")
+        case .agentUsage: String(localized: "Agent Memory usage")
         }
     }
     var subtitle: String {
@@ -429,8 +498,8 @@ private enum DashboardMetric: String, Identifiable {
         case .retrieval: String(localized: "Completed retrieval requests on this Mac")
         case .directories: String(localized: "Published document count and retrieval coverage")
         case .top: String(localized: "One count per document per retrieval")
-        case .maintenance: String(localized: "Distinct documents added, updated or deleted")
-        case .recency: String(localized: "Current documents by their most recent retrieval")
+        case .delta: String(localized: "Reuse / (Add + Replace + Reuse)")
+        case .agentUsage: String(localized: "Completed main-agent runs · Codex on this Mac")
         }
     }
     var footnote: String {
@@ -439,8 +508,8 @@ private enum DashboardMetric: String, Identifiable {
         case .retrieval: String(localized: "With content includes reused fragments")
         case .directories: String(localized: "Coverage counts each document once within the selected period")
         case .top: String(localized: "Click a document to open Memory")
-        case .maintenance: String(localized: "Draft edits are excluded")
-        case .recency: String(localized: "Not observed does not mean never retrieved")
+        case .delta: String(localized: "State supplied does not guarantee matching fragments")
+        case .agentUsage: String(localized: "Calls include activate, load and store, even when they fail")
         }
     }
     var explanation: String {
@@ -449,8 +518,8 @@ private enum DashboardMetric: String, Identifiable {
         case .retrieval: String(localized: "Completed memory.activate requests, separated into returned content, successful empty results, and failures. Reused fragments count as content. Requests still running are excluded. Retained local traces may not cover the entire period; these counts do not measure agent adoption or accuracy.")
         case .directories: String(localized: "Published documents are grouped by directory. When all documents share a parent directory, its subdirectories are shown. The light bar shows current inventory; the blue portion shows distinct current documents retrieved within the selected period. Unpublished drafts are excluded.")
         case .top: String(localized: "Current documents ranked by successful retrievals in the selected period. Multiple fragments from one document count once per request, including reused fragments. The six most frequently retrieved documents are shown.")
-        case .maintenance: String(localized: "The server compares consecutive published snapshots, including project selection changes. Distinct document IDs added, updated or deleted are grouped by day or consecutive seven-day buckets. A document can appear in several buckets, so bucket totals may exceed the period's distinct count. Draft autosaves are excluded.")
-        case .recency: String(localized: "Each current document appears once, according to its most recent observed retrieval within 90 days. Without complete history, a missing record is labelled Not observed. Low frequency alone is not evidence that a memory should be deleted.")
+        case .delta: String(localized: "Reuse is an unchanged selected fragment already represented in the caller’s state. Add is absent from that state, not necessarily newly created memory. Replace has a changed content hash. The ratio counts recorded fragments in successful retained retrievals, including drafts; missing actions and empty results do not count as zero reuse. State supplied counts all completed requests carrying a token, including invalid tokens. Period totals are weighted by fragment counts.")
+        case .agentUsage: String(localized: "A run is a native Codex turn with both start and terminal events, grouped by start date. Repeated calls count once per run; calls that fail still count as usage. Ongoing runs, subagents, other hosts, and logs without reliable boundaries are excluded. Only local sessions belonging to the selected projects are observed. Missing logs cannot establish non-use. This measures calling Memory, not answer quality or whether retrieved content was adopted.")
         }
     }
 }

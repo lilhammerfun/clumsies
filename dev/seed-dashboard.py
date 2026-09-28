@@ -144,7 +144,13 @@ def statistics_fixtures(data):
                          topResources=sorted(top, key=lambda b:(-b['value'], b['id']))[:6],
                          recency=[dict(id=str(i), label=label, value=recent[i]) for i,label in enumerate(
                              ('Last 7 days','8–30 days','31–90 days','Not observed'))],
-                         historyStart=data['historyStart'], retentionPerProject=500)
+                         historyStart=data['historyStart'], retentionPerProject=500,
+                         delta=dict(withState=sum(d['returned']//2 for d in days), days=[
+                             dict(date=d['date'], added=d['returned'], replaced=d['returned']//3,
+                                  reused=d['returned']*2, unknown=0) for d in days]),
+                         agentUsage=dict(unreadableSessions=0, unsupportedSessions=0, days=[
+                             dict(date=d['date'], withMemory=d['returned'], withoutMemory=d['empty']+2)
+                             for d in days]))
         assert sum(recent) == len(resources)
         assert sum(b['value'] for b in directories.values()) == len(hits)
         result.append(dict(projectId=data['projectID'], projectName=data['projectName'], period=period,

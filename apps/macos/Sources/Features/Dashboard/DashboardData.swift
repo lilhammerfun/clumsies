@@ -45,6 +45,8 @@ struct DashboardRetrievalStatistics: Codable, Sendable {
     let recency: [DashboardBar]
     let historyStart: TimeInterval?
     let retentionPerProject: Int
+    var delta: DashboardDeltaStatistics? = nil
+    var agentUsage: DashboardAgentUsage? = nil
 
     struct RetrievalDay: Codable, Sendable {
         let date: TimeInterval
@@ -128,4 +130,42 @@ struct DashboardSummary {
                 retrievalObserved: retrieval != nil)
         }
     }
+}
+
+struct DashboardDeltaStatistics: Codable, Sendable {
+    let withState: Int
+    let days: [DashboardDeltaDay]
+    var added: Int { days.reduce(0) { $0 + $1.added } }
+    var replaced: Int { days.reduce(0) { $0 + $1.replaced } }
+    var reused: Int { days.reduce(0) { $0 + $1.reused } }
+    var unknown: Int { days.reduce(0) { $0 + $1.unknown } }
+    var total: Int { added + replaced + reused }
+    var reuseRate: Double? { total > 0 ? Double(reused) / Double(total) : nil }
+}
+
+struct DashboardDeltaDay: Codable, Identifiable, Sendable {
+    let date: TimeInterval
+    let added: Int
+    let replaced: Int
+    let reused: Int
+    let unknown: Int
+    var id: TimeInterval { date }
+    var total: Int { added + replaced + reused }
+}
+
+struct DashboardAgentUsage: Codable, Sendable {
+    let days: [DashboardAgentUsageDay]
+    let unreadableSessions: Int
+    let unsupportedSessions: Int
+    var withMemory: Int { days.reduce(0) { $0 + $1.withMemory } }
+    var total: Int { days.reduce(0) { $0 + $1.withMemory + $1.withoutMemory } }
+    var usageRate: Double? { total > 0 ? Double(withMemory) / Double(total) : nil }
+}
+
+struct DashboardAgentUsageDay: Codable, Identifiable, Sendable {
+    let date: TimeInterval
+    let withMemory: Int
+    let withoutMemory: Int
+    var id: TimeInterval { date }
+    var total: Int { withMemory + withoutMemory }
 }
