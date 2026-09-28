@@ -92,4 +92,6 @@ subprocess.run([sys.executable, str(root / "test-collector.py")], check=True)
 
 subprocess.run([sys.executable, str(root / "test-requests.py")], check=True)
 
+subprocess.run([sys.executable, str(root / "test-grafana.py")], check=True)
+
 print("Observability configuration, collector, tunnel links, and alert behavior passed.")
