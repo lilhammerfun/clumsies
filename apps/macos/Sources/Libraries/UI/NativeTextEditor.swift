@@ -69,28 +69,32 @@ struct NativeTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        context.coordinator.binding = $text
         textView.isEditable = isEnabled
-        guard
+        // The input method owns uncommitted text and its selection until composition ends.
+        guard !textView.hasMarkedText(),
               textView.string != text,
               !context.coordinator.isApplyingTextChange else { return }
         let selection = textView.selectedRange()
         context.coordinator.isApplyingTextChange = true
         textView.string = text
-        textView.setSelectedRange(NSIntersectionRange(selection, NSRange(location: 0, length: text.utf16.count)))
+        let location = min(selection.location, text.utf16.count)
+        textView.setSelectedRange(NSRange(location: location, length: min(selection.length, text.utf16.count - location)))
         context.coordinator.isApplyingTextChange = false
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
-        @Binding var text: String
+        var binding: Binding<String>
         var isApplyingTextChange = false
 
         init(text: Binding<String>) {
-            _text = text
+            binding = text
         }
 
         func textDidChange(_ notification: Notification) {
-            guard !isApplyingTextChange, let textView = notification.object as? NSTextView else { return }
-            text = textView.string
+            guard !isApplyingTextChange, let textView = notification.object as? NSTextView,
+                  !textView.hasMarkedText() else { return }
+            binding.wrappedValue = textView.string
         }
     }
 }
