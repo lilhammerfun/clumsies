@@ -2,13 +2,14 @@ import Combine
 import Foundation
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, agent, organization, advanced
+    case general, account, agent, organization, advanced
 
     var id: Self { self }
     static let defaultsKey = "ClumsiesSettingsPane"
 
     var title: String {
         switch self {
+        case .account: String(localized: "Account")
         case .general: String(localized: "General")
         case .agent: String(localized: "Agents")
         case .organization: String(localized: "Organization")
@@ -18,6 +19,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .account: "person.crop.circle"
         case .general: "gearshape"
         case .agent: "terminal"
         case .organization: "building.2"
@@ -55,6 +57,7 @@ enum SettingsDestination: Hashable, Identifiable {
     }
     var subtitle: String {
         switch self {
+        case .pane(.account): String(localized: "Account")
         case .pane(.general): String(localized: "Language, version and software updates")
         case .pane(.agent): String(localized: "Agent integrations for this Mac")
         case .pane(.organization): String(localized: "Organization name, members, and sign-in")
@@ -75,6 +78,7 @@ enum SettingsDestination: Hashable, Identifiable {
 
     private var keywords: String {
         switch self {
+        case .pane(.account): "username password credentials Google login identity binding 用户名 密码 登录 绑定"
         case .pane(.general): String(localized: "about automatic download software update version language English Chinese") + " about automatic download software update updates version language English Chinese follow system 语言 中文 简体中文 跟随系统"
         case .pane(.agent): String(localized: "plugin repair mcp integration repository") + " plugin repair mcp integration repository"
         case .pane(.organization): String(localized: "team administration name rename") + " team administration name rename"
