@@ -136,7 +136,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func confirmDiscardIfNeeded() -> Bool {
-        guard !store.context.isMutatingAdministration else {
+        guard !store.context.isMutatingAdministration, !navigation.isSaving else {
             window?.makeKeyAndOrderFront(nil)
             let alert = NSAlert()
             alert.messageText = String(localized: "Changes are still being saved")
@@ -149,7 +149,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if store.context.isMutatingAdministration && navigation.hasUnsavedChanges { return false }
+        if store.context.isMutatingAdministration || navigation.isSaving { return false }
         guard !navigation.hasUnsavedChanges || confirmDiscard() else { return false }
         discardsOnClose = navigation.hasUnsavedChanges
         return true

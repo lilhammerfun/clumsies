@@ -40,6 +40,29 @@ final class SettingsWindowLayoutTests: XCTestCase {
         XCTAssertEqual(window.title, "Security")
     }
 
+    func testAccountUsesSettingsHistoryAndUnsavedChangesGuard() {
+        let suite = "SettingsWindowLayoutTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let navigation = SettingsNavigation(defaults: defaults)
+        navigation.navigate(to: .pane(.account))
+        XCTAssertEqual(SettingsPane.restored(from: defaults), .account)
+        XCTAssertEqual(SettingsDestination.search("password", canAdminister: false), [.pane(.account)])
+        navigation.hasUnsavedChanges = true
+        navigation.isSaving = true
+        navigation.goBack()
+        XCTAssertNil(navigation.pendingDestination)
+        XCTAssertEqual(navigation.destination, .pane(.account))
+        navigation.isSaving = false
+        navigation.goBack()
+        XCTAssertEqual(navigation.destination, .pane(.account))
+        XCTAssertEqual(navigation.pendingDestination, .pane(.general))
+        navigation.discardAndNavigate()
+        XCTAssertEqual(navigation.destination, .pane(.general))
+        navigation.goForward()
+        XCTAssertEqual(navigation.destination, .pane(.account))
+    }
+
     func testNavigationRestoresPaneAndProtectsDraftsAcrossHistory() {
         let suite = "SettingsWindowLayoutTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -90,8 +113,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
 
     func testSettingsSearchFindsChildrenAndRespectsOrganizationPermission() {
         XCTAssertEqual(SettingsDestination.search("email domains", canAdminister: true), [.organization(.access)])
-        XCTAssertTrue(SettingsDestination.search("credentials", canAdminister: true).isEmpty)
-        XCTAssertTrue(SettingsDestination.search("credentials", canAdminister: false).isEmpty)
+        XCTAssertEqual(SettingsDestination.search("credentials", canAdminister: true), [.pane(.account)])
+        XCTAssertEqual(SettingsDestination.search("credentials", canAdminister: false), [.pane(.account)])
         XCTAssertEqual(SettingsDestination.search("updates", canAdminister: false), [.pane(.general)])
         XCTAssertEqual(SettingsDestination.search("plugin", canAdminister: false), [.pane(.agent)])
         XCTAssertEqual(SettingsDestination.search("SSO", canAdminister: true), [.organization(.access)])
@@ -115,6 +138,9 @@ final class SettingsWindowLayoutTests: XCTestCase {
         XCTAssertFalse(controller.windowShouldClose(window))
         XCTAssertTrue(navigation.hasUnsavedChanges)
         controller.confirmDiscard = { true }
+        navigation.isSaving = true
+        XCTAssertFalse(controller.windowShouldClose(window))
+        navigation.isSaving = false
         XCTAssertTrue(controller.windowShouldClose(window))
         controller.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: window))
         XCTAssertNil(controller.window)
