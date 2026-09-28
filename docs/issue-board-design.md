@@ -379,7 +379,7 @@ daemon 执行本地校验和 Server 发布；共享发布失败必须按第 9 �
 
 ## 11. Schema 升级
 
-当前 daemon 本地 schema 版本是 **40**（`CURRENT_LOCAL_SCHEMA_VERSION = 40`）。与
+当前 daemon 本地 schema 版本是 **41**（`CURRENT_LOCAL_SCHEMA_VERSION = 41`）。与
 Issue 看板直接相关的演进包括：
 
 - 23→24：加入 `native_issues` 和 `native_issue_imports`；
@@ -396,10 +396,11 @@ Issue 看板直接相关的演进包括：
 - 35→36：加入 dsh AgentRun；
 - 37→38：将 dsh 扩展到 AgentRun、adapter 和文件操作约束；
 - 38→39：将 Antigravity 扩展到相同约束；
-- 39→40：允许检索历史 candidate 使用统一 `memory` kind。
+- 39→40：允许检索历史 candidate 使用统一 `memory` kind；
+- 40→41：加入 Project Episode outbox、摘要投影与统一 provenance。
 
-36→37 的统一 Memory kind 和 39→40 的检索历史变更不改变 Issue 权威模型，但属于同一
-中心 SQLite 的版本链，因此部署与故障诊断必须以 40 为当前版本。Server 的
+36→37 的统一 Memory kind、39→40 的检索历史变更和 40→41 的 Episode 状态不改变 Issue
+权威模型，但属于同一中心 SQLite 的版本链，因此部署与故障诊断必须以 41 为当前版本。Server 的
 `kanban_issues` 与 `issue_claims` 使用独立 PostgreSQL migration，不由本地 schema
 版本代表。
 

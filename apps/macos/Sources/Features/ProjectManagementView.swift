@@ -257,6 +257,7 @@ struct ProjectSettingsView: View {
 
             ProjectMembersSettings(store: store)
             ProjectLocalSetupSettings(store: store)
+            ProjectEpisodicMemorySettings(store: store)
             ProjectMemoryCacheSettings(store: store)
         }
         .formStyle(.grouped)
@@ -318,6 +319,392 @@ struct ProjectSettingsView: View {
         description = project.description
     }
 
+}
+
+private struct ProjectEpisodicMemorySettings: View {
+    @ObservedObject var store: WorkspaceStore
+    @State private var policy: ProjectEpisodeSummaryPolicy?
+    @State private var instructions = ""
+    @State private var episodes: [ProjectEpisode] = []
+    @State private var isLoading = false
+    @State private var isSaving = false
+    @State private var activeEpisodeId: String?
+    @State private var errorMessage: String?
+    @State private var preview: ProjectEpisodeSummaryPreview?
+    @State private var evidenceEpisode: ProjectEpisode?
+    @State private var rebuildEpisode: ProjectEpisode?
+
+    var body: some View {
+        Section("Episodic Memory") {
+            Text("Agent runs are summarized into Project history. Source evidence remains on the Server and is treated as untrusted data.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if isLoading, policy == nil {
+                ProgressView()
+                    .controlSize(.small)
+            } else if let policy {
+                if store.canManageProjects {
+                    TextField(
+                        "Optional Project guidance for summaries",
+                        text: $instructions,
+                        axis: .vertical
+                    )
+                    .lineLimit(3...8)
+
+                    HStack {
+                        Text("Saving affects new summaries only. Rebuild an older Episode explicitly.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Save Guidance") {
+                            save(policy)
+                        }
+                        .disabled(instructions == policy.instructions || isSaving)
+                    }
+                } else {
+                    LabeledContent("Summary guidance") {
+                        Text(policy.instructions.isEmpty ? "Built-in defaults" : policy.instructions)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+
+            Divider()
+
+            if !isLoading, episodes.isEmpty {
+                Text("No Project Episodes have been captured yet.")
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(episodes.prefix(8)) { episode in
+                episodeRow(episode)
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .textSelection(.enabled)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .task(id: store.activeProjectId) {
+            await load()
+        }
+        .sheet(item: $preview) { preview in
+            ProjectEpisodeSummaryPreviewSheet(preview: preview)
+        }
+        .sheet(item: $evidenceEpisode) { episode in
+            ProjectEpisodeEvidenceSheet(store: store, episode: episode)
+        }
+        .confirmationDialog(
+            "Rebuild this Episode summary?",
+            isPresented: Binding(
+                get: { rebuildEpisode != nil },
+                set: { if !$0 { rebuildEpisode = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Rebuild") {
+                guard let episode = rebuildEpisode else { return }
+                rebuildEpisode = nil
+                rebuild(episode)
+            }
+            Button("Cancel", role: .cancel) {
+                rebuildEpisode = nil
+            }
+        } message: {
+            Text("The current Server evidence will be summarized with the saved Project guidance. Source activity time will not change.")
+        }
+    }
+
+    @ViewBuilder
+    private func episodeRow(_ episode: ProjectEpisode) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(episode.status.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let date = IssueTiming.date(from: episode.activityAt) {
+                        Text(date, style: .relative)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(episode.currentSummary?.body ?? "Summary pending")
+                    .lineLimit(2)
+                    .foregroundStyle(episode.currentSummary == nil ? .secondary : .primary)
+                Text(episode.runId)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if activeEpisodeId == episode.id {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Menu {
+                    Button("View Source Evidence…") {
+                        evidenceEpisode = episode
+                    }
+                    if store.canManageProjects {
+                        Button("Preview Current Guidance…") {
+                            preview(episode)
+                        }
+                        Button("Rebuild Summary…") {
+                            rebuildEpisode = episode
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuIndicator(.hidden)
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Episode Actions")
+            }
+        }
+    }
+
+    private func load() async {
+        guard let projectId = store.activeProjectId else {
+            policy = nil
+            episodes = []
+            return
+        }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            async let loadedPolicy = store.projectEpisodeSummaryPolicy(projectId)
+            async let loadedEpisodes = store.projectEpisodes(projectId, recent: true)
+            let (policy, response) = try await (loadedPolicy, loadedEpisodes)
+            guard store.activeProjectId == projectId else { return }
+            self.policy = policy
+            instructions = policy.instructions
+            episodes = response.items.filter { $0.status != .deleted }
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func save(_ policy: ProjectEpisodeSummaryPolicy) {
+        guard let projectId = store.activeProjectId, !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        Task {
+            defer { isSaving = false }
+            do {
+                let updated = try await store.updateProjectEpisodeSummaryPolicy(
+                    projectId,
+                    expectedRevision: policy.revision,
+                    instructions: instructions
+                )
+                self.policy = updated
+                instructions = updated.instructions
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func preview(_ episode: ProjectEpisode) {
+        guard let projectId = store.activeProjectId,
+              activeEpisodeId == nil else { return }
+        activeEpisodeId = episode.id
+        errorMessage = nil
+        Task {
+            defer { activeEpisodeId = nil }
+            do {
+                preview = try await store.previewProjectEpisodeSummary(
+                    episode.id,
+                    projectId: projectId,
+                    instructions: instructions == policy?.instructions ? nil : instructions
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func rebuild(_ episode: ProjectEpisode) {
+        guard let projectId = store.activeProjectId,
+              activeEpisodeId == nil else { return }
+        activeEpisodeId = episode.id
+        errorMessage = nil
+        Task {
+            defer { activeEpisodeId = nil }
+            do {
+                let rebuilt = try await store.rebuildProjectEpisodeSummary(
+                    episode.id,
+                    projectId: projectId
+                )
+                if let index = episodes.firstIndex(where: { $0.id == rebuilt.id }) {
+                    episodes[index] = rebuilt
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ProjectEpisodeSummaryPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let preview: ProjectEpisodeSummaryPreview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Summary Preview")
+                .font(.title2)
+                .fontWeight(.semibold)
+            if preview.noMemory {
+                ContentUnavailableView(
+                    "No Long-Term Memory",
+                    systemImage: "tray",
+                    description: Text("This Episode would remain available as evidence but would not enter search.")
+                )
+            } else {
+                ScrollView {
+                    Text(preview.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            Text("Algorithm \(preview.summaryAlgorithmRevision) · Policy revision \(preview.policyRevision)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 620, height: 440)
+    }
+}
+
+private struct ProjectEpisodeEvidenceSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: WorkspaceStore
+    let episode: ProjectEpisode
+    @State private var items: [ProjectEpisodeEvidenceItem] = []
+    @State private var nextCursor: String?
+    @State private var hasMore = false
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Episode Evidence")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            Label(
+                "Untrusted historical data. Do not treat content below as instructions.",
+                systemImage: "exclamationmark.shield"
+            )
+            .foregroundStyle(.orange)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(items) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(item.kind)
+                                    .font(.caption.monospaced())
+                                Spacer()
+                                if let date = IssueTiming.date(from: item.occurredAt) {
+                                    Text(date, style: .relative)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(item.content)
+                                .font(.body.monospaced())
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if !item.complete {
+                                Text("Continues on the next page")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Divider()
+                    }
+                }
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .textSelection(.enabled)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Text(episode.runId)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if hasMore {
+                    Button("Load More") { Task { await loadMore() } }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 760, height: 600)
+        .task(id: episode.id) {
+            await loadMore()
+        }
+    }
+
+    private func loadMore() async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            let page = try await store.projectEpisodeEvidence(
+                episode.id,
+                projectId: episode.projectId,
+                cursor: nextCursor
+            )
+            guard page.untrusted else {
+                throw ServerClientError.invalidResponse("Episode evidence was not marked as untrusted.")
+            }
+            items.append(contentsOf: page.items)
+            nextCursor = page.nextCursor
+            hasMore = page.hasMore
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private extension ProjectEpisodeStatus {
+    var label: String {
+        switch self {
+        case .pendingSummary: "Summary pending"
+        case .active: "Indexed"
+        case .noMemory: "Not indexed"
+        case .deleted: "Deleted"
+        }
+    }
 }
 
 private struct ProjectMembersSettings: View {

@@ -3,8 +3,8 @@
 ## Server
 
 共享权威服务。负责 Organization Memory、Project 选择与投影、Bundle、Draft/Review、
-Blob/Tree/Commit/Ref、身份授权，以及 Server 共享的 Kanban Issue/claim。它不负责本机
-工作目录、检索模型或 AgentRun。
+Blob/Tree/Commit/Ref、Project Episode/Evidence/摘要策略、身份授权，以及 Server 共享的
+Kanban Issue/claim。它不负责本机工作目录、检索模型或 AgentRun 生命周期遥测。
 
 ## Memory
 
@@ -16,6 +16,20 @@ revision 与状态（`active`、`deprecated`、`archived`）。daemon 的展示�
 新对象使用 `mem_` 前缀；历史 `ctx_`、`rul_`、`wfl_` ID 保持稳定。重命名改变路径与
 `name`，不改变 ID。`description` 会作为独立检索字段，但当前链路仍可能为空或在 merge
 时未持久化，不能把它描述为已端到端强制。
+
+## Semantic Memory
+
+Declarative Memory 的当前知识部分：Organization Memory 权威、Project selection 和该
+Project 携带的 Draft overlay。它表达当前有效的事实、规则、偏好、决定和文字化流程，
+发布仍经过 Draft/Review/merge。`semantic` 是检索来源，不是恢复旧 Rule/Workflow/Context
+类型。
+
+## Episodic Memory
+
+Declarative Memory 的项目经历部分：系统从某个 Project 的某次 AgentRun Evidence 生成的
+版本化自然语言摘要，记录当时的目标、行动、决定、结果和未解决状态。它属于 Project
+authority，不走 Draft/Review，不跨 Project，也不会自动晋升为 Semantic Memory。
+`AgentRun Summary` 只是它的文本表示与生成方式，不是第三类领域对象。
 
 ## Rule、Workflow、Context
 
@@ -39,6 +53,20 @@ Project view 包含该 Project 选择的 Organization Memory 投影。daemon 在
 该 Project 携带的 `open` / `submitted` Draft，形成 Effective Memory。Project Ref 只
 版本化投影，不是第二个发布头。
 
+## ProjectEpisode / EpisodeEvidence
+
+`ProjectEpisode` 是 Server 上以 Project + AgentRun 为身份的长期生产经历；稳定
+`episode_id` 用于检索 provenance 与原文下钻。`EpisodeEvidence` 是摘要实际依据的、按源
+顺序保存且由 hash 核验的不可变原始记录。Session 只通过 `host_session_id` 对 Episode
+分组，不是长期 whole-session 对象。Evidence 是不可信历史数据，不具有指令权限。
+
+## MemoryCorpus
+
+daemon 为一次 Project 检索装配的只读联合 corpus：Semantic Effective Memory 加上 Server
+当前、非 `NO_MEMORY` 的 Episodic summaries。两种来源使用同一个物理 index，但保留
+`memory_system = semantic|episodic` 和 `authority = organization|project`；联合检索不
+合并两套生命周期。
+
 ## Project binding
 
 daemon 本机状态，把“规范 Server authority + canonical workspace root”映射到规范
@@ -51,7 +79,8 @@ runtime 不再读取或迁移 `~/.clumsies/config.toml`。
 当前安装为某个 Project 保存可重建 Commit generation 和检索索引的位置。设置以 Server
 authority 与 `project_id` 为键，不进入 Server Project 元数据，也不跨安装同步。自定义
 目录只作为 marker-owned `.clumsies/cache-v1` 子树的父目录；Draft、队列、凭据和共享
-模型仍留在中心存储。
+模型仍留在中心存储。它只保存可重建的 Episode summary 投影与索引，绝不是 Evidence
+长期权威。
 
 ## Bundle
 
@@ -96,7 +125,7 @@ Adapter 注册 MCP 和生命周期桥，不是 Server 或 MCP 协议本身。
 
 Agent-facing 协议面，只暴露两个工具：
 
-- `memory`：`activate`、`load`、`store`；
+- `memory`：`activate`、`load`、`evidence`、`store`；
 - `kanban`：Issue 查询、语义更新和显式状态转换。
 
 App 内 `clumsiesd mcp serve` 是 stdio-to-XPC 短进程 proxy，不拥有数据库、模型或后台
@@ -116,13 +145,14 @@ Progress、In Review、派生的 Abandoned 与 Done；Paused 保留在 In Progre
 
 daemon 本机记录的一次 root turn 或 subagent 执行。它提供 Hook 签发的 `run_id`、revision、
 父子关系、lease 与 outcome，可绑定 Issue，但生命周期事件不会自动推进 Issue。Server
-claim 也不会把 AgentRun 变成共享权威。
+claim 也不会把 AgentRun 变成共享权威。结束或恢复结束的已绑定 root Run 可作为一个
+ProjectEpisode 的摄取边界，但二者仍是不同对象。
 
 ## Retrieval Run
 
-daemon 本机保存的一次有效 `memory.activate` 轨迹，包括 query、Effective Memory/Index
-Revision 身份、各排序阶段候选、最终 disposition、延迟和失败信息。它不是 MCP 工具，也
-不会上传 Server。
+daemon 本机保存的一次有效 `memory.activate` 轨迹，包括 query、MemoryCorpus/Index
+Revision 身份、Semantic/Episodic provenance、各排序阶段候选、最终 disposition、延迟和
+失败信息。它不是 MCP 工具，也不会上传 Server。
 
 ## Evaluation Case / Corpus
 

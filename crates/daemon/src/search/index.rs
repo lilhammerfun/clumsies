@@ -11,16 +11,16 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, Transaction};
 
 use super::chunker::build_units;
 use super::{
-    CHUNKER_VERSION, DaemonError, EffectiveMemory, PARSER_VERSION, RANKING_CONFIG_VERSION,
+    CHUNKER_VERSION, DaemonError, MemoryCorpus, PARSER_VERSION, RANKING_CONFIG_VERSION,
     RetrievalUnit, SearchFailure, SearchModels, SourceResource,
 };
 
-// Schema 7 guarantees search_resources carries the description column and the
-// widened kind CHECK. Version 6 was written in two flavors: before commit
+// Schema 8 adds memory-system and provenance metadata to the schema 7
+// search_resources shape. Version 6 was written in two flavors: before commit
 // 232eaac the column and the 'memory' kind were missing from the CREATE TABLE
 // without a version bump, so rebuilds below are keyed on column presence
 // rather than the version marker alone.
-const PROJECT_INDEX_SCHEMA_VERSION: i64 = 7;
+const PROJECT_INDEX_SCHEMA_VERSION: i64 = 8;
 pub(super) const VECTOR_INPUT_VERSION: &str = "search-passage.v1:fastembed-prefix=passage";
 
 #[derive(Clone, Debug)]
@@ -37,7 +37,7 @@ const VECTOR_CACHE_RETAIN_UNUSED: i64 = 4_096;
 #[derive(Debug)]
 pub(super) struct PreparedIndex {
     pub(super) project_id: String,
-    pub(super) effective_hash: String,
+    pub(super) corpus_hash: String,
     pub(super) revision_id: String,
     pub(super) model_revision: String,
     pub(super) embedding_revision: String,
@@ -110,7 +110,7 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
         || (existing.is_some()
             && !matches!(
                 existing_version,
-                Some(3) | Some(4) | Some(5) | Some(PROJECT_INDEX_SCHEMA_VERSION)
+                Some(3) | Some(4) | Some(5) | Some(7) | Some(PROJECT_INDEX_SCHEMA_VERSION)
             ))
     {
         let mut tx = pool.begin().await?;
@@ -201,6 +201,37 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
             .await?;
         }
     }
+    if has_search_resources > 0 {
+        let columns = sqlx::query("PRAGMA table_info(search_resources)")
+            .fetch_all(pool)
+            .await?;
+        let names = columns
+            .iter()
+            .map(|row| row.get::<String, _>("name"))
+            .collect::<std::collections::HashSet<_>>();
+        for (name, definition) in [
+            (
+                "memory_system",
+                "TEXT NOT NULL DEFAULT 'semantic' CHECK (memory_system IN ('semantic', 'episodic'))",
+            ),
+            (
+                "authority",
+                "TEXT NOT NULL DEFAULT 'organization' CHECK (authority IN ('organization', 'project'))",
+            ),
+            ("episode_id", "TEXT"),
+            ("run_id", "TEXT"),
+            ("activity_at", "TEXT"),
+            ("evidence_hash", "TEXT"),
+        ] {
+            if !names.contains(name) {
+                sqlx::query(&format!(
+                    "ALTER TABLE search_resources ADD COLUMN {name} {definition}"
+                ))
+                .execute(pool)
+                .await?;
+            }
+        }
+    }
     // Keep the fresh schema and its version marker in one SQLite transaction.
     // A process crash must never leave a partial set of tables that a later
     // open could accidentally bless as the current schema.
@@ -229,6 +260,8 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
             revision_id TEXT NOT NULL REFERENCES search_revisions(revision_id) ON DELETE CASCADE,
             resource_id TEXT NOT NULL,
             project_id TEXT NOT NULL,
+            memory_system TEXT NOT NULL CHECK (memory_system IN ('semantic', 'episodic')),
+            authority TEXT NOT NULL CHECK (authority IN ('organization', 'project')),
             scope TEXT NOT NULL CHECK (scope IN ('org', 'project')),
             kind TEXT NOT NULL CHECK (kind IN ('context', 'rule', 'workflow', 'memory')),
             path TEXT NOT NULL,
@@ -239,6 +272,10 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
             source_commit_id TEXT,
             draft_id TEXT,
             draft_revision TEXT,
+            episode_id TEXT,
+            run_id TEXT,
+            activity_at TEXT,
+            evidence_hash TEXT,
             PRIMARY KEY (revision_id, resource_id)
         )",
     )
@@ -348,26 +385,16 @@ pub(super) async fn ready_index_revision(
         return Ok(None);
     }
     let models = state.inner.search_models.clone();
-    let (model_revision, embedding_revision) = super::run_model_work(state, move || {
-        Ok((models.revision()?, models.embedding_revision()?))
-    })
-    .await?;
+    let embedding_revision =
+        super::run_model_work(state, move || models.embedding_revision()).await?;
     let dimensions = i64::try_from(state.inner.search_models.dimensions())
         .map_err(|_| SearchFailure::vector("embedding dimensions exceed SQLite integer range"))?;
-    ready_index_revision_for_fingerprint(
-        pool,
-        project_id,
-        &model_revision,
-        &embedding_revision,
-        dimensions,
-    )
-    .await
+    ready_index_revision_for_fingerprint(pool, project_id, &embedding_revision, dimensions).await
 }
 
 async fn ready_index_revision_for_fingerprint(
     pool: &SqlitePool,
     project_id: &str,
-    model_revision: &str,
     embedding_revision: &str,
     dimensions: i64,
 ) -> Result<Option<String>, DaemonError> {
@@ -376,20 +403,16 @@ async fn ready_index_revision_for_fingerprint(
          FROM search_heads h
          JOIN search_revisions r ON r.revision_id = h.revision_id
          WHERE h.project_id = $1 AND r.status = 'ready'
-           AND r.model_revision = $2
-           AND r.embedding_revision = $3
-           AND r.dimensions = $4
-           AND r.parser_version = $5
-           AND r.chunker_version = $6
-           AND r.ranking_version = $7",
+           AND r.embedding_revision = $2
+           AND r.dimensions = $3
+           AND r.parser_version = $4
+           AND r.chunker_version = $5",
     )
     .bind(project_id)
-    .bind(model_revision)
     .bind(embedding_revision)
     .bind(dimensions)
     .bind(PARSER_VERSION)
     .bind(CHUNKER_VERSION)
-    .bind(RANKING_CONFIG_VERSION)
     .fetch_optional(pool)
     .await?)
 }
@@ -397,7 +420,7 @@ async fn ready_index_revision_for_fingerprint(
 pub(super) async fn prepare_incremental_index<F, Fut>(
     state: &super::DaemonState,
     pool: &SqlitePool,
-    effective: &EffectiveMemory,
+    corpus: &MemoryCorpus,
     mut should_continue: F,
 ) -> Result<PrepareIndexOutcome, DaemonError>
 where
@@ -439,19 +462,14 @@ where
     })
     .await?;
     let dimensions = state.inner.search_models.dimensions();
-    let revision_id = index_revision_id(
-        &effective.effective_hash,
-        &model_revision,
-        &embedding_revision,
-        dimensions,
-    );
+    let revision_id = index_revision_id(&corpus.corpus_hash, &embedding_revision, dimensions);
     let existing: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM search_heads h
          JOIN search_revisions r ON r.revision_id = h.revision_id
          WHERE h.project_id = $1 AND h.revision_id = $2 AND r.status = 'ready'",
     )
-    .bind(&effective.project_id)
+    .bind(&corpus.project_id)
     .bind(&revision_id)
     .fetch_one(pool)
     .await?;
@@ -461,13 +479,13 @@ where
 
     let result: Result<PrepareIndexOutcome, DaemonError> = async {
         let mut built = Vec::new();
-        for (resource_index, resource) in effective.resources.iter().enumerate() {
+        for (resource_index, resource) in corpus.resources.iter().enumerate() {
             if !should_continue().await {
                 return Ok(PrepareIndexOutcome::Superseded);
             }
             if let Some(mut reused) = reuse_ready_resource(
                 pool,
-                &effective.project_id,
+                &corpus.project_id,
                 resource_index,
                 resource,
                 &embedding_revision,
@@ -492,7 +510,7 @@ where
                     state,
                     pool,
                     state.inner.search_models.clone(),
-                    &effective.resources[resource_index],
+                    &corpus.resources[resource_index],
                     resource_index,
                     unit_batch,
                     &embedding_revision,
@@ -506,8 +524,8 @@ where
             }
         }
         Ok(PrepareIndexOutcome::Prepared(PreparedIndex {
-            project_id: effective.project_id.clone(),
-            effective_hash: effective.effective_hash.clone(),
+            project_id: corpus.project_id.clone(),
+            corpus_hash: corpus.corpus_hash.clone(),
             revision_id: revision_id.clone(),
             model_revision: model_revision.clone(),
             embedding_revision: embedding_revision.clone(),
@@ -519,7 +537,7 @@ where
     if let Err(error) = &result {
         let _ = record_failed_index(
             pool,
-            effective,
+            corpus,
             &revision_id,
             &model_revision,
             &embedding_revision,
@@ -533,7 +551,7 @@ where
 
 async fn record_failed_index(
     pool: &SqlitePool,
-    effective: &EffectiveMemory,
+    corpus: &MemoryCorpus,
     revision_id: &str,
     model_revision: &str,
     embedding_revision: &str,
@@ -551,8 +569,8 @@ async fn record_failed_index(
             ready_at = NULL",
     )
     .bind(revision_id)
-    .bind(&effective.project_id)
-    .bind(&effective.effective_hash)
+    .bind(&corpus.project_id)
+    .bind(&corpus.corpus_hash)
     .bind(model_revision)
     .bind(embedding_revision)
     .bind(
@@ -580,7 +598,7 @@ async fn reuse_ready_resource(
     let metadata = sqlx::query(
         "SELECT h.revision_id, r.embedding_revision, r.dimensions,
                 r.parser_version, r.chunker_version,
-                sr.content_hash, sr.path, sr.scope, sr.kind
+                sr.content_hash, sr.path, sr.description
          FROM search_heads h
          JOIN search_revisions r ON r.revision_id = h.revision_id
          JOIN search_resources sr ON sr.revision_id = h.revision_id
@@ -605,8 +623,7 @@ async fn reuse_ready_resource(
             != Some(CHUNKER_VERSION)
         || metadata.try_get::<String, _>("content_hash")? != resource.content_hash
         || metadata.try_get::<String, _>("path")? != resource.path
-        || metadata.try_get::<String, _>("scope")? != resource.scope.as_str()
-        || metadata.try_get::<String, _>("kind")? != resource.kind.as_str()
+        || metadata.try_get::<String, _>("description")? != resource.description
     {
         return Ok(None);
     }
@@ -950,20 +967,17 @@ fn embed_pending_units(
 }
 
 pub(super) fn index_revision_id(
-    effective_hash: &str,
-    model_revision: &str,
+    corpus_hash: &str,
     embedding_revision: &str,
     dimensions: usize,
 ) -> String {
     let mut hasher = Sha256::new();
     for value in [
-        effective_hash,
+        corpus_hash,
         PARSER_VERSION,
         CHUNKER_VERSION,
-        model_revision,
         embedding_revision,
         VECTOR_INPUT_VERSION,
-        RANKING_CONFIG_VERSION,
     ] {
         hasher.update(value.as_bytes());
         hasher.update([0]);
@@ -974,36 +988,35 @@ pub(super) fn index_revision_id(
 
 pub(super) async fn stage_prepared_index(
     pool: &SqlitePool,
-    effective: &EffectiveMemory,
+    corpus: &MemoryCorpus,
     prepared: &PreparedIndex,
 ) -> Result<String, DaemonError> {
-    write_prepared_index(pool, effective, prepared).await
+    write_prepared_index(pool, corpus, prepared).await
 }
 
 async fn write_prepared_index(
     pool: &SqlitePool,
-    effective: &EffectiveMemory,
+    corpus: &MemoryCorpus,
     prepared: &PreparedIndex,
 ) -> Result<String, DaemonError> {
-    if prepared.project_id != effective.project_id
-        || prepared.effective_hash != effective.effective_hash
+    if prepared.project_id != corpus.project_id
+        || prepared.corpus_hash != corpus.corpus_hash
         || prepared.revision_id
             != index_revision_id(
-                &prepared.effective_hash,
-                &prepared.model_revision,
+                &prepared.corpus_hash,
                 &prepared.embedding_revision,
                 prepared.dimensions,
             )
     {
         return Err(SearchFailure::generation_changed(
-            "prepared search index no longer matches the requested Effective Memory",
+            "prepared search index no longer matches the requested Memory Corpus",
         )
         .into());
     }
     if prepared.units.iter().any(|built| {
         built.vector.len() != prepared.dimensions
             || !valid_normalized_vector(&built.vector)
-            || effective
+            || corpus
                 .resources
                 .get(built.resource_index)
                 .is_none_or(|resource| {
@@ -1026,7 +1039,7 @@ async fn write_prepared_index(
         "SELECT COUNT(*) FROM search_revisions
          WHERE project_id = $1 AND revision_id = $2 AND status = 'ready'",
     )
-    .bind(&effective.project_id)
+    .bind(&corpus.project_id)
     .bind(&prepared.revision_id)
     .fetch_one(&mut *tx)
     .await?;
@@ -1042,8 +1055,8 @@ async fn write_prepared_index(
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'building')",
     )
     .bind(&prepared.revision_id)
-    .bind(&effective.project_id)
-    .bind(&effective.effective_hash)
+    .bind(&corpus.project_id)
+    .bind(&corpus.corpus_hash)
     .bind(&prepared.model_revision)
     .bind(&prepared.embedding_revision)
     .bind(
@@ -1057,16 +1070,23 @@ async fn write_prepared_index(
     .execute(&mut *tx)
     .await?;
 
-    for resource in effective.resources.iter() {
+    for resource in corpus.resources.iter() {
         sqlx::query(
             "INSERT INTO search_resources (
-                revision_id, resource_id, project_id, scope, kind, path, title,
-                description, content, content_hash, source_commit_id, draft_id, draft_revision
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                revision_id, resource_id, project_id, memory_system, authority,
+                scope, kind, path, title, description, content, content_hash,
+                source_commit_id, draft_id, draft_revision,
+                episode_id, run_id, activity_at, evidence_hash
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17, $18, $19
+             )",
         )
         .bind(&prepared.revision_id)
         .bind(&resource.resource_id)
         .bind(&resource.project_id)
+        .bind(resource.memory_system.as_str())
+        .bind(resource.authority.as_str())
         .bind(resource.scope.as_str())
         .bind(resource.kind.as_str())
         .bind(&resource.path)
@@ -1077,12 +1097,16 @@ async fn write_prepared_index(
         .bind(&resource.source_commit_id)
         .bind(&resource.draft_id)
         .bind(&resource.draft_revision)
+        .bind(&resource.episode_id)
+        .bind(&resource.run_id)
+        .bind(&resource.activity_at)
+        .bind(&resource.evidence_hash)
         .execute(&mut *tx)
         .await?;
     }
 
     for built in &prepared.units {
-        let resource = &effective.resources[built.resource_index];
+        let resource = &corpus.resources[built.resource_index];
         let result = sqlx::query(
             "INSERT INTO search_units (
                 revision_id, unit_key, resource_id, ordinal, heading_path_json,
@@ -1129,8 +1153,7 @@ async fn write_prepared_index(
             .bind(&prepared.revision_id)
             .fetch_one(&mut *tx)
             .await?;
-    if resource_count != effective.resources.len() as i64
-        || unit_count != prepared.units.len() as i64
+    if resource_count != corpus.resources.len() as i64 || unit_count != prepared.units.len() as i64
     {
         return Err(SearchFailure::failed(
             "search index row counts do not match the Effective Memory build",
@@ -1322,7 +1345,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use super::super::{MemoryKind, SourceScope};
+    use super::super::{MemoryAuthority, MemoryKind, MemorySystem, SourceScope};
     use super::*;
     use crate::{CredentialStore, CredentialStoreError, DaemonState, ServerCredentials};
 
@@ -1346,6 +1369,7 @@ mod tests {
     struct RecordingModels {
         embedded: AtomicUsize,
         passages: Mutex<Vec<String>>,
+        model_revision: Mutex<String>,
     }
 
     impl RecordingModels {
@@ -1361,11 +1385,24 @@ mod tests {
         fn passages(&self) -> Vec<String> {
             self.passages.lock().unwrap().clone()
         }
+
+        fn set_model_revision(&self, revision: &str) {
+            *self.model_revision.lock().unwrap() = revision.to_owned();
+        }
     }
 
     impl SearchModels for RecordingModels {
         fn revision(&self) -> Result<String, SearchFailure> {
-            Ok("acceptance-models.v1".to_owned())
+            let revision = self.model_revision.lock().unwrap().clone();
+            Ok(if revision.is_empty() {
+                "acceptance-models.v1".to_owned()
+            } else {
+                revision
+            })
+        }
+
+        fn embedding_revision(&self) -> Result<String, SearchFailure> {
+            Ok("acceptance-embedding.v1".to_owned())
         }
 
         fn token_offsets(&self, text: &str) -> Result<Vec<(usize, usize)>, SearchFailure> {
@@ -1423,6 +1460,8 @@ mod tests {
         SourceResource {
             resource_id: id.to_owned(),
             project_id: "prj_test".to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Organization,
             scope: SourceScope::Project,
             kind: MemoryKind::Memory,
             path: path.to_owned(),
@@ -1433,21 +1472,21 @@ mod tests {
             source_commit_id: Some("commit_one".to_owned()),
             draft_id: None,
             draft_revision: None,
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
         }
     }
 
-    fn remap_resource_ids(
-        source: &EffectiveMemory,
-        effective_hash: &str,
-        suffix: &str,
-    ) -> EffectiveMemory {
+    fn remap_resource_ids(source: &MemoryCorpus, corpus_hash: &str, suffix: &str) -> MemoryCorpus {
         let mut resources = source.resources.to_vec();
         for resource in &mut resources {
             resource.resource_id = format!("{}_{}", resource.resource_id, suffix);
         }
-        EffectiveMemory {
+        MemoryCorpus {
             project_id: source.project_id.clone(),
-            effective_hash: effective_hash.to_owned(),
+            corpus_hash: corpus_hash.to_owned(),
             resources: resources.into(),
         }
     }
@@ -1455,9 +1494,9 @@ mod tests {
     async fn prepared(
         state: &DaemonState,
         pool: &SqlitePool,
-        effective: &EffectiveMemory,
+        corpus: &MemoryCorpus,
     ) -> PreparedIndex {
-        match prepare_incremental_index(state, pool, effective, || async { true })
+        match prepare_incremental_index(state, pool, corpus, || async { true })
             .await
             .unwrap()
         {
@@ -1466,22 +1505,11 @@ mod tests {
         }
     }
 
-    async fn publish(
-        pool: &SqlitePool,
-        effective: &EffectiveMemory,
-        prepared: &PreparedIndex,
-    ) -> String {
-        let revision = stage_prepared_index(pool, effective, prepared)
+    async fn publish(pool: &SqlitePool, corpus: &MemoryCorpus, prepared: &PreparedIndex) -> String {
+        let revision = stage_prepared_index(pool, corpus, prepared).await.unwrap();
+        publish_staged_index(pool, &corpus.project_id, &corpus.corpus_hash, &revision)
             .await
             .unwrap();
-        publish_staged_index(
-            pool,
-            &effective.project_id,
-            &effective.effective_hash,
-            &revision,
-        )
-        .await
-        .unwrap();
         revision
     }
 
@@ -1536,6 +1564,16 @@ mod tests {
                 .unwrap();
         assert_eq!(version, PROJECT_INDEX_SCHEMA_VERSION.to_string());
         assert!(has_column(pool, "search_revisions", "dimensions").await);
+        for column in [
+            "memory_system",
+            "authority",
+            "episode_id",
+            "run_id",
+            "activity_at",
+            "evidence_hash",
+        ] {
+            assert!(has_column(pool, "search_resources", column).await);
+        }
         let cache_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master
              WHERE type = 'table' AND name = 'search_vector_cache'",
@@ -1577,9 +1615,9 @@ mod tests {
             "b".repeat(900)
         );
         let gamma = format!("# Gamma\n\n{}\n", "c".repeat(900));
-        let cold = EffectiveMemory {
+        let cold = MemoryCorpus {
             project_id: "prj_test".to_owned(),
-            effective_hash: "effective_cold".to_owned(),
+            corpus_hash: "effective_cold".to_owned(),
             resources: vec![
                 resource("ctx_alpha", "context/alpha.md", "Alpha", alpha.clone()),
                 resource("ctx_gamma", "context/gamma.md", "Gamma", gamma),
@@ -1596,13 +1634,18 @@ mod tests {
         publish(&pool, &cold, &cold_prepared).await;
 
         models.reset();
+        models.set_model_revision("reranker-only-change.v2");
         assert!(matches!(
             prepare_incremental_index(&state, &pool, &cold, || async { true })
                 .await
                 .unwrap(),
             PrepareIndexOutcome::AlreadyReady(_)
         ));
-        assert_eq!(models.embedded(), 0, "the ready head must not re-embed");
+        assert_eq!(
+            models.embedded(),
+            0,
+            "a reranker-only revision change must not re-embed"
+        );
 
         let mut changed_resources = cold.resources.to_vec();
         let body_start = changed_resources[0].content.find("\n\n").unwrap() + 2;
@@ -1610,9 +1653,9 @@ mod tests {
             .content
             .replace_range(body_start..body_start + 1, "z");
         changed_resources[0].content_hash = super::super::sha256(&changed_resources[0].content);
-        let changed = EffectiveMemory {
+        let changed = MemoryCorpus {
             project_id: "prj_test".to_owned(),
-            effective_hash: "effective_changed".to_owned(),
+            corpus_hash: "effective_changed".to_owned(),
             resources: changed_resources.into(),
         };
         models.reset();
@@ -1812,48 +1855,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ready_index_revision_for_fingerprint(
-                &pool,
-                "prj_test",
-                "models.v1",
-                "embedding.v1",
-                3,
-            )
-            .await
-            .unwrap()
-            .as_deref(),
+            ready_index_revision_for_fingerprint(&pool, "prj_test", "embedding.v1", 3,)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("search_ready")
         );
         assert!(
-            ready_index_revision_for_fingerprint(
-                &pool,
-                "prj_test",
-                "models.v2",
-                "embedding.v2",
-                3,
-            )
-            .await
-            .unwrap()
-            .is_none()
+            ready_index_revision_for_fingerprint(&pool, "prj_test", "embedding.v2", 3,)
+                .await
+                .unwrap()
+                .is_none()
         );
         assert!(
-            ready_index_revision_for_fingerprint(
-                &pool,
-                "prj_test",
-                "models.v1",
-                "embedding.v1",
-                4,
-            )
-            .await
-            .unwrap()
-            .is_none()
+            ready_index_revision_for_fingerprint(&pool, "prj_test", "embedding.v1", 4,)
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
     #[test]
     fn index_revision_identity_includes_embedding_dimensions() {
-        let three = index_revision_id("effective", "model", "embedding", 3);
-        let four = index_revision_id("effective", "model", "embedding", 4);
+        let three = index_revision_id("corpus", "embedding", 3);
+        let four = index_revision_id("corpus", "embedding", 4);
         assert_ne!(three, four);
     }
 
@@ -2068,10 +2093,10 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO search_resources (
-                revision_id, resource_id, project_id, scope, kind, path,
-                title, content, content_hash
-             ) VALUES ('revision', 'resource', 'project', 'project', 'context',
-                       'context.md', 'Context', 'body', 'content')",
+                revision_id, resource_id, project_id, memory_system, authority,
+                scope, kind, path, title, content, content_hash
+             ) VALUES ('revision', 'resource', 'project', 'semantic', 'organization',
+                       'project', 'context', 'context.md', 'Context', 'body', 'content')",
         )
         .execute(&pool)
         .await

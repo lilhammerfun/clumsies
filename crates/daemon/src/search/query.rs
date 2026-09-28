@@ -5,9 +5,10 @@ use sqlx::{Row, SqlitePool};
 use super::activation::{ActivationStateToken, activation_response};
 use super::index::decode_vector;
 use super::{
-    ActivateMemoryResponse, DaemonError, MIN_RERANK_RELEVANCE, MemoryKind, RetrievalCandidateInput,
-    RetrievalDeltaAction, RetrievalExclusionReason, RetrievalRunCompletion, SearchFailure,
-    SourceLocator, SourceScope, elapsed_us, parse_memory_kind, parse_source_scope,
+    ActivateMemoryResponse, DaemonError, MIN_RERANK_RELEVANCE, MemoryAuthority, MemoryKind,
+    MemorySystem, RetrievalCandidateInput, RetrievalDeltaAction, RetrievalExclusionReason,
+    RetrievalRunCompletion, SearchFailure, SourceLocator, SourceScope, elapsed_us,
+    parse_memory_authority, parse_memory_kind, parse_memory_system, parse_source_scope,
 };
 
 pub(super) const BM25_TOP_K: usize = 60;
@@ -24,6 +25,8 @@ pub(super) struct IndexRow {
     pub(super) rowid: i64,
     pub(super) unit_key: String,
     pub(super) resource_id: String,
+    pub(super) memory_system: MemorySystem,
+    pub(super) authority: MemoryAuthority,
     pub(super) scope: SourceScope,
     pub(super) kind: MemoryKind,
     pub(super) path: String,
@@ -33,6 +36,10 @@ pub(super) struct IndexRow {
     pub(super) text: String,
     pub(super) text_hash: String,
     pub(super) resource_content_hash: String,
+    pub(super) episode_id: Option<String>,
+    pub(super) run_id: Option<String>,
+    pub(super) activity_at: Option<String>,
+    pub(super) evidence_hash: Option<String>,
     pub(super) token_count: usize,
     pub(super) vector: Vec<f32>,
 }
@@ -80,11 +87,9 @@ pub(super) async fn query_index(
 ) -> Result<ActivateMemoryResponse, DaemonError> {
     let rows = fetch_index_rows(pool, revision_id, state.inner.search_models.dimensions()).await?;
     completion.unit_count = rows.len();
+    let models = state.inner.search_models.clone();
     completion.model_revision =
-        sqlx::query_scalar("SELECT model_revision FROM search_revisions WHERE revision_id = $1")
-            .bind(revision_id)
-            .fetch_optional(pool)
-            .await?;
+        Some(super::run_model_work(state, move || models.revision()).await?);
     if rows.is_empty() {
         *failure_stage = "assembly";
         let started = std::time::Instant::now();
@@ -181,6 +186,7 @@ pub(super) async fn query_index(
             candidates[candidate_index].reranker_rank = Some(index + 1);
         }
     }
+    prioritize_recent_episodes(query, &mut candidates);
 
     *failure_stage = "assembly";
     let started = std::time::Instant::now();
@@ -204,7 +210,9 @@ async fn fetch_index_rows(
     let rows = sqlx::query(
         "SELECT u.unit_rowid, u.unit_key, u.resource_id, u.heading_path_json,
                 u.locator_json, u.text, u.text_hash, u.token_count, u.vector,
-                r.scope, r.kind, r.path, r.title, r.content_hash AS resource_content_hash
+                r.memory_system, r.authority, r.scope, r.kind, r.path, r.title,
+                r.content_hash AS resource_content_hash,
+                r.episode_id, r.run_id, r.activity_at, r.evidence_hash
          FROM search_units u
          JOIN search_resources r
            ON r.revision_id = u.revision_id AND r.resource_id = u.resource_id
@@ -218,6 +226,8 @@ async fn fetch_index_rows(
         .map(|row| {
             let kind_value: String = row.try_get("kind")?;
             let scope_value: String = row.try_get("scope")?;
+            let memory_system_value: String = row.try_get("memory_system")?;
+            let authority_value: String = row.try_get("authority")?;
             let vector_bytes: Vec<u8> = row.try_get("vector")?;
             let token_count: i64 = row.try_get("token_count")?;
             if token_count < 0 {
@@ -227,6 +237,8 @@ async fn fetch_index_rows(
                 rowid: row.try_get("unit_rowid")?,
                 unit_key: row.try_get("unit_key")?,
                 resource_id: row.try_get("resource_id")?,
+                memory_system: parse_memory_system(&memory_system_value)?,
+                authority: parse_memory_authority(&authority_value)?,
                 scope: parse_source_scope(&scope_value)?,
                 kind: parse_memory_kind(&kind_value).ok_or_else(|| {
                     SearchFailure::failed(format!("unknown indexed memory kind: {kind_value}"))
@@ -240,6 +252,10 @@ async fn fetch_index_rows(
                 text: row.try_get("text")?,
                 text_hash: row.try_get("text_hash")?,
                 resource_content_hash: row.try_get("resource_content_hash")?,
+                episode_id: row.try_get("episode_id")?,
+                run_id: row.try_get("run_id")?,
+                activity_at: row.try_get("activity_at")?,
+                evidence_hash: row.try_get("evidence_hash")?,
                 token_count: token_count as usize,
                 vector: decode_vector(&vector_bytes, dimensions)?,
             })
@@ -543,10 +559,62 @@ pub(super) fn apply_fragment_budget(candidates: &mut [RankedRow]) {
     }
 }
 
+pub(super) fn prioritize_recent_episodes(query: &str, candidates: &mut [RankedRow]) {
+    if !has_recency_intent(query) {
+        return;
+    }
+    let mut episodic = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            let rank = candidate.reranker_rank?;
+            (candidate.row.memory_system == MemorySystem::Episodic
+                && candidate.row.scope == SourceScope::Project
+                && candidate
+                    .rerank_score
+                    .is_some_and(|score| rerank_relevance(score) >= MIN_RERANK_RELEVANCE))
+            .then_some((rank, index))
+        })
+        .collect::<Vec<_>>();
+    episodic.sort_by_key(|(rank, _)| *rank);
+    let ranks = episodic.iter().map(|(rank, _)| *rank).collect::<Vec<_>>();
+    episodic.sort_by(|left, right| {
+        candidates[right.1]
+            .row
+            .activity_at
+            .cmp(&candidates[left.1].row.activity_at)
+            .then_with(|| left.0.cmp(&right.0))
+            .then_with(|| {
+                candidates[left.1]
+                    .row
+                    .unit_key
+                    .cmp(&candidates[right.1].row.unit_key)
+            })
+    });
+    for (rank, (_, candidate_index)) in ranks.into_iter().zip(episodic) {
+        candidates[candidate_index].reranker_rank = Some(rank);
+    }
+}
+
+fn has_recency_intent(query: &str) -> bool {
+    let normalized = query.to_lowercase();
+    if ["最近", "最新", "上次", "上一次", "近期", "刚才", "刚刚"]
+        .iter()
+        .any(|cue| normalized.contains(cue))
+    {
+        return true;
+    }
+    normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .any(|term| matches!(term, "recent" | "recently" | "latest" | "newest" | "last"))
+}
+
 fn retrieval_candidate_input(candidate: &RankedRow) -> RetrievalCandidateInput {
     RetrievalCandidateInput {
         unit_key: candidate.row.unit_key.clone(),
         resource_id: candidate.row.resource_id.clone(),
+        memory_system: candidate.row.memory_system,
+        authority: candidate.row.authority,
         scope: candidate.row.scope,
         kind: candidate.row.kind,
         path: candidate.row.path.clone(),
@@ -554,6 +622,10 @@ fn retrieval_candidate_input(candidate: &RankedRow) -> RetrievalCandidateInput {
         locator: candidate.row.locator.clone(),
         content_hash: candidate.row.text_hash.clone(),
         resource_content_hash: candidate.row.resource_content_hash.clone(),
+        episode_id: candidate.row.episode_id.clone(),
+        run_id: candidate.row.run_id.clone(),
+        activity_at: candidate.row.activity_at.clone(),
+        evidence_hash: candidate.row.evidence_hash.clone(),
         token_count: candidate.row.token_count,
         evidence_excerpt: candidate.row.text.clone(),
         exact_rank: candidate.exact_rank,

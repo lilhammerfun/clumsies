@@ -6,8 +6,9 @@ use sqlx::{Row, SqlitePool};
 
 use super::{
     DaemonDraftContent, DaemonDraftOperation, DaemonError, DaemonUpdateDraftOperation,
-    EffectiveResource, MemoryKind, SearchFailure, SourceResource, SourceScope, markdown_title,
-    parse_memory_kind, parse_source_scope, project_authority_content, sha256, title_from_path,
+    EffectiveResource, MemoryAuthority, MemoryKind, MemorySystem, SearchFailure, SourceResource,
+    SourceScope, markdown_title, parse_memory_kind, parse_source_scope, project_authority_content,
+    sha256, title_from_path,
 };
 
 pub(super) fn cached_memory_kind(kind: CachedMemoryKind) -> Option<MemoryKind> {
@@ -205,6 +206,8 @@ async fn load_draft_base_resource(
         source: SourceResource {
             resource_id: entry.id,
             project_id: project_id.to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Organization,
             scope: draft.scope,
             kind,
             path,
@@ -215,6 +218,10 @@ async fn load_draft_base_resource(
             source_commit_id: Some(commit_id.to_owned()),
             draft_id: None,
             draft_revision: None,
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
         },
     }))
 }
@@ -328,6 +335,7 @@ pub(super) fn apply_draft_overlay(
             if markdown_title(&resource.source.content).is_none() {
                 resource.source.title = title_from_path(&rename.new_path);
             }
+            resource.source.authority = MemoryAuthority::Project;
             resource.source.draft_id = Some(draft.draft_id.clone());
             resource.source.draft_revision = Some(draft_revision.clone());
         }
@@ -382,6 +390,8 @@ pub(super) fn draft_content_resource(
         source: SourceResource {
             resource_id,
             project_id: project_id.to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Project,
             scope,
             kind,
             path,
@@ -392,6 +402,10 @@ pub(super) fn draft_content_resource(
             source_commit_id,
             draft_id: Some(draft_id.to_owned()),
             draft_revision: Some(draft_revision.to_owned()),
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
         },
     })
 }

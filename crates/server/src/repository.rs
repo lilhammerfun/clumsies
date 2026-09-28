@@ -53,6 +53,8 @@ pub enum ServerError {
     },
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 }

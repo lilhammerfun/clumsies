@@ -8,6 +8,7 @@ mod commit_sync;
 pub mod config;
 mod credentials;
 mod draft;
+mod episode;
 mod ipc;
 mod migration;
 mod project_storage;
@@ -49,6 +50,10 @@ pub(crate) use draft::{
     load_project_sync_status, load_sync_status, pull_draft_events, queue_retrying_operations,
     recover_interrupted_operations, resolve_local_draft,
 };
+pub use episode::{
+    EpisodeEvidenceItem, EpisodeEvidenceRequest, EpisodeEvidenceResponse, EpisodeProvenance,
+    EvidenceProvenance,
+};
 pub use ipc::{DaemonIpcClient, DaemonIpcServer};
 pub(crate) use migration::{
     connect_local_db, current_schema_version, load_meta_value, load_or_create_installation_id,
@@ -78,8 +83,9 @@ pub use retrieval_history::{
 };
 pub use search::{
     ActivateMemoryRequest, ActivateMemoryResponse, ActivationAction, ActivationFragment,
-    ActivationRemoval, LoadMemoryRequest, LoadMemoryResponse, LoadedMemoryResource, MemoryKind,
-    SearchIndexProjectRequest, SearchIndexStatus, SearchModelStatus, SourceLocator, SourceScope,
+    ActivationRemoval, LoadMemoryRequest, LoadMemoryResponse, LoadedMemoryResource,
+    MemoryAuthority, MemoryKind, MemorySystem, SearchIndexProjectRequest, SearchIndexStatus,
+    SearchModelStatus, SourceLocator, SourceScope,
 };
 pub(crate) use server_client::{
     clear_server_response_cache, decode_server_json, delete_server_json, ensure_server_success,

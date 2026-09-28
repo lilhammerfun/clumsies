@@ -129,6 +129,26 @@ pub(crate) async fn enqueue_project_in_tx(
     Ok(())
 }
 
+pub(crate) async fn invalidate_project_head_and_enqueue_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    project_id: &str,
+) -> Result<(), DaemonError> {
+    sqlx::query("DELETE FROM search_heads WHERE project_id = $1")
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "UPDATE search_index_jobs
+         SET target_effective_hash = NULL, active_revision = NULL
+         WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .execute(&mut **tx)
+    .await?;
+    enqueue_project_in_tx(tx, project_id).await?;
+    Ok(())
+}
+
 pub(crate) async fn enqueue_all_cached_projects_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
 ) -> Result<(), DaemonError> {
@@ -396,8 +416,8 @@ async fn claim_next_job(pool: &SqlitePool) -> Result<Option<ClaimedJob>, DaemonE
 }
 
 async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), DaemonError> {
-    let effective = match super::load_effective_memory(state, &job.project_id).await {
-        Ok(effective) => effective,
+    let corpus = match super::load_memory_corpus(state, &job.project_id).await {
+        Ok(corpus) => corpus,
         Err(DaemonError::State {
             code: "project_ref_not_synced",
             ..
@@ -415,13 +435,13 @@ async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), 
     )
     .bind(&job.project_id)
     .bind(job.sequence)
-    .bind(&effective.effective_hash)
+    .bind(&corpus.corpus_hash)
     .execute(&state.inner.pool)
     .await?;
 
     let storage_guard = state.inner.storage_access.read().await;
     let (pool, storage) = super::active_project_index(state, &job.project_id).await?;
-    let prepared = super::index::prepare_incremental_index(state, &pool, &effective, || {
+    let prepared = super::index::prepare_incremental_index(state, &pool, &corpus, || {
         let state = state.clone();
         let project_id = job.project_id.clone();
         let sequence = job.sequence;
@@ -441,7 +461,7 @@ async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), 
                 job,
                 &pool,
                 storage.location_revision,
-                &effective,
+                &corpus,
                 &revision_id,
             )
             .await?;
@@ -449,14 +469,13 @@ async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), 
         PrepareIndexOutcome::Prepared(prepared) => {
             // Persist the large revision outside the central writer barrier;
             // it remains invisible until the small head switch below.
-            let revision_id =
-                super::index::stage_prepared_index(&pool, &effective, &prepared).await?;
+            let revision_id = super::index::stage_prepared_index(&pool, &corpus, &prepared).await?;
             publish_ready_job(
                 state,
                 job,
                 &pool,
                 storage.location_revision,
-                &effective,
+                &corpus,
                 &revision_id,
             )
             .await?;
@@ -492,7 +511,7 @@ async fn publish_ready_job(
     job: &ClaimedJob,
     project_pool: &SqlitePool,
     location_revision: i64,
-    effective: &super::EffectiveMemory,
+    corpus: &super::MemoryCorpus,
     revision_id: &str,
 ) -> Result<(), DaemonError> {
     let mut barrier = state.inner.pool.begin().await?;
@@ -521,7 +540,7 @@ async fn publish_ready_job(
     super::index::publish_staged_index(
         project_pool,
         &job.project_id,
-        &effective.effective_hash,
+        &corpus.corpus_hash,
         revision_id,
     )
     .await?;
@@ -529,11 +548,11 @@ async fn publish_ready_job(
         &mut barrier,
         &job.project_id,
         revision_id,
-        &effective.effective_hash,
+        &corpus.corpus_hash,
         location_revision,
     )
     .await?;
-    mark_ready_in_tx(&mut barrier, job, &effective.effective_hash, revision_id).await?;
+    mark_ready_in_tx(&mut barrier, job, &corpus.corpus_hash, revision_id).await?;
     barrier.commit().await?;
     Ok(())
 }

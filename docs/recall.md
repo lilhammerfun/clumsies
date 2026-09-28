@@ -6,6 +6,12 @@ Activity 是 macOS App 中只读的本地诊断视图。它把 DSH 与 Codex Des
 
 它不是通用聊天记录，也不是完整 transcript 归档器。Assistant 回复、与 Clumsies 无关的工具调用、其他 MCP Server 的调用，以及 ChatGPT `conversations.json` 导出都不在范围内。
 
+Activity 与 Project Episodic Memory 是两条不同产品路径：Activity 按需在本机投影会话，
+用于回答“当时检索了什么”；Episodic Memory 则只在已绑定 Project 的 root AgentRun 结束
+或恢复结束后截取该 Run 的 Evidence，经 durable outbox 上传 Server，生成可联合检索的
+项目生产经历。后者不上传 Activity 页面、不创建 whole-session 对象，也不会进入
+Organization Semantic authority。命中摘要后的原文下钻见 [`memory.evidence`](/mcp#evidence)。
+
 ## 当前契约
 
 Activity 只回答三个问题：
@@ -112,7 +118,10 @@ payload.result = {
 
 ## 隐私与权限边界
 
-Activity 不会为了生成视图把本地会话日志上传到 Server，也不会调用模型总结日志。读取和投影发生在本机 daemon；App 通过本地 XPC 请求结果。
+Activity 不会为了生成视图把本地会话日志上传到 Server，也不会调用模型总结日志。读取和
+投影发生在本机 daemon；App 通过本地 XPC 请求结果。独立 Episode ingestor 对结束
+AgentRun 的显式摄取不改变这一诊断边界；它产生的是 Project-governed Server Evidence，
+不是 Activity 的远端副本。
 
 但“本地”不等于“不敏感”：Activity 会显示日志中记录的完整用户请求、Agent 写出的原始 Memory 查询，以及被选中的 Memory 片段。能够访问本机账号、这些日志文件或已解锁 App 的人，可能看到这些内容。当前实现不提供额外的字段脱敏、按消息授权或 Activity 专属加密层；敏感信息不应写入 prompt、查询或 Memory 正文。
 

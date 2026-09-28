@@ -4927,6 +4927,8 @@ mod tests {
             project_id: "project-1".to_owned(),
             scope: SourceScope::Project,
             kind: MemoryKind::Memory,
+            memory_system: crate::search::MemorySystem::Semantic,
+            authority: crate::search::MemoryAuthority::Organization,
             path: path.to_owned(),
             title: "Fallback title".to_owned(),
             description: String::new(),
@@ -4935,6 +4937,10 @@ mod tests {
             source_commit_id: Some("commit-1".to_owned()),
             draft_id: None,
             draft_revision: None,
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
         }
     }
 

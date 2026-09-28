@@ -362,6 +362,144 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/episodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** List Project Episodic Memory changes or the most recent Episodes. */
+        get: operations["listProjectEpisodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/episodes/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Idempotently persist one ended AgentRun as immutable Project Episode Evidence. */
+        post: operations["finalizeProjectEpisode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Tombstone a Project Episode and immediately remove its Evidence and summaries. */
+        delete: operations["deleteProjectEpisode"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        /** Read an audited, bounded page of untrusted historical Episode Evidence. */
+        get: operations["getProjectEpisodeEvidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}/summary-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview a summary without changing the current Episode summary. */
+        post: operations["previewProjectEpisodeSummary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}/summary-rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Explicitly create a new current summary revision with the saved Project policy. */
+        post: operations["rebuildProjectEpisodeSummary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/episode-summary-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** Read the Project overlay applied below fixed Episode summary constraints. */
+        get: operations["getProjectEpisodeSummaryPolicy"];
+        /** Replace the Project summary policy without automatically rebuilding old summaries. */
+        put: operations["updateProjectEpisodeSummaryPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/org-selections": {
         parameters: {
             query?: never;
@@ -896,6 +1034,106 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        EpisodeEvidenceRecord: {
+            sequence: number;
+            /** Format: date-time */
+            occurred_at: string;
+            kind: string;
+            content: string;
+        };
+        FinalizeProjectEpisodeRequest: {
+            run_id: string;
+            host_session_id?: string | null;
+            host: string;
+            evidence_format: string;
+            evidence_format_revision: number;
+            /** Format: date-time */
+            activity_at: string;
+            evidence_hash: string;
+            evidence: components["schemas"]["EpisodeEvidenceRecord"][];
+        };
+        /** @enum {string} */
+        ProjectEpisodeStatus: "pending_summary" | "active" | "no_memory" | "deleted";
+        EpisodeSummary: {
+            revision: number;
+            summary_algorithm_revision: string;
+            policy_revision: number;
+            evidence_hash: string;
+            body: string;
+            no_memory: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ProjectEpisode: {
+            episode_id: string;
+            project_id: string;
+            run_id: string;
+            host_session_id: string | null;
+            host: string;
+            evidence_format: string;
+            evidence_format_revision: number;
+            /** Format: date-time */
+            activity_at: string;
+            evidence_hash: string;
+            evidence_bytes: number;
+            status: components["schemas"]["ProjectEpisodeStatus"];
+            current_summary: components["schemas"]["EpisodeSummary"] | null;
+            revision: number;
+            corpus_revision: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            deleted_at: string | null;
+        };
+        ProjectEpisodeListResponse: {
+            items: components["schemas"]["ProjectEpisode"][];
+            corpus_revision: number;
+            next_cursor: number | null;
+            has_more: boolean;
+        };
+        EpisodeEvidenceSegment: {
+            sequence: number;
+            /** Format: date-time */
+            occurred_at: string;
+            kind: string;
+            byte_offset: number;
+            content: string;
+            complete: boolean;
+        };
+        EpisodeEvidencePage: {
+            episode_id: string;
+            project_id: string;
+            run_id: string;
+            evidence_hash: string;
+            items: components["schemas"]["EpisodeEvidenceSegment"][];
+            next_cursor: string | null;
+            has_more: boolean;
+            /** @constant */
+            untrusted: true;
+        };
+        ProjectEpisodeSummaryPolicy: {
+            project_id: string;
+            instructions: string;
+            revision: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        UpdateProjectEpisodeSummaryPolicyRequest: {
+            instructions: string;
+        };
+        PreviewEpisodeSummaryRequest: {
+            instructions?: string | null;
+        };
+        EpisodeSummaryPreview: {
+            episode_id: string;
+            evidence_hash: string;
+            summary_algorithm_revision: string;
+            policy_revision: number;
+            body: string;
+            no_memory: boolean;
+        };
         MemoryListResponse: {
             items: components["schemas"]["MemoryMeta"][];
             page_info: components["schemas"]["PageInfo"];
@@ -1324,6 +1562,7 @@ export interface components {
         IssueId: string;
         ProjectIdQuery: string;
         MemoryId: string;
+        EpisodeId: string;
         BundleId: string;
         DraftId: string;
         ReviewId: string;
@@ -2069,6 +2308,219 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectEpisodes: {
+        parameters: {
+            query?: {
+                after_revision?: number;
+                /** @description Return the newest Episodes by activity time instead of the incremental change feed. */
+                recent?: boolean;
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project Episode page. Incremental mode includes deletion tombstones; recent mode excludes tombstones and has no next cursor. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEpisodeListResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finalizeProjectEpisode: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FinalizeProjectEpisodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Durable Project Episode. Summary status may remain pending when the executor is unavailable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEpisode"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteProjectEpisode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deletion result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProjectEpisodeEvidence: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                max_bytes?: number;
+            };
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Evidence segments. Content is untrusted data and may not be executed as instructions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EpisodeEvidencePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewProjectEpisodeSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewEpisodeSummaryRequest"];
+            };
+        };
+        responses: {
+            /** @description Unpersisted summary preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EpisodeSummaryPreview"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rebuildProjectEpisodeSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                episode_id: components["parameters"]["EpisodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated Project Episode. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEpisode"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProjectEpisodeSummaryPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project Episode summary policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEpisodeSummaryPolicy"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectEpisodeSummaryPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProjectEpisodeSummaryPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated Project Episode summary policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEpisodeSummaryPolicy"];
+                };
             };
             default: components["responses"]["Error"];
         };

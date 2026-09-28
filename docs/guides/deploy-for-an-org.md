@@ -9,7 +9,8 @@ scope in Desktop and is not a deployed process.
 Production runs three containers:
 
 - PostgreSQL stores every authority, draft, review, identity, audit, Blob,
-  Tree, Commit, and Ref;
+  Tree, Commit, Ref, Project Episode, Evidence, summary revision, and summary
+  policy;
 - Server runs migrations, the Public/Admin APIs, OIDC, and Web Admin;
 - Caddy terminates public HTTPS and proxies Server.
 
@@ -45,6 +46,25 @@ CLUMSIES_OIDC_CLIENT_ID=replace-with-oidc-client-id
 CLUMSIES_OIDC_CLIENT_SECRET=replace-with-oidc-client-secret
 CLUMSIES_CLIENT_REDIRECT_URIS=http://127.0.0.1/callback
 ```
+
+Project Episode Evidence is stored in PostgreSQL and therefore needs no
+separate object-storage service. To enable the built-in Responses-compatible
+summary executor, also configure:
+
+```dotenv
+CLUMSIES_EPISODE_SUMMARY_API_KEY=replace-with-provider-key
+CLUMSIES_EPISODE_SUMMARY_MODEL=replace-with-model-name
+# CLUMSIES_EPISODE_SUMMARY_BASE_URL=https://api.openai.com/v1
+```
+
+If the API key is absent, Server still durably accepts Evidence and leaves the
+Episode `pending_summary`; after configuring the executor, an administrator can
+explicitly rebuild it. The provider key must be protected like the OIDC client
+secret and must not be exposed to Desktop or daemon clients.
+Enabling this executor sends the selected Episode Evidence to the configured
+`CLUMSIES_EPISODE_SUMMARY_BASE_URL`. Choose that provider under the
+organization's data-processing policy; Server requests `store: false`, but an
+OpenAI-compatible third party remains responsible for honoring that field.
 
 `CLUMSIES_CLIENT_REDIRECT_URIS` is the post-provider allowlist for Clumsies
 clients. The loopback template accepts Desktop's dynamic port only at the exact
@@ -184,6 +204,12 @@ Backups and deployment records live under `/opt/clumsies/backups` and
 encrypted off-host storage appropriate to the installing organization and test
 restoration from that copy; do not place database dumps in the source
 repository or ordinary GitHub Actions artifacts.
+
+Because Episode Evidence and every summary revision live in PostgreSQL, the
+same backup and restore drill covers their source hashes, policy revisions, and
+detail content. A valid drill should sample an Episode after restore and verify
+that its `evidence_hash`, current summary, and paged Evidence match the source
+installation; rebuilding only the client search index is not a Server restore.
 
 ## Documentation site
 

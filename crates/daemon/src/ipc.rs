@@ -17,10 +17,11 @@ use crate::{
     DaemonProjectStorage, DaemonProjectStorageMove, DaemonProjectStorageMoveRequest,
     DaemonProjectStorageReplaceRequest, DaemonProjectStorageRequest,
     DaemonProjectStorageResetRequest, DaemonRetryResponse, DaemonServerRequest,
-    DaemonServerResponse, DaemonSyncRetryRequest, DaemonSyncStatus, EvaluationCaseDetail,
-    ExportEvaluationSetRequest, ExportEvaluationSetResponse, GetIssueRequest,
-    GetRecallFragmentRequest, GetRecallFragmentResponse, IssueBoardListRequest, IssueBoardResponse,
-    IssueDetailRequest, IssueDetailResponse, IssueMutationResponse, IssueRemovalResponse,
+    DaemonServerResponse, DaemonSyncRetryRequest, DaemonSyncStatus, EpisodeEvidenceRequest,
+    EpisodeEvidenceResponse, EvaluationCaseDetail, ExportEvaluationSetRequest,
+    ExportEvaluationSetResponse, GetIssueRequest, GetRecallFragmentRequest,
+    GetRecallFragmentResponse, IssueBoardListRequest, IssueBoardResponse, IssueDetailRequest,
+    IssueDetailResponse, IssueMutationResponse, IssueRemovalResponse,
     IssueWorkflowMutationResponse, ListRecallsRequest, ListRecallsResponse, LoadMemoryRequest,
     LoadMemoryResponse, RecordAgentRunEventRequest, RecordAgentRunEventResponse,
     RemoveIssueRequest, RequestIssueClosureRequest, ResolveEvaluationCaseRequest,
@@ -322,6 +323,17 @@ impl DaemonIpcClient {
     ) -> Result<LoadMemoryResponse, DaemonError> {
         self.call(DaemonIpcRequest::new(
             "load_memory",
+            serde_json::to_value(request)?,
+        ))?
+        .into_payload()
+    }
+
+    pub fn get_episode_evidence(
+        &self,
+        request: EpisodeEvidenceRequest,
+    ) -> Result<EpisodeEvidenceResponse, DaemonError> {
+        self.call(DaemonIpcRequest::new(
+            "get_episode_evidence",
             serde_json::to_value(request)?,
         ))?
         .into_payload()

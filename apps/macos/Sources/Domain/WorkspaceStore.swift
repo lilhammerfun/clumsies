@@ -1496,6 +1496,86 @@ final class WorkspaceStore: ObservableObject {
         return updated
     }
 
+    func projectEpisodeSummaryPolicy(
+        _ projectId: String
+    ) async throws -> ProjectEpisodeSummaryPolicy {
+        try await server.get("/api/v1/projects/\(projectId)/episode-summary-policy")
+    }
+
+    func updateProjectEpisodeSummaryPolicy(
+        _ projectId: String,
+        expectedRevision: Int,
+        instructions: String
+    ) async throws -> ProjectEpisodeSummaryPolicy {
+        try await server.send(
+            method: "PUT",
+            path: "/api/v1/projects/\(projectId)/episode-summary-policy",
+            headers: ["if-match": String(expectedRevision)],
+            body: UpdateProjectEpisodeSummaryPolicyRequest(instructions: instructions)
+        )
+    }
+
+    func projectEpisodes(
+        _ projectId: String,
+        afterRevision: Int? = nil,
+        recent: Bool = false,
+        limit: Int = 20
+    ) async throws -> ProjectEpisodeListResponse {
+        var query = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "recent", value: String(recent)),
+        ]
+        if let afterRevision {
+            query.append(URLQueryItem(name: "after_revision", value: String(afterRevision)))
+        }
+        return try await server.get(
+            "/api/v1/projects/\(projectId)/episodes",
+            query: query
+        )
+    }
+
+    func previewProjectEpisodeSummary(
+        _ episodeId: String,
+        projectId: String,
+        instructions: String?
+    ) async throws -> ProjectEpisodeSummaryPreview {
+        try await server.send(
+            method: "POST",
+            path: "/api/v1/projects/\(projectId)/episodes/\(episodeId)/summary-preview",
+            body: ProjectEpisodeSummaryPreviewRequest(instructions: instructions)
+        )
+    }
+
+    func rebuildProjectEpisodeSummary(
+        _ episodeId: String,
+        projectId: String
+    ) async throws -> ProjectEpisode {
+        try await server.send(
+            method: "POST",
+            path: "/api/v1/projects/\(projectId)/episodes/\(episodeId)/summary-rebuild"
+        )
+    }
+
+    func projectEpisodeEvidence(
+        _ episodeId: String,
+        projectId: String,
+        cursor: String? = nil,
+        limit: Int = 50,
+        maxBytes: Int = 196_608
+    ) async throws -> ProjectEpisodeEvidencePage {
+        var query = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "max_bytes", value: String(maxBytes)),
+        ]
+        if let cursor {
+            query.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        return try await server.get(
+            "/api/v1/projects/\(projectId)/episodes/\(episodeId)/evidence",
+            query: query
+        )
+    }
+
     func refreshProjectMembers() async {
         let generation = workspaceReloadGeneration
         guard let projectId = activeProjectId else {

@@ -6,7 +6,7 @@
 
 ## 本地状态所有权
 
-daemon 使用一个中心 SQLite 数据库；当前 schema version 为 `40`。它保存：
+daemon 使用一个中心 SQLite 数据库；当前 schema version 为 `41`。它保存：
 
 - 安装身份、schema version、Server URL 和 Desktop 当前选中的 Project；
 - 规范化的工作目录到 `project_id` 绑定；
@@ -14,9 +14,12 @@ daemon 使用一个中心 SQLite 数据库；当前 schema version 为 `40`。�
 - Blob、Tree、Commit 元数据以及已安装的 Organization / Project Ref；
 - Project Local Storage 位置、revision 和 move 状态；
 - `native_issues` 本地看板副本、依赖/阻塞事实、AgentRun 与生命周期事件；
+- Project Episode outbox manifest、待传 Evidence BLOB、Server 当前摘要副本和每 Project corpus revision；
 - Retrieval Run、Evaluation Case 和相关诊断状态。
 
-每个 Project 的派生检索数据库位于该 Project 的活动 Local Storage 中，保存 Effective Memory、Markdown unit、FTS5 行、vector 和 search revision。embedding/reranking 模型只保存在 daemon 共享缓存，不按 Project 复制。
+每个 Project 的派生检索数据库位于该 Project 的活动 Local Storage 中，保存 Semantic
+Effective Memory、当前 Episodic summary、统一检索 unit、FTS5 行、vector 和 search
+revision。embedding/reranking 模型只保存在 daemon 共享缓存，不按 Project 复制。
 
 本地文件权限为 owner-only。access/refresh token 只作为绑定 Server URL 的一个 generic-password 条目保存在 macOS Keychain；SQLite 和文件系统没有明文凭据兜底。
 
@@ -27,7 +30,11 @@ Desktop (Swift) -> typed XPC -> resident daemon -> HTTPS -> Server
 Agent Host -> stdio MCP / Hook -> signed short proxy -> typed XPC -> resident daemon
 ```
 
-短进程只负责有界 framing、两项 MCP tool（`memory`、`kanban`）、Project 选择与 XPC 转发。它不初始化 `DaemonState`，不打开 SQLite，不加载模型，也不启动后台 worker。启动时，代理必须验证自身协议 revision 和 build identity 与常驻 daemon 一致。
+短进程只负责有界 framing、两项 MCP tool（`memory`、`kanban`）、Project 选择与 XPC
+转发。`memory` 的 `evidence` operation 也只是注入当前 Project 并转发稳定
+`episode_id`；短进程不读取宿主文件。它不初始化 `DaemonState`，不打开 SQLite，不加载
+模型，也不启动后台 worker。启动时，代理必须验证自身协议 revision 和 build identity 与
+常驻 daemon 一致。
 
 ## Project 绑定与两种 MCP 启动语义
 
@@ -59,7 +66,11 @@ MCP 的 update 不是整篇覆盖。Agent 必须提交 `load` 返回的完整资
 3. 把完整 Draft 结果 overlay 到最新权威；
 4. 其他资源保持最新 Commit 内容。
 
-因此成功的本地 `store` 会改变下一次 Effective Memory hash，并触发相匹配的 search revision。Commit sync 可以更新 current Commit、freshness 和候选有效性，但不能改写 Draft Base、操作、正文或 lifecycle。
+因此成功的本地 `store` 会改变下一次 Semantic corpus hash，并触发相匹配的 search
+revision。Server 当前 Episode summary 变化也会改变统一 `MemoryCorpus` hash；两种来源
+共用一个 Project index，但各自保留 `memory_system`、authority 和 provenance。Commit
+sync 可以更新 current Commit、freshness 和候选有效性，但不能改写 Draft Base、操作、
+正文或 lifecycle。
 
 ## Commit 同步与恢复
 
@@ -105,7 +116,11 @@ Project Local Storage 是由规范 Server authority 和 `project_id` 定位的�
 
 Desktop 通过 `NSOpenPanel` 交付普通 bookmark；daemon 在自身签名身份下生成并持久化 security-scoped bookmark。它拒绝网络文件系统、符号链接、不安全嵌套、无效 marker、容量不足或不可写路径，目录/文件权限分别为 `0700`/`0600`。
 
-自定义位置不可用时，daemon 不回退默认缓存，也不在 generation 不完整时推进 Ref。Draft 和同步队列仍在中心 SQLite 运行，但 `activate`、`load` 和 checkout 返回明确的 storage/search readiness 错误。Clear Cache 只删除 marker 所属 generation、search 数据和 staging，不删除 Draft、设置、模型或管理子树外的文件。
+自定义位置不可用时，daemon 不回退默认缓存，也不在 generation 不完整时推进 Ref。Draft
+和同步队列仍在中心 SQLite 运行，但 `activate`、`load` 和 checkout 返回明确的
+storage/search readiness 错误。Clear Cache 只删除 marker 所属 generation、search 数据和
+staging，不删除 Draft、Episode 上传 outbox、设置、模型或管理子树外的文件。Server 已
+ACK 的 Episode summary 可再次同步，Evidence 详情始终从 Server 读取。
 
 ## Kanban 同步与 AgentRun
 
@@ -124,6 +139,31 @@ Issue 内容更新使用 Server `content_revision` CAS。begin/resume 在 Server
 
 当前 Kanban 没有像 Draft 那样的持久 outbox。这意味着部分 mutation 会先成功写入 `native_issues`，随后因 Server PUT/DELETE 失败而向调用方报错；后续 list 会重新以 Server snapshot 投影本地状态，失败的本地变化不会自动补发。claim release 失败时，租约可能保留到 `lease_expires_at`。这是当前已知恢复限制，不应描述为强离线同步保证。
 
+## AgentRun Episode 摄取与联合检索
+
+AgentRun 仍由 lifecycle Hook 记录。后台 worker 对已绑定 Project 的结束或恢复结束 root
+Run 扫描宿主源数据，以 `run_id` 为 Episode 边界；当前 Codex 路径使用
+`thread_history_1.sqlite` 中与 Hook `host_run_key=root:<turn_id>` 精确匹配的
+`thread_turns/thread_items`，保留 provider-native 有序 item，不另造 ProductionEvent。
+没有稳定映射的 subagent 不会被猜测性摄取。
+
+摄取把 manifest 与不超过 1 MiB 的 canonical Evidence BLOB 原子写入中心 SQLite 的同一
+outbox 行。manifest 和 Server 摘要副本都绑定 canonical Server URL 与 `project_id`，防止
+切换 Server 或 Project 时串读。Evidence hash 使用与 Server 相同的 canonical JSONL；网络
+中断、进程重启和重复扫描只会重试同一 `project_id + run_id + evidence_hash`。只有 Server
+已耐久 ACK 后才在同一行清空正文并保留 manifest；摘要暂不可用不会阻止 Evidence ACK。
+
+daemon 按 Project corpus revision 同步 Server 当前摘要。`NO_MEMORY` 与已删除 Episode 不
+进入索引；其他当前摘要和 Effective Memory 通过 `MemoryCorpus` 一次装配、使用同一物理
+索引。索引 fingerprint 只包含 corpus、解析/分块、embedding/tokenizer 等会改变物理索引
+的输入；BM25/RRF/reranker、候选数和预算属于 retrieval profile，单独变化不重算
+embedding。`memory.activate` 的结果以 `semantic|episodic`、`organization|project`
+区分来源；Episode 还返回 `episode_id`、源 `run_id`、`activity_at` 和 `evidence_hash`。
+
+`memory.evidence` 只接受 `episode_id` 和可选 cursor；daemon 从当前 binding 注入
+`project_id`，绕过通用 Server response cache，并让 Server 每次重验当前 membership。
+响应分页且限制字节，正文标记为不可信历史数据，不会被自动当作 Agent 指令执行。
+
 ## Activity / Recall 隐私边界
 
 Activity 是只读的本地诊断视图。daemon 只为已绑定工作目录读取：
@@ -133,7 +173,14 @@ Activity 是只读的本地诊断视图。daemon 只为已绑定工作目录读�
 
 投影会读取真实用户消息、`memory.activate` 的精确 query、tool result 和已返回 fragment，并可从本地 Retrieval Run 冻结快照打开当时的完整 fragment。它不导入通用聊天历史、assistant prose 或其他 tool，不修改日志、Memory、Issue 或 Retrieval Run。
 
-这些内容可能包含源代码、提示词和组织知识，因此只通过本机 XPC 暴露给 Desktop，不上传 Server，也不进入 Organization Memory。正常 App 列表从 binding 表枚举 workspace，完整历史片段读取也校验 Project；但底层 `ListRecallsRequest.workspace_root` 当前只规范化显式路径而未验证该路径已绑定，本机 XPC 调用方仍可读取对应日志投影。移除 binding 会让目录离开正常 Activity 列表，但在修复前不能视为所有底层列表调用都已撤销读取能力。完整格式、兼容解析和缺口见 [Activity](/recall)。
+Activity 投影本身仍只通过本机 XPC 暴露给 Desktop，不上传 Server，也不进入 Organization
+Memory。与之不同，Episode 摄取只截取已绑定 Project 的已结束 AgentRun Evidence，经过
+durable outbox 后进入受组织治理的 Server 长期数据；这不是把 Activity 页面或 whole
+Session 上传。正常 App 列表从 binding 表枚举 workspace，完整历史片段读取也校验
+Project；但底层 `ListRecallsRequest.workspace_root` 当前只规范化显式路径而未验证该路径
+已绑定，本机 XPC 调用方仍可读取对应日志投影。移除 binding 会让目录离开正常 Activity
+列表，但在修复前不能视为所有底层列表调用都已撤销读取能力。完整格式、兼容解析和缺口
+见 [Activity](/recall)。
 
 ## 诊断与验证
 

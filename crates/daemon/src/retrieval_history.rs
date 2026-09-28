@@ -10,6 +10,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use super::{DaemonError, DaemonState, MemoryKind, SourceLocator, SourceScope};
+use crate::search::{MemoryAuthority, MemorySystem};
 
 const RETRIEVAL_RUN_RETENTION_PER_PROJECT: i64 = 500;
 const RETRIEVAL_EXCERPT_CHARS: usize = 1_200;
@@ -183,6 +184,10 @@ pub struct RetrievalRun {
 pub struct RetrievalCandidate {
     pub unit_key: String,
     pub resource_id: String,
+    #[serde(default)]
+    pub memory_system: MemorySystem,
+    #[serde(default)]
+    pub authority: MemoryAuthority,
     pub scope: SourceScope,
     pub kind: MemoryKind,
     pub path: String,
@@ -190,6 +195,14 @@ pub struct RetrievalCandidate {
     pub locator: SourceLocator,
     pub content_hash: String,
     pub resource_content_hash: String,
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub activity_at: Option<String>,
+    #[serde(default)]
+    pub evidence_hash: Option<String>,
     pub token_count: u64,
     pub evidence_excerpt: String,
     pub exact_rank: Option<u64>,
@@ -293,6 +306,10 @@ pub struct EvaluationEvidence {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct EvaluationCorpusResource {
     pub resource_id: String,
+    #[serde(default)]
+    pub memory_system: MemorySystem,
+    #[serde(default)]
+    pub authority: MemoryAuthority,
     pub scope: SourceScope,
     pub kind: MemoryKind,
     pub path: String,
@@ -301,6 +318,14 @@ pub(crate) struct EvaluationCorpusResource {
     pub source_commit_id: Option<String>,
     pub draft_id: Option<String>,
     pub draft_revision: Option<String>,
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub activity_at: Option<String>,
+    #[serde(default)]
+    pub evidence_hash: Option<String>,
     pub preview: String,
 }
 
@@ -398,6 +423,8 @@ pub struct RetrievalBenchmarkReport {
 #[derive(Clone, Debug)]
 pub(crate) struct RetrievalCorpusResourceInput {
     pub resource_id: String,
+    pub memory_system: MemorySystem,
+    pub authority: MemoryAuthority,
     pub scope: SourceScope,
     pub kind: MemoryKind,
     pub path: String,
@@ -407,12 +434,18 @@ pub(crate) struct RetrievalCorpusResourceInput {
     pub source_commit_id: Option<String>,
     pub draft_id: Option<String>,
     pub draft_revision: Option<String>,
+    pub episode_id: Option<String>,
+    pub run_id: Option<String>,
+    pub activity_at: Option<String>,
+    pub evidence_hash: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct RetrievalCandidateInput {
     pub unit_key: String,
     pub resource_id: String,
+    pub memory_system: MemorySystem,
+    pub authority: MemoryAuthority,
     pub scope: SourceScope,
     pub kind: MemoryKind,
     pub path: String,
@@ -420,6 +453,10 @@ pub(crate) struct RetrievalCandidateInput {
     pub locator: SourceLocator,
     pub content_hash: String,
     pub resource_content_hash: String,
+    pub episode_id: Option<String>,
+    pub run_id: Option<String>,
+    pub activity_at: Option<String>,
+    pub evidence_hash: Option<String>,
     pub token_count: usize,
     pub evidence_excerpt: String,
     pub exact_rank: Option<usize>,
@@ -526,6 +563,10 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             candidate_order BIGINT NOT NULL CHECK (candidate_order >= 0),
             unit_key TEXT NOT NULL,
             resource_id TEXT NOT NULL,
+            memory_system TEXT NOT NULL DEFAULT 'semantic'
+                CHECK (memory_system IN ('semantic', 'episodic')),
+            authority TEXT NOT NULL DEFAULT 'organization'
+                CHECK (authority IN ('organization', 'project')),
             scope TEXT NOT NULL CHECK (scope IN ('org', 'project')),
             kind TEXT NOT NULL CHECK (kind IN ('context', 'rule', 'workflow', 'memory')),
             path TEXT NOT NULL,
@@ -533,6 +574,10 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             locator_json TEXT NOT NULL,
             content_hash TEXT NOT NULL,
             resource_content_hash TEXT NOT NULL,
+            episode_id TEXT,
+            episode_run_id TEXT,
+            activity_at TEXT,
+            evidence_hash TEXT,
             token_count BIGINT NOT NULL CHECK (token_count >= 0),
             evidence_excerpt TEXT NOT NULL,
             exact_rank BIGINT,
@@ -565,6 +610,10 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             run_id TEXT NOT NULL,
             resource_order BIGINT NOT NULL CHECK (resource_order >= 0),
             resource_id TEXT NOT NULL,
+            memory_system TEXT NOT NULL DEFAULT 'semantic'
+                CHECK (memory_system IN ('semantic', 'episodic')),
+            authority TEXT NOT NULL DEFAULT 'organization'
+                CHECK (authority IN ('organization', 'project')),
             scope TEXT NOT NULL CHECK (scope IN ('org', 'project')),
             kind TEXT NOT NULL CHECK (kind IN ('context', 'rule', 'workflow', 'memory')),
             path TEXT NOT NULL,
@@ -574,6 +623,10 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             source_commit_id TEXT,
             draft_id TEXT,
             draft_revision TEXT,
+            episode_id TEXT,
+            episode_run_id TEXT,
+            activity_at TEXT,
+            evidence_hash TEXT,
             PRIMARY KEY (run_id, resource_id)
         )",
         "CREATE TABLE IF NOT EXISTS evaluation_corpora (
@@ -586,6 +639,10 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             corpus_id TEXT NOT NULL,
             resource_order BIGINT NOT NULL CHECK (resource_order >= 0),
             resource_id TEXT NOT NULL,
+            memory_system TEXT NOT NULL DEFAULT 'semantic'
+                CHECK (memory_system IN ('semantic', 'episodic')),
+            authority TEXT NOT NULL DEFAULT 'organization'
+                CHECK (authority IN ('organization', 'project')),
             scope TEXT NOT NULL CHECK (scope IN ('org', 'project')),
             kind TEXT NOT NULL CHECK (kind IN ('context', 'rule', 'workflow', 'memory')),
             path TEXT NOT NULL,
@@ -595,6 +652,10 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             source_commit_id TEXT,
             draft_id TEXT,
             draft_revision TEXT,
+            episode_id TEXT,
+            episode_run_id TEXT,
+            activity_at TEXT,
+            evidence_hash TEXT,
             PRIMARY KEY (corpus_id, resource_id)
         )",
         "CREATE TABLE IF NOT EXISTS evaluation_cases (
@@ -623,6 +684,46 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
         )",
     ] {
         sqlx::query(statement).execute(pool).await?;
+    }
+    ensure_history_provenance_columns(pool).await?;
+    Ok(())
+}
+
+async fn ensure_history_provenance_columns(pool: &SqlitePool) -> Result<(), DaemonError> {
+    for table in [
+        "retrieval_run_candidates",
+        "retrieval_run_resources",
+        "evaluation_corpus_resources",
+    ] {
+        let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(pool)
+            .await?;
+        let names = columns
+            .iter()
+            .map(|row| row.get::<String, _>("name"))
+            .collect::<BTreeSet<_>>();
+        for (name, definition) in [
+            (
+                "memory_system",
+                "TEXT NOT NULL DEFAULT 'semantic' CHECK (memory_system IN ('semantic', 'episodic'))",
+            ),
+            (
+                "authority",
+                "TEXT NOT NULL DEFAULT 'organization' CHECK (authority IN ('organization', 'project'))",
+            ),
+            ("episode_id", "TEXT"),
+            ("episode_run_id", "TEXT"),
+            ("activity_at", "TEXT"),
+            ("evidence_hash", "TEXT"),
+        ] {
+            if !names.contains(name) {
+                sqlx::query(&format!(
+                    "ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                ))
+                .execute(pool)
+                .await?;
+            }
+        }
     }
     Ok(())
 }
@@ -962,13 +1063,20 @@ async fn insert_run_resources(
     for (index, resource) in resources.iter().enumerate() {
         sqlx::query(
             "INSERT INTO retrieval_run_resources (
-                run_id, resource_order, resource_id, scope, kind, path, title,
-                content_hash, content_preview, source_commit_id, draft_id, draft_revision
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                run_id, resource_order, resource_id, memory_system, authority,
+                scope, kind, path, title, content_hash, content_preview,
+                source_commit_id, draft_id, draft_revision,
+                episode_id, episode_run_id, activity_at, evidence_hash
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                $10, $11, $12, $13, $14, $15, $16, $17, $18
+             )",
         )
         .bind(run_id)
         .bind(usize_to_i64(index, "resource_order")?)
         .bind(&resource.resource_id)
+        .bind(resource.memory_system.as_str())
+        .bind(resource.authority.as_str())
         .bind(resource.scope.as_str())
         .bind(resource.kind.as_str())
         .bind(&resource.path)
@@ -978,6 +1086,10 @@ async fn insert_run_resources(
         .bind(&resource.source_commit_id)
         .bind(&resource.draft_id)
         .bind(&resource.draft_revision)
+        .bind(&resource.episode_id)
+        .bind(&resource.run_id)
+        .bind(&resource.activity_at)
+        .bind(&resource.evidence_hash)
         .execute(&mut **tx)
         .await?;
     }
@@ -992,22 +1104,27 @@ async fn insert_run_candidates(
     for (index, candidate) in candidates.iter().enumerate() {
         sqlx::query(
             "INSERT INTO retrieval_run_candidates (
-                run_id, candidate_order, unit_key, resource_id, scope, kind, path,
-                heading_path_json, locator_json, content_hash, resource_content_hash,
+                run_id, candidate_order, unit_key, resource_id, memory_system, authority,
+                scope, kind, path, heading_path_json, locator_json,
+                content_hash, resource_content_hash,
+                episode_id, episode_run_id, activity_at, evidence_hash,
                 token_count, evidence_excerpt,
                 exact_rank, bm25_rank, bm25_score, vector_rank, vector_score,
                 rrf_rank, rrf_score, reranker_rank, reranker_logit,
                 reranker_relevance, final_rank, selected, exclusion_reason, delta_action
              ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                $23, $24, $25, $26, $27
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                $21, $22, $23, $24, $25, $26, $27, $28, $29,
+                $30, $31, $32, $33
              )",
         )
         .bind(run_id)
         .bind(usize_to_i64(index, "candidate_order")?)
         .bind(&candidate.unit_key)
         .bind(&candidate.resource_id)
+        .bind(candidate.memory_system.as_str())
+        .bind(candidate.authority.as_str())
         .bind(candidate.scope.as_str())
         .bind(candidate.kind.as_str())
         .bind(&candidate.path)
@@ -1015,6 +1132,10 @@ async fn insert_run_candidates(
         .bind(serde_json::to_string(&candidate.locator)?)
         .bind(&candidate.content_hash)
         .bind(&candidate.resource_content_hash)
+        .bind(&candidate.episode_id)
+        .bind(&candidate.run_id)
+        .bind(&candidate.activity_at)
+        .bind(&candidate.evidence_hash)
         .bind(usize_to_i64(candidate.token_count, "token_count")?)
         .bind(truncate_excerpt(&candidate.evidence_excerpt))
         .bind(optional_usize_to_i64(candidate.exact_rank, "exact_rank")?)
@@ -1367,6 +1488,8 @@ fn candidate_from_row(row: sqlx::sqlite::SqliteRow) -> Result<RetrievalCandidate
     Ok(RetrievalCandidate {
         unit_key: row.try_get("unit_key")?,
         resource_id: row.try_get("resource_id")?,
+        memory_system: parse_memory_system(row.try_get::<String, _>("memory_system")?.as_str())?,
+        authority: parse_memory_authority(row.try_get::<String, _>("authority")?.as_str())?,
         scope: parse_scope(row.try_get::<String, _>("scope")?.as_str())?,
         kind: parse_kind(row.try_get::<String, _>("kind")?.as_str())?,
         path: row.try_get("path")?,
@@ -1376,6 +1499,10 @@ fn candidate_from_row(row: sqlx::sqlite::SqliteRow) -> Result<RetrievalCandidate
         locator: serde_json::from_str(row.try_get::<String, _>("locator_json")?.as_str())?,
         content_hash: row.try_get("content_hash")?,
         resource_content_hash: row.try_get("resource_content_hash")?,
+        episode_id: row.try_get("episode_id")?,
+        run_id: row.try_get("episode_run_id")?,
+        activity_at: row.try_get("activity_at")?,
+        evidence_hash: row.try_get("evidence_hash")?,
         token_count: non_negative_u64(row.try_get("token_count")?, "token_count")?,
         evidence_excerpt: row.try_get("evidence_excerpt")?,
         exact_rank: optional_non_negative_u64(row.try_get("exact_rank")?, "exact_rank")?,
@@ -1429,14 +1556,21 @@ pub(super) async fn create_evaluation_case(
     for resource in &run_resources {
         sqlx::query(
             "INSERT INTO evaluation_corpus_resources (
-                corpus_id, resource_order, resource_id, scope, kind, path, title,
-                content_hash, content_preview, source_commit_id, draft_id, draft_revision
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                corpus_id, resource_order, resource_id, memory_system, authority,
+                scope, kind, path, title, content_hash, content_preview,
+                source_commit_id, draft_id, draft_revision,
+                episode_id, episode_run_id, activity_at, evidence_hash
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                $10, $11, $12, $13, $14, $15, $16, $17, $18
+             )
              ON CONFLICT(corpus_id, resource_id) DO NOTHING",
         )
         .bind(&corpus_id)
         .bind(resource.resource_order)
         .bind(&resource.resource_id)
+        .bind(&resource.memory_system)
+        .bind(&resource.authority)
         .bind(&resource.scope)
         .bind(&resource.kind)
         .bind(&resource.path)
@@ -1446,6 +1580,10 @@ pub(super) async fn create_evaluation_case(
         .bind(&resource.source_commit_id)
         .bind(&resource.draft_id)
         .bind(&resource.draft_revision)
+        .bind(&resource.episode_id)
+        .bind(&resource.episode_run_id)
+        .bind(&resource.activity_at)
+        .bind(&resource.evidence_hash)
         .execute(&mut *tx)
         .await?;
     }
@@ -1645,6 +1783,8 @@ pub(super) async fn export_evaluation_set(
 struct RunResourceRow {
     resource_order: i64,
     resource_id: String,
+    memory_system: String,
+    authority: String,
     scope: String,
     kind: String,
     path: String,
@@ -1654,6 +1794,10 @@ struct RunResourceRow {
     source_commit_id: Option<String>,
     draft_id: Option<String>,
     draft_revision: Option<String>,
+    episode_id: Option<String>,
+    episode_run_id: Option<String>,
+    activity_at: Option<String>,
+    evidence_hash: Option<String>,
 }
 
 async fn load_run_resource_rows(
@@ -1661,8 +1805,10 @@ async fn load_run_resource_rows(
     run_id: &str,
 ) -> Result<Vec<RunResourceRow>, DaemonError> {
     let rows = sqlx::query(
-        "SELECT resource_order, resource_id, scope, kind, path, title, content_hash,
-                content_preview, source_commit_id, draft_id, draft_revision
+        "SELECT resource_order, resource_id, memory_system, authority, scope, kind,
+                path, title, content_hash, content_preview, source_commit_id,
+                draft_id, draft_revision, episode_id, episode_run_id,
+                activity_at, evidence_hash
          FROM retrieval_run_resources
          WHERE run_id = $1
          ORDER BY resource_order",
@@ -1675,6 +1821,8 @@ async fn load_run_resource_rows(
             Ok(RunResourceRow {
                 resource_order: row.try_get("resource_order")?,
                 resource_id: row.try_get("resource_id")?,
+                memory_system: row.try_get("memory_system")?,
+                authority: row.try_get("authority")?,
                 scope: row.try_get("scope")?,
                 kind: row.try_get("kind")?,
                 path: row.try_get("path")?,
@@ -1684,6 +1832,10 @@ async fn load_run_resource_rows(
                 source_commit_id: row.try_get("source_commit_id")?,
                 draft_id: row.try_get("draft_id")?,
                 draft_revision: row.try_get("draft_revision")?,
+                episode_id: row.try_get("episode_id")?,
+                episode_run_id: row.try_get("episode_run_id")?,
+                activity_at: row.try_get("activity_at")?,
+                evidence_hash: row.try_get("evidence_hash")?,
             })
         })
         .collect()
@@ -1762,8 +1914,9 @@ async fn load_corpus_resources(
     corpus_id: &str,
 ) -> Result<Vec<EvaluationCorpusResource>, DaemonError> {
     let rows = sqlx::query(
-        "SELECT resource_id, scope, kind, path, title, content_hash,
-                content_preview, source_commit_id, draft_id, draft_revision
+        "SELECT resource_id, memory_system, authority, scope, kind, path, title,
+                content_hash, content_preview, source_commit_id, draft_id, draft_revision,
+                episode_id, episode_run_id, activity_at, evidence_hash
          FROM evaluation_corpus_resources
          WHERE corpus_id = $1
          ORDER BY resource_order",
@@ -1775,6 +1928,10 @@ async fn load_corpus_resources(
         .map(|row| {
             Ok(EvaluationCorpusResource {
                 resource_id: row.try_get("resource_id")?,
+                memory_system: parse_memory_system(
+                    row.try_get::<String, _>("memory_system")?.as_str(),
+                )?,
+                authority: parse_memory_authority(row.try_get::<String, _>("authority")?.as_str())?,
                 scope: parse_scope(row.try_get::<String, _>("scope")?.as_str())?,
                 kind: parse_kind(row.try_get::<String, _>("kind")?.as_str())?,
                 path: row.try_get("path")?,
@@ -1783,6 +1940,10 @@ async fn load_corpus_resources(
                 source_commit_id: row.try_get("source_commit_id")?,
                 draft_id: row.try_get("draft_id")?,
                 draft_revision: row.try_get("draft_revision")?,
+                episode_id: row.try_get("episode_id")?,
+                run_id: row.try_get("episode_run_id")?,
+                activity_at: row.try_get("activity_at")?,
+                evidence_hash: row.try_get("evidence_hash")?,
                 preview: row.try_get("content_preview")?,
             })
         })
@@ -2317,6 +2478,26 @@ fn parse_kind(value: &str) -> Result<MemoryKind, DaemonError> {
     }
 }
 
+fn parse_memory_system(value: &str) -> Result<MemorySystem, DaemonError> {
+    match value {
+        "semantic" => Ok(MemorySystem::Semantic),
+        "episodic" => Ok(MemorySystem::Episodic),
+        _ => Err(history_corrupt(format!(
+            "Unknown Retrieval Run memory system: {value}"
+        ))),
+    }
+}
+
+fn parse_memory_authority(value: &str) -> Result<MemoryAuthority, DaemonError> {
+    match value {
+        "organization" => Ok(MemoryAuthority::Organization),
+        "project" => Ok(MemoryAuthority::Project),
+        _ => Err(history_corrupt(format!(
+            "Unknown Retrieval Run memory authority: {value}"
+        ))),
+    }
+}
+
 fn elapsed_us(started: std::time::Instant) -> u64 {
     started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
@@ -2416,6 +2597,8 @@ mod tests {
                 RetrievalCandidateInput {
                     unit_key: unit_key.to_owned(),
                     resource_id: "memory-1".to_owned(),
+                    memory_system: MemorySystem::Semantic,
+                    authority: MemoryAuthority::Organization,
                     scope: SourceScope::Project,
                     kind: MemoryKind::Memory,
                     path: "memory/history.md".to_owned(),
@@ -2427,6 +2610,10 @@ mod tests {
                     },
                     content_hash: content_hash(text),
                     resource_content_hash: frozen_hash.clone(),
+                    episode_id: None,
+                    run_id: None,
+                    activity_at: None,
+                    evidence_hash: None,
                     token_count: 5,
                     evidence_excerpt: text.to_owned(),
                     exact_rank: None,
@@ -2454,6 +2641,8 @@ mod tests {
             RetrievalRunCompletion {
                 resources: vec![RetrievalCorpusResourceInput {
                     resource_id: "memory-1".to_owned(),
+                    memory_system: MemorySystem::Semantic,
+                    authority: MemoryAuthority::Organization,
                     scope: SourceScope::Project,
                     kind: MemoryKind::Memory,
                     path: "memory/history.md".to_owned(),
@@ -2463,6 +2652,10 @@ mod tests {
                     source_commit_id: None,
                     draft_id: None,
                     draft_revision: None,
+                    episode_id: None,
+                    run_id: None,
+                    activity_at: None,
+                    evidence_hash: None,
                 }],
                 candidates: vec![
                     candidate(
@@ -2588,6 +2781,8 @@ mod tests {
     fn scope_violation_and_stale_result_have_independent_semantics() {
         let corpus = vec![EvaluationCorpusResource {
             resource_id: "context-1".to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Organization,
             scope: SourceScope::Project,
             kind: MemoryKind::Memory,
             path: "context/one.md".to_owned(),
@@ -2596,6 +2791,10 @@ mod tests {
             source_commit_id: Some("commit-1".to_owned()),
             draft_id: None,
             draft_revision: None,
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
             preview: "Current content".to_owned(),
         }];
 
@@ -2627,10 +2826,32 @@ mod tests {
         assert_eq!(out_of_scope.stale_result, 0.0);
     }
 
+    #[test]
+    fn legacy_candidate_json_defaults_to_semantic_organization_provenance() {
+        let mut value = serde_json::to_value(candidate("context-1", "sha256:current")).unwrap();
+        let object = value.as_object_mut().unwrap();
+        for field in [
+            "memory_system",
+            "authority",
+            "episode_id",
+            "run_id",
+            "activity_at",
+            "evidence_hash",
+        ] {
+            object.remove(field);
+        }
+        let candidate: RetrievalCandidate = serde_json::from_value(value).unwrap();
+        assert_eq!(candidate.memory_system, MemorySystem::Semantic);
+        assert_eq!(candidate.authority, MemoryAuthority::Organization);
+        assert!(candidate.episode_id.is_none());
+    }
+
     fn candidate(resource_id: &str, resource_content_hash: &str) -> RetrievalCandidate {
         RetrievalCandidate {
             unit_key: format!("{resource_id}:unit"),
             resource_id: resource_id.to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Organization,
             scope: SourceScope::Project,
             kind: MemoryKind::Memory,
             path: format!("context/{resource_id}.md"),
@@ -2642,6 +2863,10 @@ mod tests {
             },
             content_hash: "sha256:unit".to_owned(),
             resource_content_hash: resource_content_hash.to_owned(),
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
             token_count: 1,
             evidence_excerpt: "content".to_owned(),
             exact_rank: None,

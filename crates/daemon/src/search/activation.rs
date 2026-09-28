@@ -134,10 +134,16 @@ pub(super) fn activation_response(
             unit_key: candidate.row.unit_key.clone(),
             content_hash: candidate.row.text_hash.clone(),
             resource_id: candidate.row.resource_id.clone(),
+            memory_system: candidate.row.memory_system,
+            authority: candidate.row.authority,
             scope: candidate.row.scope,
             kind: candidate.row.kind,
             path: candidate.row.path.clone(),
             heading_path: candidate.row.heading_path.clone(),
+            episode_id: candidate.row.episode_id.clone(),
+            run_id: candidate.row.run_id.clone(),
+            activity_at: candidate.row.activity_at.clone(),
+            evidence_hash: candidate.row.evidence_hash.clone(),
             content: (action != ActivationAction::Reuse).then(|| candidate.row.text.clone()),
         });
     }

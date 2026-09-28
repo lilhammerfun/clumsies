@@ -14,9 +14,10 @@ Server 负责：
 - Draft、操作历史、有序多 Draft Review、决定、评论和原子合并；
 - 不可变 Blob、Tree、Commit、Organization 权威 Ref 与 Project 投影 Ref；
 - Server 共享的 Kanban Issue、成员 assignee、短期 lease claim；
+- Project Episode、不可变 Evidence、版本化摘要与 Project 摘要策略；
 - 管理配置、token 撤销、审计事件和健康检查。
 
-Server 不负责本机工作目录、目录到 Project 的绑定、macOS bookmark、检索模型和 Project Local Storage。这些状态属于 daemon。Desktop 和 MCP 只能先把 Draft 写入 daemon，再由 daemon 同步；客户端不能绕过 Draft/Review 直接修改 Memory 权威。AgentRun 也是本地执行遥测，不会因为 Server 上存在 claim 就变成共享权威对象。
+Server 不负责本机工作目录、目录到 Project 的绑定、macOS bookmark、检索模型和 Project Local Storage。这些状态属于 daemon。Desktop 和 MCP 只能先把 Draft 写入 daemon，再由 daemon 同步；客户端不能绕过 Draft/Review 直接修改 Memory 权威。AgentRun 仍是本地执行遥测；只有结束或恢复结束的已绑定 root AgentRun 被摄取后，才会派生出独立的 Server `ProjectEpisode`，二者不能混用。
 
 ## Memory 权威与版本模型
 
@@ -60,6 +61,35 @@ reconciliation 候选绑定 Draft ID、Draft version、Base Commit 和 Current C
 
 `issue_claims` 是带到期时间的执行租约，以 `(project_id, issue_id)` 唯一。Server 只允许当前 claimant/run 续租或释放；未过期的其他 claim 会阻止并发认领。daemon 的 `native_issues` 是本地副本和离线执行状态，AgentRun 保持本地。共享 Issue、claim 与本地投影的具体运行语义见 [Issue 看板设计](/issue-board-design)。
 
+## Project Episodic Memory
+
+`ProjectEpisode` 以 `project_id + run_id` 为身份边界，保存宿主、Session 分组、源活动时间、
+Evidence 格式、hash、状态及当前摘要 revision。`EpisodeEvidence` 按源顺序作为 PostgreSQL
+`TEXT` 记录保存，由 PostgreSQL TOAST 管理大值压缩；它不是 Project Local Storage 或某台
+daemon 的私有归档。每个 Episode 最多 50,000 条、canonical JSONL 最多 1,000,000 bytes。
+
+Finalize 使用 `project_id + run_id + evidence_hash` 幂等：相同内容返回同一 Episode；同一
+Run 的身份、格式或 hash 冲突会显式失败。Server 先事务性保存 Evidence，再运行摘要。
+摘要 revision 永远绑定该次 `evidence_hash`、固定 `summary_algorithm_revision` 和 Project
+policy revision；无长期检索价值时保存 `NO_MEMORY`，Evidence 仍可核验或以后重建。
+
+摘要引擎的 system constraints 固定在 Server，Evidence 始终作为不可信输入；Project
+policy 只能补充重点、详细程度和术语，不能覆盖安全与事实约束。修改 policy 只影响以后
+生成的摘要；预览不持久化，旧摘要只有显式 rebuild 才更新，`activity_at` 始终来自源活动。
+启用 Responses-compatible executor 会把该 Episode Evidence 发送到组织配置的 provider；
+请求携带 `store: false`，但组织仍须把该 provider 纳入自身的数据处理与合规边界。
+
+Project 成员可列出 Episode 和分页读取 Evidence；默认列表是带删除 tombstone 的增量
+change feed，`recent=true` 返回按活动时间倒序的当前 Episode。policy 修改、预览、重建和
+删除使用 Project 管理权限。Evidence cursor 是 `sequence:byte_offset`，每页限制 1–200 个
+segment，`max_bytes` 约束最终序列化 JSON 响应的 256–262,144 bytes；巨型 UTF-8 记录跨页
+继续而不静默截断。每次读取留下不含正文的审计记录，响应明确携带 `untrusted: true`。删除
+在同一事务内写 tombstone、推进 corpus
+revision 并清除 Evidence/摘要正文，随后详情返回 404；Project 删除通过外键级联。
+第一版的保留策略是明确的长期保留：在 Organization 管理员删除 Episode 或删除其 Project
+之前不自动过期。它不另设尚无实际策略需求的定时清理器；数据库备份与恢复覆盖这段完整
+生命周期。
+
 ## HTTP 契约
 
 | 契约 | 范围 |
@@ -102,6 +132,18 @@ bun run dev:infra:down
 复制 `.env.example` 为 `.env`，配置 Organization OIDC，并启动 `compose.production.yml`。`CLUMSIES_PUBLIC_ORIGIN` 必须是 Server 的规范 HTTPS origin；在 IdP 注册由它派生的 `/login/oauth2/code/oidc`。同一 origin 提供 Public API、Admin API、Web Admin 和 OIDC callback。
 
 OIDC 变量为空时，Server 为基础设施诊断仍可启动，但 health 会把 OIDC 标为 `down`，登录不可用；这不是可用的生产状态。
+
+Episode Evidence 不需要额外对象存储服务，随 PostgreSQL 一起备份恢复。启用内置摘要
+执行器时配置：
+
+| 变量 | 含义 |
+| --- | --- |
+| `CLUMSIES_EPISODE_SUMMARY_API_KEY` | Responses-compatible API key；缺失或为空时禁用自动摘要，finalize 仍耐久 ACK 并保持 `pending_summary` |
+| `CLUMSIES_EPISODE_SUMMARY_MODEL` | 启用摘要时必填的模型名 |
+| `CLUMSIES_EPISODE_SUMMARY_BASE_URL` | 可选，默认 `https://api.openai.com/v1`；Server 固定调用 `<base>/responses` |
+
+未配置摘要执行器不会丢弃 Evidence；配置恢复后可从 Desktop 对 pending Episode 显式
+rebuild。第一版没有模型选择器、prompt/storage plugin 或多阶段摘要 DAG。
 
 ## 验证
 

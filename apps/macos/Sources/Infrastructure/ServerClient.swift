@@ -76,6 +76,21 @@ struct ServerClient: Sendable {
         )
     }
 
+    func send<Response: Decodable & Sendable>(
+        method: String,
+        path: String,
+        query: [URLQueryItem] = [],
+        headers: [String: String] = [:]
+    ) async throws -> Response {
+        try await request(
+            method: method,
+            path: path,
+            query: query,
+            headers: headers,
+            body: nil
+        )
+    }
+
     func raw(
         method: String,
         path: String,

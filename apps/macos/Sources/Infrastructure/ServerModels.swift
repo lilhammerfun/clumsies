@@ -467,6 +467,100 @@ struct DeleteResult: Codable, Sendable {
     let id: String
 }
 
+enum ProjectEpisodeStatus: String, Codable, Sendable {
+    case pendingSummary = "pending_summary"
+    case active
+    case noMemory = "no_memory"
+    case deleted
+}
+
+struct ProjectEpisodeSummary: Codable, Hashable, Sendable {
+    let revision: Int
+    let summaryAlgorithmRevision: String
+    let policyRevision: Int
+    let evidenceHash: String
+    let body: String
+    let noMemory: Bool
+    let createdAt: String
+}
+
+struct ProjectEpisode: Codable, Identifiable, Hashable, Sendable {
+    var id: String { episodeId }
+
+    let episodeId: String
+    let projectId: String
+    let runId: String
+    let hostSessionId: String?
+    let host: String
+    let evidenceFormat: String
+    let evidenceFormatRevision: Int
+    let activityAt: String
+    let evidenceHash: String
+    let evidenceBytes: Int
+    let status: ProjectEpisodeStatus
+    let currentSummary: ProjectEpisodeSummary?
+    let revision: Int
+    let corpusRevision: Int
+    let createdAt: String
+    let updatedAt: String
+    let deletedAt: String?
+}
+
+struct ProjectEpisodeListResponse: Codable, Sendable {
+    let items: [ProjectEpisode]
+    let corpusRevision: Int
+    let nextCursor: Int?
+    let hasMore: Bool
+}
+
+struct ProjectEpisodeSummaryPolicy: Codable, Sendable {
+    let projectId: String
+    let instructions: String
+    let revision: Int
+    let updatedAt: String
+}
+
+struct UpdateProjectEpisodeSummaryPolicyRequest: Codable, Sendable {
+    let instructions: String
+}
+
+struct ProjectEpisodeSummaryPreviewRequest: Codable, Sendable {
+    let instructions: String?
+}
+
+struct ProjectEpisodeSummaryPreview: Codable, Identifiable, Sendable {
+    var id: String { episodeId }
+
+    let episodeId: String
+    let evidenceHash: String
+    let summaryAlgorithmRevision: String
+    let policyRevision: Int
+    let body: String
+    let noMemory: Bool
+}
+
+struct ProjectEpisodeEvidenceItem: Codable, Identifiable, Sendable {
+    var id: String { "\(sequence):\(byteOffset)" }
+
+    let sequence: Int
+    let occurredAt: String
+    let kind: String
+    let byteOffset: Int
+    let content: String
+    let complete: Bool
+}
+
+struct ProjectEpisodeEvidencePage: Codable, Sendable {
+    let episodeId: String
+    let projectId: String
+    let runId: String
+    let evidenceHash: String
+    let items: [ProjectEpisodeEvidenceItem]
+    let nextCursor: String?
+    let hasMore: Bool
+    let untrusted: Bool
+}
+
 struct TokenResponse: Codable, Sendable {
     let accessToken: String
     let refreshToken: String

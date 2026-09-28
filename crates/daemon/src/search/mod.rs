@@ -47,6 +47,40 @@ impl MemoryKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySystem {
+    #[default]
+    Semantic,
+    Episodic,
+}
+
+impl MemorySystem {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Semantic => "semantic",
+            Self::Episodic => "episodic",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryAuthority {
+    #[default]
+    Organization,
+    Project,
+}
+
+impl MemoryAuthority {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Organization => "organization",
+            Self::Project => "project",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceScope {
@@ -86,6 +120,8 @@ impl SourceLocator {
 pub(crate) struct SourceResource {
     pub(crate) resource_id: String,
     pub(crate) project_id: String,
+    pub(crate) memory_system: MemorySystem,
+    pub(crate) authority: MemoryAuthority,
     pub(crate) scope: SourceScope,
     pub(crate) kind: MemoryKind,
     pub(crate) path: String,
@@ -96,6 +132,10 @@ pub(crate) struct SourceResource {
     pub(crate) source_commit_id: Option<String>,
     pub(crate) draft_id: Option<String>,
     pub(crate) draft_revision: Option<String>,
+    pub(crate) episode_id: Option<String>,
+    pub(crate) run_id: Option<String>,
+    pub(crate) activity_at: Option<String>,
+    pub(crate) evidence_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,10 +183,22 @@ pub struct ActivationFragment {
     pub unit_key: String,
     pub content_hash: String,
     pub resource_id: String,
+    #[serde(default)]
+    pub memory_system: MemorySystem,
+    #[serde(default)]
+    pub authority: MemoryAuthority,
     pub scope: SourceScope,
     pub kind: MemoryKind,
     pub path: String,
     pub heading_path: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
 }
@@ -217,6 +269,13 @@ pub struct SearchIndexStatus {
 pub(crate) struct EffectiveMemory {
     pub(crate) project_id: String,
     pub(crate) effective_hash: String,
+    pub(crate) resources: Arc<[SourceResource]>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MemoryCorpus {
+    pub(crate) project_id: String,
+    pub(crate) corpus_hash: String,
     pub(crate) resources: Arc<[SourceResource]>,
 }
 
@@ -547,8 +606,22 @@ pub(crate) async fn activate_memory(
         )
         .await?;
         require_ready_memory_cache(cache, &project_id)?;
-        let (pool, _storage) = active_project_index(state, &project_id).await?;
-        let Some(revision_id) = index::ready_index_revision(state, &pool, &project_id).await?
+        let (pool, storage) = active_project_index(state, &project_id).await?;
+        let logical_revision: Option<String> = sqlx::query_scalar(
+            "SELECT h.revision_id
+             FROM search_heads h
+             JOIN search_index_jobs j ON j.project_id = h.project_id
+             WHERE h.project_id = $1 AND h.status = 'ready'
+               AND h.location_revision = $2
+               AND j.active_revision = h.revision_id",
+        )
+        .bind(&project_id)
+        .bind(storage.location_revision)
+        .fetch_optional(&state.inner.pool)
+        .await?;
+        let physical_revision = index::ready_index_revision(state, &pool, &project_id).await?;
+        let Some(revision_id) =
+            logical_revision.filter(|revision| physical_revision.as_ref() == Some(revision))
         else {
             pool.close().await;
             drop(_storage_guard);
@@ -678,8 +751,9 @@ async fn indexed_corpus(
     .fetch_one(pool)
     .await?;
     let rows = sqlx::query(
-        "SELECT resource_id, scope, kind, path, title, content, content_hash,
-                source_commit_id, draft_id, draft_revision
+        "SELECT resource_id, memory_system, authority, scope, kind, path, title,
+                content, content_hash, source_commit_id, draft_id, draft_revision,
+                episode_id, run_id, activity_at, evidence_hash
          FROM search_resources WHERE revision_id = $1 ORDER BY resource_id",
     )
     .bind(revision_id)
@@ -695,6 +769,8 @@ async fn indexed_corpus(
             })?;
             Ok(RetrievalCorpusResourceInput {
                 resource_id: row.try_get("resource_id")?,
+                memory_system: parse_memory_system(&row.try_get::<String, _>("memory_system")?)?,
+                authority: parse_memory_authority(&row.try_get::<String, _>("authority")?)?,
                 scope,
                 kind,
                 path: row.try_get("path")?,
@@ -704,6 +780,10 @@ async fn indexed_corpus(
                 source_commit_id: row.try_get("source_commit_id")?,
                 draft_id: row.try_get("draft_id")?,
                 draft_revision: row.try_get("draft_revision")?,
+                episode_id: row.try_get("episode_id")?,
+                run_id: row.try_get("run_id")?,
+                activity_at: row.try_get("activity_at")?,
+                evidence_hash: row.try_get("evidence_hash")?,
             })
         })
         .collect::<Result<Vec<_>, DaemonError>>()?;
@@ -793,7 +873,7 @@ pub(crate) async fn search_index_status(
     // completed. A storage move takes the write side before switching or
     // cleaning the source tree.
     let _storage_guard = state.inner.storage_access.read().await;
-    let effective = load_effective_memory_under_storage_guard(state, &request.project_id).await?;
+    let corpus = load_memory_corpus_under_storage_guard(state, &request.project_id).await?;
     let (pool, _storage) = active_project_index(state, &request.project_id).await?;
     let row = sqlx::query(
         "SELECT r.revision_id, r.effective_hash, r.status, r.last_error
@@ -840,17 +920,17 @@ pub(crate) async fn search_index_status(
          LIMIT 1",
     )
     .bind(&request.project_id)
-    .bind(&effective.effective_hash)
+    .bind(&corpus.corpus_hash)
     .fetch_optional(&pool)
     .await?
     .flatten();
     let ready = revision_ready
-        && active_effective_hash.as_deref() == Some(effective.effective_hash.as_str())
+        && active_effective_hash.as_deref() == Some(corpus.corpus_hash.as_str())
         && compatible_revision.as_deref() == active_revision.as_deref();
     let job = scheduler::status(state, &request.project_id).await?;
     let status = SearchIndexStatus {
         project_id: request.project_id,
-        effective_hash: effective.effective_hash,
+        effective_hash: corpus.corpus_hash,
         active_revision,
         active_effective_hash,
         ready,
@@ -883,6 +963,57 @@ pub(crate) async fn load_effective_memory(
 ) -> Result<EffectiveMemory, DaemonError> {
     let _storage_guard = state.inner.storage_access.read().await;
     load_effective_memory_under_storage_guard(state, project_id).await
+}
+
+pub(crate) async fn load_memory_corpus(
+    state: &DaemonState,
+    project_id: &str,
+) -> Result<MemoryCorpus, DaemonError> {
+    let _storage_guard = state.inner.storage_access.read().await;
+    load_memory_corpus_under_storage_guard(state, project_id).await
+}
+
+async fn load_memory_corpus_under_storage_guard(
+    state: &DaemonState,
+    project_id: &str,
+) -> Result<MemoryCorpus, DaemonError> {
+    let effective = load_effective_memory_under_storage_guard(state, project_id).await?;
+    if effective.project_id != project_id {
+        return Err(
+            SearchFailure::failed("Effective Memory belongs to a different Project").into(),
+        );
+    }
+    let mut resources = effective.resources.to_vec();
+    for episode in crate::episode::current_summaries(state, project_id).await? {
+        let content_hash = sha256(&episode.body);
+        resources.push(SourceResource {
+            resource_id: episode_resource_id(&episode.episode_id),
+            project_id: project_id.to_owned(),
+            memory_system: MemorySystem::Episodic,
+            authority: MemoryAuthority::Project,
+            scope: SourceScope::Project,
+            kind: MemoryKind::Memory,
+            path: format!("episodes/{}", episode.episode_id),
+            title: markdown_title(&episode.body)
+                .unwrap_or_else(|| format!("Project episode {}", episode.activity_at)),
+            description: String::new(),
+            content: episode.body,
+            content_hash,
+            source_commit_id: None,
+            draft_id: None,
+            draft_revision: None,
+            episode_id: Some(episode.episode_id),
+            run_id: Some(episode.run_id),
+            activity_at: Some(episode.activity_at),
+            evidence_hash: Some(episode.evidence_hash),
+        });
+    }
+    let corpus_hash = memory_corpus_hash(project_id, &effective.effective_hash, &resources);
+    Ok(MemoryCorpus {
+        project_id: effective.project_id,
+        corpus_hash,
+        resources: resources.into(),
+    })
 }
 
 async fn load_effective_memory_under_storage_guard(
@@ -955,6 +1086,8 @@ async fn load_effective_memory_under_storage_guard(
                     source: SourceResource {
                         resource_id: entry.id,
                         project_id: project_id.to_owned(),
+                        memory_system: MemorySystem::Semantic,
+                        authority: MemoryAuthority::Organization,
                         scope,
                         kind,
                         path,
@@ -965,6 +1098,10 @@ async fn load_effective_memory_under_storage_guard(
                         source_commit_id: Some(base_commit_id.to_owned()),
                         draft_id: None,
                         draft_revision: None,
+                        episode_id: None,
+                        run_id: None,
+                        activity_at: None,
+                        evidence_hash: None,
                     },
                 },
             );
@@ -1051,6 +1188,22 @@ pub(super) fn parse_memory_kind(value: &str) -> Option<MemoryKind> {
     }
 }
 
+pub(super) fn parse_memory_system(value: &str) -> Result<MemorySystem, DaemonError> {
+    match value {
+        "semantic" => Ok(MemorySystem::Semantic),
+        "episodic" => Ok(MemorySystem::Episodic),
+        _ => Err(SearchFailure::failed(format!("unknown memory system: {value}")).into()),
+    }
+}
+
+pub(super) fn parse_memory_authority(value: &str) -> Result<MemoryAuthority, DaemonError> {
+    match value {
+        "organization" => Ok(MemoryAuthority::Organization),
+        "project" => Ok(MemoryAuthority::Project),
+        _ => Err(SearchFailure::failed(format!("unknown memory authority: {value}")).into()),
+    }
+}
+
 pub(super) fn markdown_title(content: &str) -> Option<String> {
     let mut in_heading = false;
     let mut title = String::new();
@@ -1103,6 +1256,48 @@ fn effective_memory_hash(
             resource.content_hash.as_str(),
             resource.draft_id.as_deref().unwrap_or_default(),
             resource.draft_revision.as_deref().unwrap_or_default(),
+        ] {
+            hasher.update(value.as_bytes());
+            hasher.update([0]);
+        }
+    }
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn episode_resource_id(episode_id: &str) -> String {
+    format!("episode:{episode_id}")
+}
+
+fn memory_corpus_hash(
+    project_id: &str,
+    effective_hash: &str,
+    resources: &[SourceResource],
+) -> String {
+    let mut ordered = resources.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.resource_id.cmp(&right.resource_id));
+    let mut hasher = Sha256::new();
+    for value in [project_id, effective_hash] {
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    for resource in ordered {
+        for value in [
+            resource.resource_id.as_str(),
+            resource.memory_system.as_str(),
+            resource.authority.as_str(),
+            resource.kind.as_str(),
+            resource.scope.as_str(),
+            resource.path.as_str(),
+            resource.title.as_str(),
+            resource.description.as_str(),
+            resource.content_hash.as_str(),
+            resource.source_commit_id.as_deref().unwrap_or_default(),
+            resource.draft_id.as_deref().unwrap_or_default(),
+            resource.draft_revision.as_deref().unwrap_or_default(),
+            resource.episode_id.as_deref().unwrap_or_default(),
+            resource.run_id.as_deref().unwrap_or_default(),
+            resource.activity_at.as_deref().unwrap_or_default(),
+            resource.evidence_hash.as_deref().unwrap_or_default(),
         ] {
             hasher.update(value.as_bytes());
             hasher.update([0]);
@@ -1365,6 +1560,8 @@ mod tests {
                 rowid: 1,
                 unit_key: unit_key.to_owned(),
                 resource_id: resource_id.to_owned(),
+                memory_system: MemorySystem::Semantic,
+                authority: MemoryAuthority::Organization,
                 scope: SourceScope::Project,
                 kind: MemoryKind::Memory,
                 path: format!("context/{resource_id}.md"),
@@ -1378,6 +1575,10 @@ mod tests {
                 text: unit_key.to_owned(),
                 text_hash: sha256(unit_key),
                 resource_content_hash: sha256(unit_key),
+                episode_id: None,
+                run_id: None,
+                activity_at: None,
+                evidence_hash: None,
                 token_count,
                 vector: vec![1.0, 0.0, 0.0],
             },
@@ -1737,6 +1938,147 @@ mod tests {
         .await
         .unwrap();
         (temp, state)
+    }
+
+    #[tokio::test]
+    async fn memory_corpus_adds_only_current_project_episode_summaries() {
+        let (_temp, state) = test_state_with_models(Arc::new(DeterministicModels)).await;
+        for (server_url, episode_id, status, body) in [
+            (
+                "https://clumsies.test",
+                "episode_current",
+                "active",
+                Some("# Episode\n\nImplemented durable project recall."),
+            ),
+            (
+                "https://clumsies.test",
+                "episode_no_memory",
+                "no_memory",
+                None,
+            ),
+            (
+                "https://other.test",
+                "episode_other_server",
+                "active",
+                Some("Must stay isolated."),
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO current_episode_summaries (
+                    server_url, episode_id, project_id, run_id, activity_at,
+                    evidence_hash, status, episode_revision, corpus_revision,
+                    summary_revision, summary_algorithm_revision, policy_revision,
+                    body, summary_created_at, updated_at
+                 ) VALUES ($1, $2, 'prj_test', 'arun_test', '2026-08-30T00:00:00Z',
+                           'sha256:evidence', $3, 1, 1, $4, $5, $6, $7,
+                           '2026-08-30T00:00:01Z', '2026-08-30T00:00:01Z')",
+            )
+            .bind(server_url)
+            .bind(episode_id)
+            .bind(status)
+            .bind(body.map(|_| 1_i64))
+            .bind(body.map(|_| "summary.v1"))
+            .bind(body.map(|_| 1_i64))
+            .bind(body)
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        }
+
+        let effective = load_effective_memory(&state, "prj_test").await.unwrap();
+        let corpus = load_memory_corpus(&state, "prj_test").await.unwrap();
+        assert_eq!(corpus.resources.len(), effective.resources.len() + 1);
+        assert_ne!(corpus.corpus_hash, effective.effective_hash);
+        let episode = corpus
+            .resources
+            .iter()
+            .find(|resource| resource.memory_system == MemorySystem::Episodic)
+            .unwrap();
+        assert_eq!(episode.resource_id, "episode:episode_current");
+        assert_eq!(episode.authority, MemoryAuthority::Project);
+        assert_eq!(episode.episode_id.as_deref(), Some("episode_current"));
+        assert_eq!(episode.run_id.as_deref(), Some("arun_test"));
+        assert_eq!(episode.evidence_hash.as_deref(), Some("sha256:evidence"));
+        assert!(
+            corpus
+                .resources
+                .iter()
+                .filter(|resource| resource.memory_system == MemorySystem::Semantic)
+                .all(|resource| resource.authority == MemoryAuthority::Organization)
+        );
+    }
+
+    #[tokio::test]
+    async fn purged_episode_projection_cannot_use_the_old_head_before_rebuild() {
+        let (_temp, state) = test_state_with_models(Arc::new(DeterministicModels)).await;
+        sqlx::query(
+            "INSERT INTO current_episode_summaries (
+                server_url, episode_id, project_id, run_id, activity_at,
+                evidence_hash, status, episode_revision, corpus_revision,
+                summary_revision, summary_algorithm_revision, policy_revision,
+                body, summary_created_at, updated_at
+             ) VALUES (
+                'https://clumsies.test', 'episode_purged', 'prj_test', 'arun_test',
+                '2026-08-30T00:00:00Z', 'sha256:evidence', 'active', 1, 1, 1,
+                'summary.v1', 1, '# Episode\n\nImplemented durable project recall.',
+                '2026-08-30T00:00:01Z', '2026-08-30T00:00:01Z'
+             )",
+        )
+        .execute(&state.inner.pool)
+        .await
+        .unwrap();
+
+        let worker = state.start_search_index_worker();
+        scheduler::enqueue_project(&state, "prj_test")
+            .await
+            .unwrap();
+        wait_for_index_job(&state, "ready").await;
+        let before = state
+            .activate_memory(ActivateMemoryRequest {
+                project_id: "prj_test".to_owned(),
+                query: "durable project recall".to_owned(),
+                state: None,
+            })
+            .await
+            .unwrap();
+        assert!(before.fragments.iter().any(|fragment| {
+            fragment.resource_id == "episode:episode_purged"
+                && fragment.memory_system == MemorySystem::Episodic
+        }));
+        worker.abort();
+        let _ = worker.await;
+
+        assert!(
+            crate::episode::purge_project_summaries(&state, "https://clumsies.test", "prj_test")
+                .await
+                .unwrap()
+        );
+        let central_head: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM search_heads WHERE project_id = 'prj_test'")
+                .fetch_one(&state.inner.pool)
+                .await
+                .unwrap();
+        let active_revision: Option<String> = sqlx::query_scalar(
+            "SELECT active_revision FROM search_index_jobs WHERE project_id = 'prj_test'",
+        )
+        .fetch_one(&state.inner.pool)
+        .await
+        .unwrap();
+        assert_eq!(central_head, 0);
+        assert!(active_revision.is_none());
+
+        let error = state
+            .activate_memory(ActivateMemoryRequest {
+                project_id: "prj_test".to_owned(),
+                query: "durable project recall".to_owned(),
+                state: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DaemonError::Search { ref code, .. } if code == "search_index_preparing"
+        ));
     }
 
     #[tokio::test]
@@ -2858,6 +3200,8 @@ mod tests {
                 source: SourceResource {
                     resource_id: "ctx_target".to_owned(),
                     project_id: "prj_test".to_owned(),
+                    memory_system: MemorySystem::Semantic,
+                    authority: MemoryAuthority::Organization,
                     scope: SourceScope::Project,
                     kind: MemoryKind::Memory,
                     path: path.to_owned(),
@@ -2868,6 +3212,10 @@ mod tests {
                     source_commit_id: Some(commit_id.to_owned()),
                     draft_id: None,
                     draft_revision: None,
+                    episode_id: None,
+                    run_id: None,
+                    activity_at: None,
+                    evidence_hash: None,
                 },
             }
         }
@@ -2922,6 +3270,10 @@ mod tests {
         .unwrap();
         assert_eq!(updated["ctx_target"].source.content, "# Personal Draft");
         assert_eq!(
+            updated["ctx_target"].source.authority,
+            MemoryAuthority::Project
+        );
+        assert_eq!(
             updated["ctx_target"].source.draft_id.as_deref(),
             Some("draft_update")
         );
@@ -2950,6 +3302,10 @@ mod tests {
         .unwrap();
         assert_eq!(renamed["ctx_target"].source.path, "context/renamed.md");
         assert_eq!(renamed["ctx_target"].source.content, "# Base");
+        assert_eq!(
+            renamed["ctx_target"].source.authority,
+            MemoryAuthority::Project
+        );
 
         let mut deleted = BTreeMap::from([("ctx_target".to_owned(), current.clone())]);
         super::overlay::apply_draft_overlay(
@@ -3000,6 +3356,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(created["draft_create"].source.content, "# New Draft");
+        assert_eq!(
+            created["draft_create"].source.authority,
+            MemoryAuthority::Project
+        );
         assert!(created.contains_key("ctx_target"));
     }
 
@@ -3242,6 +3602,8 @@ mod tests {
         let resources = [SourceResource {
             resource_id: "ctx_large".to_owned(),
             project_id: "prj_test".to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Organization,
             scope: SourceScope::Project,
             kind: MemoryKind::Memory,
             path: "context/large.md".to_owned(),
@@ -3252,6 +3614,10 @@ mod tests {
             source_commit_id: Some("commit_test".to_owned()),
             draft_id: None,
             draft_revision: None,
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
         }];
         let models = BatchRecordingModels {
             largest_batch: AtomicUsize::new(0),
@@ -3282,6 +3648,8 @@ mod tests {
             SourceResource {
                 resource_id: "ctx_alpha".to_owned(),
                 project_id: "prj_test".to_owned(),
+                memory_system: MemorySystem::Semantic,
+                authority: MemoryAuthority::Organization,
                 scope: SourceScope::Project,
                 kind: MemoryKind::Memory,
                 path: "context/alpha.md".to_owned(),
@@ -3292,10 +3660,16 @@ mod tests {
                 source_commit_id: Some("commit_one".to_owned()),
                 draft_id: None,
                 draft_revision: None,
+                episode_id: None,
+                run_id: None,
+                activity_at: None,
+                evidence_hash: None,
             },
             SourceResource {
                 resource_id: "ctx_gamma".to_owned(),
                 project_id: "prj_test".to_owned(),
+                memory_system: MemorySystem::Semantic,
+                authority: MemoryAuthority::Organization,
                 scope: SourceScope::Project,
                 kind: MemoryKind::Memory,
                 path: "context/gamma.md".to_owned(),
@@ -3306,12 +3680,16 @@ mod tests {
                 source_commit_id: Some("commit_one".to_owned()),
                 draft_id: None,
                 draft_revision: None,
+                episode_id: None,
+                run_id: None,
+                activity_at: None,
+                evidence_hash: None,
             },
         ]
         .into();
-        let first = EffectiveMemory {
+        let first = MemoryCorpus {
             project_id: "prj_test".to_owned(),
-            effective_hash: "effective_one".to_owned(),
+            corpus_hash: "effective_one".to_owned(),
             resources: first_resources,
         };
         let prepared =
@@ -3327,7 +3705,7 @@ mod tests {
         let revision = index::stage_prepared_index(&pool, &first, &prepared)
             .await
             .unwrap();
-        index::publish_staged_index(&pool, "prj_test", &first.effective_hash, &revision)
+        index::publish_staged_index(&pool, "prj_test", &first.corpus_hash, &revision)
             .await
             .unwrap();
 
@@ -3344,9 +3722,9 @@ mod tests {
         changed_resources[0].content = changed_content;
         changed_resources[0].content_hash = sha256(&changed_resources[0].content);
         changed_resources[0].source_commit_id = Some("commit_two".to_owned());
-        let changed = EffectiveMemory {
+        let changed = MemoryCorpus {
             project_id: "prj_test".to_owned(),
-            effective_hash: "effective_two".to_owned(),
+            corpus_hash: "effective_two".to_owned(),
             resources: changed_resources.into(),
         };
         let prepared =
@@ -3361,7 +3739,7 @@ mod tests {
         let revision = index::stage_prepared_index(&pool, &changed, &prepared)
             .await
             .unwrap();
-        index::publish_staged_index(&pool, "prj_test", &changed.effective_hash, &revision)
+        index::publish_staged_index(&pool, "prj_test", &changed.corpus_hash, &revision)
             .await
             .unwrap();
 
@@ -3407,6 +3785,45 @@ mod tests {
         );
         assert!((query::rerank_relevance(0.0) - 0.5).abs() < f32::EPSILON);
         assert!(query::rerank_relevance(-10.0) < MIN_RERANK_RELEVANCE);
+    }
+
+    #[test]
+    fn explicit_recency_intent_only_reorders_recalled_project_episodes() {
+        let mut candidates = vec![
+            ranked_test_row("older", "episode:older", 0, 10, 10, 2.0),
+            ranked_test_row("semantic", "memory", 0, 10, 10, 2.0),
+            ranked_test_row("newer", "episode:newer", 0, 10, 10, 2.0),
+        ];
+        for (index, candidate) in candidates.iter_mut().enumerate() {
+            candidate.reranker_rank = Some(index + 1);
+        }
+        for (index, activity_at) in [(0, "2026-08-01T00:00:00Z"), (2, "2026-08-30T00:00:00Z")] {
+            let candidate = &mut candidates[index];
+            candidate.row.memory_system = MemorySystem::Episodic;
+            candidate.row.authority = MemoryAuthority::Project;
+            candidate.row.activity_at = Some(activity_at.to_owned());
+        }
+
+        let mut ordinary = candidates.clone();
+        query::prioritize_recent_episodes("architecture decisions", &mut ordinary);
+        assert_eq!(
+            ordinary
+                .iter()
+                .map(|candidate| candidate.reranker_rank)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+
+        query::prioritize_recent_episodes("latest architecture decisions", &mut candidates);
+        assert_eq!(candidates[0].reranker_rank, Some(3));
+        assert_eq!(candidates[1].reranker_rank, Some(2));
+        assert_eq!(candidates[2].reranker_rank, Some(1));
+
+        let mut chinese = ordinary;
+        query::prioritize_recent_episodes("最近的架构决定", &mut chinese);
+        assert_eq!(chinese[0].reranker_rank, Some(3));
+        assert_eq!(chinese[1].reranker_rank, Some(2));
+        assert_eq!(chinese[2].reranker_rank, Some(1));
     }
 
     #[test]
@@ -3494,6 +3911,8 @@ mod tests {
         let resources = [SourceResource {
             resource_id: "ctx_large_real".to_owned(),
             project_id: "prj_test".to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Organization,
             scope: SourceScope::Project,
             kind: MemoryKind::Memory,
             path: "context/large-real.md".to_owned(),
@@ -3504,6 +3923,10 @@ mod tests {
             source_commit_id: Some("commit_test".to_owned()),
             draft_id: None,
             draft_revision: None,
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
         }];
 
         let started = std::time::Instant::now();

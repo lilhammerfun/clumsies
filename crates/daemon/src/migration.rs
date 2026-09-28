@@ -15,7 +15,7 @@ use crate::{
     RuntimeProjectConfig, ServerCredentials,
 };
 use crate::{
-    agent_adapter, commit_sync, project_storage, retrieval_history, search, work_tracking,
+    agent_adapter, commit_sync, episode, project_storage, retrieval_history, search, work_tracking,
 };
 
 pub(crate) fn prepare_directories(config: &DaemonConfig) -> Result<(), DaemonError> {
@@ -155,6 +155,10 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
         migrate_local_schema_39_to_40(pool).await?;
         existing_schema_version = 40;
     }
+    if existing_schema_version == 40 {
+        migrate_local_schema_40_to_41(pool).await?;
+        existing_schema_version = 41;
+    }
     if existing_schema_version != 0 && existing_schema_version != CURRENT_LOCAL_SCHEMA_VERSION {
         return Err(DaemonError::InvalidConfig(format!(
             "local database schema version {existing_schema_version} is incompatible with version {CURRENT_LOCAL_SCHEMA_VERSION}; recreate the daemon database"
@@ -273,6 +277,7 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
     search::migrate(pool).await?;
     retrieval_history::migrate(pool).await?;
     work_tracking::migrate(pool).await?;
+    episode::migrate(pool).await?;
     sqlx::query(
         "INSERT INTO daemon_meta (key, value)
          VALUES ('schema_version', $1)
@@ -2006,8 +2011,21 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
                     delta_action TEXT CHECK (delta_action IN ('add', 'replace', 'reuse')),
                     PRIMARY KEY (run_id, unit_key)
                 )",
-                "INSERT INTO retrieval_run_candidates_v40
-                 SELECT * FROM retrieval_run_candidates",
+                "INSERT INTO retrieval_run_candidates_v40 (
+                    run_id, candidate_order, unit_key, resource_id, scope, kind, path,
+                    heading_path_json, locator_json, content_hash, resource_content_hash,
+                    token_count, evidence_excerpt, exact_rank, bm25_rank, bm25_score,
+                    vector_rank, vector_score, rrf_rank, rrf_score, reranker_rank,
+                    reranker_logit, reranker_relevance, final_rank, selected,
+                    exclusion_reason, delta_action
+                 )
+                 SELECT run_id, candidate_order, unit_key, resource_id, scope, kind, path,
+                        heading_path_json, locator_json, content_hash, resource_content_hash,
+                        token_count, evidence_excerpt, exact_rank, bm25_rank, bm25_score,
+                        vector_rank, vector_score, rrf_rank, rrf_score, reranker_rank,
+                        reranker_logit, reranker_relevance, final_rank, selected,
+                        exclusion_reason, delta_action
+                 FROM retrieval_run_candidates",
                 "DROP TABLE retrieval_run_candidates",
                 "ALTER TABLE retrieval_run_candidates_v40 RENAME TO retrieval_run_candidates",
                 "CREATE INDEX idx_retrieval_candidates_run_order
@@ -2043,8 +2061,13 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
                     draft_revision TEXT,
                     PRIMARY KEY (run_id, resource_id)
                 )",
-                "INSERT INTO retrieval_run_resources_v40
-                 SELECT * FROM retrieval_run_resources",
+                "INSERT INTO retrieval_run_resources_v40 (
+                    run_id, resource_order, resource_id, scope, kind, path, title,
+                    content_hash, content_preview, source_commit_id, draft_id, draft_revision
+                 )
+                 SELECT run_id, resource_order, resource_id, scope, kind, path, title,
+                        content_hash, content_preview, source_commit_id, draft_id, draft_revision
+                 FROM retrieval_run_resources",
                 "DROP TABLE retrieval_run_resources",
                 "ALTER TABLE retrieval_run_resources_v40 RENAME TO retrieval_run_resources",
             ] {
@@ -2078,8 +2101,13 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
                     draft_revision TEXT,
                     PRIMARY KEY (corpus_id, resource_id)
                 )",
-                "INSERT INTO evaluation_corpus_resources_v40
-                 SELECT * FROM evaluation_corpus_resources",
+                "INSERT INTO evaluation_corpus_resources_v40 (
+                    corpus_id, resource_order, resource_id, scope, kind, path, title,
+                    content_hash, content_preview, source_commit_id, draft_id, draft_revision
+                 )
+                 SELECT corpus_id, resource_order, resource_id, scope, kind, path, title,
+                        content_hash, content_preview, source_commit_id, draft_id, draft_revision
+                 FROM evaluation_corpus_resources",
                 "DROP TABLE evaluation_corpus_resources",
                 "ALTER TABLE evaluation_corpus_resources_v40
                  RENAME TO evaluation_corpus_resources",
@@ -2098,10 +2126,128 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
     result
 }
 
+/// Adds the shared Semantic/Episodic provenance carried by frozen retrieval
+/// history and creates the durable Episode capture/sync manifests.
+pub(crate) async fn migrate_local_schema_40_to_41(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut tx = pool.begin().await?;
+    for table in [
+        "retrieval_run_candidates",
+        "retrieval_run_resources",
+        "evaluation_corpus_resources",
+    ] {
+        let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(&mut *tx)
+            .await?;
+        let names = columns
+            .iter()
+            .map(|row| row.get::<String, _>("name"))
+            .collect::<std::collections::BTreeSet<_>>();
+        for (column, definition) in [
+            (
+                "memory_system",
+                "TEXT NOT NULL DEFAULT 'semantic' CHECK (memory_system IN ('semantic', 'episodic'))",
+            ),
+            (
+                "authority",
+                "TEXT NOT NULL DEFAULT 'organization' CHECK (authority IN ('organization', 'project'))",
+            ),
+            ("episode_id", "TEXT"),
+            ("episode_run_id", "TEXT"),
+            ("activity_at", "TEXT"),
+            ("evidence_hash", "TEXT"),
+        ] {
+            if !names.contains(column) {
+                sqlx::query(&format!(
+                    "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                ))
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        sqlx::query(&format!(
+            "UPDATE {table}
+             SET authority = 'organization'
+             WHERE memory_system = 'semantic'"
+        ))
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    episode::migrate(pool).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn schema_40_to_41_adds_episode_storage_and_semantic_provenance() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for table in [
+            "retrieval_run_candidates",
+            "retrieval_run_resources",
+            "evaluation_corpus_resources",
+        ] {
+            sqlx::query(&format!(
+                "CREATE TABLE {table} (id TEXT PRIMARY KEY, scope TEXT NOT NULL)"
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(&format!(
+                "INSERT INTO {table} (id, scope) VALUES ('row', 'project')"
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        migrate_local_schema_40_to_41(&pool).await.unwrap();
+        migrate_local_schema_40_to_41(&pool).await.unwrap();
+
+        for table in [
+            "retrieval_run_candidates",
+            "retrieval_run_resources",
+            "evaluation_corpus_resources",
+        ] {
+            let row = sqlx::query(&format!(
+                "SELECT memory_system, authority, episode_id, episode_run_id,
+                        activity_at, evidence_hash FROM {table} WHERE id = 'row'"
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(row.get::<String, _>("memory_system"), "semantic");
+            assert_eq!(row.get::<String, _>("authority"), "organization");
+            for column in [
+                "episode_id",
+                "episode_run_id",
+                "activity_at",
+                "evidence_hash",
+            ] {
+                assert!(row.get::<Option<String>, _>(column).is_none());
+            }
+        }
+        for table in [
+            "episode_outbox",
+            "current_episode_summaries",
+            "episode_sync_state",
+        ] {
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $1",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(exists, 1, "missing {table}");
+        }
+    }
 
     async fn test_pool_with_v35_runs() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -2505,7 +2651,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(schema_version, "40");
+        assert_eq!(schema_version, "41");
         for table in [
             "retrieval_run_candidates",
             "retrieval_run_resources",

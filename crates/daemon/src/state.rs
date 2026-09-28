@@ -175,6 +175,7 @@ pub(crate) struct DaemonInner {
     pub(crate) draft_mutation_lock: Mutex<()>,
     pub(crate) local_setup_lock: Mutex<()>,
     pub(crate) agent_run_lock: Mutex<()>,
+    pub(crate) episode_lock: Mutex<()>,
     pub(crate) storage_access: tokio::sync::RwLock<()>,
 }
 
@@ -304,9 +305,13 @@ impl DaemonState {
                 draft_mutation_lock: Mutex::new(()),
                 local_setup_lock: Mutex::new(()),
                 agent_run_lock: Mutex::new(()),
+                episode_lock: Mutex::new(()),
                 storage_access: tokio::sync::RwLock::new(()),
             }),
         };
+        if let Err(error) = episode::capture_ended_runs(&state, None).await {
+            tracing::warn!("failed to recover ended AgentRun Episode capture: {error}");
+        }
         project_storage::resume_pending_moves(&state);
         Ok(state)
     }
@@ -1185,12 +1190,29 @@ impl DaemonState {
         search::load_memory(self, request).await
     }
 
+    pub async fn get_episode_evidence(
+        &self,
+        request: EpisodeEvidenceRequest,
+    ) -> Result<EpisodeEvidenceResponse, DaemonError> {
+        episode::get_episode_evidence(self, request).await
+    }
+
     pub async fn record_agent_run_event(
         &self,
         request: RecordAgentRunEventRequest,
     ) -> Result<RecordAgentRunEventResponse, DaemonError> {
-        let _guard = self.inner.agent_run_lock.lock().await;
-        work_tracking::record_agent_run_event(&self.inner.pool, request).await
+        let project_id = request.project_id.clone();
+        let response = {
+            let _guard = self.inner.agent_run_lock.lock().await;
+            work_tracking::record_agent_run_event(&self.inner.pool, request).await?
+        };
+        if let Err(error) = episode::capture_ended_runs(self, Some(&project_id)).await {
+            tracing::warn!(
+                project_id,
+                "failed to capture ended AgentRun Evidence: {error}"
+            );
+        }
+        Ok(response)
     }
 
     pub async fn list_issue_board(
@@ -2426,7 +2448,15 @@ impl DaemonState {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let _ = work_tracking::recover_stale_runs(&state.inner.pool).await;
+                match work_tracking::recover_stale_runs(&state.inner.pool).await {
+                    Ok(0) => {}
+                    Ok(_) => {
+                        if let Err(error) = episode::capture_ended_runs(&state, None).await {
+                            tracing::warn!("failed to capture reaped AgentRun Evidence: {error}");
+                        }
+                    }
+                    Err(error) => tracing::warn!("failed to reap stale AgentRuns: {error}"),
+                }
             }
         })
     }
@@ -2481,6 +2511,11 @@ impl DaemonState {
                 {
                     first_error = Some(error);
                 }
+            }
+            if let Err(error) = episode::sync(self, retry_transient_failures, project_id).await
+                && first_error.is_none()
+            {
+                first_error = Some(error);
             }
             match first_error {
                 Some(error) => Err(error),
@@ -2724,6 +2759,13 @@ impl DaemonIpcService {
         request: LoadMemoryRequest,
     ) -> Result<LoadMemoryResponse, DaemonError> {
         self.state.load_memory(request).await
+    }
+
+    pub async fn get_episode_evidence(
+        &self,
+        request: EpisodeEvidenceRequest,
+    ) -> Result<EpisodeEvidenceResponse, DaemonError> {
+        self.state.get_episode_evidence(request).await
     }
 
     pub async fn record_agent_run_event(
@@ -3006,6 +3048,9 @@ impl DaemonIpcService {
             "project_checkout" => dispatch_async!(self, request.payload, project_checkout),
             "activate_memory" => dispatch_async!(self, request.payload, activate_memory),
             "load_memory" => dispatch_async!(self, request.payload, load_memory),
+            "get_episode_evidence" => {
+                dispatch_async!(self, request.payload, get_episode_evidence)
+            }
             "record_agent_run_event" => {
                 dispatch_async!(self, request.payload, record_agent_run_event)
             }

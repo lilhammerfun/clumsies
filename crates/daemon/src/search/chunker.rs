@@ -425,7 +425,7 @@ mod tests {
 
     use super::*;
     use crate::search::models::SearchModelRuntimeStatus;
-    use crate::search::{MemoryKind, SourceScope};
+    use crate::search::{MemoryAuthority, MemoryKind, MemorySystem, SourceScope};
 
     struct CharacterModels;
 
@@ -509,6 +509,8 @@ mod tests {
         SourceResource {
             resource_id: "ctx_test".to_owned(),
             project_id: "prj_test".to_owned(),
+            memory_system: MemorySystem::Semantic,
+            authority: MemoryAuthority::Organization,
             scope: SourceScope::Project,
             kind: MemoryKind::Memory,
             path: "architecture/search.md".to_owned(),
@@ -519,6 +521,10 @@ mod tests {
             source_commit_id: Some("commit_test".to_owned()),
             draft_id: None,
             draft_revision: None,
+            episode_id: None,
+            run_id: None,
+            activity_at: None,
+            evidence_hash: None,
         }
     }
 

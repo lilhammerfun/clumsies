@@ -143,6 +143,16 @@ define_routes!(protected_routes, PROTECTED_OPERATIONS, {
     "/api/v1/org/memories/{memory_id}" => { get: crate::memory::http::get_org_memory };
     "/api/v1/projects/{project_id}/memories" => { get: crate::memory::http::list_project_memories };
     "/api/v1/projects/{project_id}/memories/{memory_id}" => { get: crate::memory::http::get_project_memory };
+    "/api/v1/projects/{project_id}/episodes" => { get: crate::episode::http::list_project_episodes };
+    "/api/v1/projects/{project_id}/episodes/finalize" => { post: crate::episode::http::finalize_project_episode };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}" => { delete: crate::episode::http::delete_project_episode };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}/evidence" => { get: crate::episode::http::get_episode_evidence };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}/summary-preview" => { post: crate::episode::http::preview_episode_summary };
+    "/api/v1/projects/{project_id}/episodes/{episode_id}/summary-rebuild" => { post: crate::episode::http::rebuild_episode_summary };
+    "/api/v1/projects/{project_id}/episode-summary-policy" => {
+        get: crate::episode::http::get_episode_summary_policy,
+        put: crate::episode::http::update_episode_summary_policy,
+    };
     "/api/v1/projects/{project_id}/org-selections" => {
         get: crate::memory::http::get_project_org_selection,
         put: crate::memory::http::replace_project_org_selection,
@@ -353,6 +363,7 @@ impl IntoResponse for HttpError {
                     ServerError::InvalidTransition { .. } | ServerError::InvalidRequest(_) => {
                         StatusCode::BAD_REQUEST
                     }
+                    ServerError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
                     ServerError::Sqlx(_) => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 let code = match &error {
@@ -367,6 +378,7 @@ impl IntoResponse for HttpError {
                     ServerError::InvalidTransition { .. } | ServerError::InvalidRequest(_) => {
                         "invalid_request"
                     }
+                    ServerError::ServiceUnavailable(_) => "service_unavailable",
                     ServerError::Sqlx(_) => "internal_error",
                 };
                 let details = match &error {

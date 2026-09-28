@@ -1,6 +1,7 @@
 mod app;
 mod bootstrap;
 mod changes;
+mod episode;
 mod health;
 mod memory;
 mod middleware;

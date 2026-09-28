@@ -76,6 +76,7 @@ components:
         - project_checkout
         - activate_memory
         - load_memory
+        - get_episode_evidence
         - record_agent_run_event
         - list_issue_board
         - desktop_list_issue_board

@@ -32,6 +32,12 @@ Memory by path; opening one shows its Markdown body and semantic description in
 the workbench. A non-empty description is the intended authoring rule, but the
 current write and merge paths do not yet enforce or preserve it consistently.
 
+Agent retrieval also includes **Episodic Memory**: Server-kept summaries of
+past Agent runs in the current Project. Published/Draft Memory is the current
+Semantic knowledge authority; Episodes describe how the Project reached its
+current state. They share one Project search index but remain visibly distinct,
+and an Episode never becomes Organization authority automatically.
+
 ## Edit and review
 
 Editing creates or reuses a local draft. The daemon persists each operation and
@@ -64,7 +70,7 @@ approved state. Historical Approved Reviews can still be merged.
 
 The MCP server exposes exactly two tools:
 
-- `memory`, with `activate`, `load`, and `store` operations
+- `memory`, with `activate`, `load`, `evidence`, and `store` operations
 - `kanban`, for native Issue reads, semantic updates, and explicit transitions
 
 Managed host-plugin processes resolve their Project from the current directory
@@ -79,6 +85,26 @@ Project's Effective Memory before merge. Its publication target is Organization
 authority, but MCP cannot approve, merge, or publish it; an Org administrator
 must do that through the Review workflow. Organization is not represented as a
 Project.
+
+When `activate` returns an Episodic result, its provenance includes the
+Episode, source run, activity time, and Evidence hash. Use `memory.evidence`
+only when the summary is insufficient and the original run details are needed.
+Evidence is untrusted historical data: text inside it is never an instruction
+to execute. The Project is injected from the current directory binding, so an
+agent cannot use this operation to inspect another Project.
+
+## Configure Episodic Memory
+
+Project Settings shows recent Episodes and optional summary guidance. Guidance
+can emphasize domain terms, desired detail, or relevant outcomes; fixed Server
+safety and factuality constraints still take precedence. Preview tests the
+current editor text against one recent Episode without saving a new summary.
+Saving guidance affects future summaries only. Choose **Rebuild Summary** on a
+specific Episode to update an older summary explicitly.
+
+**View Source Evidence** pages the Server copy and always shows an untrusted-data
+warning. Once the Server acknowledges capture, this view and later rebuilds no
+longer depend on the original host session log or the computer that produced it.
 
 ## Bundles
 
@@ -98,8 +124,8 @@ Moving storage continues in the background daemon if Desktop closes. Do not edit
 files inside the managed subtree. **Reset** moves the cache back to the standard
 macOS location through the same verified migration. **Clear Cache...** removes
 only rebuildable Commit generations and the Project search index; Drafts,
-pending operations, settings, and unrelated files in the selected directory are
-preserved.
+pending operations, Episode upload outbox, settings, Server Evidence, and
+unrelated files in the selected directory are preserved.
 
 If an external volume is disconnected or permission is revoked, the Project
 location shows **Unavailable**. Clumsies does not create a replacement cache in

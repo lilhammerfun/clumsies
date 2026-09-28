@@ -922,7 +922,7 @@ pub(super) async fn list_audit_events(
         .collect()
 }
 
-pub(super) async fn insert_audit_event(
+pub(crate) async fn insert_audit_event(
     tx: &mut Transaction<'_, Postgres>,
     org_id: &str,
     actor_user_id: Option<&str>,

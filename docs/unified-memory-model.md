@@ -1,16 +1,17 @@
 # 统一 Memory 数据模型
 
-本文是 Clumsies 当前 Memory 数据架构的权威说明，面向实现、接口和质量评审。它描述系统现在如何确定发布权威、Project 投影、Draft overlay 与 Review 合并语义；历史迁移过程不在本文展开，参见 [Project Memory 权威切换](/project-authority-migration)。
+本文是 Clumsies 当前 **Semantic Memory 发布模型**的权威说明，面向实现、接口和质量评审。它描述系统现在如何确定发布权威、Project 投影、Draft overlay 与 Review 合并语义；Project Episodic Memory 是独立的系统派生记忆，只在联合检索层相遇，完整边界见[系统架构](/architecture)。历史迁移过程不在本文展开，参见 [Project Memory 权威切换](/project-authority-migration)。
 
 ## 核心结论
 
-当前模型只有一个可发布内容对象：`Memory`。
+当前 Semantic 模型只有一个可发布内容对象：`Memory`。
 
 - **Organization 是唯一的 Memory 发布权威。** 新建、更新、重命名和删除最终都必须通过 Organization-scoped Draft、Review 与 merge 写入 Organization Ref。
 - **Project 不是 Memory 权威。** Project 保存 Organization Memory 的选择集合，并持有由该集合生成的 Project Ref；该 Ref 是可同步、可安装的投影，不是第二份发布源。
 - **Draft 由 Project 携带。** Draft 的发布目标是 Organization，但在 merge 前只覆盖携带它的 Project 的 Effective Memory，不会直接修改 Organization，也不会影响其他 Project。
 - **Review 可以包含一个或多个 Draft。** 多 Draft Review 按顺序关联 Draft，并以一个数据库事务完成校验、应用、Commit 与 Ref 前移；任一 Draft 失败时整次 merge 不提交。
 - Rule、Workflow、Context 不再是 Server、daemon 或 MCP 的内容类型。它们只可以作为 Markdown 内容与路径表达的语义；macOS 仍保留的 `MemoryKind` 属于尚未收口的 UI 实现，见[当前实现缺口](#当前实现缺口)。
+- **Episodic Memory 不可发布。** 它是 Server 从特定 Project/AgentRun Evidence 生成的版本化摘要，不走 Draft/Review，不自动成为 Organization authority；跨 Episode 提炼出的可复用知识仍通过本页的 Semantic 发布流程维护。
 
 ```mermaid
 flowchart LR
@@ -21,6 +22,9 @@ flowchart LR
     LD[Project 携带的 open / submitted Draft] -->|overlay| EM
     LD --> RV[有序的单 Draft 或多 Draft Review]
     RV -->|授权审批并原子 merge| OA
+    EM --> MC[MemoryCorpus]
+    EP[Project 当前 Episodic summaries] --> MC
+    MC --> IDX[统一 Project index]
 ```
 
 ## 设计理由与当前边界
@@ -28,7 +32,10 @@ flowchart LR
 统一 Memory 不是把旧枚举替换成任意 `type: string`，也不是让检索相关性代替治理：
 
 - 旧 Rule、Workflow、Context 只声明分类，没有验证“指令、事实、流程”的内容语义；让这三个值继续支配 API、身份、路径、UI 和 Adapter 行为，只会把一次分类调整放大成全链路协议变更。
-- `activate` 不接收 kind filter。Project selection 决定哪些发布资源进入 Effective Memory，之后所有 Memory 使用同一套分块、BM25、向量召回、RRF、重排和预算流程；排序算法不靠旧三分类分派。
+- `activate` 不接收 kind filter。Project selection 决定哪些发布资源进入 Effective Memory，
+  再与当前 Project Episodic summaries 装配成 `MemoryCorpus`；所有检索资源使用同一套分块、
+  BM25、向量召回、RRF、重排和预算流程。排序算法不靠旧三分类分派，来源由正交的
+  `memory_system` 与 `authority` provenance 表达。
 - 任意字符串类型仍会把用户 taxonomy 与系统行为绑在一起。当前 wire contract 因此只接受统一的 `memory`，不会根据路径、标题或用户命名生成新系统类型。
 - 检索只判断相关性，不授予内容权威。Organization publication、Project selection、Commit 来源和 Draft 状态共同决定来源与治理边界；未发布 overlay 不能被误报为 Organization 权威。
 - 当前模型没有 Category/Tag、`content_type`、`agent_instruction` 或 `invocable_skill` 字段。未来如要增加用户 taxonomy、内容格式或可执行能力，必须作为彼此正交且可授权的契约设计，不能从分类显示名或 `workflow/` 路径隐式推导。
@@ -156,6 +163,14 @@ Review 的批准只对当时的完整结果哈希有效。Draft 内容变化或 
 
 新客户端不应使用这两个端点构建 Project Memory 视图。应使用 Project Org Selection、Project Commit payload，以及 daemon 提供的 Effective Memory 能力。
 
+### Episodic HTTP 与 MCP 边界
+
+`/api/v1/projects/{project_id}/episodes`、summary policy/preview/rebuild 及 Evidence 详情路由
+属于 Project Episodic authority，不返回或修改本页的 `resources`、Draft、Review、Commit
+或 Ref。daemon 只把当前、非 `NO_MEMORY` summary 投影进 `MemoryCorpus`；原始 Evidence
+不进入全文/向量索引。MCP `memory.evidence` 从当前 binding 注入 Project 并按稳定
+`episode_id` 下钻，不能把 Evidence 作为 `memory.load` 或 `memory.store` 的资源。
+
 ## 当前实现缺口
 
 以下事项尚未闭环，不能写成已完成能力：
@@ -175,3 +190,5 @@ Review 的批准只对当时的完整结果哈希有效。Draft 内容变化或 
 - 一个 Review 的所有 Draft 要么在一个事务中全部发布，要么一个也不发布。
 - Effective Memory 可以包含未发布 overlay；任何读取结果都必须保留其 source、Draft 或 Commit 来源，不能把候选状态误报为 Organization 权威。
 - MCP 与 daemon 不能审批、merge 或直接发布 Organization Memory；授权发布只能经过 Server Review 流程。
+- Episodic summary 只能引用 Server 已持久化的确切 Evidence hash；Episode 不进入
+  Organization Ref、Project selection 或 Semantic Draft/Review。

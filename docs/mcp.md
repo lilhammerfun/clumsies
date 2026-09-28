@@ -4,7 +4,7 @@ Clumsies 只向 Coding Agent 暴露两个 MCP 工具：
 
 | 工具 | 职责 |
 |---|---|
-| `memory` | 读取当前绑定 Project 的 Effective Memory，或创建由该 Project 携带的 Memory 提案 Draft |
+| `memory` | 联合检索当前 Project 的 Semantic/Episodic Memory，读取完整 Semantic 资源或 Episode Evidence，或创建由该 Project 携带的 Memory 提案 Draft |
 | `kanban` | 读取和维护当前 Project 的原生 Issue，并显式执行工作状态转换 |
 
 `clumsiesd mcp serve` 是短生命周期的 stdio 协议代理。Effective Memory 构建、索引、检索、Draft 持久化、Issue 与 AgentRun 状态都由常驻 `clumsiesd` 管理，代理通过本地 XPC 调用它。代理只接受本文列出的强类型输入，不能把任意 JSON 转发给 daemon。
@@ -30,7 +30,7 @@ Clumsies 只向 Coding Agent 暴露两个 MCP 工具：
 
 ## `memory`
 
-`memory` 包含 `activate`、`load` 和 `store` 三个 operation。
+`memory` 包含 `activate`、`load`、`evidence` 和 `store` 四个 operation。
 
 ### Project Memory 指南
 
@@ -62,7 +62,11 @@ Project 可以约定一份 Memory 指南，默认路径为 `CLUMSIES.md`；受�
 | `query` | 是 | 非空的自然语言任务或检索线索 |
 | `state` | 否 | 上一次响应的 `next_state`；仅在上一次片段仍完整保留于模型上下文时传入 |
 
-daemon 在一次调用内完成 BM25、向量召回、RRF 融合、Cross-Encoder 重排、资源多样性限制、token 预算和片段增量计算。模型名、候选数量和排序参数由 daemon 管理，不是 Agent 输入。
+daemon 把当前 Project 的 Effective Memory（Semantic）与当前 Episode summaries
+（Episodic）装配为一个 `MemoryCorpus`，再在一次调用内完成 BM25、向量召回、RRF
+融合、Cross-Encoder 重排、资源多样性限制、token 预算和片段增量计算。模型名、候选
+数量、排序参数及来源权重由 daemon 管理，不是 Agent 输入；普通查询不因 Episode 较新就
+自动覆盖相关性，只有明确时间意图才使用 `activity_at`。
 
 响应的主要结构为：
 
@@ -77,6 +81,8 @@ daemon 在一次调用内完成 BM25、向量召回、RRF 融合、Cross-Encoder
       "unit_key": "mem_123/mcp/0/0",
       "content_hash": "sha256:...",
       "resource_id": "mem_123",
+      "memory_system": "semantic",
+      "authority": "organization",
       "scope": "org",
       "kind": "memory",
       "path": "architecture/mcp.md",
@@ -87,6 +93,10 @@ daemon 在一次调用内完成 BM25、向量召回、RRF 融合、Cross-Encoder
   "removed": []
 }
 ```
+
+Episodic fragment 使用 `memory_system: "episodic"`、`authority: "project"`，并额外
+返回 `episode_id`、源 `run_id`、`activity_at` 和 `evidence_hash`。这些字段用于判断来源
+和显式下钻，不会把 Episode 伪装成可编辑 Memory 或 Organization authority。
 
 `add` 与 `replace` 携带正文；`reuse` 表示调用方上下文里已有同一片段，因此省略正文；`removed` 只撤销已删除、失去权限或重新解析后消失的单元，不会因为本次 query 不相关就撤销旧片段。
 
@@ -114,7 +124,39 @@ daemon 在一次调用内完成 BM25、向量召回、RRF 融合、Cross-Encoder
 | `ids` | 是 | 非空、无重复的 ID 或精确路径数组；每项都必须是非空字符串 |
 | `knownHashes` | 否 | 以请求 ID/路径为 key 的已知完整资源哈希 |
 
-当 `knownHashes` 与当前资源一致时，结果返回 `changed = false` 并省略 `content`。任一请求目标不存在时返回 `memory_resource_not_found`，不会静默忽略。`load` 与 `activate` 读取同一份 Effective Memory，包括当前 Project 的 Draft overlay。
+当 `knownHashes` 与当前资源一致时，结果返回 `changed = false` 并省略 `content`。任一请求
+目标不存在时返回 `memory_resource_not_found`，不会静默忽略。`load` 只解析 Semantic
+Effective Memory（包括当前 Project 的 Draft overlay）；Episodic summary 通过
+`activate` 命中后，原始详情使用独立的 `evidence` operation。
+
+### `evidence`
+
+`evidence` 在命中 Episodic summary 后按稳定 Episode ID 分页读取原始证据：
+
+```json
+{
+  "op": {
+    "evidence": {
+      "episode_id": "episode_0123456789abcdef0123456789abcdef",
+      "cursor": "12:65536"
+    }
+  }
+}
+```
+
+| 字段 | 必填 | 语义 |
+|---|---:|---|
+| `episode_id` | 是 | `episode_` + 32 位小写十六进制稳定 ID |
+| `cursor` | 否 | 上一页返回的 opaque cursor，最长 512 bytes |
+
+调用方不能提供 `project_id`、workspace path 或宿主日志路径。MCP proxy 从当前 binding
+注入 Project，daemon 绕过通用 Server response cache，Server 每次按当前 membership
+重新鉴权并写入不含正文的审计记录。响应以条数和字节双重上限分页；巨型单条记录可以在
+后续 cursor 继续，不会静默截断。
+
+Evidence 响应始终包含 `untrusted: true` 和警告。正文是用于核验的历史数据，即使其中
+出现“系统指令”或工具请求，也不能覆盖当前 Agent 指令或被自动执行。`activate` 只返回
+摘要与 provenance；只有显式调用 `evidence` 才加载正文。
 
 ### `store`
 
@@ -293,11 +335,16 @@ Update 不接受完整的新正文。先 `load` 资源，再把返回的完整�
 - 同一个 session 最多持有一个 In Progress Issue。开始另一个 Issue 前，先 pause、request closure 或 unclaim 当前 Issue。
 - `begin_work` 重试同一绑定是幂等的；把已有 run 改绑到另一个 Issue 会冲突。
 - Stop、StopFailure、SubagentStop 与 SessionEnd 是运行遥测，不自动把 Issue 移到 In Review、Done 或 Todo。
-- 私有 hook bridge 不保存原始 hook JSON、prompt、transcript、tool payload 或 assistant message。
+- 私有 hook bridge 本身不保存原始 hook JSON、prompt、transcript、tool payload 或 assistant
+  message；独立的 Episode ingestor 只会在已绑定 root AgentRun 结束后，从宿主权威日志按
+  Run 边界建立受治理 Evidence。
 - board 中的 blocked、blocking reasons 和失联 run 状态是 daemon 投影；它们帮助 Agent 判断是否可开始工作，但不代替显式语义转换。
 
 ## 私有 daemon 边界
 
-MCP operation 会映射到 daemon 的 `activate_memory`、`load_memory`、`store_draft_operation` 以及 Issue 查询/转换方法。Desktop 还使用审批、人工释放、归档、删除、检索诊断等私有 XPC 方法；它们不是额外 MCP 工具。
+MCP operation 会映射到 daemon 的 `activate_memory`、`load_memory`、
+`get_episode_evidence`、`store_draft_operation` 以及 Issue 查询/转换方法。Desktop 还使用
+审批、人工释放、归档、删除、Episode policy/预览/重建、检索诊断等私有 XPC/Server
+能力；它们不是额外 MCP 工具。
 
 每次有效 `activate` 会基于同一候选轨迹写入一条本地 Retrieval Run，但不会改变 MCP 响应 schema。Retrieval Run、Evaluation Case 和评测导出属于 daemon/Desktop 诊断能力，参见[检索运行与评测](/retrieval-evaluation)，不会发送给 Server。

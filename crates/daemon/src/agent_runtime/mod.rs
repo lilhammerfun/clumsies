@@ -13,7 +13,7 @@ use crate::{
     AgentRuntimeIdentity, DaemonError, DaemonIpcClient, DaemonIpcRequest, DaemonIpcResponse,
 };
 
-pub const AGENT_RUNTIME_PROTOCOL_REVISION: u32 = 1;
+pub const AGENT_RUNTIME_PROTOCOL_REVISION: u32 = 2;
 pub const AGENT_RUNTIME_BUILD_ID: &str = env!("CLUMSIES_AGENT_RUNTIME_BUILD_ID");
 
 pub fn current_identity() -> AgentRuntimeIdentity {
@@ -47,6 +47,7 @@ pub(crate) fn method_requires_identity(method: &str) -> bool {
         "resolve_project_binding"
             | "activate_memory"
             | "load_memory"
+            | "get_episode_evidence"
             | "store_draft_operation"
             | "record_agent_run_event"
             | "list_issue_board"
@@ -107,6 +108,7 @@ impl mcp_contract::AgentRuntimeRequest {
         let (method, payload) = match self {
             Self::Activate(request) => ("activate_memory", serde_json::to_value(request)?),
             Self::Load(request) => ("load_memory", serde_json::to_value(request)?),
+            Self::Evidence(request) => ("get_episode_evidence", serde_json::to_value(request)?),
             Self::Store(request) => ("store_draft_operation", serde_json::to_value(request)?),
             Self::ListIssues(request) => ("list_issue_board", serde_json::to_value(request)?),
             Self::GetIssue(request) => ("get_issue", serde_json::to_value(request)?),
@@ -167,6 +169,7 @@ mod tests {
             "resolve_project_binding",
             "activate_memory",
             "load_memory",
+            "get_episode_evidence",
             "store_draft_operation",
             "record_agent_run_event",
             "list_issue_board",

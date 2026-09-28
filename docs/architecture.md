@@ -11,6 +11,7 @@
 clumsies 为编码 Agent 提供持久、可检索、可审查的外部记忆。系统需要同时满足：
 
 - 组织共享内容有唯一权威版本，不能由某台开发机或某个 Agent 会话私自发布；
+- Project 的生产经历在宿主日志消失后仍可跨设备、成员检索和核验；
 - Agent 在当前 Project 中读取“已发布内容 + 本地未合并 Draft”的一致视图；
 - Desktop 关闭后，本地 Draft、同步、检索和 Agent 接入仍能继续工作；
 - 写入先可靠落地，再异步同步；失败必须可见、可重试，不能静默丢失；
@@ -99,10 +100,10 @@ Claude Code、opencode、dsh 与 Antigravity 接入、Effective Memory overlay�
 
 | 组件 | 负责 | 不负责 |
 | --- | --- | --- |
-| Server | 组织与 Project 身份、授权、Organization Memory、Project 选择/投影、Draft/Review、Commit 图、共享 Kanban Issue 与 lease claim、审计 | 本地工作目录、检索模型、客户端进程生命周期 |
+| Server | 组织与 Project 身份、授权、Organization Memory、Project 选择/投影、Draft/Review、Commit 图、Project Episode/Evidence/摘要策略、共享 Kanban Issue 与 lease claim、审计 | 本地工作目录、检索模型、客户端进程生命周期 |
 | PostgreSQL | Server 权威数据与事务约束 | 本地 Draft 可用性和 Project 搜索索引 |
-| 常驻 daemon | Project 绑定、本地 Draft、同步队列、Commit 缓存与安装、Effective Memory、检索、AgentRun、Issue 本地副本与 stale 投影、本地 Server 代理 | 发布审批、Organization Memory 权威和共享 Issue/claim 权威 |
-| Project Local Storage | 可重建的 immutable generations 与 Project 搜索数据库 | Draft、凭据、共享模型和 Server 权威 |
+| 常驻 daemon | Project 绑定、本地 Draft、同步队列、Commit 缓存与安装、Effective Memory、结束 AgentRun 的 Episode outbox、Semantic/Episodic 联合检索、Issue 本地副本与 stale 投影、本地 Server 代理 | 发布审批、Organization Memory 权威、Episode 长期权威和共享 Issue/claim 权威 |
+| Project Local Storage | 可重建的 immutable generations 与统一 Project 搜索数据库 | Draft、Episode Evidence、凭据、共享模型和 Server 权威 |
 | Desktop | Memory、Draft、Review、Issue、诊断和设置的原生交互 | bearer token 和内容权威 |
 | Agent runtime proxy | 有界 MCP/Hook 解码、运行身份校验、Project 解析和 typed XPC 转发 | 数据库、模型、后台 worker 和第二套检索实现 |
 | Web Admin | 组织、成员、Project、令牌、审计和健康管理 | 日常 Memory 编辑和 Review 工作流 |
@@ -130,6 +131,17 @@ Organization Ref 是唯一可发布的 Memory 权威指针。Project Ref 只标�
 Organization Draft 在合并前只影响该 Project 的 Effective Memory；批准并合并后，
 Server 才创建新的 Organization Commit 并推进 Organization Ref。
 
+长期 Declarative Memory 在检索层分成两套来源：`Semantic Memory` 是上述人工维护、
+可发布的当前知识；`Episodic Memory` 是 Server 从某个 Project 的某次 AgentRun 派生的
+生产经历。它们通过只读 `MemoryCorpus` 进入同一个 Project index，但 Episode 不走
+Draft/Review，也不会自动晋升为 Organization 或跨 Project 的 Semantic authority。
+
+```text
+Effective Memory (Semantic, Organization authority) ─┐
+                                                     ├─> MemoryCorpus -> one Project index
+Current Episode summaries (Episodic, Project authority) ─┘
+```
+
 ### 跨组件不变量
 
 - Server 决定身份、授权和发布；daemon 决定本机持久化、同步和派生读取状态。
@@ -141,6 +153,10 @@ Server 才创建新的 Organization Commit 并推进 Organization Ref。
 - Kanban Issue 与 lease claim 以 Server 记录协调多安装并发；daemon 不能只凭本地副本授予 claim。
 - Ref、Draft、Issue 和 AgentRun 都使用乐观并发或明确的所有权约束，拒绝隐式覆盖。
 - 派生缓存可以删除并重建；Draft、操作队列、凭据和权威历史不能因此丢失。
+- Episode Evidence 必须先在 Server 耐久持久化，摘要才可引用其 `evidence_hash`；Server
+  ACK 前 daemon outbox 不得删除，ACK 后本机正文只属于可删缓存。
+- Episode 永久属于一个 Project。同步、检索与 Evidence 读取都重新校验当前 binding 和
+  Project membership；删除先撤出 corpus 并拒绝读取，再清理正文。
 
 ## 3. 数据架构
 
@@ -158,6 +174,9 @@ Server 才创建新的 Organization Commit 并推进 Organization Ref。
 | Effective Memory | 已安装 Project 投影与当前 open/submitted Draft 操作合成的本地读取模型 |
 | Issue / lease claim | Server 中的共享 Kanban 权威记录；daemon 保存本地副本供原生交互，并与本机 AgentRun、lease 和 stale 状态合成看板投影 |
 | AgentRun | daemon 本地的有界执行遥测，可绑定 Issue，但生命周期事件不直接决定 Issue 语义状态 |
+| ProjectEpisode / EpisodeEvidence | Server 上以 Project + AgentRun 为边界的生产经历及其不可变原始证据；Session 只提供宿主分组，不是长期记忆对象 |
+| EpisodeSummaryRevision / summary policy | 绑定确切 Evidence hash 的版本化自然语言 Episodic Memory，以及 Project 可调整、显式预览/重建的摘要 guidance |
+| MemoryCorpus | Effective Memory 与当前、非 `NO_MEMORY` Episode summary 的只读联合投影；不改变两套 authority 生命周期 |
 | Retrieval Run / Evaluation Case | 本地检索轨迹及其人工标注评测样本，不上传 Server |
 
 Memory 的目标角色——规则、流程、项目背景或设计约束——由内容和路径表达，不由封闭的
@@ -192,9 +211,9 @@ Draft 并应用各自确认过的候选。合并同样锁定目标 Ref，校验 
 
 | 数据 | 存储位置 | 性质 |
 | --- | --- | --- |
-| 组织、成员、Memory、Draft/Review、Commit 图、Kanban Issue/lease claim、审计 | PostgreSQL | Server 共享权威 |
-| Project 绑定、Draft 与操作队列、缓存对象、Refs、Issue 本地副本、AgentRun、检索历史 | daemon 中心 SQLite | 本机持久状态与共享数据副本 |
-| Commit generations、完整 Effective Memory、检索单元、FTS、向量 | Project Local Storage | 可验证、可重建的派生状态 |
+| 组织、成员、Memory、Draft/Review、Commit 图、Project Episode/Evidence/摘要/策略、Kanban Issue/lease claim、审计 | PostgreSQL | Server 共享权威；数据库备份覆盖 Episode 全部长期数据 |
+| Project 绑定、Draft 与操作队列、缓存对象、Refs、Issue 本地副本、AgentRun、Episode outbox/摘要副本、检索历史 | daemon owner-only 中心 SQLite | 本机持久状态、原子上传缓冲与共享数据副本 |
+| Commit generations、完整 Effective Memory、当前 Episodic summary 投影、检索单元、FTS、向量 | Project Local Storage | 可验证、可重建的派生状态；不是 Evidence 唯一副本 |
 | access/refresh token | macOS Keychain | 本机秘密 |
 | embedding/reranker 模型 | daemon 共享缓存 | 可重建的本机依赖 |
 
