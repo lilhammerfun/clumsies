@@ -223,11 +223,11 @@ struct InboxView: View {
                 selection = allVisibleSelected ? [] : Set(visibleItems.map(\.id))
             } label: {
                 Label(allVisibleSelected ? "Deselect All" : "Select All",
-                      systemImage: allVisibleSelected ? "checkmark.square" : "square")
-                    .padding(.horizontal, 8)
+                      systemImage: allVisibleSelected ? "checkmark.square" : (selectedItems.isEmpty ? "square" : "minus.square"))
             }
-            .labelStyle(.titleAndIcon)
-            .toolbarHelp(String(localized: "Select or deselect all notifications matching the current filters"))
+            .labelStyle(.iconOnly)
+            .toolbarHelp(allVisibleSelected ? String(localized: "Deselect All") : String(localized: "Select All"))
+            .accessibilityValue(Text("\(selectedItems.count) / \(visibleItems.count)"))
             .accessibilityIdentifier("inbox-toolbar-select-all")
             .disabled(visibleItems.isEmpty || isBusy)
         }
