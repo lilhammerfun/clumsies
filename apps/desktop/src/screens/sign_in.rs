@@ -11,6 +11,10 @@
 //! and the form rules, which come from DESIGN.md: the required fields are
 //! marked, the primary action stays disabled until they are filled or the Server
 //! has been asked, and a failure is shown in the form rather than in a dialog.
+//! Metrics are the library's, which is what DESIGN.md's platform rule asks for
+//! on Linux: the layout is macOS's — buttons that fill the column, a 20-point
+//! title beside the mark — while heights, radii and type steps are the ones the
+//! component library already draws.
 
 use gpui_kit::base::{Disableable, StyledExt};
 use gpui_kit::component::ActiveTheme;
@@ -336,19 +340,25 @@ impl SignInScreen {
             .into_any_element()
     }
 
-    /// The mark, then what the page is for. macOS puts the two on one line and
-    /// drops the subtitle it used to carry.
+    /// The mark, then what the page is for. macOS puts the two on one line,
+    /// six points apart, with the title at 20 points semibold — a step below the
+    /// page titles elsewhere, because it names a form rather than a destination.
     fn header(&self, _cx: &App) -> AnyElement {
         div()
             .h_flex()
             .items_center()
-            .gap_3()
-            .pb_2()
+            .gap_2()
+            .pb_1()
             // The mark is drawn rather than typed, which is what macOS's
             // `BrandLogoView` is: the one place the product shows its face
             // before it knows who is signing in.
             .child(gpui_kit::img("brand/brand-mark.png").w(px(40.)).h(px(40.)))
-            .child(div().text_style(&ui::TITLE).child(self.title().to_owned()))
+            .child(
+                div()
+                    .text_style(&ui::SUBTITLE)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.title().to_owned()),
+            )
             .into_any_element()
     }
 
@@ -417,7 +427,9 @@ impl SignInScreen {
 
     /// The local fields, which are the same three the Server asks for whether
     /// the reader is signing in, accepting an invitation, resetting a password,
-    /// or creating the owner — macOS keeps one stack for all of them.
+    /// or creating the owner — macOS keeps one stack for all of them, and names
+    /// each field in its placeholder rather than on a label above it. The
+    /// first-run stack is the one that carries labels, and it does here too.
     fn local_fields(&self, cx: &mut Context<DesktopApp>) -> Vec<AnyElement> {
         let setup = self.shows_setup;
         let action = self.local_action;
@@ -432,24 +444,21 @@ impl SignInScreen {
                         .into_any_element(),
                 );
             }
-            fields.push(field(
-                "One-time credential *",
-                Input::new(&self.credential),
-                "",
-                cx,
-            ));
+            fields.push(Input::new(&self.credential).into_any_element());
         }
         if setup || action != LocalAction::Reset {
-            fields.push(field("Username *", Input::new(&self.username), "", cx));
+            fields.push(Input::new(&self.username).into_any_element());
         }
-        fields.push(field("Password *", Input::new(&self.password), "", cx));
+        fields.push(Input::new(&self.password).into_any_element());
         if setup || action != LocalAction::SignIn {
-            fields.push(field(
-                "Confirm password *",
-                Input::new(&self.confirm),
-                "Use at least 15 characters. Usernames use 3–32 letters, digits, dots, underscores or hyphens.",
-                cx,
-            ));
+            fields.push(Input::new(&self.confirm).into_any_element());
+            fields.push(
+                div()
+                    .text_style(&ui::CAPTION)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Use at least 15 characters. Usernames use 3–32 letters, digits, dots, underscores or hyphens.")
+                    .into_any_element(),
+            );
         }
         fields
     }
@@ -466,6 +475,7 @@ impl SignInScreen {
         let button = Button::new("primary")
             .primary()
             .label(label)
+            .w_full()
             .disabled(self.busy || !self.ready(cx));
         let button = match self.primary() {
             Primary::BrowserSetup => {
@@ -485,7 +495,7 @@ impl SignInScreen {
     }
 
     /// The browser, which is the whole of the sign-in when the deployment has no
-    /// passwords. Google's mark travels with the button when that is the
+    /// passwords. Google's mark travels inside the button when that is the
     /// provider, as it does in macOS.
     fn browser_button(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
         let google = self.methods.as_ref().is_some_and(|methods| methods.google);
@@ -494,17 +504,19 @@ impl SignInScreen {
         } else {
             "Sign in with identity provider"
         };
-        let mut row = div().h_flex().items_center().gap_2();
+        // The mark is an image rather than an icon, so it is a child of the
+        // button rather than its icon slot: macOS draws the two the same way
+        // round — the G, then the label, centred in a button that fills the
+        // column.
+        let mut button = Button::new("browser-sign-in")
+            .label(label)
+            .w_full()
+            .disabled(self.busy || !self.server_ready(cx))
+            .on_click(cx.listener(|this, _, _, cx| this.continue_in_browser(cx)));
         if google {
-            row = row.child(gpui_kit::img("brand/google-g.png").w(px(20.)).h(px(20.)));
+            button = button.child(gpui_kit::img("brand/google-g.png").w(px(20.)).h(px(20.)));
         }
-        row.child(
-            Button::new("browser-sign-in")
-                .label(label)
-                .disabled(self.busy || !self.server_ready(cx))
-                .on_click(cx.listener(|this, _, _, cx| this.continue_in_browser(cx))),
-        )
-        .into_any_element()
+        button.into_any_element()
     }
 
     /// macOS's two links: the way into an invitation, and the way to a reset.
@@ -594,6 +606,7 @@ impl SignInScreen {
                         Button::new("connect")
                             .primary()
                             .label("Connect")
+                            .w(px(88.))
                             .disabled(self.busy || self.server_ready(cx) || !self.has_origin(cx))
                             .on_click(cx.listener(|this, _, _, cx| this.connect_to_server(cx))),
                     ),
