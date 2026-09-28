@@ -323,7 +323,7 @@ Review。Org Review 需要 Org owner/administrator 权限。
 | `memory_resource_not_found` | 检查精确 ID/路径和当前 Project；load 不会静默跳过缺失目标 |
 | `memory_content_changed` | 重新加载完整资源，重新判断要做的修改 |
 | `text_replacement_not_found` / `text_replacement_ambiguous` / `text_replacement_overlap` | 根据新加载的正文修正精确替换范围；update 会被原子拒绝 |
-| `agent_runtime_mismatch` | 让受管代理与常驻 daemon 的构建保持一致；可能需要重启仍使用旧集成的 Agent host |
+| `agent_runtime_mismatch` | Agent 协议身份缺失或不兼容。更新 Clumsies 后重新连接 Agent 集成；宿主不支持重连时重启宿主。被拒绝的请求未执行 |
 
 update 失败不意味着可以改用完整正文覆盖。
 activate 失败也不意味着没有相关 Memory。应把它们视为失败的操作，

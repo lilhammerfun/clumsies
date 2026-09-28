@@ -28,10 +28,22 @@ The installer requires an executable whose canonical path ends in
 the path and SHA-256 in the adapter manifest. There is no checkout build,
 `PATH`, environment-variable, or copied-helper fallback.
 
-Each proxy verifies that its Agent runtime protocol revision and build identity
-match the resident daemon before forwarding traffic over XPC. Replacing the App
-therefore updates every newly started proxy, while a resident from an older
-release is detected and must be restarted.
+Each proxy and the resident daemon require the same Agent runtime protocol
+revision at startup and on every request. Build identity is retained for
+diagnostics; different builds using the same protocol can communicate.
+Replacing the App updates newly started proxies. An incompatible protocol is
+rejected before business dispatch; update Clumsies and reconnect the Agent
+integration (restart the host if it has no reconnect action).
+
+The protocol revision is independent of product versions, MCP versions, and
+SQLite schema versions. Bump it for incompatible request/response shapes or
+semantics. Compatible optional additions must preserve behavior for both older
+and newer peers. Cover cross-build acceptance, protocol rejection, and Project
+binding checks in tests. Revision equality is the only compatibility policy;
+there is no version-range negotiation or automatic replay of writes.
+
+Previously shipped proxies retain their exact-build startup check and may need
+one reconnection when first upgrading to this policy.
 
 ## Managed host surfaces
 

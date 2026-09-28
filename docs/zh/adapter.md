@@ -32,11 +32,17 @@ clumsiesd mcp serve --host codex --delivery host-plugin
 它不搜索 checkout 构建、`PATH`、环境变量
 或复制的 helper。
 
-每个 proxy 在转发 XPC 前比较自身与常驻 daemon 的 Agent
-runtime protocol revision 和
-build identity。替换 App 会更新之后启动的 proxy；
-若 resident 仍是旧版本，请求会明确
-报错并要求重启，而不是混用协议。
+proxy 启动时及 daemon 每次处理请求前，都要求 Agent runtime protocol revision
+相同。build identity 保留用于诊断；协议相同的不同构建允许通信。
+替换 App 会更新之后启动的 proxy。协议不兼容时，在业务执行前拒绝请求；
+更新 Clumsies 后重新连接 Agent 集成，宿主没有重连操作时再重启宿主。
+
+协议 revision 独立于产品版本、MCP 版本和 SQLite schema 版本。
+修改不兼容的请求／响应结构或语义时必须提升它；兼容的可选字段新增必须保证
+新旧双方行为兼容。测试覆盖不同构建通信、协议不兼容拒绝和项目绑定检查。
+当前仅支持 revision 相等，不引入版本范围协商，也不自动重放写请求。
+
+已发布的旧 proxy 仍保留严格构建检查，首次升级到此策略时可能仍需重连一次。
 
 ## 宿主交付面
 

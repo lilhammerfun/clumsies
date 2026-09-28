@@ -291,9 +291,12 @@ pub struct DaemonHealth {
     pub local_db: LocalDbStatus,
 }
 
+/// Agent IPC compatibility and build provenance, carried on every proxy request.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AgentRuntimeIdentity {
+    /// Wire and semantic compatibility revision, independent of product versions.
     pub protocol_revision: u32,
+    /// Build provenance for diagnostics; differing builds may share one protocol.
     pub build_id: String,
 }
 
