@@ -112,6 +112,15 @@ final class SoftwareUpdateControllerTests: XCTestCase {
                 XCTAssertEqual(observer.canCheckWhileDownloading, false)
                 XCTAssertEqual(observer.error?.code, Int(SUError.downloadError.rawValue))
                 XCTAssertFalse(controller.hasAvailableUpdate)
+                // Sparkle may briefly become busy again while asynchronously scheduling
+                // its next check after the completion delegate returns.
+                let retryReady = expectation(description: "Failed download becomes retryable")
+                let readiness = updater.publisher(for: \.canCheckForUpdates, options: [.initial, .new])
+                    .filter { $0 }
+                    .prefix(1)
+                    .sink { _ in retryReady.fulfill() }
+                await fulfillment(of: [retryReady], timeout: 5)
+                readiness.cancel()
                 XCTAssertTrue(controller.canCheckForUpdates, "A failed download must allow retrying")
             } else {
                 await fulfillment(of: [try XCTUnwrap(observer.presented)], timeout: 5)
