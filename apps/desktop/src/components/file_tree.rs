@@ -16,10 +16,14 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
+use gpui_kit::component::{Icon, IconName, Sizable};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::ui::{self, Typography};
+use crate::ui;
 
 /// One file in a tree: what it is called, where it lives, and the identity a
 /// screen uses to talk about it (a resource, a draft, a changed file).
@@ -150,7 +154,7 @@ pub struct RowClick {
     /// Whether the click landed on the row's own disclosure control, which is
     /// the part of a folder that opens and closes it. A row click selects a
     /// row; the control belongs to the folder.
-    pub chevron: bool,
+    pub folder_toggle: bool,
 }
 
 impl RowClick {
@@ -239,30 +243,33 @@ pub fn path_tree(
     let clicked = Rc::new(on_click);
     tree(state, move |index, entry, _lead, _window, cx| {
         let path = entry.item().id.to_string();
-        let marker = if entry.is_folder() {
-            if entry.is_expanded() { "▾" } else { "▸" }
-        } else {
-            " "
-        };
         let decoration = decorate(&path);
-        let tone = decoration.tone.unwrap_or_else(|| cx.theme().foreground);
-        let label = decoration.label.map(|label| {
-            div()
-                .text_style(&ui::CAPTION)
-                .text_color(cx.theme().primary)
-                .child(label)
-        });
-        // A folder's disclosure control is its own: the row selects, and this
-        // opens and closes, which is what macOS's tree does too. A file has the
-        // same width of space so the names line up.
-        let control = if entry.is_folder() {
+        let icon = if entry.is_folder() {
+            Icon::default().path(if entry.is_expanded() {
+                "icons/folder-open.svg"
+            } else {
+                "icons/folder.svg"
+            })
+        } else {
+            Icon::new(IconName::FileText)
+        };
+        let label = decoration
+            .label
+            .map(|label| Tag::secondary().xsmall().child(label));
+        // The folder icon toggles expansion; the rest of the row selects.
+        // Files and folders each occupy a single icon slot.
+        let leading_icon = if entry.is_folder() {
             let pressed = clicked.clone();
             let control_path = path.clone();
             div()
                 .id(("tree-disclosure", index))
                 .h_flex()
                 .justify_center()
-                .w(px(ui::SPACE_LG))
+                .items_center()
+                .size_4()
+                .flex_shrink_0()
+                .cursor_pointer()
+                .text_color(cx.theme().muted_foreground)
                 .hover(|style| style.text_color(cx.theme().foreground))
                 .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                     cx.stop_propagation();
@@ -271,30 +278,53 @@ pub fn path_tree(
                             path: control_path.clone(),
                             button: MouseButton::Left,
                             modifiers: event.modifiers,
-                            chevron: true,
+                            folder_toggle: true,
                         },
                         window,
                         cx,
                     );
                 })
-                .child(marker)
+                .child(icon.small())
                 .into_any_element()
         } else {
-            div().w(px(ui::SPACE_LG)).into_any_element()
+            icon.small()
+                .flex_shrink_0()
+                .text_color(cx.theme().muted_foreground)
+                .into_any_element()
         };
-        let item = ListItem::new(index).child(
-            div()
-                .h_flex()
-                .gap_2()
-                .pl(px(entry.depth() as f32 * ui::SPACE_MD))
-                .child(control)
-                .child(div().text_color(tone).child(entry.item().label.clone()))
-                .children(label),
-        );
-        // A set of several rows is painted here: the component library
-        // highlights one row, which is the row a plain click leaves behind.
+        let tooltip_path = path.clone();
+        let item = ListItem::new(index)
+            .text_sm()
+            .px_2()
+            .rounded(cx.theme().radius)
+            .tooltip(move |window, cx| Tooltip::new(tooltip_path.clone()).build(window, cx))
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .min_w(px(0.))
+                    .items_center()
+                    .gap_1()
+                    .pl(px(entry.depth() as f32 * ui::SPACE_MD))
+                    .child(leading_icon)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .when_some(decoration.tone, |this, tone| this.text_color(tone))
+                            .child(entry.item().label.clone()),
+                    )
+                    .children(label),
+            );
+        // GPUI Tree owns one active row. Our multi-selection uses exactly the
+        // same GPUI ListItem selection token, rather than a second palette.
         let item = if selected.is_batch() && selected.contains(&path) {
-            item.bg(cx.theme().tokens.selection)
+            item.bg(if cx.theme().list.active_highlight {
+                cx.theme().list_active
+            } else {
+                cx.theme().accent
+            })
         } else {
             item
         };
@@ -314,7 +344,7 @@ pub fn path_tree(
                     path: pressed_path.clone(),
                     button: MouseButton::Left,
                     modifiers: event.modifiers,
-                    chevron: false,
+                    folder_toggle: false,
                 },
                 window,
                 cx,
@@ -332,7 +362,7 @@ pub fn path_tree(
                     path: menu_path.clone(),
                     button: MouseButton::Right,
                     modifiers: event.modifiers,
-                    chevron: false,
+                    folder_toggle: false,
                 },
                 window,
                 cx,

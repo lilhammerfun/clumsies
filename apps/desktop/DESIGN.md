@@ -49,9 +49,20 @@ text including titles, and prefer ellipsis over clipping.
 
 ### Color
 
-Windows ships light and dark modes; both must work. Depth comes from surface
-lightness — less important surfaces are darker, more important ones lighter —
-not from extra borders.
+Windows ships light and dark modes; both must work. Assign colors by surface
+role through `src/ui.rs`, using existing GPUI tokens without hand-mixed colors:
+
+- Content canvas: `background`.
+- Surrounding page, title bar and rail: `title_bar`.
+- Active tabs: `accent`, paired with `accent_foreground`.
+- Menus and popovers: the GPUI `surface`/`surface_foreground` semantic pair.
+  On dark-mode initialization and system appearance changes, the shared theme
+  maps this pair to `title_bar`/`foreground`, so popups remain distinct from
+  the canvas. Light mode retains the library's default popup colors.
+
+Header wrappers are transparent. Only hover, pressed and selected states add
+fills. Use GPUI PopupMenu for all dropdown/context menus, retaining its item
+states, shadow, spacing and radius; do not restyle each menu independently.
 
 ## What the component library already gives us
 
@@ -77,6 +88,25 @@ Windows and Linux looking like the same product.
 Spacing comes from a 4px grid, stepped 4 / 8 / 12 / 16 / 24 / 32. Named steps
 live in `src/ui.rs`; screens use those names rather than picking a padding
 per call site.
+
+## Shared pane-header styling
+
+All list and content headers must use `components/header.rs`. Do not define
+local heights, padding, corner radii or borders for project filters, document
+tabs, toolbar groups or settings controls.
+
+- Header row: 44px, vertically centered, with shared horizontal padding.
+- Outer group: 40px, fully rounded, no border and no background fill.
+- Inner controls and tabs: 32px, fully rounded.
+- Selected tabs use a fill rather than introducing their own border.
+- The project filter stays on the left of the list header; project settings
+  stays right-aligned in that same navigator header. Document tabs stay on the
+  left of the content header and document tools on the right.
+- Content search is deferred until its scope and behavior are defined. Project
+  selection must not be combined with a content-search control.
+
+New controls must reuse these helpers; changes to this geometry must be made
+in the shared component, not patched independently in each screen.
 
 ## Motion
 
@@ -126,8 +156,8 @@ The Memory screen is side-by-side at every width today; below 641px it should
 stack and grow a back affordance. This is a real gap, not a stylistic
 preference, because the client runs in windows the user resizes.
 
-**A folder is opened by its own control, and by the arrow keys.** The row
-selects; the disclosure control at its left opens and closes it, and Left and
+**A folder is opened by its icon, and by the arrow keys.** The row
+selects; its open/closed folder icon toggles expansion without a separate arrow, and Left and
 Right do the same for the row the keyboard is on — a fold steps in, and anything
 else steps out to the folder that holds it. Which folders are folded is the
 screen's state, not the component's, because the component library expands a
@@ -145,14 +175,9 @@ after a divider, the ones only Memory knows, a Review and a discard. A command
 that would change several documents at once says how many it would change, and
 the ones that cannot be undone name the documents in the dialog they ask with.
 
-**The list is filtered by words rather than searched.** What the reader types
-filters the documents the screen already holds — a path, a title, or any word of
-the text, which is what macOS's Memory list matches — and the tree is rebuilt
-from what survives, so a folder whose contents all fall out goes with them.
-Nothing is asked of the Server for it: the filter is a projection of what is
-already on screen. A query that names nothing says so where the list was, which
-is macOS's own empty state for a search with no results, and a row the filter
-takes away is no longer selected.
+**Content search is deferred.** Do not expose the old local text filter as a
+search feature until the product defines whether search is global or scoped to
+the current Project. Project selection is a separate navigation control.
 
 **An empty Memory offers a starting point rather than a sentence.** macOS's
 empty Memory is where its guidelines are set up, and this client's is the same:
@@ -217,7 +242,7 @@ detail. This client draws, from the top:
 | --- | --- |
 | Title bar | The window's, not a screen's: the page navigation at the left and the window controls at the right, and nothing else. |
 | Rail | The six destinations of the macOS sidebar, **icons only**, each named in a tooltip. Memory is the brain, as it is in macOS. |
-| List column | The open section's list, under a header row carrying its two filters — the Project picker, which macOS calls MemoryProjectFilter and keeps in the same place, and the field the reader types in, which filters the same list macOS's searchable field filters — and, at the far right, at most one command rarer than the work itself. No heading: the rail already says which section this is. |
+| List column | The open section's list, with the shared project filter in its header. Content search is deferred. |
 | Detail | The work, under **one** header row: the open documents as tabs on the left, the tools for the one in front on the right. |
 
 **A document opens to be read.** The pane's default is the prose, and editing

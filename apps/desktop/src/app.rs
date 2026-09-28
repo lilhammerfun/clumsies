@@ -92,8 +92,10 @@ impl DesktopApp {
         // whenever it changes: a client that stays white on a dark desktop is
         // a client nobody wants open.
         Theme::sync_system_appearance(Some(window), cx);
+        ui::sync_popup_surface(cx);
         let appearance = cx.observe_window_appearance(window, |_app, _window, cx| {
             Theme::sync_system_appearance(None, cx);
+            ui::sync_popup_surface(cx);
         });
         let mut app = Self {
             engine,
@@ -145,14 +147,14 @@ impl DesktopApp {
         &self.memory
     }
 
-    /// The one command the list column's right side offers: the Project's
-    /// settings. Anything more is more than a reader needs above the work.
+    /// Project settings, right-aligned above the Memory navigator.
     fn settings_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        Button::new("project-settings")
-            .ghost()
+        let button = crate::components::header::button("project-settings")
             .icon(Icon::default().path("icons/settings.svg"))
             .tooltip("Project settings")
-            .on_click(cx.listener(|app, _event, window, cx| app.open_project_settings(window, cx)))
+            .on_click(cx.listener(|app, _event, window, cx| app.open_project_settings(window, cx)));
+        crate::components::header::group()
+            .child(button)
             .into_any_element()
     }
 
@@ -800,19 +802,8 @@ impl DesktopApp {
         cx.notify();
     }
 
-    pub fn toggle_projects(&mut self, cx: &mut Context<Self>) {
-        self.shell.toggle_projects();
-        cx.notify();
-    }
-
-    pub fn close_projects(&mut self, cx: &mut Context<Self>) {
-        self.shell.close_projects();
-        cx.notify();
-    }
-
     /// A Project was picked from the list header's panel.
     pub fn choose_project(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.shell.close_projects();
         self.select_project(index, cx);
     }
 
@@ -1586,6 +1577,18 @@ impl DesktopApp {
         cx.notify();
     }
 
+    fn project_filter(&self, cx: &mut Context<Self>) -> AnyElement {
+        let app = cx.entity();
+        crate::components::project_filter::project_filter(
+            self.projects
+                .iter()
+                .map(|project| project.name.clone())
+                .collect(),
+            self.selected_project,
+            move |index, _, cx| app.update(cx, |app, cx| app.choose_project(index, cx)),
+        )
+    }
+
     /// The open section's list column. A section that has no screen yet says so
     /// rather than drawing an empty column with no explanation.
     fn section_list(
@@ -1597,7 +1600,7 @@ impl DesktopApp {
         match self.shell.section() {
             Section::Memory => {
                 let settings = self.settings_button(cx);
-                self.memory.list(picker, Some(settings), window, cx)
+                self.memory.list(picker, settings, window, cx)
             }
             Section::Reviews => self.reviews.list(picker, window, cx),
             other => placeholder(other.list_note(), cx),
@@ -1619,16 +1622,9 @@ impl DesktopApp {
         }
     }
 
-    /// What the window's chrome needs: which Project is open, the list the
-    /// picker offers, and the width that decides whether the columns stack.
+    /// Window navigation, account and engine state, plus responsive layout.
     fn chrome(&self, window: &Window) -> Chrome<'_> {
-        let project = self
-            .selected_project
-            .and_then(|index| self.projects.get(index))
-            .map(|project| project.name.as_str());
         Chrome {
-            project,
-            projects: &self.projects,
             engine: self.engine_facts(),
             // The account this window is signed in to, as the rail's foot names
             // it: the Server the daemon holds a session with.
@@ -1711,7 +1707,7 @@ impl Render for DesktopApp {
         let actions = self.actions(window, cx);
         let mut chrome = self.chrome(window);
         chrome.width = width;
-        let picker = self.shell.project_picker(&chrome, cx);
+        let picker = self.project_filter(cx);
         let slots = Slots {
             list: self.section_list(picker, window, cx),
             detail: self.section_detail(actions, window, cx),

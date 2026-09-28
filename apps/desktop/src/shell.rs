@@ -11,7 +11,7 @@
 //! - a band across the top belonging to the window alone: the page navigation
 //!   and the window controls, and nothing a screen owns;
 //! - the section's list and the work itself inside one floating card: rounded,
-//!   bordered, a lighter colour than the page, and inset from the page's right
+//!   bordered, a content canvas distinct from the page, and inset from the page's right
 //!   and bottom edges. Each of those two panes carries a header row of its own
 //!   for the commands and facts that act on that pane — the list's header, and
 //!   the document's header — which is where a screen puts what it offers, and
@@ -33,7 +33,6 @@ use gpui_kit::component::{Icon, IconName, Sizable as _, TitleBar};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
-use crate::engine::Project;
 use crate::ui::{self, Typography};
 
 /// The rail of destinations: an icon, and nothing else.
@@ -144,14 +143,8 @@ pub struct EngineFacts {
     pub version: String,
 }
 
-/// What the window supplies for its own chrome: which Project is open, the list
-/// the picker offers, the engine behind it, what each destination has waiting,
-/// and the width that decides what folds away.
+/// Shared window navigation, engine state and responsive layout.
 pub struct Chrome<'a> {
-    /// The Project the work belongs to.
-    pub project: Option<&'a str>,
-    /// The Projects the picker offers.
-    pub projects: &'a [Project],
     /// The engine this client is talking to.
     pub engine: EngineFacts,
     /// What the account is called, for the foot of the rail.
@@ -178,9 +171,6 @@ pub struct Slots {
 
 pub struct Shell {
     section: Section,
-    /// The Project picker is chrome, not a screen, so the shell owns whether it
-    /// is open.
-    projects_open: bool,
 }
 
 impl Default for Shell {
@@ -193,7 +183,6 @@ impl Shell {
     pub fn new() -> Self {
         Self {
             section: Section::Memory,
-            projects_open: false,
         }
     }
 
@@ -201,38 +190,8 @@ impl Shell {
         self.section
     }
 
-    pub fn close_projects(&mut self) {
-        self.projects_open = false;
-    }
-
-    pub fn toggle_projects(&mut self) {
-        self.projects_open = !self.projects_open;
-    }
-
     pub fn set_section(&mut self, section: Section) {
         self.section = section;
-        self.projects_open = false;
-    }
-
-    /// The chip that names the open Project. A screen puts it in its list
-    /// column's header, which is where macOS keeps the same filter.
-    pub fn project_picker(&self, chrome: &Chrome<'_>, cx: &mut Context<DesktopApp>) -> AnyElement {
-        let project = chrome.project.unwrap_or("No Project").to_owned();
-        div()
-            .id("project-picker")
-            .h_flex()
-            .gap_1()
-            .items_center()
-            .px_2()
-            .py_1()
-            .rounded(px(ui::RADIUS))
-            .text_style(&ui::CAPTION)
-            .text_color(cx.theme().muted_foreground)
-            .hover(|this| this.bg(cx.theme().list_hover))
-            .child(ui::truncate(&project, 20))
-            .child(Icon::new(IconName::ChevronDown).with_size(px(12.)))
-            .on_click(cx.listener(|app, _event, _window, cx| app.toggle_projects(cx)))
-            .into_any_element()
     }
 
     /// The window: the band across the top, then the rail and the card.
@@ -274,8 +233,7 @@ impl Shell {
                 .into_any_element()
         };
 
-        // The work floats: a card of its own colour, inset from the page on
-        // every side, which is what separates it from the chrome around it.
+        // The content uses the base canvas, framed by the contrasting page chrome.
         let card = div()
             .v_flex()
             .flex_1()
@@ -287,26 +245,14 @@ impl Shell {
             .border_1()
             .border_color(cx.theme().border)
             .overflow_hidden()
-            .bg(ui::surface(cx))
+            .bg(ui::content_background(cx))
             .child(inside);
-
-        let menu_open = self.projects_open;
-        let overlay = menu_open.then(|| {
-            div()
-                .id("projects-overlay")
-                .absolute()
-                .inset_0()
-                .occlude()
-                .on_click(cx.listener(|app, _event, _window, cx| app.close_projects(cx)))
-                .into_any_element()
-        });
-        let panel = menu_open.then(|| self.projects_panel(chrome.projects, cx));
 
         div()
             .v_flex()
             .relative()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(ui::page_background(cx))
             .child(self.band(window, &chrome, cx))
             .child(
                 div()
@@ -317,8 +263,6 @@ impl Shell {
                     .child(self.rail(&chrome, cx))
                     .child(card),
             )
-            .children(overlay)
-            .children(panel)
             .into_any_element()
     }
 
@@ -336,8 +280,8 @@ impl Shell {
         // window reads as one surface with a card floating on it.
         let band = TitleBar::new()
             .pl(px(0.))
-            .bg(cx.theme().background)
-            .border_color(cx.theme().background)
+            .bg(ui::page_background(cx))
+            .border_color(ui::page_background(cx))
             .child(
                 div()
                     .h_flex()
@@ -488,39 +432,6 @@ impl Shell {
                         move |window, cx| Tooltip::new(label.clone()).build(window, cx)
                     }),
             )
-            .into_any_element()
-    }
-
-    /// The Project list, under the chip that names the current Project. macOS
-    /// keeps this list in the sidebar's own list; this client shows it where the
-    /// Project is named.
-    fn projects_panel(&self, projects: &[Project], cx: &mut Context<DesktopApp>) -> AnyElement {
-        let items = projects.iter().enumerate().map(|(index, project)| {
-            div()
-                .id(("project-choice", index))
-                .px_3()
-                .py_2()
-                .text_style(&ui::BODY)
-                .child(project.name.clone())
-                .hover(|this| this.bg(cx.theme().list_hover))
-                .on_click(cx.listener(move |app, _event, _window, cx| {
-                    app.choose_project(index, cx);
-                }))
-        });
-
-        div()
-            .id("projects-panel")
-            .absolute()
-            .top(px(ui::SPACE_2XL + ui::SPACE_MD))
-            .left(px(RAIL_WIDTH + ui::SPACE_LG))
-            .min_w(px(240.))
-            .max_h(px(320.))
-            .rounded(px(ui::RADIUS))
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().popover)
-            .v_flex()
-            .children(items)
             .into_any_element()
     }
 }

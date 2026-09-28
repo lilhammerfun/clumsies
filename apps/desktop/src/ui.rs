@@ -55,16 +55,31 @@ pub const RADIUS: f32 = 4.;
 /// Radius for top-level containers: windows, dialogs, flyouts.
 pub const RADIUS_LG: f32 = 8.;
 
-/// How far a surface is lifted off the page below it. The theme names one
-/// background; a card that has to read as floating needs a little more light
-/// than the page, and one ratio in one place is how it gets it in either mode.
-pub const ELEVATION: f32 = 0.05;
+/// The canvas and chrome use GPUI's existing semantic colors, without mixing.
+pub fn content_background(cx: &App) -> Hsla {
+    cx.theme().background
+}
 
-/// The surface a floating card is drawn on: the page's colour, lifted.
-pub fn surface(cx: &App) -> Hsla {
-    cx.theme()
-        .background
-        .blend(cx.theme().foreground.opacity(ELEVATION))
+pub fn page_background(cx: &App) -> Hsla {
+    cx.theme().title_bar
+}
+
+pub fn selected_background(cx: &App) -> Hsla {
+    cx.theme().accent
+}
+
+/// Keep every GPUI popup on the same surface role as the surrounding chrome
+/// in dark mode. Light mode retains the library's white popup surface.
+/// This is a theme mapping, not a per-menu style or a new color palette.
+pub fn sync_popup_surface(cx: &mut App) {
+    use gpui_kit::component::Theme;
+    let mut tokens = cx.theme().semantic_tokens();
+    if cx.theme().mode.is_dark() {
+        tokens.colors.surface = cx.theme().title_bar;
+        tokens.colors.surface_foreground = cx.theme().foreground;
+    }
+    Theme::global_mut(cx).apply_semantic_tokens(&tokens);
+    gpui_kit::base::Theme::global_mut(cx).tokens = tokens;
 }
 
 /// A line of text in a semantic color. Every empty state and every failure the

@@ -17,7 +17,6 @@ use clumsiesd::{
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::tree::TreeState;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
@@ -25,9 +24,9 @@ use gpui_kit::*;
 
 use crate::app::DesktopApp;
 use crate::components::file_tree::{self, RowClick};
-use crate::components::memory_tree;
+use crate::components::{header, memory_tree};
 use crate::engine::{Checkout, DocumentEdit, MemoryDocument};
-use crate::screens::document::{DocumentPane, Mode, Notice, PANE_HEADER, PaneContext};
+use crate::screens::document::{DocumentPane, Mode, Notice, PaneContext};
 use crate::ui::{self, Typography};
 
 /// What an empty Memory offers: the starting point macOS offers from the same
@@ -73,14 +72,8 @@ fn empty_memory_state(cx: &mut Context<DesktopApp>) -> AnyElement {
         .into_any_element()
 }
 
-/// The list header's fields: the filter beside the Project filter, which is
-/// what a search field in a list is. macOS puts the same field in its window
-/// toolbar, because that toolbar is the only place it has for one.
-const SEARCH_HEIGHT: f32 = 28.;
-
 /// One tab. macOS sizes its own between 84 and 200 points; a name that long is
 /// rare here, and the truncation is what keeps the strip from walking off.
-const TAB_HEIGHT: f32 = 26.;
 const TAB_MIN_WIDTH: f32 = 96.;
 const TAB_MAX_WIDTH: f32 = 200.;
 
@@ -138,9 +131,6 @@ pub struct MemoryScreen {
     /// workspace navigation and filters the list in front with it; here the
     /// Memory list is the only list, so the screen keeps it.
     query: String,
-    /// The field the query is typed in, which sits in the list's own header
-    /// beside the Project filter: both of them filter the same list.
-    search: Entity<InputState>,
     /// The drafts open in this Project, which is what the tree marks and what
     /// the pane offers to review.
     drafts: Vec<DaemonDraftSummary>,
@@ -157,7 +147,6 @@ pub struct MemoryScreen {
     list_focus: FocusHandle,
     /// Dropping a subscription cancels it, so the screen holds it.
     _selection: Subscription,
-    _search_edits: Subscription,
 }
 
 /// What a tree row can offer, read before its menu is built.
@@ -228,17 +217,6 @@ impl MemoryScreen {
             app.memory().follow_selection(cx);
             cx.notify();
         });
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
-        // Every keystroke in the field rebuilds what the tree shows: the filter
-        // is a projection of the documents the screen already holds, so there
-        // is nothing to wait for.
-        let search_edits = cx.subscribe(&search, |app, _, event, cx| {
-            if matches!(event, InputEvent::Change) {
-                let query = app.memory().search.read(cx).value().to_string();
-                app.memory().query = query;
-                app.memory().publish(cx);
-            }
-        });
         let mut screen = Self {
             tree,
             project_id: None,
@@ -257,13 +235,11 @@ impl MemoryScreen {
             pending_path: None,
             pending_mode: None,
             query: String::new(),
-            search,
             drafts: Vec::new(),
             error: None,
             tools_focus: cx.focus_handle(),
             list_focus: cx.focus_handle(),
             _selection: selection,
-            _search_edits: search_edits,
         };
         screen.set_checkout(checkout, error, cx);
         // Opening a Project opens its first document, which is what opening one
@@ -1122,42 +1098,23 @@ impl MemoryScreen {
         })
     }
 
-    /// The section's list column: the Project's Memory, as files, under a header
-    /// row of its own saying which Project and offering to change it. Every pane
-    /// carries its own header; this is the list's.
+    /// The project scope stays above the file list; content search is deferred.
     pub fn list(
         &self,
         project: AnyElement,
-        settings: Option<AnyElement>,
+        settings: AnyElement,
         window: &Window,
         cx: &App,
     ) -> AnyElement {
-        // No title: the rail already says which section this is, and a heading
-        // that repeats it is a line of pixels that says nothing. What a reader
-        // needs here is the two filters — which Project, and which words — and,
-        // at the far right, the one command rarer than the work.
-        let header = div()
-            .h_flex()
-            .h(px(PANE_HEADER))
-            .pl_3()
-            .pr_2()
-            .gap_2()
-            .items_center()
-            .child(project)
+        let header = header::row()
             .child(
-                div().flex_1().min_w(px(0.)).child(
-                    Input::new(&self.search)
-                        .w_full()
-                        .h(px(SEARCH_HEIGHT))
-                        .cleanable(true)
-                        .prefix(
-                            Icon::new(IconName::Search)
-                                .with_size(px(14.))
-                                .text_color(cx.theme().muted_foreground),
-                        ),
-                ),
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .child(project),
             )
-            .children(settings);
+            .child(div().flex_shrink_0().child(settings));
         // The tree's region takes the keyboard as one thing, and says so with a
         // ring, the way every other focusable region in this window does.
         let ring = if self.list_focused(window) {
@@ -1209,57 +1166,47 @@ impl MemoryScreen {
             .into_any_element()
     }
 
-    /// The section's detail: the strip of open documents over the tab in front,
-    /// which draws under the pane's own header.
+    /// Tabs stay on the left; all tools stay on the right, even with no tab open.
     pub fn detail(
         &self,
         focus: &FocusHandle,
         window: &Window,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
-        let Some(pane) = self.active_pane() else {
-            // Three ways to have nothing to show: a Project that could not be
-            // read, one with no Memory at all, and one whose tabs the reader
-            // has all closed.
-            let reason = match (&self.error, self.documents.is_empty()) {
-                (Some(error), _) => ui::message(error.clone(), cx.theme().danger),
-                // A Project with no Memory at all is where Memory starts: macOS
-                // offers the same thing from this state rather than a sentence,
-                // because a reader with nothing to browse has nothing else to do.
-                (None, true) => return empty_memory_state(cx),
-                (None, false) => ui::message("Select a document.", cx.theme().muted_foreground),
-            };
-            return div()
-                .v_flex()
-                .flex_1()
-                .h_full()
-                .min_w(px(0.))
-                .p_4()
-                .child(reason)
-                .into_any_element();
-        };
-        // One toolbar for the pane: which document is open on the left, what
-        // can be done with it on the right. macOS splits the same two between
-        // its tab strip and its window toolbar.
-        let toolbar = div()
-            .h_flex()
-            .h(px(PANE_HEADER))
-            .pl_2()
-            .pr_3()
-            .gap_2()
-            .items_center()
+        let pane = self.active_pane();
+        let tabs = self.tabs(cx);
+        let toolbar = header::row()
+            .children((!tabs.is_empty()).then(|| {
+                header::group()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .children(tabs)
+            }))
+            .child(div().flex_1())
             .child(
                 div()
                     .h_flex()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .gap_1()
+                    .flex_shrink_0()
                     .items_center()
-                    .overflow_hidden()
-                    .children(self.tabs(cx)),
-            )
-            .child(pane.tools(focus, cx));
-        let body = pane.body(window, cx);
+                    .gap_1()
+                    .children(pane.map(|pane| pane.tools(focus, cx))),
+            );
+        let body = if let Some(pane) = pane {
+            pane.body(window, cx)
+        } else {
+            match (&self.error, self.documents.is_empty()) {
+                (None, true) => empty_memory_state(cx),
+                (error, _) => div()
+                    .v_flex()
+                    .flex_1()
+                    .p_4()
+                    .child(match error {
+                        Some(error) => ui::message(error.clone(), cx.theme().danger),
+                        None => ui::message("Select a document.", cx.theme().muted_foreground),
+                    })
+                    .into_any_element(),
+            }
+        };
         div()
             .v_flex()
             .flex_1()
@@ -1282,12 +1229,11 @@ impl MemoryScreen {
         }
         // The colors a chip needs are taken once: a listener borrows the
         // application, so the theme cannot be held across one.
-        let (surface, border, foreground, muted, hover) = {
+        let (surface, foreground, muted, hover) = {
             let theme = cx.theme();
             (
-                theme.background,
-                theme.border,
-                theme.foreground,
+                ui::selected_background(cx),
+                theme.accent_foreground,
                 theme.muted_foreground,
                 theme.secondary_hover,
             )
@@ -1318,19 +1264,19 @@ impl MemoryScreen {
                     .h_flex()
                     .items_center()
                     .gap_1()
-                    .h(px(TAB_HEIGHT))
+                    .h(px(header::CONTROL_HEIGHT))
                     .min_w(px(TAB_MIN_WIDTH))
                     .max_w(px(TAB_MAX_WIDTH))
                     .flex_shrink_0()
                     .pl_2()
                     .pr_1()
-                    .rounded(px(ui::RADIUS))
+                    .rounded(px(header::RADIUS))
                     .text_color(tone)
                     .on_click(cx.listener(move |app, _event, window, cx| {
                         app.select_tab(&opening, window, cx)
                     }));
             if selected {
-                chip = chip.bg(surface).border_1().border_color(border);
+                chip = chip.bg(surface);
             } else {
                 chip = chip.hover(|style| style.bg(hover));
             }
@@ -1357,7 +1303,7 @@ impl MemoryScreen {
                         .items_center()
                         .size(px(18.))
                         .flex_shrink_0()
-                        .rounded(px(ui::RADIUS))
+                        .rounded(px(header::RADIUS))
                         .hover(|style| style.bg(hover))
                         .on_click(cx.listener(move |app, _event, window, cx| {
                             app.close_tab(&closing, window, cx)
@@ -1573,7 +1519,7 @@ fn tree_clicked(click: RowClick, _window: &mut Window, cx: &mut App) {
     };
     app.update(cx, |app, cx| {
         let memory = app.memory();
-        match (click.button, click.chevron) {
+        match (click.button, click.folder_toggle) {
             (MouseButton::Left, true) => {
                 memory.toggle_folder(&click.path, cx);
                 return;

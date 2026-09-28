@@ -23,17 +23,13 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
-use crate::components::{diff, fill, markdown};
+use crate::components::{diff, fill, header, markdown};
 use crate::engine::{self, DocumentEdit, MemoryDocument};
 use crate::ui::{self, Typography};
 
 /// How long a pause in typing waits before the text is stored. macOS debounces
 /// at 600ms because the store is a socket call, not an in-process write.
 pub const SAVE_DELAY: Duration = Duration::from_millis(600);
-
-/// The height of a pane's header row. The list column and the document pane use
-/// the same one, so the two headers line up across the card.
-pub const PANE_HEADER: f32 = 44.;
 
 /// What the pane is doing with a document. Reading it as prose is what a
 /// document is for, so that is what a reader gets without asking; editing and
@@ -254,14 +250,10 @@ impl DocumentPane {
                     selected: bool,
                     this: Entity<DesktopApp>,
                     action: fn(&mut DesktopApp, &mut Context<DesktopApp>)| {
-            Button::new(id)
-                // No frame: the pill around the group is the only shape the
-                // tools need, and a box inside a box is what that avoids.
-                .ghost()
+            header::button(id)
                 .icon(icon)
                 .tooltip(tooltip)
                 .toggled(selected)
-                .rounded(px(999.))
                 .on_click(move |_event, _window, cx| {
                     this.update(cx, action);
                 })
@@ -272,12 +264,10 @@ impl DocumentPane {
             // A plain button that opens the menu: the library's dropdown button
             // adds a caret and a divider of its own, which squares off the end
             // of the pill for a mark the reader does not need.
-            Button::new("document-more")
-                .ghost()
+            header::button("document-more")
                 .bg(transparent_black())
                 .icon(Icon::default().path("icons/ellipsis.svg"))
                 .tooltip("More")
-                .rounded(px(999.))
                 .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
                     let this = this.clone();
                     menu.item(
@@ -289,18 +279,8 @@ impl DocumentPane {
                     )
                 })
         };
-        div()
+        header::group()
             .id("document-tools")
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
-            // The tools are a surface of their own with fully rounded ends, so
-            // the group does not read as another square panel inside the pane.
-            // No border and no ring: the fill is the shape.
-            .rounded_full()
-            .bg(ui::surface(cx))
             .track_focus(focus)
             .tab_stop(true)
             .children(self.header_status(cx))

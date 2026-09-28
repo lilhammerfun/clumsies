@@ -54,13 +54,13 @@ will do. Ordered the way the macOS client uses them.
 | `SheetActionBar` (9 files) | Divider, progress label, Cancel and Confirm, bar background. | Library. `dialog`/`sheet` own their footers; the Review sheet uses them. Escape and Return come from the framework, so they are free. |
 | `View.toolbarHelp` (6 files) | A tooltip that survives being hosted in the native toolbar. | Library. `tooltip::Tooltip`, built once per control. |
 | `FormErrorMessage` (6 files) | A red line inside the form, with an optional Retry. | Compose. `ui::message(text, danger)` is the same line; a Retry belongs to the control that failed. |
-| `ClassicSearchField` (5 files) | The one search box, with a focus token driven by Cmd-K. | Library. `input::Input` with a magnifier and its clear button, in the Memory list's header, filtering the tree in place. macOS keeps the same field in its window toolbar; this client keeps it in the list's own header, because its title bar carries no screen content. A palette over `command` is not built. |
+| `ClassicSearchField` (5 files) | Content search. | Deferred until the desktop search scope and behavior are defined. No search field or search icon is currently exposed. |
 | `ContentLoadingView` (5 files) | One centred spinner for a region awaiting its first result. | Library. `spinner`/`skeleton`; not built yet, and today a screen simply has nothing to show while it waits. |
 | `UnifiedDiffView` + its metrics (4 files) | Monospaced diff, two or three gutters, hunk collapsing, inline comment threads. | Ours: `components/diff.rs`, on `similar`. Rows and colours are there, and a line wider than the pane is reached by scrolling the view sideways rather than wrapping — the rows are virtualized, so a wrapped line would break their height. Gutters, hunk collapse and comment threads are not built. |
 | `AvatarView`, `UserIdentityLabel` (3 files each) | Initials or image, one size ramp, one a11y element. | Library. `avatar`; the rail's foot draws an icon today. |
 | `BrandLogoView` (3 files) | The brand mark, optionally breathing. | Ours later; it is an asset and a container. |
 | `ReviewSymbolImage`, `ReviewStatusIndicator`, `InlineStatusBadge` (2 files each) | Review state as an icon, a colour and a capsule. | Port the table, use `badge`/`tag`. `ui.rs` holds the type and colour steps; the review-state table arrives with the Reviews screen. |
-| `ToolbarFilterMenu`, `ProjectFilterMenu` (2 files each) | A funnel chip with the selected title, opening a menu. | Compose. `shell::project_picker` is already this chip; `popover` + `menu` are the library pieces behind it. |
+| `ToolbarFilterMenu`, `ProjectFilterMenu` (2 files each) | A filter icon and selected project name, opening a checked menu. | `components/project_filter.rs` composes GPUI Button and PopupMenu in the list header, shared by Memory and Reviews. No content search is mixed into project selection. |
 | `PathTreeView`, `PathTreeRowLabel`, `FileSymbolView` (2 files) | A path-derived tree, one row shape, file-type icons. | Ours: `components/memory_tree.rs` builds the tree from paths; the library's `tree` draws it. Multi-select is ours on top, in `file_tree::Selection`: the set is the screen's, the painting and the modifier clicks are the component's. A context menu and inline rename are not built — the menu is Memory's business, and a rename is a dialog rather than a field in a row. |
 | `MarkdownContentView`, `MarkdownPreview` (2 files each) | Markdown with the frontmatter split out, in a reading column. | Library. `text::TextView::markdown` with `FrontmatterPlugin`, wrapped in `components/markdown.rs`. |
 | `NativeTextEditor` (1 screen) | The document body: plain text, undo, find, a centred column. | Library. `input::Textarea`, sized by `components/fill.rs`; the centred column is `DocumentContentMetrics`' idea and is not built. |
@@ -122,3 +122,28 @@ behaviour this client has to re-express rather than translate:
 4. Diff parity: gutters, hunk collapsing, and the comment threads the review
    flow needs.
 5. The window-level feedback corner, on `notification`.
+
+## Header geometry
+
+`components/header.rs` owns the shared 44px pane row, 40px transparent, borderless
+group, and 32px rounded controls. Project scope, document tabs, document tools
+and project settings use this same composition; selected tabs use a fill, not
+a separate border.
+
+Surface roles are defined in `ui.rs`: page chrome surrounds the base content
+canvas; header groups are transparent layout wrappers; active tabs use the
+selected surface. Only interaction states add control backgrounds. All screens must use these roles instead of assigning background
+tokens independently.
+
+## File rows and menus
+
+The reusable path tree composes GPUI Tree, ListItem, Icon, Tooltip and Tag.
+Rows use the library's small text scale and radius, with folder/file icons,
+truncated names and a trailing secondary status tag. Folder icons toggle expansion and show open/closed state without a separate
+arrow; multi-selection uses the same ListItem color tokens as single
+selection. Keep our path projection and selection behavior, not a second set
+of widget styles.
+
+All action and project menus use PopupMenu unchanged. The shared theme maps
+its semantic popup surface at startup and on appearance changes, using GPUI's
+existing colors; no per-menu palette or hand-mixed colors are allowed.

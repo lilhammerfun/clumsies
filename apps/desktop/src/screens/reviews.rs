@@ -373,12 +373,7 @@ impl ReviewsScreen {
         window: &Window,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
-        let header = div()
-            .h_flex()
-            .h(px(crate::screens::document::PANE_HEADER))
-            .px_3()
-            .gap_2()
-            .items_center()
+        let header = crate::components::header::row()
             .child(div().text_style(&ui::BODY).child("Reviews"))
             .child(project);
         let ring = if self.list_focused(window) {
