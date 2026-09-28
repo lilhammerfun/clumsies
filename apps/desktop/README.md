@@ -55,6 +55,16 @@ A Dev Instance may keep a `fixtures/dashboard.json` beside its daemon root, as
 the live statistics and badges the page "Demo data". A month of history takes a
 month to accumulate, so this is how the screen is looked at while it is built.
 
+**Signing in** is the macOS page in the state it reached when it gained invited
+password accounts: the brand mark over a title, then whatever the Server says it
+offers — a local password, an identity provider, both, or neither — with an
+invitation and a password reset behind the same fields, and the four first-run
+fields when the Server has never been configured. The Server address is folded
+away at the bottom, because it is set once and then read. Nothing here is
+guessed from the client's side: the Server's own `/api/v1/auth/methods` decides
+which controls exist, and the four shapes this client mirrors are pinned by
+tests.
+
 **Settings and the account menu** are the macOS client's own two: the identity
 at the foot of the rail opens Settings — a dialog here, because this client has
 one window — and ends the session from the same menu. Signing out stores what

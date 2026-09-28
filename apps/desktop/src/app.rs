@@ -26,7 +26,7 @@ use crate::screens::new_memory::NewMemoryDialog;
 use crate::screens::project_settings::{ProjectSettings, ProjectSettingsDialog};
 use crate::screens::reviews::{ReviewNotice, ReviewsScreen};
 use crate::screens::settings::{self, SettingsDialog};
-use crate::screens::sign_in::{SignInScreen, StagedSetup};
+use crate::screens::sign_in::{LocalAction, SignInScreen, StagedSetup};
 use crate::shell::{AccountFacts, Chrome, EngineFacts, Section, Shell, Slots};
 use crate::ui::{self, Typography};
 
@@ -1976,6 +1976,13 @@ impl Render for DesktopApp {
             // A staged configuration arrives without a window, so the form takes
             // it here, before it draws with its fields.
             self.sign_in.apply_staged(window, cx);
+            // The form is built from what the Server says it offers, which macOS
+            // asks for when the page appears. It is asked once, so rendering
+            // does not become a poll.
+            if self.sign_in.should_ask(cx) {
+                self.sign_in.asked = true;
+                self.connect_to_server(cx);
+            }
             return self.sign_in.render(cx);
         }
         // A tree click arrives as a notification, which carries no window, so
@@ -2058,21 +2065,114 @@ impl Render for DesktopApp {
 
 /// What the form's background work produces.
 enum Outcome {
-    /// The Server has never been configured and needs the setup fields.
-    NeedsSetup {
+    /// What a Server answered about itself: whether it has been configured, and
+    /// which ways in it offers. The form is built from this.
+    Server {
+        origin: String,
         setup_code_configured: bool,
         oidc_configured: bool,
+        needs_setup: bool,
         /// What a previous setup attempt already staged there.
         staged: Option<StagedSetup>,
+        methods: crate::sign_in::LoginMethods,
     },
     SignedIn,
 }
 
 impl DesktopApp {
-    /// The form's primary action, branching the way the macOS model does: a
-    /// Server that reports itself unconfigured reveals the setup fields, and a
-    /// configured one goes straight to the browser.
-    pub fn continue_from_form(&mut self, cx: &mut Context<Self>) {
+    /// The sign-in form, for the screen's own controls: the toggle and the
+    /// address row change what the form is, not what the window is doing.
+    pub fn sign_in_mut(&mut self) -> &mut SignInScreen {
+        &mut self.sign_in
+    }
+
+    /// Asks the Server what it offers, which is what decides the shape of the
+    /// form: passwords, an identity provider, both, or neither. macOS runs the
+    /// same call when the page appears and when the address is submitted.
+    pub fn connect_to_server(&mut self, cx: &mut Context<Self>) {
+        if self.sign_in.busy {
+            return;
+        }
+        let origin = self.sign_in.values(cx).server_origin;
+        if origin.is_empty() {
+            self.sign_in.error = Some("Enter the Server address.".to_owned());
+            cx.notify();
+            return;
+        }
+        self.begin("Asking the Server…", cx, move || {
+            let origin = normalize_origin(&origin)?;
+            let status = crate::sign_in::setup_status(&origin)?;
+            let methods = crate::sign_in::login_methods(&origin)?;
+            Ok(Outcome::Server {
+                origin,
+                setup_code_configured: status.setup_code_configured,
+                oidc_configured: status.oidc_configured,
+                needs_setup: crate::sign_in::needs_setup(&status),
+                staged: staged_setup(&status),
+                methods,
+            })
+        });
+    }
+
+    /// Signs in with a local password, or redeems the one-time credential the
+    /// reader is holding — macOS's `signInWithPassword`, which is one action
+    /// with three names.
+    pub fn sign_in_with_password(&mut self, cx: &mut Context<Self>) {
+        if self.sign_in.busy {
+            return;
+        }
+        let values = self.sign_in.values(cx);
+        let action = self.sign_in.local_action;
+        if values.username.is_empty() && action != LocalAction::Reset {
+            self.sign_in.error = Some("Enter a username.".to_owned());
+            cx.notify();
+            return;
+        }
+        if values.password.is_empty() {
+            self.sign_in.error = Some("Enter a password.".to_owned());
+            cx.notify();
+            return;
+        }
+        if action != LocalAction::SignIn {
+            if values.credential.is_empty() {
+                self.sign_in.error = Some("Enter the one-time credential.".to_owned());
+                cx.notify();
+                return;
+            }
+            if values.password != values.confirm {
+                self.sign_in.error = Some("Passwords do not match.".to_owned());
+                cx.notify();
+                return;
+            }
+        }
+        self.begin("Signing in…", cx, move || {
+            let origin = normalize_origin(&values.server_origin)?;
+            let session = match action {
+                LocalAction::SignIn => {
+                    crate::sign_in::password_login(&origin, &values.username, &values.password)?
+                }
+                LocalAction::Invitation => crate::sign_in::redeem_credential(
+                    &origin,
+                    &values.credential,
+                    Some(&values.username),
+                    &values.password,
+                    true,
+                )?,
+                LocalAction::Reset => crate::sign_in::redeem_credential(
+                    &origin,
+                    &values.credential,
+                    None,
+                    &values.password,
+                    false,
+                )?,
+            };
+            install(&origin, session)
+        });
+    }
+
+    /// Signs in through the browser, which is the whole of the sign-in on a
+    /// deployment with no passwords and the second way in on one with both.
+    pub fn continue_in_browser(&mut self, cx: &mut Context<Self>) {
         if self.sign_in.busy {
             return;
         }
@@ -2082,66 +2182,103 @@ impl DesktopApp {
             cx.notify();
             return;
         }
+        self.begin("Opening the browser…", cx, move || {
+            let origin = normalize_origin(&values.server_origin)?;
+            let status = crate::sign_in::setup_status(&origin)?;
+            if crate::sign_in::needs_setup(&status) {
+                let methods = crate::sign_in::login_methods(&origin)?;
+                return Ok(Outcome::Server {
+                    origin,
+                    setup_code_configured: status.setup_code_configured,
+                    oidc_configured: status.oidc_configured,
+                    needs_setup: true,
+                    staged: staged_setup(&status),
+                    methods,
+                });
+            }
+            if !status.oidc_configured {
+                return Err(
+                    "Configure the Server's OIDC deployment settings before continuing.".to_owned(),
+                );
+            }
+            let session = crate::sign_in::authenticate(&origin)?;
+            install(&origin, session)
+        });
+    }
 
-        if self.sign_in.shows_setup {
-            if values.setup_code.is_empty() {
-                self.sign_in.error =
-                    Some("Enter the setup code from the Server deployment.".to_owned());
-                cx.notify();
-                return;
-            }
-            if values.organization.is_empty() {
-                self.sign_in.error = Some("Enter an organization name.".to_owned());
-                cx.notify();
-                return;
-            }
-            if values.default_project.is_empty() {
-                self.sign_in.error = Some("Enter a default project name.".to_owned());
-                cx.notify();
-                return;
-            }
-            self.begin("Saving the Server configuration…", cx, move || {
-                let origin = normalize_origin(&values.server_origin)?;
-                let session = crate::sign_in::complete_setup(
+    /// The first-run primary action: creates the owner with a local password, or
+    /// hands the first run to the identity provider. macOS branches on the same
+    /// switch with the same two calls.
+    pub fn complete_setup(&mut self, cx: &mut Context<Self>) {
+        if self.sign_in.busy {
+            return;
+        }
+        let values = self.sign_in.values(cx);
+        let with_password = self.sign_in.setup_with_password;
+        if values.setup_code.is_empty() {
+            self.sign_in.error =
+                Some("Enter the setup code from the Server deployment.".to_owned());
+            cx.notify();
+            return;
+        }
+        if values.organization.is_empty() {
+            self.sign_in.error = Some("Enter an organization name.".to_owned());
+            cx.notify();
+            return;
+        }
+        if values.default_project.is_empty() {
+            self.sign_in.error = Some("Enter a default project name.".to_owned());
+            cx.notify();
+            return;
+        }
+        if with_password && values.password.is_empty() {
+            self.sign_in.error = Some("Enter a password.".to_owned());
+            cx.notify();
+            return;
+        }
+        if with_password && values.password != values.confirm {
+            self.sign_in.error = Some("Passwords do not match.".to_owned());
+            cx.notify();
+            return;
+        }
+        self.begin("Saving the Server configuration…", cx, move || {
+            let origin = normalize_origin(&values.server_origin)?;
+            let session = if with_password {
+                crate::sign_in::complete_password_setup(
                     &origin,
                     &values.setup_code,
                     &values.organization,
                     &values.default_project,
                     &values.allowed_domains,
-                )?;
-                install(&origin, session)
-            });
-        } else {
-            self.begin("Asking the Server…", cx, move || {
-                let origin = normalize_origin(&values.server_origin)?;
-                let status = crate::sign_in::setup_status(&origin)?;
-                if crate::sign_in::needs_setup(&status) {
-                    return Ok(Outcome::NeedsSetup {
-                        setup_code_configured: status.setup_code_configured,
-                        oidc_configured: status.oidc_configured,
-                        staged: staged_setup(&status),
-                    });
-                }
-                if !status.oidc_configured {
-                    return Err(
-                        "Configure the Server's OIDC deployment settings before continuing."
-                            .to_owned(),
-                    );
-                }
-                let session = crate::sign_in::authenticate(&origin)?;
-                install(&origin, session)
-            });
-        }
+                    &values.username,
+                    &values.password,
+                )?
+            } else {
+                crate::sign_in::complete_setup(
+                    &origin,
+                    &values.setup_code,
+                    &values.organization,
+                    &values.default_project,
+                    &values.allowed_domains,
+                )?
+            };
+            install(&origin, session)
+        });
     }
 
-    /// Back to the Server step, which is what the macOS client calls
-    /// "Use a different Server".
-    pub fn choose_another_server(&mut self, cx: &mut Context<Self>) {
+    /// Switches the local form between signing in, accepting an invitation and
+    /// resetting a password, which macOS does by clearing what no longer applies.
+    pub fn switch_local_action(
+        &mut self,
+        action: LocalAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.sign_in.busy {
             return;
         }
-        self.sign_in.shows_setup = false;
-        self.sign_in.error = None;
+        self.sign_in.local_action = action;
+        self.sign_in.forget_secrets(window, cx);
         cx.notify();
     }
 
@@ -2169,12 +2306,21 @@ impl DesktopApp {
         self.sign_in.busy = false;
         self.sign_in.stage = None;
         match result {
-            Ok(Outcome::NeedsSetup {
+            Ok(Outcome::Server {
+                origin,
                 setup_code_configured,
                 oidc_configured,
+                needs_setup,
                 staged,
+                methods,
             }) => {
-                self.sign_in.shows_setup = true;
+                // The Server answered, so the address it answered about stops
+                // being worth asking again.
+                self.sign_in.setup_with_password = methods.password_enabled;
+                self.sign_in.methods = Some(methods);
+                self.sign_in.checked = Some(origin);
+                self.sign_in.server_expanded = false;
+                self.sign_in.shows_setup = needs_setup;
                 self.sign_in.setup_code_configured = setup_code_configured;
                 self.sign_in.oidc_configured = oidc_configured;
                 self.sign_in.staged = staged;

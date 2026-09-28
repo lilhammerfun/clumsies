@@ -4,6 +4,7 @@
 //! `engine.rs`; see README.md for how to run it.
 
 mod app;
+mod assets;
 mod components;
 mod engine;
 mod logging;
@@ -28,10 +29,11 @@ fn main() {
         std::env::var("CLUMSIES_DAEMON_ROOT").unwrap_or_else(|_| "unset".to_owned()),
         std::env::var("CLUMSIES_DESKTOP_LOG").unwrap_or_else(|_| "beside the daemon".to_owned()),
     ));
-    // The window draws its own icons, so it needs the bundled asset source
-    // before anything else.
+    // The window draws its own icons and the sign-in page draws the brand mark,
+    // so it needs the asset source before anything else: the client's own two
+    // marks in front of the component library's icon set.
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets::new(""))
+        .with_assets(assets::Assets)
         .run(|cx| {
             gpui_kit::init(cx);
             // The window draws its own title bar with the window controls in
