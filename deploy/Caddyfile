@@ -2,11 +2,13 @@
 	# Prometheus scrapes HTTP metrics on the admin endpoint. It stays on the
 	# Compose network because only ports 80 and 443 are published.
 	admin :2019
-	metrics
+	metrics {
+		per_host
+	}
 }
 
-app.clumsies.ai {
-	encode zstd gzip
+# One log schema for all sites. Duration is milliseconds; paths omit queries.
+(access_log) {
 	log {
 		output stdout
 		format filter {
@@ -19,8 +21,14 @@ app.clumsies.ai {
 		}
 	}
 	log_append request_id {http.request.uuid}
-	log_append path {http.request.uri.path}
-	log_append upstream_host {rp.upstream.host}
+	log_append path {http.request.orig_uri.path}
+	log_append site {args[0]}
+	header X-Request-ID {http.request.uuid}
+}
+
+app.clumsies.ai {
+	encode zstd gzip
+	import access_log app.clumsies.ai
 	log_append upstream_duration_ms {rp.upstream.duration_ms}
 	log_append upstream_latency_ms {rp.upstream.latency_ms}
 
@@ -41,6 +49,7 @@ app.clumsies.ai {
 }
 
 docs.clumsies.ai {
+	import access_log docs.clumsies.ai
 	encode zstd gzip
 
 	header {
@@ -65,6 +74,7 @@ docs.clumsies.ai {
 }
 
 www.clumsies.ai {
+	import access_log www.clumsies.ai
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
@@ -76,6 +86,7 @@ www.clumsies.ai {
 }
 
 clumsies.ai {
+	import access_log clumsies.ai
 	encode zstd gzip
 
 	header {

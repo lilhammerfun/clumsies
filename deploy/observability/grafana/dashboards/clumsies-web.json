@@ -1,0 +1,410 @@
+{
+  "uid": "clumsies-web",
+  "title": "Clumsies Website Traffic",
+  "tags": [
+    "clumsies",
+    "en"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "description": "One HTTPS site handler per request. Includes availability probes; excludes automatic HTTP→HTTPS redirects. Measures server-side response handling, not browser page load. Host labels start at deployment; old all-site history is not backfilled.",
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/clumsies-overview/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Business API",
+      "type": "link",
+      "url": "/d/clumsies-api/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Website traffic",
+      "type": "link",
+      "url": "/d/clumsies-web/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Entrance latency · 5m",
+      "type": "timeseries",
+      "description": "Rolling 5-minute histogram estimate, not the maximum or a single request. Read alongside the sample count. Empty means no samples, not zero latency. One HTTPS site handler per request. Includes availability probes; excludes automatic HTTP→HTTPS redirects. Measures server-side response handling, not browser page load. Host labels start at deployment; old all-site history is not backfilled.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "legendFormat": "p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "legendFormat": "p99",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Requests observed · 5m",
+      "type": "timeseries",
+      "description": "Rolling 5-minute histogram estimate, not the maximum or a single request. Read alongside the sample count. Empty means no samples, not zero latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))",
+          "legendFormat": "Requests observed · 5m",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Requests by status / second",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(code)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))",
+          "legendFormat": "{{code}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Requests over 1s · 5m",
+      "type": "timeseries",
+      "description": "Investigation threshold, not an SLO. Includes synthetic probes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) - sum(increase(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\",le=~\"1|1[.]0\"}[5m]))",
+          "legendFormat": "Requests over 1s · 5m",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Slow site requests > 1s",
+      "type": "logs",
+      "description": "Duration is milliseconds. Expand the log for original path, status, size and request ID. Open Related request logs for the full request.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=\"caddy\"} | json | site=\"$site\" | duration > 1000 | __error__=\"\" | line_format \"{{.path}} · {{.duration}} ms · HTTP {{.status}} · request_id={{.request_id}}\"",
+          "legendFormat": "",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "showLabels": false
+      }
+    },
+    {
+      "id": 6,
+      "title": "Site access log",
+      "type": "logs",
+      "description": "",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=\"caddy\"} | json | site=\"$site\" | __error__=\"\" | line_format \"{{.path}} · {{.duration}} ms · HTTP {{.status}} · request_id={{.request_id}}\"",
+          "legendFormat": "",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "showLabels": false
+      }
+    },
+    {
+      "id": 7,
+      "title": "Logs for request ID",
+      "type": "logs",
+      "description": "Paste an ID; empty shows all logs. Ignores site selection so backend records remain visible.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=~\"caddy|server\"} |= ${request_id:doublequote}",
+          "legendFormat": "",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "showLabels": false
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "label": "Site",
+        "type": "custom",
+        "query": "docs.clumsies.ai,clumsies.ai,www.clumsies.ai,app.clumsies.ai",
+        "current": {
+          "text": "docs.clumsies.ai",
+          "value": "docs.clumsies.ai"
+        },
+        "options": [
+          {
+            "text": "docs.clumsies.ai",
+            "value": "docs.clumsies.ai",
+            "selected": true
+          },
+          {
+            "text": "clumsies.ai",
+            "value": "clumsies.ai",
+            "selected": false
+          },
+          {
+            "text": "www.clumsies.ai",
+            "value": "www.clumsies.ai",
+            "selected": false
+          },
+          {
+            "text": "app.clumsies.ai",
+            "value": "app.clumsies.ai",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": false
+      },
+      {
+        "name": "request_id",
+        "label": "Request ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      }
+    ]
+  }
+}
