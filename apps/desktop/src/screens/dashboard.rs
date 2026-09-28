@@ -30,9 +30,8 @@
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::button::*;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Sizable as _, WindowExt as _};
+use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
@@ -1749,14 +1748,7 @@ impl Render for AboutDialog {
                     )),
             );
         }
-        column.child(
-            div().h_flex().justify_end().child(
-                Button::new("dashboard-about-done")
-                    .primary()
-                    .label("Done")
-                    .on_click(|_event, window, cx| window.close_dialog(cx)),
-            ),
-        )
+        column
     }
 }
 

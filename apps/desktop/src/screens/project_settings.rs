@@ -11,6 +11,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
+use crate::components::modal;
 use crate::engine::ProjectStorage;
 use crate::screens::dialogs::{ConfirmDialog, DialogAction};
 use crate::ui::{self, Typography};
@@ -46,25 +47,15 @@ impl Render for ProjectSettingsDialog {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = _cx.theme();
         let mut rows: Vec<AnyElement> = Vec::new();
-        let heading = |text: &str, rows: &mut Vec<AnyElement>, cx: &App| {
-            rows.push(
-                div()
-                    .pt(px(ui::SPACE_SM))
-                    .text_style(&ui::CAPTION)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(text.to_owned())
-                    .into_any_element(),
-            );
-        };
 
-        heading("Memory", &mut rows, _cx);
+        rows.push(modal::heading("Memory", _cx));
         match &self.settings.storage {
             Ok(storage) => {
-                rows.push(entry("Location", storage.location.clone(), _cx));
-                rows.push(entry("Used", bytes(storage.used_bytes), _cx));
-                rows.push(entry("Status", storage.status.to_owned(), _cx));
+                rows.push(modal::entry("Location", storage.location.clone(), _cx));
+                rows.push(modal::entry("Used", bytes(storage.used_bytes), _cx));
+                rows.push(modal::entry("Status", storage.status.to_owned(), _cx));
                 if let Some(diagnostic) = &storage.diagnostic {
-                    rows.push(entry("Diagnostic", diagnostic.clone(), _cx));
+                    rows.push(modal::entry("Diagnostic", diagnostic.clone(), _cx));
                 }
             }
             Err(error) => rows.push(
@@ -76,9 +67,9 @@ impl Render for ProjectSettingsDialog {
             ),
         }
 
-        heading("Engine", &mut rows, _cx);
-        rows.push(entry("Project", self.settings.project.clone(), _cx));
-        rows.push(entry(
+        rows.push(modal::heading("Engine", _cx));
+        rows.push(modal::entry("Project", self.settings.project.clone(), _cx));
+        rows.push(modal::entry(
             "Server",
             self.settings
                 .server
@@ -86,9 +77,9 @@ impl Render for ProjectSettingsDialog {
                 .unwrap_or_else(|| "not connected".to_owned()),
             _cx,
         ));
-        rows.push(entry("Daemon", self.settings.daemon.clone(), _cx));
+        rows.push(modal::entry("Daemon", self.settings.daemon.clone(), _cx));
         if let Some(log_dir) = &self.settings.log_dir {
-            rows.push(entry("Logs", log_dir.clone(), _cx));
+            rows.push(modal::entry("Logs", log_dir.clone(), _cx));
         }
 
         // What can be done about it. The two that change where Memory lives ask
@@ -165,31 +156,6 @@ impl Render for ProjectSettingsDialog {
 
         div().v_flex().w_full().gap_2().children(rows)
     }
-}
-
-/// One line of the dialog: what it is, and what it says.
-fn entry(label: &str, value: String, cx: &App) -> AnyElement {
-    div()
-        .h_flex()
-        .gap_3()
-        .items_start()
-        .child(
-            div()
-                .w(px(88.))
-                .flex_shrink_0()
-                .text_style(&ui::CAPTION)
-                .text_color(cx.theme().muted_foreground)
-                .child(label.to_owned()),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .truncate()
-                .text_style(&ui::BODY)
-                .child(value),
-        )
-        .into_any_element()
 }
 
 /// What a reader can compare at a glance: bytes are not readable numbers.

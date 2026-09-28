@@ -14,6 +14,7 @@ use gpui_kit::component::{Icon, Root, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::components::header;
+use crate::components::modal;
 use crate::engine::{
     self, Checkout, DocumentEdit, EngineStatus, Period, Project, Review, ReviewStatus,
 };
@@ -197,16 +198,55 @@ impl DesktopApp {
         let facts = self.settings_facts();
         let app = cx.entity().downgrade();
         let view = cx.new(|cx| SettingsDialog::new(app, facts, window, cx));
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let view = view.clone();
-            dialog
-                .title("Settings")
-                .w(px(600.))
-                .keyboard(true)
-                .content(move |content, _window, _cx| content.child(view.clone()))
-                .footer(div())
-                .footer(div())
-        });
+        // The footer belongs to the dialog surface rather than to the page
+        // inside it, so it is built here, out of what that page says it offers.
+        let dialog_view = view.clone();
+        modal::open(
+            window,
+            cx,
+            "Settings",
+            modal::WIDE,
+            move |dialog, _window, cx| {
+                let footer = match dialog_view.read(cx).footer_state(cx) {
+                    settings::FooterState::Done => modal::footer(
+                        None,
+                        modal::primary("settings-done", "Done", true)
+                            .on_click(|_event, window, cx| window.close_dialog(cx))
+                            .into_any_element(),
+                    ),
+                    settings::FooterState::Action {
+                        confirm,
+                        enabled,
+                        busy,
+                    } => {
+                        let cancel = dialog_view.clone();
+                        let ok = dialog_view.clone();
+                        modal::footer(
+                            Some(
+                                modal::primary("settings-cancel-action", "Cancel", true)
+                                    .on_click(move |_event, _window, cx| {
+                                        let _ = cancel
+                                            .update(cx, |dialog, cx| dialog.cancel_action(cx));
+                                    })
+                                    .into_any_element(),
+                            ),
+                            modal::primary("settings-confirm", confirm, enabled)
+                                .loading(busy)
+                                .on_click(move |_event, _window, cx| {
+                                    let _ = ok.update(cx, |dialog, cx| dialog.confirm_action(cx));
+                                })
+                                .into_any_element(),
+                        )
+                    }
+                };
+                dialog
+                    .content({
+                        let view = view.clone();
+                        move |content, _window, _cx| content.child(view.clone())
+                    })
+                    .footer(footer)
+            },
+        );
     }
 
     /// What the Settings dialog is shown: the account the daemon's session
@@ -284,16 +324,25 @@ impl DesktopApp {
         };
         let app = cx.entity().downgrade();
         let view = cx.new(|_| ProjectSettingsDialog::new(app, settings));
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let view = view.clone();
-            dialog
-                .title("Project settings")
-                .w(px(560.))
-                .keyboard(true)
-                .content(move |content, _window, _cx| content.child(view.clone()))
-                .footer(div())
-                .footer(div())
-        });
+        modal::open(
+            window,
+            cx,
+            "Project settings",
+            modal::MEDIUM,
+            move |dialog, _window, _cx| {
+                dialog
+                    .content({
+                        let view = view.clone();
+                        move |content, _window, _cx| content.child(view.clone())
+                    })
+                    .footer(modal::footer(
+                        None,
+                        modal::primary("project-settings-done", "Done", true)
+                            .on_click(|_event, window, cx| window.close_dialog(cx))
+                            .into_any_element(),
+                    ))
+            },
+        );
     }
 
     /// Opens a document from the tree's menu. A menu comes with a window, so
@@ -1524,16 +1573,25 @@ impl DesktopApp {
     ) {
         let retention = self.dashboard.retention_per_project();
         let view = cx.new(|_| AboutDialog::new(metric, retention));
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let view = view.clone();
-            dialog
-                .title(metric.title())
-                .w(px(520.))
-                .keyboard(true)
-                .content(move |content, _window, _cx| content.child(view.clone()))
-                .footer(div())
-                .footer(div())
-        });
+        modal::open(
+            window,
+            cx,
+            metric.title(),
+            modal::NARROW,
+            move |dialog, _window, _cx| {
+                dialog
+                    .content({
+                        let view = view.clone();
+                        move |content, _window, _cx| content.child(view.clone())
+                    })
+                    .footer(modal::footer(
+                        None,
+                        modal::primary("dashboard-about-done", "Done", true)
+                            .on_click(|_event, window, cx| window.close_dialog(cx))
+                            .into_any_element(),
+                    ))
+            },
+        );
     }
 
     /// Opens one Review: the queue's selection and the read that fills its

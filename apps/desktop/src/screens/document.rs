@@ -13,16 +13,16 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use clumsiesd::DaemonDraftSummary;
-use gpui_kit::base::{Disableable, StyledExt};
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
+use crate::components::modal;
 use crate::components::{diff, fill, header, markdown};
 use crate::engine::{self, DocumentEdit, MemoryDocument};
 use crate::ui::{self, Typography};
@@ -475,16 +475,39 @@ pub(crate) fn open_review_sheet(
     cx: &mut App,
 ) {
     let view = cx.new(|cx| ReviewDialog::new(cx, title, description, edits, store, app));
-    window.open_dialog(cx, move |dialog, _window, _cx| {
-        let view = view.clone();
-        dialog
-            .title("Request review")
-            .w(px(520.))
-            .keyboard(true)
-            .content(move |content, _window, _cx| content.child(view.clone()))
-            .footer(div())
-            .footer(div())
-    });
+    let footer_view = view.clone();
+    modal::open(
+        window,
+        cx,
+        "Request review",
+        modal::MEDIUM,
+        move |dialog, _window, cx| {
+            let (ready, busy) = {
+                let dialog = footer_view.read(cx);
+                (dialog.ready(cx), dialog.busy)
+            };
+            let label = if busy {
+                "Requesting review…"
+            } else {
+                "Request review"
+            };
+            let request = modal::primary("review-request", label, ready && !busy)
+                .loading(busy)
+                .on_click({
+                    let view = footer_view.clone();
+                    move |_event, window, cx| {
+                        let _ = view.update(cx, |dialog, cx| dialog.request(window, cx));
+                    }
+                })
+                .into_any_element();
+            dialog
+                .content({
+                    let view = view.clone();
+                    move |content, _window, _cx| content.child(view.clone())
+                })
+                .footer(modal::footer(Some(modal::cancel("Cancel", !busy)), request))
+        },
+    );
 }
 
 /// The title a Review starts from: the document's own frontmatter title when it
@@ -609,11 +632,6 @@ impl ReviewDialog {
 
 impl Render for ReviewDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let label = if self.busy {
-            "Requesting review…"
-        } else {
-            "Request review"
-        };
         div()
             .v_flex()
             .gap_3()
@@ -637,34 +655,6 @@ impl Render for ReviewDialog {
                     .text_color(cx.theme().danger)
                     .child(error.clone())
             }))
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Button::new("request")
-                            .primary()
-                            .label(label)
-                            .disabled(!self.ready(cx))
-                            .on_click(
-                                cx.listener(|dialog, _, window, cx| dialog.request(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("cancel")
-                            .label("Cancel")
-                            .disabled(self.busy)
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_style(&ui::CAPTION)
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Escape cancels."),
-                    ),
-            )
     }
 }
 

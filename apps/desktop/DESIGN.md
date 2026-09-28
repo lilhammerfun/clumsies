@@ -239,6 +239,21 @@ provider, and the form says so before it happens.
 For this client that means: a discard or destructive confirmation can be a
 dialog, and Escape must dismiss it without doing the destructive thing.
 
+`components/modal.rs` is where those rules live, so a dialog is opened the way
+every other dialog is:
+
+- **Three widths, never a number picked at the call site**: `NARROW` (448, the
+  library's own default) for a question, `MEDIUM` (560) for a form or a
+  read-out, `WIDE` (760) for a surface with a navigation column of its own.
+- **The actions live in the dialog's footer**, never in the content, so they
+  cannot scroll away from the reader who needs them. The safe action comes
+  first, the primary last.
+- **Escape always closes; a click outside does not.** A dialog here holds a form
+  or a settings surface, and losing half-typed input to a stray click is worse
+  than the extra Escape. macOS sheets behave the same way.
+- **The body scrolls**, which the library already does; a dialog taller than the
+  window shrinks to fit rather than running off it.
+
 ## The window
 
 The window is one shell, and every screen fills two slots in it. macOS draws the

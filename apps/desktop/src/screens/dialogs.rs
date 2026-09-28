@@ -7,11 +7,11 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
+use crate::components::modal;
 use crate::engine::DocumentEdit;
 use crate::ui::{self, Typography};
 
@@ -58,51 +58,47 @@ impl ConfirmDialog {
             confirm,
             action,
         });
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let view = view.clone();
-            dialog
-                .title(title)
-                .w(px(460.))
-                .keyboard(true)
-                .content(move |content, _window, _cx| content.child(view.clone()))
-                .footer(div())
-                .footer(div())
-        });
+        let footer_view = view.clone();
+        modal::open(
+            window,
+            cx,
+            title,
+            modal::NARROW,
+            move |dialog, _window, cx| {
+                let confirm = modal::primary("dialog-confirm", footer_view.read(cx).confirm, true)
+                    .on_click({
+                        let view = footer_view.clone();
+                        move |_event, window, cx| {
+                            let _ = view.update(cx, |dialog, cx| dialog.confirm(window, cx));
+                        }
+                    })
+                    .into_any_element();
+                dialog
+                    .content({
+                        let view = view.clone();
+                        move |content, _window, _cx| content.child(view.clone())
+                    })
+                    .footer(modal::footer(Some(modal::cancel("Cancel", true)), confirm))
+            },
+        );
+    }
+
+    /// Does the thing the dialog was opened for, and leaves.
+    fn confirm(&mut self, window: &mut Window, cx: &mut App) {
+        let action = self.action.clone();
+        let _ = self
+            .app
+            .update(cx, |app, cx| app.run_dialog_action(action, cx));
+        window.close_dialog(cx);
     }
 }
 
 impl Render for ConfirmDialog {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = _cx.theme();
-        let confirming = self.app.clone();
-        let action = self.action.clone();
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .v_flex()
-            .gap_4()
-            .child(
-                div()
-                    .text_style(&ui::BODY)
-                    .text_color(theme.foreground)
-                    .child(self.message.clone()),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .child(Button::new("dialog-cancel").label("Cancel"))
-                    .child(
-                        Button::new("dialog-confirm")
-                            .primary()
-                            .label(self.confirm)
-                            .on_click(move |_event, window, cx| {
-                                confirming
-                                    .update(cx, |app, cx| app.run_dialog_action(action.clone(), cx))
-                                    .ok();
-                                window.close_dialog(cx);
-                            }),
-                    ),
-            )
+            .text_style(&ui::BODY)
+            .text_color(cx.theme().foreground)
+            .child(self.message.clone())
     }
 }
 
@@ -129,60 +125,66 @@ impl RenameFolderDialog {
             folder,
             name: field,
         });
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let view = view.clone();
-            dialog
-                .title("Rename folder")
-                .w(px(460.))
-                .keyboard(true)
-                .content(move |content, _window, _cx| content.child(view.clone()))
-                .footer(div())
-                .footer(div())
-        });
+        let footer_view = view.clone();
+        modal::open(
+            window,
+            cx,
+            "Rename folder",
+            modal::NARROW,
+            move |dialog, _window, cx| {
+                let ready = footer_view.read(cx).ready(cx);
+                let confirm = modal::primary("rename-folder-confirm", "Rename", ready)
+                    .on_click({
+                        let view = footer_view.clone();
+                        move |_event, window, cx| {
+                            let _ = view.update(cx, |dialog, cx| dialog.rename(window, cx));
+                        }
+                    })
+                    .into_any_element();
+                dialog
+                    .content({
+                        let view = view.clone();
+                        move |content, _window, _cx| content.child(view.clone())
+                    })
+                    .footer(modal::footer(Some(modal::cancel("Cancel", true)), confirm))
+            },
+        );
+    }
+
+    /// A folder name is one path component, and nothing else.
+    fn ready(&self, cx: &App) -> bool {
+        let name = self.name.read(cx).value().trim().to_owned();
+        !name.is_empty() && name != "." && name != ".." && !name.contains('/')
+    }
+
+    fn rename(&mut self, window: &mut Window, cx: &mut App) {
+        let name = self.name.read(cx).value().trim().to_owned();
+        if !self.ready(cx) {
+            return;
+        }
+        let folder = self.folder.clone();
+        let _ = self
+            .app
+            .update(cx, |app, cx| app.rename_folder(&folder, &name, cx));
+        window.close_dialog(cx);
     }
 }
 
 impl Render for RenameFolderDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let name = self.name.read(cx).value().trim().to_owned();
-        let valid = !name.is_empty() && name != "." && name != ".." && !name.contains('/');
-        let confirming = self.app.clone();
-        let folder = self.folder.clone();
-        let mut confirm = Button::new("rename-folder-confirm")
-            .primary()
-            .label("Rename");
-        if valid {
-            confirm = confirm.on_click(move |_event, window, cx| {
-                let folder = folder.clone();
-                let name = name.clone();
-                confirming
-                    .update(cx, |app, cx| app.rename_folder(&folder, &name, cx))
-                    .ok();
-                window.close_dialog(cx);
-            });
-        }
         div()
             .v_flex()
             .gap_3()
             .child(
                 div()
                     .text_style(&ui::CAPTION)
-                    .text_color(theme.muted_foreground)
+                    .text_color(cx.theme().muted_foreground)
                     .child(format!(
                         "Every memory in {} moves with the folder, keeping its relative path. Each move is saved as a draft.",
                         self.folder
                     )),
             )
             .child(Input::new(&self.name))
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .child(Button::new("rename-folder-cancel").label("Cancel"))
-                    .child(confirm),
-            )
     }
 }
 /// A dialog with one field, for renaming a document.
@@ -214,61 +216,72 @@ impl RenameDialog {
             parent,
             name: field,
         });
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let view = view.clone();
-            dialog
-                .title("Rename")
-                .w(px(460.))
-                .keyboard(true)
-                .content(move |content, _window, _cx| content.child(view.clone()))
-                .footer(div())
-                .footer(div())
-        });
+        let footer_view = view.clone();
+        modal::open(
+            window,
+            cx,
+            "Rename",
+            modal::NARROW,
+            move |dialog, _window, cx| {
+                let ready = footer_view.read(cx).ready(cx);
+                let confirm = modal::primary("rename-confirm", "Rename", ready)
+                    .on_click({
+                        let view = footer_view.clone();
+                        move |_event, window, cx| {
+                            let _ = view.update(cx, |dialog, cx| dialog.rename(window, cx));
+                        }
+                    })
+                    .into_any_element();
+                dialog
+                    .content({
+                        let view = view.clone();
+                        move |content, _window, _cx| content.child(view.clone())
+                    })
+                    .footer(modal::footer(Some(modal::cancel("Cancel", true)), confirm))
+            },
+        );
+    }
+
+    /// A file name is one path component, and nothing else: the daemon
+    /// validates the path itself and reports what it decided.
+    fn ready(&self, cx: &App) -> bool {
+        let typed = self.name.read(cx).value().trim().to_owned();
+        !typed.is_empty() && typed != "." && typed != ".." && !typed.contains('/')
+    }
+
+    fn path(&self, cx: &App) -> String {
+        let typed = self.name.read(cx).value().trim().to_owned();
+        if self.parent.is_empty() {
+            typed
+        } else {
+            format!("{}/{typed}", self.parent)
+        }
+    }
+
+    fn rename(&mut self, window: &mut Window, cx: &mut App) {
+        if !self.ready(cx) {
+            return;
+        }
+        let path = self.path(cx);
+        let edit = self.edit.clone();
+        let _ = self
+            .app
+            .update(cx, |app, cx| app.rename_document(edit, &path, cx));
+        window.close_dialog(cx);
     }
 }
 
 impl Render for RenameDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let typed = self.name.read(cx).value().trim().to_owned();
-        // What a file name may not be, which is the whole of what this checks:
-        // the daemon validates the path itself and reports what it decided.
-        let valid = !typed.is_empty() && typed != "." && typed != ".." && !typed.contains('/');
-        let path = if self.parent.is_empty() {
-            typed.clone()
-        } else {
-            format!("{}/{typed}", self.parent)
-        };
-        let confirming = self.app.clone();
-        let edit = self.edit.clone();
-        let mut confirm = Button::new("rename-confirm").primary().label("Rename");
-        if valid {
-            confirm = confirm.on_click(move |_event, window, cx| {
-                let path = path.clone();
-                let edit = edit.clone();
-                confirming
-                    .update(cx, |app, cx| app.rename_document(edit.clone(), &path, cx))
-                    .ok();
-                window.close_dialog(cx);
-            });
-        }
         div()
             .v_flex()
             .gap_3()
             .child(
                 div()
                     .text_style(&ui::CAPTION)
-                    .text_color(theme.muted_foreground)
+                    .text_color(cx.theme().muted_foreground)
                     .child("The rename is saved as a draft, and takes effect for the Project after review and merge."),
             )
             .child(Input::new(&self.name))
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .child(Button::new("rename-cancel").label("Cancel"))
-                    .child(confirm),
-            )
     }
 }

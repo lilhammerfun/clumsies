@@ -3,11 +3,11 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
+use crate::components::modal;
 use crate::ui::{self, Typography};
 
 pub struct NewMemoryDialog {
@@ -33,42 +33,56 @@ impl NewMemoryDialog {
             folder,
             name: field,
         });
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let view = view.clone();
-            dialog
-                .title("New memory")
-                .w(px(460.))
-                .keyboard(true)
-                .content(move |content, _window, _cx| content.child(view.clone()))
-                .footer(div())
-                .footer(div())
-        });
+        let footer_view = view.clone();
+        modal::open(
+            window,
+            cx,
+            "New memory",
+            modal::NARROW,
+            move |dialog, _window, cx| {
+                let ready = footer_view.read(cx).ready(cx);
+                let create = modal::primary("new-memory-create", "Create", ready)
+                    .on_click({
+                        let view = footer_view.clone();
+                        move |_event, window, cx| {
+                            let _ = view.update(cx, |dialog, cx| dialog.create(window, cx));
+                        }
+                    })
+                    .into_any_element();
+                dialog
+                    .content({
+                        let view = view.clone();
+                        move |content, _window, _cx| content.child(view.clone())
+                    })
+                    .footer(modal::footer(Some(modal::cancel("Cancel", true)), create))
+            },
+        );
+    }
+
+    /// A file name, not a path: the folder is the row this was asked for from,
+    /// and the daemon validates the path it is given.
+    fn ready(&self, cx: &App) -> bool {
+        let name = self.name.read(cx).value().trim().to_owned();
+        !name.is_empty() && name != "." && name != ".." && !name.contains('/')
+    }
+
+    fn create(&mut self, window: &mut Window, cx: &mut App) {
+        if !self.ready(cx) {
+            return;
+        }
+        let name = self.name.read(cx).value().trim().to_owned();
+        let path = if self.folder.is_empty() {
+            name
+        } else {
+            format!("{}/{name}", self.folder)
+        };
+        let _ = self.app.update(cx, |app, cx| app.create_memory(&path, cx));
+        window.close_dialog(cx);
     }
 }
 
 impl Render for NewMemoryDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let name = self.name.read(cx).value().trim().to_owned();
-        // A file name, not a path: the folder is the row this was asked for
-        // from, and the daemon validates the path it is given.
-        let valid = !name.is_empty() && name != "." && name != ".." && !name.contains('/');
-        let path = if self.folder.is_empty() {
-            name.clone()
-        } else {
-            format!("{}/{name}", self.folder)
-        };
-        let confirming = self.app.clone();
-        let mut create = Button::new("new-memory-create").primary().label("Create");
-        if valid {
-            create = create.on_click(move |_event, window, cx| {
-                let path = path.clone();
-                confirming
-                    .update(cx, |app, cx| app.create_memory(&path, cx))
-                    .ok();
-                window.close_dialog(cx);
-            });
-        }
         let shown = if self.folder.is_empty() {
             "this Project".to_owned()
         } else {
@@ -80,19 +94,11 @@ impl Render for NewMemoryDialog {
             .child(
                 div()
                     .text_style(&ui::CAPTION)
-                    .text_color(theme.muted_foreground)
+                    .text_color(cx.theme().muted_foreground)
                     .child(format!(
                         "A new Memory document in {shown}. It is saved as a draft, and exists for the Project once its Review is merged."
                     )),
             )
             .child(Input::new(&self.name))
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .child(Button::new("new-memory-cancel").label("Cancel"))
-                    .child(create),
-            )
     }
 }
