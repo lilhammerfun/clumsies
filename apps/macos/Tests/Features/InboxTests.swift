@@ -239,8 +239,18 @@ final class InboxTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(list.selectedRowIndexes, IndexSet(integer: 1))
         XCTAssertTrue(receipts.isEmpty, "Deselecting down to one item must not read the remaining item.")
-        try toggle(0)
-        try await Task.sleep(for: .milliseconds(100))
+        func toggleAll(expectedCount: Int) async throws {
+            let control = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue.contains("inbox.select-all") }?.view)
+            try click(control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil), in: window)
+            for _ in 0..<40 where list.selectedRowIndexes.count != expectedCount {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTAssertEqual(list.selectedRowIndexes.count, expectedCount)
+            XCTAssertTrue(receipts.isEmpty, "Bulk selection must not mark messages as read.")
+        }
+        try await toggleAll(expectedCount: 2)
+        try await toggleAll(expectedCount: 0)
+        try await toggleAll(expectedCount: 2)
         let archive = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue.contains("inbox.archive") }?.view)
         let point = archive.convert(NSPoint(x: archive.bounds.midX, y: archive.bounds.midY), to: nil)
         try click(point, in: window)

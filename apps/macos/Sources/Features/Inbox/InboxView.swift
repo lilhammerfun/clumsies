@@ -39,6 +39,7 @@ struct InboxView: View {
     }
 
     private var selectedItems: [InboxItem] { visibleItems.filter { selection.contains($0.id) } }
+    private var allVisibleSelected: Bool { !visibleItems.isEmpty && visibleItems.allSatisfy { selection.contains($0.id) } }
     private var isBusy: Bool { openingId != nil }
     private var readAction: InboxReceiptAction { selectedItems.contains { !$0.isRead } ? .read : .unread }
 
@@ -216,6 +217,16 @@ struct InboxView: View {
         }
         if #available(macOS 26.0, *) {
             ToolbarSpacer(.flexible, placement: .automatic)
+        }
+        ToolbarItem(id: "inbox.select-all", placement: .trailingPinned) {
+            Button(allVisibleSelected ? "Deselect All" : "Select All",
+                   systemImage: allVisibleSelected ? "checkmark.square" : "square") {
+                selection = allVisibleSelected ? [] : Set(visibleItems.map(\.id))
+            }
+            .labelStyle(.titleAndIcon)
+            .toolbarHelp(String(localized: "Select or deselect all notifications matching the current filters"))
+            .accessibilityIdentifier("inbox-toolbar-select-all")
+            .disabled(visibleItems.isEmpty || isBusy)
         }
         ToolbarItem(id: "inbox.read", placement: .trailingPinned) {
             Button(readAction == .read ? "Mark as Read" : "Mark as Unread",
