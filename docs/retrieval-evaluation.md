@@ -24,8 +24,42 @@ outputs needed to explain and evaluate that activation:
 
 The MCP response and persisted trace are assembled from the same in-memory
 ranked candidates. Retrieval history is diagnostic and evaluative local state,
-not Server telemetry. The daemon does not upload queries, candidates, judgments,
-or metrics, and the Server exposes no Retrieval Run endpoint.
+not Server telemetry. The Server exposes no Retrieval Run endpoint. The daemon
+exports no telemetry unless an operator explicitly configures an OTLP trace
+endpoint.
+
+## Optional OTLP/OpenInference export
+
+The resident daemon can send one OpenInference `RETRIEVER` span per
+`activate_memory` call to any OTLP/HTTP protobuf collector. Phoenix is a
+compatible collector, not a required Clumsies component. To enable a
+self-hosted Phoenix instance, install or reinstall the LaunchAgent with:
+
+```sh
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:6006/v1/traces \
+  clumsiesd --install-launch-agent
+```
+
+The default span contains the opaque Project and Retrieval Run IDs, corpus and
+model versions, result counts, stage latency, error code, and selected-document
+content hashes and scores. It does not contain the query, Memory text, unit key,
+path, heading, resource ID, Prompt, evaluation judgments, or frozen corpus.
+
+An operator may explicitly include the query and selected candidate excerpts:
+
+```sh
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:6006/v1/traces \
+CLUMSIES_OTEL_CAPTURE_CONTENT=true \
+  clumsiesd --install-launch-agent
+```
+
+Treat that mode as production-data export and apply the organization's access,
+retention, and residency controls to the collector. Export uses a bounded
+background queue and a three-second request timeout. Queue pressure, collector
+failure, and exporter rejection are logged locally but never change the
+agent-facing retrieval result. Clumsies Retrieval History and Evaluation Cases
+remain the durable product records; OTLP traces are optional observability
+copies.
 
 ## Storage
 

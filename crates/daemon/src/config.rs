@@ -16,6 +16,8 @@ pub const IDENTIFIER_NAMESPACE: &str = "ai.clumsies";
 pub const DAEMON_AGENT_LABEL: &str = "ai.clumsies.daemon";
 pub const DAEMON_MACH_SERVICE_NAME: &str = DAEMON_AGENT_LABEL;
 pub const DEV_INSTANCE_ID_ENV: &str = "CLUMSIES_DEV_INSTANCE_ID";
+pub const OTLP_TRACES_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
+pub const OTLP_CAPTURE_CONTENT_ENV: &str = "CLUMSIES_OTEL_CAPTURE_CONTENT";
 const DEV_DAEMON_SERVICE_PREFIX: &str = "ai.clumsies.daemon.dev.";
 const DEV_KEYCHAIN_SERVICE_PREFIX: &str = "ai.clumsies.dev.";
 const MAX_DEV_INSTANCE_ID_BYTES: usize = 32;
@@ -37,7 +39,14 @@ pub struct DaemonConfig {
     pub launch_agents_dir: PathBuf,
     pub codex_home: Option<PathBuf>,
     pub project: ProjectConfig,
+    pub retrieval_telemetry: RetrievalTelemetryConfig,
     pub sync: SyncConfig,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RetrievalTelemetryConfig {
+    pub endpoint: Option<String>,
+    pub capture_content: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -80,6 +89,7 @@ impl DaemonConfig {
         let (launch_agent_label, mach_service_name, keychain_service) =
             daemon_runtime_names(dev_instance_id.as_deref());
         let project = ProjectConfig::from_env();
+        let retrieval_telemetry = RetrievalTelemetryConfig::from_env()?;
         let sync = SyncConfig {
             enabled: parse_bool_env("CLUMSIES_SYNC_ENABLED")?.unwrap_or(true),
             interval: Duration::from_millis(
@@ -99,6 +109,7 @@ impl DaemonConfig {
             launch_agents_dir: paths.launch_agents_dir,
             codex_home,
             project,
+            retrieval_telemetry,
             sync,
         })
     }
@@ -140,6 +151,7 @@ impl DaemonConfig {
             launch_agents_dir: paths.launch_agents_dir,
             codex_home: None,
             project: ProjectConfig::default(),
+            retrieval_telemetry: RetrievalTelemetryConfig::default(),
             sync: SyncConfig {
                 enabled: false,
                 interval: Duration::from_secs(30),
@@ -158,6 +170,41 @@ impl DaemonConfig {
     pub fn launch_agent_plist_path(&self) -> PathBuf {
         self.launch_agents_dir
             .join(format!("{}.plist", self.launch_agent_label))
+    }
+}
+
+impl RetrievalTelemetryConfig {
+    fn from_env() -> Result<Self, DaemonError> {
+        let endpoint = match env::var(OTLP_TRACES_ENDPOINT_ENV) {
+            Ok(value) => non_empty_string(value),
+            Err(env::VarError::NotPresent) => None,
+            Err(env::VarError::NotUnicode(_)) => {
+                return Err(DaemonError::InvalidConfig(format!(
+                    "{OTLP_TRACES_ENDPOINT_ENV} must be valid UTF-8"
+                )));
+            }
+        };
+        let config = Self {
+            endpoint,
+            capture_content: parse_bool_env(OTLP_CAPTURE_CONTENT_ENV)?.unwrap_or(false),
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<(), DaemonError> {
+        let Some(endpoint) = self.endpoint.as_deref() else {
+            return Ok(());
+        };
+        let url = reqwest::Url::parse(endpoint).map_err(|error| {
+            DaemonError::InvalidConfig(format!("invalid {OTLP_TRACES_ENDPOINT_ENV}: {error}"))
+        })?;
+        match url.scheme() {
+            "http" | "https" => Ok(()),
+            scheme => Err(DaemonError::InvalidConfig(format!(
+                "{OTLP_TRACES_ENDPOINT_ENV} scheme must be http or https, got {scheme}"
+            ))),
+        }
     }
 }
 
@@ -331,6 +378,7 @@ pub struct LaunchAgentConfig {
     launch_agents_dir: PathBuf,
     dev_instance_id: Option<String>,
     server_url: String,
+    retrieval_telemetry: RetrievalTelemetryConfig,
     codex_home: Option<PathBuf>,
     binary_sha256: String,
 }
@@ -353,6 +401,7 @@ impl LaunchAgentConfig {
             launch_agents_dir: config.launch_agents_dir.clone(),
             dev_instance_id: config.dev_instance_id.clone(),
             server_url: config.project.server_url.clone(),
+            retrieval_telemetry: config.retrieval_telemetry.clone(),
             codex_home: config.codex_home.clone(),
             binary_sha256,
         })
@@ -367,7 +416,19 @@ impl LaunchAgentConfig {
     }
 
     pub fn plist_contents(&self) -> String {
-        let mut dev_environment = String::new();
+        let mut runtime_environment = String::new();
+        if let Some(endpoint) = self.retrieval_telemetry.endpoint.as_deref() {
+            runtime_environment.push_str(&plist_environment_variable(
+                OTLP_TRACES_ENDPOINT_ENV,
+                endpoint,
+            ));
+            if self.retrieval_telemetry.capture_content {
+                runtime_environment.push_str(&plist_environment_variable(
+                    OTLP_CAPTURE_CONTENT_ENV,
+                    "true",
+                ));
+            }
+        }
         if let Some(instance_id) = self.dev_instance_id.as_deref() {
             for (name, value) in [
                 (DEV_INSTANCE_ID_ENV, instance_id.to_owned()),
@@ -377,10 +438,10 @@ impl LaunchAgentConfig {
                 ),
                 ("CLUMSIES_SERVER_URL", self.server_url.clone()),
             ] {
-                dev_environment.push_str(&plist_environment_variable(name, &value));
+                runtime_environment.push_str(&plist_environment_variable(name, &value));
             }
             if let Some(codex_home) = &self.codex_home {
-                dev_environment.push_str(&plist_environment_variable(
+                runtime_environment.push_str(&plist_environment_variable(
                     "CODEX_HOME",
                     &codex_home.display().to_string(),
                 ));
@@ -414,7 +475,7 @@ impl LaunchAgentConfig {
     <string>{cache_dir}</string>
     <key>CLUMSIES_DAEMON_LOG_DIR</key>
     <string>{log_dir}</string>
-{dev_environment}    <key>CLUMSIES_DAEMON_BINARY_SHA256</key>
+{runtime_environment}    <key>CLUMSIES_DAEMON_BINARY_SHA256</key>
     <string>{binary_sha256}</string>
     <key>RUST_LOG</key>
     <string>info</string>
@@ -432,7 +493,7 @@ impl LaunchAgentConfig {
             root_dir = escape_plist_value(self.root_dir.to_string_lossy().as_ref()),
             cache_dir = escape_plist_value(self.cache_dir.to_string_lossy().as_ref()),
             log_dir = escape_plist_value(self.log_dir.to_string_lossy().as_ref()),
-            dev_environment = dev_environment,
+            runtime_environment = runtime_environment,
             binary_sha256 = escape_plist_value(&self.binary_sha256),
             stdout = escape_plist_value(self.standard_output_path().to_string_lossy().as_ref()),
             stderr = escape_plist_value(self.standard_error_path().to_string_lossy().as_ref()),
@@ -792,6 +853,10 @@ mod launch_agent_tests {
                 project_id: None,
                 memory_guidelines_path: None,
             },
+            retrieval_telemetry: RetrievalTelemetryConfig {
+                endpoint: Some("http://127.0.0.1:6006/v1/traces".to_owned()),
+                capture_content: true,
+            },
             sync: SyncConfig {
                 enabled: true,
                 interval: Duration::from_secs(30),
@@ -823,16 +888,38 @@ mod launch_agent_tests {
             "CLUMSIES_DAEMON_LAUNCH_AGENTS_DIR",
             "CLUMSIES_SERVER_URL",
             "CODEX_HOME",
+            OTLP_TRACES_ENDPOINT_ENV,
+            OTLP_CAPTURE_CONTENT_ENV,
         ] {
             assert!(plist.contains(&format!("<key>{key}</key>")), "{key}");
         }
         assert!(plist.contains("http://127.0.0.1:43123/?a=1&amp;b=2"));
+        assert!(plist.contains("http://127.0.0.1:6006/v1/traces"));
         assert!(plist.contains(&escape_plist_value(
             paths.launch_agents_dir.to_string_lossy().as_ref()
         )));
         assert!(plist.contains(&escape_plist_value(
             paths.root_dir.join("codex-home").to_string_lossy().as_ref()
         )));
+    }
+
+    #[test]
+    fn retrieval_telemetry_accepts_only_http_collectors() {
+        assert!(
+            RetrievalTelemetryConfig {
+                endpoint: Some("https://phoenix.example.com/v1/traces".to_owned()),
+                capture_content: false,
+            }
+            .validate()
+            .is_ok()
+        );
+        let error = RetrievalTelemetryConfig {
+            endpoint: Some("file:///tmp/traces".to_owned()),
+            capture_content: false,
+        }
+        .validate()
+        .unwrap_err();
+        assert!(error.to_string().contains("scheme must be http or https"));
     }
 
     #[test]

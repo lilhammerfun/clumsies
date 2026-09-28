@@ -172,6 +172,7 @@ pub(crate) struct DaemonInner {
     pub(crate) search_index_notify: Notify,
     pub(crate) search_lock: Mutex<()>,
     pub(crate) retrieval_history_lock: Mutex<()>,
+    pub(crate) retrieval_telemetry: Option<retrieval_telemetry::RetrievalTelemetry>,
     pub(crate) draft_mutation_lock: Mutex<()>,
     pub(crate) local_setup_lock: Mutex<()>,
     pub(crate) agent_run_lock: Mutex<()>,
@@ -276,6 +277,8 @@ impl DaemonState {
                 .await;
         let project_config = load_project_config(&pool, &config.project, credentials).await?;
         let http = build_http_client(HTTP_CONNECT_TIMEOUT, HTTP_REQUEST_TIMEOUT)?;
+        let retrieval_telemetry =
+            retrieval_telemetry::RetrievalTelemetry::from_config(&config.retrieval_telemetry);
 
         let state = Self {
             inner: Arc::new(DaemonInner {
@@ -301,6 +304,7 @@ impl DaemonState {
                 search_index_notify: Notify::new(),
                 search_lock: Mutex::new(()),
                 retrieval_history_lock: Mutex::new(()),
+                retrieval_telemetry,
                 draft_mutation_lock: Mutex::new(()),
                 local_setup_lock: Mutex::new(()),
                 agent_run_lock: Mutex::new(()),

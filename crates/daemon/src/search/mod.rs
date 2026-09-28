@@ -637,6 +637,9 @@ pub(crate) async fn activate_memory(
             completion.error_summary = Some(summary);
         }
     }
+    if let Some(telemetry) = state.inner.retrieval_telemetry.as_ref() {
+        telemetry.emit(run_id.as_deref(), &project_id, &query, &completion);
+    }
     if let Some(run_id) = run_id {
         let finish_result = if deadline_expired {
             // Keep the deadline terminalization independent of the history

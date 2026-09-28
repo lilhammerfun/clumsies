@@ -3,7 +3,36 @@
 本文定义 resident daemon 当前的本地检索索引、`activate_memory` 排序链、Retrieval Run
 历史和 Evaluation Case 评测契约。Memory corpus 的来源与合成规则见
 [《统一 Memory 模型》](./unified-memory-model.md)。检索历史是本机诊断数据，不是 Server
-遥测；daemon 不上传 query、candidate、evidence 或 benchmark。
+遥测；Server 不提供 Retrieval Run 接口。只有运维方显式配置 OTLP trace endpoint 时，
+daemon 才会向指定 Collector 导出观测副本。
+
+## 可选 OTLP/OpenInference 导出
+
+resident daemon 可以为每次 `activate_memory` 向任意 OTLP/HTTP protobuf Collector
+发送一个 OpenInference `RETRIEVER` span。Phoenix 是兼容的 Collector，不是 Clumsies
+必需组件。连接自托管 Phoenix 时，在安装或重新安装 LaunchAgent 时配置：
+
+```sh
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:6006/v1/traces \
+  clumsiesd --install-launch-agent
+```
+
+默认 span 只包含不透明的 Project / Retrieval Run ID、corpus 与模型版本、结果数量、
+阶段耗时、错误码，以及最终选中文档的内容 hash 和分数；不包含 query、Memory 正文、
+unit key、path、heading、resource ID、Prompt、评测标注或冻结 corpus。
+
+运维方可以显式允许发送 query 和最终候选 excerpt：
+
+```sh
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:6006/v1/traces \
+CLUMSIES_OTEL_CAPTURE_CONTENT=true \
+  clumsiesd --install-launch-agent
+```
+
+该模式应按生产数据导出处理，并由组织为 Collector 配置访问、保留和数据驻留策略。
+exporter 使用有界后台队列和三秒请求超时；队列拥塞、Collector 故障或拒绝请求只写入
+本地诊断，不改变 Agent 得到的检索结果。Clumsies Retrieval History 与 Evaluation Case
+仍是持久产品记录，OTLP trace 只是可关闭、可丢失的观测副本。
 
 ## 1. 边界与快照语义
 

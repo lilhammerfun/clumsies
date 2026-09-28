@@ -26,6 +26,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "net", "process", "signal", "sync", "time"] }
 toml_edit = "0.25.13"
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
+opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "internal-logs", "reqwest-rustls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
