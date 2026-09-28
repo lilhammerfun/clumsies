@@ -784,7 +784,7 @@ async fn upgrade_preserves_rejected_content_and_allows_a_new_review() {
         .bind(&installation.project_id).bind(&installation.user_id).execute(&pg.pool).await.unwrap();
     sqlx::raw_sql("INSERT INTO draft_operations (operation_id, draft_id, action, resource_scope,
         resource_kind, path, content, ordinal) VALUES ('legacy-operation', 'legacy-draft', 'create',
-        'project', 'memory', 'legacy.md', '{\"content\":\"Legacy content\"}', 0);
+        'project', 'memory', 'legacy.md', '{\"content\":\"Legacy content\"}', 1);
         INSERT INTO reviews (review_id, draft_id, project_id, author_user_id, title, status, decision_body)
         SELECT 'legacy-review', draft_id, project_id, author_user_id, title, 'rejected', 'Please revise' FROM drafts;
         INSERT INTO review_drafts VALUES ('legacy-review', 'legacy-draft', 0);")
