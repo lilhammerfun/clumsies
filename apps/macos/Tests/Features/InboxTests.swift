@@ -133,8 +133,12 @@ final class InboxTests: XCTestCase {
             }
         }
         let hosting = NSHostingView(rootView: root(UUID()))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
+        // Exercise the workspace's minimum width with its production titlebar configuration.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 820),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         window.makeKeyAndOrderFront(nil)
@@ -153,9 +157,11 @@ final class InboxTests: XCTestCase {
         let search = try XCTUnwrap(searchField(in: XCTUnwrap(item("search").view)))
         XCTAssertEqual(search.accessibilityIdentifier(), "inbox-toolbar-search")
         XCTAssertEqual(search.placeholderString, "Search Inbox")
-        for (leading, trailing) in [("filter", "type"), ("type", "read"), ("read", "archive"), ("archive", "refresh"), ("refresh", "search")] {
+        for (leading, trailing) in [("filter", "type"), ("type", "select-all"), ("select-all", "read"), ("read", "archive"), ("archive", "refresh"), ("refresh", "search")] {
             let left = try XCTUnwrap(item(leading).view)
             let right = try XCTUnwrap(item(trailing).view)
+            XCTAssertTrue(left.window === window, "\(leading) must remain visible.")
+            XCTAssertTrue(right.window === window, "\(trailing) must remain visible.")
             XCTAssertLessThan(left.convert(left.bounds, to: nil).midX,
                 right.convert(right.bounds, to: nil).midX, "\(leading) must precede \(trailing).")
         }
@@ -212,6 +218,9 @@ final class InboxTests: XCTestCase {
         }))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
