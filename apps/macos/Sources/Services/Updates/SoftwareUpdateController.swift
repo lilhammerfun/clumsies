@@ -67,16 +67,13 @@ final class SoftwareUpdateController: NSObject, ObservableObject {
 extension SoftwareUpdateController: SPUUpdaterDelegate, @preconcurrency SPUStandardUserDriverDelegate {
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
-    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-        hasAvailableUpdate = true
-    }
-
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
         hasAvailableUpdate = false
     }
 
     func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
-        // Restored downloads can be presented without fetching the appcast again.
+        // Finding a version is too early: automatic downloads cannot be brought into focus.
+        // This callback also covers restored downloads that do not fetch the appcast again.
         hasAvailableUpdate = true
     }
 
