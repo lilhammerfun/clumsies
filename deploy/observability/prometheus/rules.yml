@@ -70,17 +70,32 @@ groups:
         annotations:
           summary: "Container {{ $labels.name }} uses more than 2 GiB"
 
-      # Threshold follows the one percent error-rate objective rather than a
-      # locally chosen number.
+      # Keep the existing 1% objective, but evaluate each site independently.
+      # subroute measures the site handler once instead of summing middleware.
       - alert: HttpServerErrorRate
         expr: >-
-          sum(rate(caddy_http_request_duration_seconds_count{code=~"5.."}[5m]))
-          / clamp_min(sum(rate(caddy_http_request_duration_seconds_count[5m])), 0.01) > 0.01
+          sum by (host) (rate(caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host=~"app\\.clumsies\\.ai|docs\\.clumsies\\.ai|clumsies\\.ai|www\\.clumsies\\.ai",code=~"5.."}[5m]))
+          / sum by (host) (rate(caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host=~"app\\.clumsies\\.ai|docs\\.clumsies\\.ai|clumsies\\.ai|www\\.clumsies\\.ai"}[5m])) > 0.01
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "More than 1 percent of edge requests answer with a server error"
+          summary: "More than 1 percent of requests to {{ $labels.host }} answer with a server error"
+
+      - alert: LogDeliveryRetries
+        expr: sum(rate(loki_write_batch_retries_total{job="alloy"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Log delivery to Loki has been retrying for 5 minutes"
+
+      - alert: LogEntriesDropped
+        expr: sum(increase(loki_write_dropped_entries_total{job="alloy"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Log entries were dropped; request history may be incomplete"
 
   - name: operations
     rules:

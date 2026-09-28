@@ -111,3 +111,46 @@ tests:
             value: 1
           - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="stale",severity="warning"}'
             value: 1
+
+  - name: a failing site cannot be diluted by healthy traffic or duplicate middleware
+    interval: 1m
+    input_series:
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host="docs.clumsies.ai",code="500"}'
+        values: '0+2x10 20x10'
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host="docs.clumsies.ai",code="200"}'
+        values: '0+98x20'
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="file_server",host="docs.clumsies.ai",code="200"}'
+        values: '0+10000x20'
+      - series: 'caddy_http_request_duration_seconds_count{job="caddy",handler="subroute",host="app.clumsies.ai",code="200"}'
+        values: '0+10000x20'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpServerErrorRate",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpServerErrorRate",alertstate="firing",host="docs.clumsies.ai",severity="critical"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HttpServerErrorRate",alertstate="firing"}'
+        eval_time: 16m
+        exp_samples: []
+
+  - name: log delivery failures are visible and resolve
+    interval: 1m
+    input_series:
+      - series: 'loki_write_batch_retries_total{job="alloy"}'
+        values: '0+1x8 8x12'
+      - series: 'loki_write_dropped_entries_total{job="alloy"}'
+        values: '0x3 1x17'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="LogDeliveryRetries",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="LogDeliveryRetries",alertstate="firing",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname="LogEntriesDropped",alertstate="firing"}'
+        eval_time: 4m
+        exp_samples:
+          - labels: 'ALERTS{alertname="LogEntriesDropped",alertstate="firing",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname=~"LogDeliveryRetries|LogEntriesDropped",alertstate="firing"}'
+        eval_time: 16m
+        exp_samples: []
