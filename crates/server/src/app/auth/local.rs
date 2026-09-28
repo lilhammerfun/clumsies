@@ -181,7 +181,11 @@ impl AuthService {
             &mut tx,
             &actor.org_id,
             Some(&actor.user_id),
-            "auth.action_issued",
+            if invitation {
+                "auth.invitation_reissued"
+            } else {
+                "auth.password_reset_issued"
+            },
             "user",
             Some(user_id),
         )

@@ -185,6 +185,12 @@ struct AdminAccessTokenRecord: Codable, Identifiable, Hashable, Sendable {
     let createdAt: String
 }
 
+struct AdminAuditChange: Codable, Hashable, Sendable {
+    let field: String
+    let before: String
+    let after: String
+}
+
 struct AdminAuditEventRecord: Codable, Identifiable, Hashable, Sendable {
     var id: String { eventId }
 
@@ -196,6 +202,7 @@ struct AdminAuditEventRecord: Codable, Identifiable, Hashable, Sendable {
     let targetType: String
     let targetId: String?
     let targetDisplayName: String?
+    var changes: [AdminAuditChange]? = nil
     let createdAt: String
 }
 

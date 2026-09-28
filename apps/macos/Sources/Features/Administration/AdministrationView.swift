@@ -484,15 +484,15 @@ private struct AdministrationAuditView: View {
     var body: some View {
         Form {
             Section {
-                ClassicSearchField(text: $query, prompt: String(localized: "Search activity"), width: 300,
+                ClassicSearchField(text: $query, prompt: String(localized: "Search audit log"), width: 300,
                     accessibilityIdentifier: "organization-audit-events-search")
                     .frame(height: 24)
             }
-            Section("Activity") {
+            Section("Audit Log") {
                 if completedQuery != query || state.isLoading && events.isEmpty {
-                    ProgressView("Loading activity…")
+                    ProgressView("Loading audit log…")
                 } else if events.isEmpty, state.errorMessage == nil {
-                    Text(query.isEmpty ? "No activity yet." : "No activity found.")
+                    Text(query.isEmpty ? "No audit events yet." : "No audit events found.")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(completedQuery == query ? events : []) { event in
@@ -500,6 +500,10 @@ private struct AdministrationAuditView: View {
                         Text(actionTitle(event.action))
                         Text(targetName(event))
                             .foregroundStyle(.secondary)
+                        ForEach(Array((event.changes ?? []).enumerated()), id: \.offset) { _, change in
+                            Text("\(fieldTitle(change.field)): \(changeValue(change.before, field: change.field)) → \(changeValue(change.after, field: change.field))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         HStack(alignment: .firstTextBaseline) {
                             Text(actorName(event))
                             Spacer(minLength: 8)
@@ -549,12 +553,52 @@ private struct AdministrationAuditView: View {
         case "admin.project_member_updated": String(localized: "Updated project member")
         case "admin.project_member_deleted": String(localized: "Removed project member")
         case "admin.token_revoked": String(localized: "Revoked sign-in credential")
-        default: String(localized: "Organization activity")
+        case "installation.completed": String(localized: "Completed setup")
+        case "project_memory_authority_migrated": String(localized: "Migrated project memory")
+        case "auth.session_created": String(localized: "Signed in")
+        case "auth.session_revoked": String(localized: "Revoked session")
+        case "auth.oidc_login_completed": String(localized: "Signed in with SSO")
+        case "auth.oidc_identity_bound": String(localized: "Connected sign-in account")
+        case "auth.invitation_created": String(localized: "Created invitation")
+        case "auth.invitation_reissued": String(localized: "Reissued invitation")
+        case "auth.password_reset_issued": String(localized: "Issued password reset")
+        case "auth.action_issued": String(localized: "Issued account action")
+        case "auth.action_revoked": String(localized: "Revoked account action")
+        case "auth.invitation_accepted": String(localized: "Accepted invitation")
+        case "auth.password_reset": String(localized: "Reset password")
+        case "auth.password_changed": String(localized: "Changed password")
+        case "auth.owner_recovery_issued": String(localized: "Issued owner recovery")
+        default: action
+        }
+    }
+
+    private func changeValue(_ value: String, field: String) -> String {
+        if field == "allowed_email_domains", value.isEmpty { return String(localized: "Any domain") }
+        if field == "role", let role = AdminOrganizationRole(rawValue: value) { return role.title }
+        if field == "status" {
+            switch value {
+            case "active": return String(localized: "Active")
+            case "disabled": return String(localized: "Disabled")
+            case "invited": return String(localized: "Invited")
+            default: break
+            }
+        }
+        return value.isEmpty ? String(localized: "None") : value
+    }
+
+    private func fieldTitle(_ field: String) -> String {
+        switch field {
+        case "name": String(localized: "Name")
+        case "role": String(localized: "Role")
+        case "status": String(localized: "Status")
+        case "allowed_email_domains": String(localized: "Allowed email domains")
+        default: field
         }
     }
 
     private func targetName(_ event: AdminAuditEventRecord) -> String {
         if let name = event.targetDisplayName, !name.isEmpty { return name }
+        if let id = event.targetId { return id }
         switch event.targetType {
         case "org": return workspaceContext.organization?.name ?? String(localized: "Unavailable organization")
         case "user": return String(localized: "Unavailable member")
@@ -567,7 +611,7 @@ private struct AdministrationAuditView: View {
 
     private func actorName(_ event: AdminAuditEventRecord) -> String {
         if let name = event.actorDisplayName ?? event.actorEmail { return name }
-        return event.actorUserId == nil ? String(localized: "System") : String(localized: "Unavailable member")
+        return event.actorUserId ?? String(localized: "System")
     }
 }
 

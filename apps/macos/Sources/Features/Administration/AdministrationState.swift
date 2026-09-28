@@ -15,7 +15,7 @@ enum AdministrationSection: String, CaseIterable, Identifiable, Sendable {
         case .members: String(localized: "Members")
         case .projects: String(localized: "Projects")
         case .access: String(localized: "Sign-in & Access")
-        case .audit: String(localized: "Activity")
+        case .audit: String(localized: "Audit Log")
         }
     }
 
