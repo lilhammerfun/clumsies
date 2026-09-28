@@ -75,6 +75,61 @@ pub fn selected_background(cx: &App) -> Hsla {
     cx.theme().accent
 }
 
+/// One step of the brand's ramp, from the same hex the site and the docs use.
+fn hsla_of(hex: u32) -> Hsla {
+    rgb(hex).into()
+}
+
+/// The product's own accent, which the theme does not carry.
+///
+/// The library's default maps `primary` and `link` to the foreground colour, so
+/// in dark mode every primary action and every link would be white — the
+/// sign-in page's two links, a dialog's confirm button, the review actions. The
+/// macOS client draws those in `Color.accentColor`, the system's accent; this
+/// client has an identity of its own instead, and it is the brand's ramp, the
+/// one the site and the documentation already use: `#e657a0` light and
+/// `#f178b8` dark for the actions, a shade deeper for a link at rest, the
+/// lighter step for hover, the deepest for the pressed state, and the brand's
+/// own wash behind selected text.
+///
+/// It is written into the theme rather than applied per control, because it is
+/// one decision: a second button with its own colour is a second accent.
+pub fn apply_brand(cx: &mut App) {
+    use gpui_kit::component::Theme;
+    let (action, action_text, link, hover, active, selection) = if cx.theme().mode.is_dark() {
+        (
+            hsla_of(0xf178b8),
+            hsla_of(0x2a1220),
+            hsla_of(0xf178b8),
+            hsla_of(0xff9ccb),
+            hsla_of(0xffd4ea),
+            hsla_of(0xf178b8).alpha(0.18),
+        )
+    } else {
+        (
+            hsla_of(0xe657a0),
+            hsla_of(0xffffff),
+            hsla_of(0xc93b86),
+            hsla_of(0xe657a0),
+            hsla_of(0xa82f6f),
+            hsla_of(0xe657a0).alpha(0.12),
+        )
+    };
+    let mut tokens = cx.theme().semantic_tokens();
+    tokens.colors.primary = action;
+    tokens.colors.primary_foreground = action_text;
+    // The focus ring is the accent too, which is what makes a focused control
+    // read as the same product as the button beside it.
+    tokens.colors.ring = link;
+    tokens.colors.selection = selection;
+    let theme = Theme::global_mut(cx);
+    theme.apply_semantic_tokens(&tokens);
+    theme.link = link;
+    theme.link_hover = hover;
+    theme.link_active = active;
+    gpui_kit::base::Theme::global_mut(cx).tokens = tokens;
+}
+
 /// Keep every GPUI popup on the same surface role as the surrounding chrome
 /// in dark mode. Light mode retains the library's white popup surface.
 /// This is a theme mapping, not a per-menu style or a new color palette.

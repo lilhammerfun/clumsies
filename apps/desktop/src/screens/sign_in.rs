@@ -520,6 +520,9 @@ impl SignInScreen {
     }
 
     /// macOS's two links: the way into an invitation, and the way to a reset.
+    /// They carry the accent, which is what `Color.accentColor` is in macOS:
+    /// the library's text button draws the foreground colour, so the colour is
+    /// asked for rather than inherited.
     fn local_links(&self, cx: &mut Context<DesktopApp>) -> AnyElement {
         let action = self.local_action;
         let other = if action == LocalAction::SignIn {
@@ -527,6 +530,7 @@ impl SignInScreen {
         } else {
             "Back to sign in"
         };
+        let link = cx.theme().link;
         let mut row = div()
             .h_flex()
             .items_center()
@@ -536,6 +540,7 @@ impl SignInScreen {
                 Button::new("local-action")
                     .text()
                     .label(other)
+                    .text_color(link)
                     .disabled(self.busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.switch_local_action(
@@ -554,6 +559,7 @@ impl SignInScreen {
                 Button::new("forgot-password")
                     .text()
                     .label("Forgot password?")
+                    .text_color(link)
                     .disabled(self.busy)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.switch_local_action(LocalAction::Reset, window, cx);

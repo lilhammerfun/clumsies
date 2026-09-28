@@ -110,9 +110,13 @@ impl DesktopApp {
         // a client nobody wants open.
         Theme::sync_system_appearance(Some(window), cx);
         ui::sync_popup_surface(cx);
+        ui::apply_brand(cx);
         let appearance = cx.observe_window_appearance(window, |_app, _window, cx| {
             Theme::sync_system_appearance(None, cx);
             ui::sync_popup_surface(cx);
+            // The brand's ramp has a light step and a dark one, so a window
+            // that changes appearance takes the accent with it.
+            ui::apply_brand(cx);
         });
         let mut app = Self {
             engine,

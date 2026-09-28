@@ -53,6 +53,14 @@ Windows ships light and dark modes; both must work. Assign colors by surface
 role through `src/ui.rs`, using existing GPUI tokens without hand-mixed colors:
 
 - Content canvas: `background`.
+- The product's accent: `primary`/`primary_foreground` for a primary action,
+  `link`/`link_hover`/`link_active` for a link, `ring` for focus, `selection`
+  behind selected text. The library's default theme maps `primary` and `link`
+  to the foreground colour, which in dark mode is white — so the client states
+  the accent once, in `ui::apply_brand`, from the brand's own ramp: the hexes
+  the site and the documentation already use (`#e657a0` and its neighbours
+  light, `#f178b8` and its neighbours dark). A control that wants the accent
+  reads the token; nothing mixes its own.
 - Surrounding page, title bar and rail: `title_bar`.
 - Active tabs: `accent`, paired with `accent_foreground`.
 - Menus and popovers: the GPUI `surface`/`surface_foreground` semantic pair.
