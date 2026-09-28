@@ -28,3 +28,16 @@ pub async fn list_admin_audit_events(
 }
 
 // Transaction participants share the caller-owned transaction; only the outer service commits.
+
+/// Build details from a caller-owned allowlist, excluding unchanged fields.
+pub(crate) fn changes(fields: &[(&str, &str, &str)]) -> Vec<super::dto::AuditChange> {
+    fields
+        .iter()
+        .filter(|(_, before, after)| before != after)
+        .map(|(field, before, after)| super::dto::AuditChange {
+            field: (*field).to_owned(),
+            before: (*before).to_owned(),
+            after: (*after).to_owned(),
+        })
+        .collect()
+}
