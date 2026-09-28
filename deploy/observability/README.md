@@ -321,3 +321,17 @@ Roll back the backed-up config and Server release together if validation fails.
 Check all four hosts, an API request, its derived log link, and Alloy/Loki scrape
 health after rollout. Never induce slow traffic or delivery failures in production
 just to test these scenarios.
+
+## Server metric implementation
+
+The Server uses the `prometheus` Rust library for collectors, histogram
+aggregation and text encoding. The existing `/metrics` endpoint, route/status
+labels and latency bucket boundaries remain unchanged. Requests cancelled
+before a response decrement the in-flight gauge without recording a completed
+response. Handler latency still excludes response body transfer.
+
+`clumsies_db_pool_size` reports current open connections, preserving its
+historical values; `clumsies_db_pool_max_connections` reports the configured
+limit. `clumsies_db_pool_connections{state="idle"|"used"}` samples current pool
+usage at scrape time. These pool readings are approximate concurrent snapshots,
+not an atomic transaction across all gauges.
