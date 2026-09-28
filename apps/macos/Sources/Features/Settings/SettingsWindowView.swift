@@ -20,7 +20,6 @@ struct SettingsWindowView: View {
     @EnvironmentObject private var administration: AdministrationModel
     @ObservedObject var softwareUpdateController: SoftwareUpdateController
     @ObservedObject var navigation: SettingsNavigation
-    @State private var showsAccountSecurity = false
     let onShowLogs: () -> Void
     let onRestart: () -> Void
 
@@ -66,7 +65,7 @@ struct SettingsWindowView: View {
                 }
         }
         .automaticRefresh(id: navigation.destination) {
-            guard !navigation.hasUnsavedChanges, !navigation.isSaving, !showsAccountSecurity,
+            guard !navigation.hasUnsavedChanges, !navigation.isSaving,
                   !workspaceContext.isMutatingAdministration else { return }
             let destination = navigation.destination
             let canApply: @MainActor () -> Bool = { !navigation.hasUnsavedChanges && !navigation.isSaving
@@ -79,7 +78,6 @@ struct SettingsWindowView: View {
             default: break
             }
         }
-        .sheet(isPresented: $showsAccountSecurity) { AccountSecurityView() }
         .navigationSplitViewStyle(.balanced)
         .pageFeedback(administration.statusMessage, isStatus: true, dismiss: { administration.statusMessage = nil })
         .feedbackHost(error: workspaceFeedback.errorMessage, dismiss: workspaceFeedback.dismissErrorMessage)
@@ -126,13 +124,12 @@ struct SettingsWindowView: View {
                                 }
                             }
                             .padding(.vertical, 6)
-                            .selectionDisabled()
+                            .tag(SettingsPane.account)
+                            .accessibilityIdentifier("settings-pane-account")
                         }
                     }
                     Section {
-                        Button("Login methods…") { showsAccountSecurity = true }
-                            .disabled(workspaceContext.account == nil)
-                        ForEach(SettingsPane.allCases.filter { $0 != .organization || canShowOrganization }) { pane in
+                        ForEach(SettingsPane.allCases.filter { $0 != .account && ($0 != .organization || canShowOrganization) }) { pane in
                             HStack(spacing: 8) {
                                 SettingsIcon(symbol: pane.systemImage)
                                 Text(pane.title)
@@ -175,6 +172,9 @@ struct SettingsWindowView: View {
     @ViewBuilder
     private var detail: some View {
         switch navigation.destination {
+        case .pane(.account):
+            if workspaceContext.account != nil { AccountSecurityView(navigation: navigation) }
+            else { Text("Sign in to Clumsies") }
         case .pane(.general):
             GeneralSettingsView(softwareUpdateController: softwareUpdateController, onRestart: onRestart)
         case .pane(.agent):

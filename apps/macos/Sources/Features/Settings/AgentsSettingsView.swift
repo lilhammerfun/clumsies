@@ -62,20 +62,13 @@ struct AgentsSettingsView: View {
                     Text("Install once for all projects. The repository binding selects which project’s Memory each agent uses.")
                 }
 
-                if self.onCompleted == nil {
+                if self.model.selected.contains(.dsh) {
                     Section {
-                        Button("Repair Selected Integrations") { Task { if await self.model.saveSelection(refreshStatus: self.onCompleted == nil) { self.onCompleted?() } } }
-                            .disabled(self.model.isWorking || !self.model.hasLoaded)
-                    }
-                }
-                Section {
-                    Text("After changing Codex, restart it and start a new task.")
-                    if self.model.selected.contains(.dsh) {
                         Text("Register the dsh MCP entry in your dsh profile.")
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
             }
             .formStyle(.grouped)
