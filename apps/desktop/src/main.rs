@@ -11,6 +11,7 @@ mod screens;
 mod shell;
 mod sign_in;
 mod state;
+mod timestamps;
 mod ui;
 
 use gpui_kit::component::{Root, TitleBar};

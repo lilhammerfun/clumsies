@@ -45,6 +45,24 @@ pub const STACK_WIDTH: f32 = 760.;
 /// The gap between the floating card and the page it floats on.
 pub const CARD_GAP: f32 = 8.;
 
+/// How wide a screen's own area is in a window of this width, which is what a
+/// screen lays its own columns out by. The shell owns the rail, the list column,
+/// the divider between them and the card's own inset, so a screen asks for the
+/// width it will be given rather than subtracting them itself.
+///
+/// `listed` says whether the open section fills a list column. A section that
+/// fills none — macOS's Dashboard has no navigator — has the whole card, and a
+/// narrow window stacks the list above the work, so the work has the width
+/// either way there.
+pub fn content_width(window_width: Pixels, listed: bool) -> Pixels {
+    let chrome = px(RAIL_WIDTH + 1. + 2. * CARD_GAP);
+    match (listed, window_width < px(STACK_WIDTH)) {
+        (false, _) => window_width - chrome,
+        (true, true) => window_width,
+        (true, false) => window_width - chrome - px(LIST_WIDTH),
+    }
+}
+
 /// The six destinations of the macOS client, in its order.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -107,9 +125,7 @@ impl Section {
     /// empty column with no explanation.
     pub fn list_note(self) -> &'static str {
         match self {
-            Section::Dashboard => {
-                "Retrieval statistics for the Project, with the runs behind them."
-            }
+            Section::Dashboard => "",
             Section::Inbox => "Reviews and mentions waiting on you.",
             Section::Memory => "",
             Section::Bundles => "Bundles of Memory resources, and where each one comes from.",
@@ -120,9 +136,7 @@ impl Section {
 
     pub fn detail_note(self) -> &'static str {
         match self {
-            Section::Dashboard => {
-                "Statistics and the retrieval runs behind them: DashboardPage in the macOS client."
-            }
+            Section::Dashboard => "",
             Section::Inbox => "Reviews and mentions waiting on you: InboxView in the macOS client.",
             Section::Memory => "",
             Section::Bundles => "Bundles of Memory resources: BundlesView in the macOS client.",
@@ -164,8 +178,11 @@ pub struct Chrome<'a> {
 /// What a screen fills: its list column and its detail. Everything a screen
 /// has to show or offer belongs to one of the two panes, each of which carries
 /// its own header; the band above them belongs to the window.
+///
+/// A screen that has no navigator — as macOS's Dashboard has none — fills no
+/// list, and the detail takes the whole card.
 pub struct Slots {
-    pub list: AnyElement,
+    pub list: Option<AnyElement>,
     pub detail: AnyElement,
 }
 
@@ -205,32 +222,54 @@ impl Shell {
         let narrow = chrome.width < px(STACK_WIDTH);
         let Slots { list, detail } = slots;
 
-        let list_column = div().v_flex().w(px(LIST_WIDTH)).h_full().child(list);
         let detail_column = div()
             .v_flex()
             .flex_1()
             .min_w(px(0.))
             .min_h(px(0.))
             .child(detail);
-        let inside = if narrow {
-            div()
-                .v_flex()
-                .flex_1()
-                .min_w(px(0.))
-                .child(div().v_flex().h(px(180.)).child(list_column))
-                .child(divider(false, cx))
-                .child(detail_column)
-                .into_any_element()
-        } else {
-            div()
+        // A section without a navigator fills the card itself: macOS's
+        // Dashboard is a sidebar beside one page, and that page holds the
+        // metric cards as well as the panels.
+        //
+        // Every wrapper in this chain carries `min_h(0)`: a flex item's
+        // automatic minimum height is its content's, so without it a page
+        // taller than the window stretches this row instead of scrolling
+        // inside it, and the bottom of the page is simply cut off.
+        let inside = match list {
+            None => div()
                 .h_flex()
                 .items_stretch()
                 .flex_1()
                 .min_w(px(0.))
-                .child(list_column)
-                .child(divider(true, cx))
+                .min_h(px(0.))
                 .child(detail_column)
-                .into_any_element()
+                .into_any_element(),
+            Some(list) => {
+                let list_column = div().v_flex().w(px(LIST_WIDTH)).h_full().child(list);
+                if narrow {
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .min_h(px(0.))
+                        .child(div().v_flex().h(px(180.)).child(list_column))
+                        .child(divider(false, cx))
+                        .child(detail_column)
+                        .into_any_element()
+                } else {
+                    div()
+                        .h_flex()
+                        .items_stretch()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .min_h(px(0.))
+                        .child(list_column)
+                        .child(divider(true, cx))
+                        .child(detail_column)
+                        .into_any_element()
+                }
+            }
         };
 
         // The content uses the base canvas, framed by the contrasting page chrome.

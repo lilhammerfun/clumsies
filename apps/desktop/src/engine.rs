@@ -21,7 +21,7 @@ use clumsiesd::{
     DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
     DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The service name the daemon registers. The client resolves it to the local
 /// endpoint by the daemon's own rule, so both halves agree on where to talk.
@@ -1078,6 +1078,471 @@ struct ReviewPage {
     items: Vec<Review>,
 }
 
+/// How many calendar days a Dashboard read covers. macOS offers the same three
+/// in its toolbar picker, and the Server accepts nothing else.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Period {
+    Week,
+    Month,
+    Quarter,
+}
+
+impl Period {
+    pub const ALL: [Period; 3] = [Period::Week, Period::Month, Period::Quarter];
+
+    pub fn days(self) -> u32 {
+        match self {
+            Period::Week => 7,
+            Period::Month => 30,
+            Period::Quarter => 90,
+        }
+    }
+
+    /// What the picker calls it, which is macOS's own label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Period::Week => "7 days",
+            Period::Month => "30 days",
+            Period::Quarter => "90 days",
+        }
+    }
+}
+
+/// The Server's half of the Dashboard: the published inventory and its history,
+/// bucketed in the reader's own time zone.
+///
+/// Read from `MemoryStatistics` in `crates/server/src/app/memory/dto.rs`, which
+/// carries more than this client draws: the change buckets and the deleted
+/// count are left out here, because no screen asks for them.
+#[derive(Clone, Debug, Deserialize)]
+pub struct MemoryStatistics {
+    /// The Server's clock when it answered, which the engine's telemetry is
+    /// measured against.
+    pub generated_at: i64,
+    /// Local calendar boundaries, including the exclusive one after the last
+    /// day. The engine validates their shape and refuses anything else.
+    pub day_bounds: Vec<i64>,
+    /// The starts of the last 7, 30 and 90 days, which the engine groups its
+    /// most-recent retrieval by.
+    pub recency_starts: Vec<i64>,
+    /// The Projects this answer covers — one, for a Project's own statistics.
+    pub project_ids: Vec<String>,
+    /// What the Project publishes today, which is what retrieval is measured
+    /// against.
+    pub resources: Vec<StatisticsResource>,
+    pub memory_count: usize,
+    /// Distinct documents added and edited within the period.
+    pub added_count: usize,
+    pub updated_count: usize,
+    /// One entry per day of the period, in order.
+    pub days: Vec<InventoryDay>,
+    /// Drafts the Server knows about: open or conflicted, and submitted.
+    pub open_drafts: i64,
+    pub submitted_drafts: i64,
+}
+
+/// One published document, as the Server's statistics name it. The id is the
+/// Memory resource, which is what the engine's telemetry counts and what a
+/// Dashboard row opens.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StatisticsResource {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+}
+
+/// One day's closing inventory. `None` predates the first retained snapshot,
+/// which is not the same as a day that held nothing.
+#[derive(Clone, Debug, Deserialize)]
+pub struct InventoryDay {
+    pub date: i64,
+    pub memory_count: Option<usize>,
+}
+
+/// The engine's half of the Dashboard: retrieval telemetry retained on this
+/// machine. Read from `DashboardRetrievalStatistics` in
+/// `crates/clumsiesd/src/dashboard.rs`, whose nested types the daemon does not
+/// export; the field names here are that struct's, and a test below pins them.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RetrievalStatistics {
+    /// Completed requests in the period.
+    pub retrievals: usize,
+    /// Distinct published documents those requests returned.
+    pub recalled_count: usize,
+    /// The share of the current inventory that was retrieved at least once.
+    pub coverage: f64,
+    /// Only the days with retained records are sent; a day nobody asked on is
+    /// absent rather than zero.
+    pub days: Vec<RetrievalDay>,
+    /// Directory counts and their coverage of the current inventory.
+    pub directories: Vec<DashboardBar>,
+    /// The most frequently retrieved documents, six at most.
+    pub top_resources: Vec<DashboardBar>,
+    /// The oldest retained request within 90 days, when there is one. A flat
+    /// week can mean a week nobody asked in, or a week this machine never saw.
+    pub history_start: Option<i64>,
+    /// How many requests per Project this machine keeps. Counts are local
+    /// history, never a claim about anyone else's.
+    pub retention_per_project: i64,
+    /// Fragment delta actions, absent on an engine too old to record them.
+    #[serde(default)]
+    pub delta: Option<DeltaStatistics>,
+    /// Completed agent runs seen in local session logs, when the engine reads
+    /// them.
+    #[serde(default)]
+    pub agent_usage: Option<AgentUsage>,
+}
+
+/// One local day's completed retrieval, by outcome.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RetrievalDay {
+    pub date: i64,
+    /// Successful requests that returned or reused content.
+    pub returned: usize,
+    /// Successful requests that returned nothing.
+    pub empty: usize,
+    /// Requests that failed.
+    pub failed: usize,
+}
+
+/// A bar of a horizontal chart: a directory, a retrieved document, or one of
+/// the recency groups. `total` is the inventory a coverage bar is measured
+/// against, and is absent from a bar that counts requests.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DashboardBar {
+    pub id: String,
+    pub label: String,
+    pub value: usize,
+    pub total: Option<usize>,
+}
+
+/// Delta telemetry counts fragments rather than documents or requests, which is
+/// why its rate is the ratio of three of its own actions rather than a share of
+/// the inventory.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeltaStatistics {
+    /// Completed requests carrying a state token, including rejected ones.
+    pub with_state: usize,
+    pub days: Vec<DeltaDay>,
+}
+
+impl DeltaStatistics {
+    pub fn added(&self) -> usize {
+        self.days.iter().map(|day| day.added).sum()
+    }
+
+    pub fn replaced(&self) -> usize {
+        self.days.iter().map(|day| day.replaced).sum()
+    }
+
+    pub fn reused(&self) -> usize {
+        self.days.iter().map(|day| day.reused).sum()
+    }
+
+    pub fn unknown(&self) -> usize {
+        self.days.iter().map(|day| day.unknown).sum()
+    }
+
+    /// Fragments whose action was recorded; the ones without one are excluded
+    /// from the ratio rather than counted as reuse.
+    pub fn total(&self) -> usize {
+        self.added() + self.replaced() + self.reused()
+    }
+
+    /// Reuse / (add + replace + reuse), which is macOS's own ratio.
+    pub fn reuse_rate(&self) -> Option<f64> {
+        (self.total() > 0).then(|| self.reused() as f64 / self.total() as f64)
+    }
+}
+
+/// One day's fragment actions.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeltaDay {
+    pub date: i64,
+    pub added: usize,
+    pub replaced: usize,
+    pub reused: usize,
+    pub unknown: usize,
+}
+
+impl DeltaDay {
+    pub fn total(&self) -> usize {
+        self.added + self.replaced + self.reused
+    }
+}
+
+/// Completed local agent runs, and whether each called Memory.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AgentUsage {
+    pub days: Vec<AgentUsageDay>,
+    /// Session logs the engine could not read, and ones it does not
+    /// understand. Both are named so a rate is never read as the whole truth.
+    pub unreadable_sessions: usize,
+    pub unsupported_sessions: usize,
+}
+
+impl AgentUsage {
+    pub fn with_memory(&self) -> usize {
+        self.days.iter().map(|day| day.with_memory).sum()
+    }
+
+    pub fn total(&self) -> usize {
+        self.days.iter().map(AgentUsageDay::total).sum()
+    }
+
+    pub fn usage_rate(&self) -> Option<f64> {
+        (self.total() > 0).then(|| self.with_memory() as f64 / self.total() as f64)
+    }
+
+    /// Sessions left out of both counts, which the panel says out loud.
+    pub fn excluded_sessions(&self) -> usize {
+        self.unreadable_sessions + self.unsupported_sessions
+    }
+}
+
+/// One day's agent runs.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AgentUsageDay {
+    pub date: i64,
+    pub with_memory: usize,
+    pub without_memory: usize,
+}
+
+impl AgentUsageDay {
+    pub fn total(&self) -> usize {
+        self.with_memory + self.without_memory
+    }
+}
+
+/// One read of the Dashboard: what the Project publishes over a period, what
+/// the engine retained of its retrieval, and whether the Server's half came
+/// from the daemon's cache rather than from the Server just now.
+///
+/// The two halves are not joined here. Each panel draws one of them against its
+/// own days, which is what macOS's `DashboardSummary` does with the pair: the
+/// join it computes is not read by any of its charts either.
+pub struct DashboardSnapshot {
+    pub period: Period,
+    pub memory: MemoryStatistics,
+    pub retrieval: RetrievalStatistics,
+    /// The daemon answers from its cache when the Server cannot be reached, and
+    /// says so in a header. A cached number is worth showing, and worth saying.
+    pub stale: bool,
+    /// Whether this came from a Dev Instance's fixture rather than from the
+    /// Server and the engine. macOS badges the same file "Demo data", because a
+    /// sample is not this Project's own history.
+    pub demo: bool,
+}
+
+impl DashboardSnapshot {
+    /// The documents this snapshot names, which is how a Dashboard row turns a
+    /// resource id back into the path Memory opens.
+    pub fn path_for(&self, resource_id: &str) -> Option<&str> {
+        self.memory
+            .resources
+            .iter()
+            .find(|resource| resource.id == resource_id)
+            .map(|resource| resource.path.as_str())
+    }
+
+    /// The largest inventory of the period, which is the scale the growth chart
+    /// draws against.
+    pub fn peak_inventory(&self) -> usize {
+        self.memory
+            .days
+            .iter()
+            .filter_map(|day| day.memory_count)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// Reads both halves of the Dashboard for one Project.
+///
+/// A Dev Instance's fixture is read first when there is one, because a screen
+/// whose numbers take a month to accumulate cannot otherwise be looked at. The
+/// live read is the Server and the engine: the Server owns the published
+/// inventory and the calendar, so it is asked for the statistics of the period
+/// in the reader's time zone, and the engine owns the retrieval telemetry, so it
+/// is asked with the Server's own boundaries and both halves describe the same
+/// days. Nothing here writes anything.
+pub fn dashboard(project_id: &str, period: Period) -> Result<DashboardSnapshot, String> {
+    if let Some(snapshot) = demo_snapshot(project_id, period) {
+        return Ok(snapshot);
+    }
+    let response = server(
+        "GET",
+        &statistics_path(project_id, period, &crate::timestamps::time_zone()),
+        BTreeMap::new(),
+        None,
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    let memory: MemoryStatistics = serde_json::from_str(&response.body)
+        .map_err(|error| format!("unreadable Project statistics: {error}"))?;
+    // The daemon keeps the Server's last answer and serves it when the Server
+    // cannot be reached, marking it with this header. The caller reports it
+    // rather than passing a kept number off as this minute's.
+    let stale = response.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("x-clumsies-cache") && value.eq_ignore_ascii_case("stale")
+    });
+    // The engine's own call takes exactly the boundaries the Server computed,
+    // so the reader's time zone is applied once, by the party that owns the
+    // calendar, and both halves agree on where a day begins.
+    let request = serde_json::json!({
+        "project_ids": memory.project_ids,
+        "resources": memory.resources,
+        "day_bounds": memory.day_bounds,
+        "recency_starts": memory.recency_starts,
+        "generated_at": memory.generated_at,
+    });
+    let response = client()
+        .call(DaemonIpcRequest::new(
+            "dashboard_retrieval_statistics",
+            request,
+        ))
+        .map_err(|error| error.to_string())?;
+    let retrieval: RetrievalStatistics =
+        response.into_payload().map_err(|error| error.to_string())?;
+    Ok(DashboardSnapshot {
+        period,
+        memory,
+        retrieval,
+        stale,
+        demo: false,
+    })
+}
+
+/// One period of a Dev Instance's sample, as `dev/seed-dashboard.py` writes it.
+#[derive(Deserialize)]
+struct FixtureSnapshot {
+    /// Absent for an organization-wide sample.
+    project_id: Option<String>,
+    period: u32,
+    memory: MemoryStatistics,
+    retrieval: RetrievalStatistics,
+}
+
+/// The sample a Dev Instance keeps beside its daemon root, which is the file
+/// macOS reads in one too.
+///
+/// It is read only when the daemon root is the one a developer pointed this
+/// client at — the installed app never sets `CLUMSIES_DAEMON_ROOT` — and only
+/// when the file is there and holds this Project and period. Anything else is
+/// an ordinary read of the Server and the engine.
+fn demo_snapshot(project_id: &str, period: Period) -> Option<DashboardSnapshot> {
+    let root = std::env::var_os("CLUMSIES_DAEMON_ROOT")?;
+    let mut path = std::path::PathBuf::from(root);
+    path.pop();
+    let text = std::fs::read_to_string(path.join("fixtures").join("dashboard.json")).ok()?;
+    let mut fixture: serde_json::Value = serde_json::from_str(&text).ok()?;
+    // The file is the macOS client's own spelling — `dev/seed-dashboard.py`
+    // writes camelCase keys and `TimeInterval` seconds for it — so the names and
+    // the numbers are translated once here rather than kept in a second set of
+    // types.
+    lowercase_keys(&mut fixture);
+    whole_seconds(&mut fixture);
+    let samples: Vec<FixtureSnapshot> = serde_json::from_value(fixture).ok()?;
+    let sample = samples.into_iter().find(|sample| {
+        sample.period == period.days() && sample.project_id.as_deref() == Some(project_id)
+    })?;
+    crate::logging::info(&format!(
+        "read the Dashboard's sample for {} days",
+        period.days()
+    ));
+    Some(DashboardSnapshot {
+        period,
+        memory: sample.memory,
+        retrieval: sample.retrieval,
+        stale: false,
+        demo: true,
+    })
+}
+
+/// Rewrites every key of a JSON tree from `camelCase` to `snake_case`, which is
+/// the spelling this client's mirrors are written in.
+fn lowercase_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            let translated: Vec<(String, serde_json::Value)> = std::mem::take(fields)
+                .into_iter()
+                .map(|(key, mut value)| {
+                    lowercase_keys(&mut value);
+                    (snake_case(&key), value)
+                })
+                .collect();
+            fields.extend(translated);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(lowercase_keys),
+        _ => {}
+    }
+}
+
+fn snake_case(key: &str) -> String {
+    let mut spelled = String::with_capacity(key.len() + 4);
+    for character in key.chars() {
+        if character.is_ascii_uppercase() {
+            spelled.push('_');
+            spelled.push(character.to_ascii_lowercase());
+        } else {
+            spelled.push(character);
+        }
+    }
+    spelled
+}
+
+/// Rewrites an instant written as a double as the whole seconds this client
+/// counts in.
+///
+/// The sample's times are `TimeInterval` — a double, which is what the macOS
+/// client reads — while this client's mirrors are seconds. A number that large
+/// can only be an instant: every rate a reader is shown is a share of one, and
+/// every count is already a whole number in the file.
+fn whole_seconds(value: &mut serde_json::Value) {
+    /// Below this a number is a share, a count or a length, never an instant.
+    const INSTANT_FLOOR: f64 = 1e6;
+    match value {
+        serde_json::Value::Number(number) => {
+            let Some(seconds) = number.as_f64() else {
+                return;
+            };
+            if number.as_i64().is_none() && seconds.abs() >= INSTANT_FLOOR && seconds.abs() < 9e15 {
+                *number = serde_json::Number::from(seconds.trunc() as i64);
+            }
+        }
+        serde_json::Value::Object(fields) => fields.values_mut().for_each(whole_seconds),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(whole_seconds),
+        _ => {}
+    }
+}
+
+/// The two query parameters the Server requires. The time zone carries a slash,
+/// so it is encoded rather than pasted into the path.
+fn statistics_path(project_id: &str, period: Period, zone: &str) -> String {
+    format!(
+        "/api/v1/projects/{project_id}/memory-statistics?days={}&time_zone={}",
+        period.days(),
+        encode(zone)
+    )
+}
+
+/// Percent-encodes everything a query value may not carry literally.
+fn encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '~') {
+            encoded.push(character);
+            continue;
+        }
+        let mut buffer = [0_u8; 4];
+        for byte in character.encode_utf8(&mut buffer).as_bytes() {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
 /// One request through the daemon, which is the only party holding a session.
 fn server(
     method: &str,
@@ -1137,5 +1602,194 @@ mod tests {
         assert_eq!(documents[0].resource_id, "file");
         assert_eq!(documents[0].path, "notes/readme.md");
         assert_eq!(documents[0].content, "Keep this file");
+    }
+
+    #[test]
+    fn statistics_are_asked_for_in_the_readers_zone() {
+        assert_eq!(
+            statistics_path("proj_1", Period::Month, "Asia/Shanghai"),
+            "/api/v1/projects/proj_1/memory-statistics?days=30&time_zone=Asia%2FShanghai"
+        );
+        // A zone PostgreSQL would accept but a path would not: the plus sign.
+        assert_eq!(encode("Etc/GMT+8"), "Etc%2FGMT%2B8");
+    }
+
+    #[test]
+    fn the_engines_retrieval_answer_keeps_its_own_field_names() {
+        // The shape `dashboard_retrieval_statistics` answers with, from
+        // clumsiesd::dashboard. Pinned here because the daemon does not export
+        // the nested types this client reads.
+        let retrieval: RetrievalStatistics = serde_json::from_value(serde_json::json!({
+            "retrievals": 12,
+            "recalled_count": 5,
+            "coverage": 0.25,
+            "days": [{ "date": 1_790_452_800, "returned": 3, "empty": 1, "failed": 0 }],
+            "directories": [{ "id": "knowledge", "label": "knowledge", "value": 4, "total": 9 }],
+            "top_resources": [{ "id": "mem_1", "label": "Architecture", "value": 7 }],
+            "recency": [
+                { "id": "0", "label": "Last 7 days", "value": 2 },
+                { "id": "1", "label": "8–30 days", "value": 1 },
+                { "id": "2", "label": "31–90 days", "value": 1 },
+                { "id": "3", "label": "Not observed", "value": 1 }
+            ],
+            "history_start": 1_790_000_000,
+            "retention_per_project": 500,
+            "delta": {
+                "with_state": 4,
+                "days": [{ "date": 1_790_452_800, "added": 2, "replaced": 1, "reused": 7, "unknown": 1 }]
+            },
+            "agent_usage": {
+                "days": [{ "date": 1_790_452_800, "with_memory": 3, "without_memory": 1 }],
+                "unreadable_sessions": 1,
+                "unsupported_sessions": 2
+            }
+        }))
+        .unwrap();
+        assert_eq!(retrieval.retrievals, 12);
+        assert_eq!(retrieval.directories[0].total, Some(9));
+        assert_eq!(retrieval.top_resources[0].total, None);
+        let delta = retrieval.delta.unwrap();
+        assert_eq!(delta.total(), 10);
+        assert_eq!(delta.reuse_rate(), Some(0.7));
+        assert_eq!(delta.unknown(), 1);
+        let usage = retrieval.agent_usage.unwrap();
+        assert_eq!(usage.usage_rate(), Some(0.75));
+        assert_eq!(usage.excluded_sessions(), 3);
+    }
+
+    #[test]
+    fn an_engine_without_delta_telemetry_still_answers() {
+        // An older daemon sends neither field, and the panels say so rather
+        // than failing the whole read.
+        let retrieval: RetrievalStatistics = serde_json::from_value(serde_json::json!({
+            "retrievals": 0,
+            "recalled_count": 0,
+            "coverage": 0.0,
+            "days": [],
+            "directories": [],
+            "top_resources": [],
+            "recency": [],
+            "history_start": null,
+            "retention_per_project": 500
+        }))
+        .unwrap();
+        assert!(retrieval.delta.is_none());
+        assert!(retrieval.agent_usage.is_none());
+    }
+
+    #[test]
+    fn a_snapshot_reads_its_own_inventory_and_names_its_documents() {
+        let snapshot = DashboardSnapshot {
+            period: Period::Week,
+            stale: false,
+            demo: false,
+            memory: MemoryStatistics {
+                generated_at: 1_790_500_000,
+                day_bounds: vec![1_790_452_800, 1_790_539_200],
+                recency_starts: vec![1_790_452_800, 1_790_452_800, 1_790_452_800],
+                project_ids: vec!["proj_1".to_owned()],
+                resources: vec![StatisticsResource {
+                    id: "mem_1".to_owned(),
+                    title: "Architecture".to_owned(),
+                    path: "knowledge/architecture.md".to_owned(),
+                }],
+                memory_count: 1,
+                added_count: 1,
+                updated_count: 0,
+                days: vec![
+                    InventoryDay {
+                        date: 1_790_452_800,
+                        memory_count: None,
+                    },
+                    InventoryDay {
+                        date: 1_790_539_200,
+                        memory_count: Some(4),
+                    },
+                ],
+                open_drafts: 1,
+                submitted_drafts: 2,
+            },
+            retrieval: RetrievalStatistics {
+                retrievals: 3,
+                recalled_count: 1,
+                coverage: 1.0,
+                days: vec![RetrievalDay {
+                    date: 1_790_539_200,
+                    returned: 3,
+                    empty: 0,
+                    failed: 0,
+                }],
+                directories: Vec::new(),
+                top_resources: Vec::new(),
+                history_start: Some(1_790_452_800),
+                retention_per_project: 500,
+                delta: None,
+                agent_usage: None,
+            },
+        };
+        // A day the Server could not count is not a day of nothing: it is
+        // absent from the peak rather than dragging it down.
+        assert_eq!(snapshot.peak_inventory(), 4);
+        assert_eq!(
+            snapshot.path_for("mem_1"),
+            Some("knowledge/architecture.md")
+        );
+        assert_eq!(snapshot.path_for("mem_2"), None);
+    }
+
+    #[test]
+    fn the_samples_keys_are_read_in_this_clients_spelling() {
+        // A slice of the file `dev/seed-dashboard.py` writes, in the macOS
+        // client's camelCase, as it reaches the mirrors above.
+        let mut fixture = serde_json::json!([{
+            "projectId": "prj_1",
+            "period": 7,
+            "memory": {
+                "generatedAt": 1_790_500_000.123,
+                "dayBounds": [1_790_452_800.0, 1_790_539_200.0],
+                "recencyStarts": [1_790_452_800, 1_790_452_800, 1_790_452_800],
+                "projectIds": ["prj_1"],
+                "resources": [{ "id": "mem_1", "title": "Architecture", "path": "knowledge/a.md" }],
+                "memoryCount": 1,
+                "addedCount": 1,
+                "updatedCount": 0,
+                "deletedCount": 0,
+                "days": [{ "date": 1_790_452_800, "memoryCount": 3 }],
+                "changeBuckets": [],
+                "openDrafts": 9,
+                "submittedDrafts": 5
+            },
+            "retrieval": {
+                "retrievals": 12,
+                "recalledCount": 1,
+                "coverage": 1.0,
+                "days": [{ "date": 1_790_452_800, "returned": 12, "empty": 3, "failed": 1 }],
+                "directories": [{ "id": "knowledge/", "label": "knowledge/", "value": 1, "total": 1 }],
+                "topResources": [{ "id": "mem_1", "label": "Architecture", "value": 12 }],
+                "recency": [],
+                "historyStart": 1_790_452_800,
+                "retentionPerProject": 500,
+                "delta": { "withState": 6, "days": [] },
+                "agentUsage": { "days": [], "unreadableSessions": 0, "unsupportedSessions": 0 }
+            }
+        }]);
+        lowercase_keys(&mut fixture);
+        whole_seconds(&mut fixture);
+        let samples: Vec<FixtureSnapshot> = serde_json::from_value(fixture).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].period, 7);
+        // An instant written as a double is read as the whole second it names,
+        // and a rate is left a rate.
+        assert_eq!(samples[0].memory.generated_at, 1_790_500_000);
+        assert_eq!(samples[0].memory.day_bounds[0], 1_790_452_800);
+        assert_eq!(samples[0].retrieval.coverage, 1.0);
+        assert_eq!(samples[0].memory.memory_count, 1);
+        assert_eq!(samples[0].memory.open_drafts, 9);
+        assert_eq!(samples[0].memory.days[0].memory_count, Some(3));
+        assert_eq!(samples[0].retrieval.top_resources[0].value, 12);
+        assert_eq!(samples[0].retrieval.days[0].failed, 1);
+        assert!(samples[0].retrieval.delta.is_some());
+        assert_eq!(snake_case("projectId"), "project_id");
+        assert_eq!(snake_case("dayBounds"), "day_bounds");
     }
 }

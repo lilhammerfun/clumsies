@@ -1,3 +1,4 @@
+pub mod dashboard;
 pub mod dialogs;
 pub mod document;
 pub mod guidelines;

@@ -13,7 +13,11 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::{Icon, Root, Theme, WindowExt as _};
 use gpui_kit::*;
 
-use crate::engine::{self, Checkout, DocumentEdit, EngineStatus, Project, Review, ReviewStatus};
+use crate::components::header;
+use crate::engine::{
+    self, Checkout, DocumentEdit, EngineStatus, Period, Project, Review, ReviewStatus,
+};
+use crate::screens::dashboard::{AboutDialog, DashboardScreen, Metric};
 use crate::screens::dialogs::{ConfirmDialog, DialogAction, RenameDialog, RenameFolderDialog};
 use crate::screens::document::{self, Mode, Notice, SAVE_DELAY, SaveState};
 use crate::screens::guidelines;
@@ -46,6 +50,7 @@ pub struct DesktopApp {
     selected_project: Option<usize>,
     memory: MemoryScreen,
     reviews: ReviewsScreen,
+    dashboard: DashboardScreen,
     shell: Shell,
     /// The pane header's actions take focus here. F6 is the Windows key for
     /// moving between a window's regions, and it is the only way out of an
@@ -80,6 +85,11 @@ impl DesktopApp {
         if let Some(checkout) = &checkout {
             reviews.set_published(checkout);
         }
+        let mut dashboard = DashboardScreen::new(cx);
+        dashboard.set_project(
+            projects.first().map(|project| project.project_id.clone()),
+            cx,
+        );
         let memory = MemoryScreen::new(window, cx, checkout, checkout_error);
         // A daemon with no session refuses every Server request, and that
         // refusal is the only signed-out signal there is.
@@ -104,6 +114,7 @@ impl DesktopApp {
             projects_error,
             memory,
             reviews,
+            dashboard,
             shell: Shell::new(),
             actions_focus: cx.focus_handle(),
             rail_focus: cx.focus_handle(),
@@ -115,6 +126,11 @@ impl DesktopApp {
         // A Project that already holds a proposal must show it on the first
         // frame: the tree marks it and the pane header offers to review it.
         app.refresh_drafts(cx);
+        // A section is read when it is opened, which for the section the window
+        // opens on has already happened by the time the window exists.
+        if app.shell.section() == Section::Dashboard {
+            app.refresh_dashboard(cx);
+        }
         // The pane's tools are a region of the window (F6 walks it), so the
         // window owns the handle and the screen draws from it.
         app.memory.set_tools_focus(app.actions_focus.clone());
@@ -208,6 +224,20 @@ impl DesktopApp {
         if self.memory.open_now(path, Some(mode), window, cx) {
             cx.notify();
         }
+    }
+
+    /// Opens one of the Project's documents from another screen, which is what
+    /// a retrieved-memory row on the Dashboard does; macOS calls the same move
+    /// `onOpenMemory`.
+    pub fn open_memory_resource(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.shell.set_section(Section::Memory);
+        self.open_document(path, Mode::Preview, window, cx);
+        cx.notify();
     }
 
     /// Asks for a Review of one document, whether or not it is the open one.
@@ -799,6 +829,12 @@ impl DesktopApp {
         if section == Section::Reviews && self.reviews.needs_reading() {
             self.refresh_reviews(cx);
         }
+        // A Dashboard is two reads — the Server's and the engine's — and it is
+        // read for the period on screen, so it is asked once and then only when
+        // the reader asks for another period.
+        if section == Section::Dashboard && self.dashboard.needs_reading() {
+            self.refresh_dashboard(cx);
+        }
         cx.notify();
     }
 
@@ -821,10 +857,17 @@ impl DesktopApp {
             if let Some(checkout) = &checkout {
                 self.reviews.set_published(checkout);
             }
+            // Another Project is another Dashboard, and the numbers of one say
+            // nothing about the other.
+            self.dashboard
+                .set_project(Some(project.project_id.clone()), cx);
             self.memory.set_checkout(checkout, error, cx);
             self.refresh_drafts(cx);
             if self.shell.section() == Section::Reviews {
                 self.refresh_reviews(cx);
+            }
+            if self.shell.section() == Section::Dashboard {
+                self.refresh_dashboard(cx);
             }
         }
         cx.notify();
@@ -853,6 +896,11 @@ impl DesktopApp {
             Region::Rail => window.focus(&self.rail_focus, cx),
             Region::List if self.shell.section() == Section::Reviews => {
                 self.reviews.focus_list(window, cx)
+            }
+            // The Dashboard's list is a reading surface rather than a
+            // selection, so F6 has nothing to land on there.
+            Region::List if self.shell.section() == Section::Dashboard => {
+                self.focus_content(window, cx)
             }
             Region::List => self.memory.focus_list(window, cx),
             Region::Detail => self.focus_content(window, cx),
@@ -1312,6 +1360,89 @@ impl DesktopApp {
         }
     }
 
+    /// Reads the Project's Dashboard: the Server's statistics for the period on
+    /// screen, and the engine's telemetry for the same boundaries. Both are
+    /// socket calls, so this runs on the click that opens the section and when
+    /// the reader asks for another period — never inside a frame.
+    pub fn refresh_dashboard(&mut self, cx: &mut Context<Self>) {
+        let Some(project_id) = self.dashboard.project_id().map(str::to_owned) else {
+            return;
+        };
+        let period = self.dashboard.period();
+        let generation = self.dashboard.begin_read(period);
+        cx.notify();
+        let work = cx
+            .background_executor()
+            .spawn(async move { engine::dashboard(&project_id, period) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| app.dashboard_loaded(generation, result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn dashboard_loaded(
+        &mut self,
+        generation: u64,
+        result: Result<engine::DashboardSnapshot, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match &result {
+            // A sample says so itself, where it is read, so the log does not
+            // report it twice.
+            Ok(snapshot) if !snapshot.demo => crate::logging::info(&format!(
+                "read the Dashboard for {} days",
+                snapshot.period.days()
+            )),
+            Ok(_) => {}
+            Err(error) => crate::logging::error(&format!("could not read the Dashboard: {error}")),
+        }
+        self.dashboard.set_snapshot(generation, result, cx);
+    }
+
+    /// Another period is another read, and the charts on screen belong to the
+    /// period the reader has left until the new one answers.
+    pub fn show_dashboard_period(&mut self, period: Period, cx: &mut Context<Self>) {
+        if self.dashboard.set_period(period) {
+            self.refresh_dashboard(cx);
+        }
+    }
+
+    /// The pointer entered or left one day of one of the Dashboard's charts.
+    pub fn dashboard_hover(
+        &mut self,
+        metric: Metric,
+        slot: usize,
+        over: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.dashboard.set_chart_hover(metric, slot, over, cx);
+    }
+
+    /// What a Dashboard panel counts, in macOS's own words. It is an
+    /// explanation rather than a setting, so it opens over the work and closes
+    /// without changing anything.
+    pub fn open_dashboard_about(
+        &mut self,
+        metric: Metric,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let retention = self.dashboard.retention_per_project();
+        let view = cx.new(|_| AboutDialog::new(metric, retention));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view = view.clone();
+            dialog
+                .title(metric.title())
+                .w(px(520.))
+                .keyboard(true)
+                .content(move |content, _window, _cx| content.child(view.clone()))
+                .footer(div())
+                .footer(div())
+        });
+    }
+
     /// Opens one Review: the queue's selection and the read that fills its
     /// detail both start here, whether a click or the keyboard asked.
     pub fn open_review(&mut self, review_id: &str, cx: &mut Context<Self>) {
@@ -1456,6 +1587,9 @@ impl DesktopApp {
     /// it is the section that has it: a screen with no actions returns nothing
     /// here rather than a button that says so.
     fn actions(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.shell.section() == Section::Dashboard {
+            return self.dashboard_actions(window, cx);
+        }
         if self.shell.section() == Section::Reviews {
             return self.review_actions(window, cx);
         }
@@ -1491,6 +1625,45 @@ impl DesktopApp {
             )
             .into_any_element()
             .into()
+    }
+
+    /// The Dashboard's one command: the period the whole page reports on.
+    /// macOS keeps the same picker in its window toolbar; this client draws it
+    /// in the page's header.
+    ///
+    /// It is not one of the window's keyboard regions. macOS's Dashboard is
+    /// pointer-first — its toolbar is not a pane a reader tabs into either — and
+    /// the walk this client invented is not a place to spend a control that
+    /// macOS does not put there.
+    fn dashboard_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let current = self.dashboard.period();
+        // The segments carry no heading, as macOS's segmented picker carries
+        // none of its own label: what the control is belongs in the tooltip a
+        // reader finds by hovering it, not in a word the eye reads every time.
+        let mut group = header::group();
+        for period in Period::ALL {
+            group = group.child(
+                header::button(("dashboard-period", period.days() as usize))
+                    .label(period.label())
+                    .tooltip("Dashboard period")
+                    .toggled(period == current)
+                    .on_click(cx.listener(move |app, _event, _window, cx| {
+                        app.show_dashboard_period(period, cx);
+                    })),
+            );
+        }
+        Some(
+            div()
+                .id("dashboard-period")
+                .h_flex()
+                .items_center()
+                .child(group)
+                .into_any_element(),
+        )
     }
 
     /// What the open Review can be decided as. macOS keeps the same two
@@ -1589,21 +1762,26 @@ impl DesktopApp {
         )
     }
 
-    /// The open section's list column. A section that has no screen yet says so
-    /// rather than drawing an empty column with no explanation.
+    /// The open section's list column, where the section has one. A section
+    /// that has no screen yet says so rather than drawing an empty column with
+    /// no explanation.
     fn section_list(
         &self,
         picker: AnyElement,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<AnyElement> {
         match self.shell.section() {
             Section::Memory => {
                 let settings = self.settings_button(cx);
-                self.memory.list(picker, settings, window, cx)
+                Some(self.memory.list(picker, settings, window, cx))
             }
-            Section::Reviews => self.reviews.list(picker, window, cx),
-            other => placeholder(other.list_note(), cx),
+            Section::Reviews => Some(self.reviews.list(picker, window, cx)),
+            // macOS's Dashboard is a sidebar beside one page: it has no
+            // navigator, and the Project filter travels in the page's own
+            // header, which is where macOS keeps it too.
+            Section::Dashboard => None,
+            other => Some(placeholder(other.list_note(), cx)),
         }
     }
 
@@ -1618,6 +1796,15 @@ impl DesktopApp {
         match self.shell.section() {
             Section::Memory => self.memory.detail(&self.actions_focus, window, cx),
             Section::Reviews => self.reviews.detail(actions, window, cx),
+            // The Dashboard's cards and panels are laid out by the width they
+            // are given, which is the page's own and not the window's — and the
+            // page has no list column beside it.
+            Section::Dashboard => self.dashboard.detail(
+                self.project_filter(cx),
+                actions,
+                crate::shell::content_width(window.viewport_size().width, false),
+                cx,
+            ),
             other => placeholder(other.detail_note(), cx),
         }
     }

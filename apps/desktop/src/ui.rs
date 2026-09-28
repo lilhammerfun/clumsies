@@ -49,6 +49,13 @@ pub const SUBTITLE: TextStyle = TextStyle {
     line_height: 28.,
 };
 
+/// Display semibold, 28/36. The largest step a screen has asked for so far: a
+/// Dashboard card's figure.
+pub const TITLE: TextStyle = TextStyle {
+    size: 28.,
+    line_height: 36.,
+};
+
 /// Radius for in-page elements: buttons, inputs, list rows, bars.
 pub const RADIUS: f32 = 4.;
 

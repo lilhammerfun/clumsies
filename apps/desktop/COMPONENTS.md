@@ -18,8 +18,10 @@ most of the work:
 | `gpui_kit::assets` | gpui-kit-assets 0.6.6 | The icon catalog and the asset source the SVGs resolve through. |
 
 Beside it: `similar` (line-level diffing), `clumsiesd` (the daemon's wire
-protocol, depended on rather than copied), and serde/reqwest/uuid for the
-Server's own API.
+protocol, depended on rather than copied), serde/reqwest/uuid for the Server's
+own API, and chrono/iana-time-zone for the reader's calendar — the Dashboard is
+bucketed in their time zone and answered in Unix seconds. Both were already in
+the workspace's lock file through the Server's own use of them.
 
 We do not vendor or fork the library. Where its behaviour is wrong for us we
 work around it in exactly one place and say so there — `components/fill.rs` is
@@ -63,6 +65,9 @@ will do. Ordered the way the macOS client uses them.
 | `ToolbarFilterMenu`, `ProjectFilterMenu` (2 files each) | A filter icon and selected project name, opening a checked menu. | `components/project_filter.rs` composes GPUI Button and PopupMenu in the list header, shared by Memory and Reviews. No content search is mixed into project selection. |
 | `PathTreeView`, `PathTreeRowLabel`, `FileSymbolView` (2 files) | A path-derived tree, one row shape, file-type icons. | Ours: `components/memory_tree.rs` builds the tree from paths; the library's `tree` draws it. Multi-select is ours on top, in `file_tree::Selection`: the set is the screen's, the painting and the modifier clicks are the component's. A context menu and inline rename are not built — the menu is Memory's business, and a rename is a dialog rather than a field in a row. |
 | `MarkdownContentView`, `MarkdownPreview` (2 files each) | Markdown with the frontmatter split out, in a reading column. | Library. `text::TextView::markdown` with `FrontmatterPlugin`, wrapped in `components/markdown.rs`. |
+| `DashboardPage`, `DashboardView` + Swift Charts (1 screen) | Six metric cards, six panels of charts and bars, a period picker in the window toolbar, an About sheet per panel. | Ported: `screens/dashboard.rs`. The page is macOS's: six cards across the top, the panels below two to a row, **no navigator column beside it** (macOS's split view is the sidebar next to that one page) and no page title (macOS's has none), so the Project filter and the period picker sit in the page's own header. The cards, the panels and the charts are composed — the library's `chart` draws one series per value and cannot stack a day's outcomes, so a day is a column here. Hovering a chart draws macOS's `RuleMark` and the day's numbers beside it; the pointer's day comes from one invisible cell per day rather than from measured geometry. Each panel names the peak its chart is scaled by instead of drawing a y axis. |
+| `DashboardModel.demoSnapshot` (1 screen) | A Dev Instance's `fixtures/dashboard.json`, read instead of the live statistics and badged "Demo data". | Ported: `engine::demo_snapshot`. The file is the macOS client's spelling, so its camelCase keys and `TimeInterval` seconds are translated once where it is read rather than kept in a second set of types. |
+| `DashboardModel` + `DashboardSummary` (1 screen) | Two reads joined: the Server's published inventory, and the daemon's local retrieval telemetry. | Ported: `engine::dashboard` asks the Server through the proxy and the engine over its socket, with the Server's own day boundaries so both halves describe the same days. The daemon does not export the nested types of its answer, so the fields this client draws are mirrored in `engine.rs` and pinned by a test. |
 | `NativeTextEditor` (1 screen) | The document body: plain text, undo, find, a centred column. | Library. `input::Textarea`, sized by `components/fill.rs`; the centred column is `DocumentContentMetrics`' idea and is not built. |
 | `DocumentTabStrip` (1 screen) | Pill tabs, a close button revealed on hover, width-aware layout. | Compose, for now in `screens/memory.rs`: the library's `tab` has no per-tab close button. It moves to `components/` when a second screen wants tabs. |
 | `FileTreeView` (1 screen) | The Memory navigator: multi-select, draft-coloured titles, rename, context menu. | Ours, partly. Selection works, one row or a set of them, with the row menu acting on the selection and reporting the draft's synchronization; a folder is opened by its own control or by Left/Right rather than by a click on the row, and a draft is marked with a label rather than a colour. |
@@ -81,8 +86,10 @@ keeps two clients looking like one product:
 - `DocumentContentMetrics` (reading width 760, minimum inset 36) and the tab and
   diff metrics — partly done: `ui.rs` holds the scale, `shell.rs` the widths.
 - `MemoryTreeProjection` — items to rows. Done: `components/memory_tree.rs`.
-- `TimestampFormatting` — absolute and relative timestamps. Not built; the
-  Reviews and Activity screens need it.
+- `TimestampFormatting` — absolute and relative timestamps. Started:
+  `timestamps.rs` names the system's IANA zone and writes a local `Sep 26`,
+  which is what the Dashboard's axes are labelled with. Relative timestamps are
+  not built; Reviews still slices RFC 3339 text.
 - The Review status tables (state to title, symbol, tone) and the review queue's
   filter set. Not built; they arrive with the Reviews screen.
 - `ClientDiagnostics` — redaction and export. Partly done: `logging.rs` records

@@ -245,6 +245,15 @@ detail. This client draws, from the top:
 | List column | The open section's list, with the shared project filter in its header. Content search is deferred. |
 | Detail | The work, under **one** header row: the open documents as tabs on the left, the tools for the one in front on the right. |
 
+**A section may fill no list.** macOS's Dashboard is a sidebar beside one page:
+it has no navigator, so neither does this client's Dashboard, and the card it
+would have sat in is the page's. The Project filter then travels in that page's
+own header, which is where macOS keeps it too — in its toolbar. The page also
+has **no title**: macOS's has none, and the destination is already named by the
+rail the reader came through and by that rail's tooltip. A page title is
+therefore not a thing to add when translating the next screen; macOS puts one in
+the window title or in the section's own list header, and so does this client.
+
 **A document opens to be read.** The pane's default is the prose, and editing
 and diffing are tools a reader turns on rather than a mode switch they start in;
 turning one off returns to reading. The rare commands (request a review, and
@@ -338,6 +347,16 @@ wrong in the other.
    what exists stays — it is also how this client gets tested on a machine that
    cannot synthesize pointer events — and nothing new is added for its own sake.
 
+   **F6's region walk is this client's own invention.** macOS has no equivalent:
+   its keyboard model is the menu bar and the responder chain, and its screens
+   are reached with the pointer. The same call settles what to do with it —
+   nothing is added to the walk, nothing is polished inside it, and it is not
+   the way this client is verified: a machine without a pointer takes a
+   screenshot, and a person uses the pointer. A defect in the walk is written
+   down here and left alone, not chased. Where macOS's screen is pointer-first,
+   so is this one: the Dashboard carries no region of the walk at all, and its
+   period picker draws no focus ring, because macOS's page has neither.
+
 ## Known gaps
 
 Places where the client does not yet meet the rules above, with the reason and
@@ -347,3 +366,4 @@ exist yet is not a deviation.
 | Gap | Where | Why, and what fixes it |
 | --- | --- | --- |
 | A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |
+| F6 stops at the work while the document in front is being read | F6's region walk | `focus_content` always hands the keyboard to the open pane's editor, and in Preview that editor's element is not in the view tree: the keyboard moves to a handle nothing draws, so the next F6 is never delivered and the walk cannot reach the actions or the rail. The walk is this client's own invention and the keyboard is not a priority (see the rules above), so this is **recorded rather than fixed**: whoever next takes the keyboard in hand decides whether a pane in Preview takes the keyboard itself, or whether the walk steps over a region that cannot take it. |
