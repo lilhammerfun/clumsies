@@ -18,8 +18,8 @@ use server::app::draft::dto::{
 use server::app::memory::dto::{ReplaceProjectOrgSelectionRequest, ResourceScope};
 use server::app::project::dto::{CreateProjectRequest, Project};
 use server::app::review::dto::{
-    CreateReviewDecisionRequest, CreateReviewMergeRequest, CreateReviewRequest,
-    CreateReviewSubmissionRequest, ReviewDecision, ReviewDraftRequest, ReviewMergeResult,
+    CreateReviewDecisionRequest, CreateReviewMergeRequest, CreateReviewRequest, ReviewDecision,
+    ReviewDraftRequest, ReviewMergeResult,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -656,14 +656,12 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     assert_eq!(edited.draft.status, DaemonLocalDraftStatus::Open);
     assert_eq!(edited.draft.server_version, rejected.draft.version + 1);
 
-    let resubmitted = server::app::review::create_review_submission(
+    let resubmitted = server::app::review::create_review(
         &pool,
-        &rejected.review.review_id,
         &common::principal(&pool, &bootstrap.user_id).await,
         rejected.draft.coordination.current_commit_id.as_deref(),
-        CreateReviewSubmissionRequest {
+        CreateReviewRequest {
             org_contribution: None,
-            expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: rejected.draft.draft_id.clone(),
                 expected_draft_version: edited.draft.server_version,
@@ -685,7 +683,7 @@ async fn local_draft_refreshes_auth_and_syncs_to_the_real_server() {
     let projected = service.get_draft(&local_draft.draft_id).await.unwrap();
     assert_eq!(projected.draft.status, DaemonLocalDraftStatus::Submitted);
     assert_eq!(projected.draft.server_version, resubmitted.draft.version);
-    assert_eq!(resubmitted.review.review_id, review.review.review_id);
+    assert_ne!(resubmitted.review.review_id, review.review.review_id);
 
     server.shutdown().await;
 }

@@ -17,8 +17,8 @@ use crate::app::draft::model::{
 };
 use crate::app::draft::{
     apply_draft_rebase_in_tx, apply_operation, create_reconciliation_candidate_in_tx,
-    draft_result_hash, draft_result_state, insert_draft_event, invalidate_draft_candidates,
-    load_draft_detail, load_draft_operations, target_ref_for_draft, user_ref,
+    draft_result_hash, insert_draft_event, invalidate_draft_candidates, load_draft_detail,
+    load_draft_operations, target_ref_for_draft, user_ref,
     validate_org_draft_operation_inputs_in_org, validate_stored_org_draft_operations_in_org,
 };
 use crate::app::memory::dto::ResourceScope;
@@ -57,7 +57,7 @@ async fn lock_review_update(
     let row = repository::lock_merge_state(tx, review_id)
         .await?
         .ok_or_else(|| ServerError::not_found("review", review_id))?;
-    if !["open", "approved", "rejected"].contains(&row.status.as_str()) {
+    if !["open", "approved"].contains(&row.status.as_str()) {
         return Err(ServerError::invalid_transition(
             "review",
             &row.status,
@@ -247,6 +247,9 @@ pub(crate) async fn remove_discarded_draft(
         return Ok(());
     };
     let remaining = repository::remaining_review_drafts(tx, &review_id, draft_id).await?;
+    if remaining.is_empty() {
+        freeze_review_drafts(tx, &review_id).await?;
+    }
     repository::remove_review_member(
         tx,
         &review_id,
@@ -274,7 +277,7 @@ async fn ensure_review_member(
     }
 }
 
-/// Validate an author's proposal set and create or resubmit its review in one transaction.
+/// Validate an author's proposal set and create a new review in one transaction.
 ///
 /// # Errors
 /// Rejects inaccessible or foreign-authored proposals, invalid proposal sets, stale revisions,
@@ -293,7 +296,7 @@ pub async fn create_review(
         .iter()
         .map(|draft| draft.draft_id.clone())
         .collect::<Vec<_>>();
-    let Some(primary_draft_id) = draft_ids.first() else {
+    let Some(_) = draft_ids.first() else {
         return Err(ServerError::InvalidRequest(
             "a review must contain at least one draft".to_owned(),
         ));
@@ -304,25 +307,6 @@ pub async fn create_review(
             "a review must not contain duplicate drafts".to_owned(),
         ));
     }
-    if let Some((review_id, version)) =
-        repository::find_rejected_review(pool, primary_draft_id).await?
-    {
-        return create_review_submission(
-            pool,
-            &review_id,
-            principal,
-            expected_ref,
-            CreateReviewSubmissionRequest {
-                org_contribution: request.org_contribution,
-                expected_review_version: version,
-                drafts: request.drafts,
-                title: request.title,
-                description: request.description,
-            },
-        )
-        .await;
-    }
-
     let mut tx = pool.begin().await?;
     draft::ensure_drafts_authored_by(&mut tx, author_user_id, &draft_ids).await?;
     let outcome = create_review_in_tx(&mut tx, author_user_id, expected_ref, request).await?;
@@ -486,45 +470,22 @@ pub async fn create_review_decision(
     Ok(detail)
 }
 
-/// Validate access and proposal ownership before resubmitting a rejected review.
+/// Reject legacy resubmission calls: closed reviews remain historical records.
 ///
 /// # Errors
-/// Rejects inaccessible or foreign-authored proposals, invalid resubmission state, and stale
-/// revisions. Required reconciliation evidence is committed before its conflict is returned;
-/// other failures do not commit the submission.
+/// Rejects inaccessible reviews and always reports an invalid lifecycle transition.
 pub async fn create_review_submission(
     pool: &sqlx::PgPool,
     review_id: &str,
     principal: &AuthPrincipal,
-    expected_ref: Option<&str>,
-    request: CreateReviewSubmissionRequest,
+    _expected_ref: Option<&str>,
+    _request: CreateReviewSubmissionRequest,
 ) -> Result<ReviewDetail, ServerError> {
-    let author_user_id = &principal.user_id;
-    ensure_review_member(pool, principal, review_id).await?;
-
-    let Some(_) = request.drafts.first() else {
-        return Err(ServerError::InvalidRequest(
-            "a review must contain at least one draft".to_owned(),
-        ));
-    };
-    let draft_ids = request
-        .drafts
-        .iter()
-        .map(|draft| draft.draft_id.clone())
-        .collect::<Vec<_>>();
-    let distinct_draft_ids = draft_ids.iter().collect::<BTreeSet<_>>();
-    if distinct_draft_ids.len() != draft_ids.len() {
-        return Err(ServerError::InvalidRequest(
-            "a review must not contain duplicate drafts".to_owned(),
-        ));
-    }
-    let mut tx = pool.begin().await?;
-    draft::ensure_drafts_authored_by(&mut tx, author_user_id, &draft_ids).await?;
-    let outcome =
-        create_review_submission_in_tx(&mut tx, review_id, author_user_id, expected_ref, request)
-            .await?;
-    tx.commit().await?;
-    outcome.into_result()
+    let review = get_review(pool, principal, review_id).await?;
+    Err(ServerError::InvalidRequest(format!(
+        "review {} cannot be resubmitted; edit drafts and create a new review",
+        review.review_id
+    )))
 }
 
 /// Authorize publication and commit resource changes, reference advancement, and synchronization
@@ -655,6 +616,19 @@ pub(crate) async fn load_review_drafts(
     Ok(drafts)
 }
 
+/// Retain the last available proposal content when a Review becomes closed history.
+///
+/// # Errors
+/// Propagates proposal loading and snapshot persistence failures in the caller's transaction.
+pub(crate) async fn freeze_review_drafts(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+) -> Result<(), ServerError> {
+    let ids = load_review_draft_ids(tx, review_id).await?;
+    let drafts = load_review_drafts(tx, &ids).await?;
+    repository::save_closed_drafts(tx, review_id, &drafts).await
+}
+
 /// Require a valid candidate for upstream changes and apply the submitted conflict resolution.
 ///
 /// Uses the caller's transaction without committing it.
@@ -738,7 +712,10 @@ pub(crate) async fn load_review_with_drafts(
     review_id: &str,
 ) -> Result<(Review, Vec<ReviewDraftDetail>), ServerError> {
     let draft_ids = repository::load_review_draft_ids(tx, review_id).await?;
-    let drafts = load_review_drafts(tx, &draft_ids).await?;
+    let drafts = match repository::load_closed_drafts(tx, review_id).await? {
+        Some(drafts) => drafts,
+        None => load_review_drafts(tx, &draft_ids).await?,
+    };
     let coordinations = drafts
         .iter()
         .map(|detail| detail.draft.coordination.clone())
@@ -799,10 +776,16 @@ pub(crate) async fn create_review_comment_in_tx(
         ));
     }
     if let Some((anchor_path, anchor_line)) = anchor {
-        let draft_ids = load_review_draft_ids(tx, review_id).await?;
+        let (_, drafts) = load_review_with_drafts(tx, review_id).await?;
         let mut matching_state = None;
-        for draft_id in draft_ids {
-            let state = draft_result_state(tx, &draft_id).await?;
+        for item in drafts {
+            let state = draft::draft_operations_result_state(
+                tx,
+                item.draft.base_commit_id.as_deref(),
+                &item.draft.resource,
+                &item.operations,
+            )
+            .await?;
             if state.exists && state.resource.path.as_deref() == Some(anchor_path) {
                 matching_state = Some(state);
                 break;
@@ -918,6 +901,7 @@ pub(crate) async fn create_review_decision_in_tx(
             )
             .await?;
         }
+        freeze_review_drafts(tx, review_id).await?;
     }
     repository::update_decision(
         tx,
@@ -1190,246 +1174,6 @@ pub(crate) async fn create_review_in_tx(
     crate::app::inbox::notify_review(
         tx,
         &review_id,
-        author_user_id,
-        "review_requested",
-        &format!("review_requested:{}", detail.review.version),
-    )
-    .await?;
-    Ok(CommitOutcome::Success(detail))
-}
-
-/// Revalidate rejected-review proposals and replace their ordered submission links atomically.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Rejects invalid resubmission state, proposal ownership, or stale revisions. A reconciliation
-/// failure outcome requires the caller to commit its generated evidence before returning the
-/// conflict.
-pub(crate) async fn create_review_submission_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    review_id: &str,
-    author_user_id: &str,
-    expected_ref: Option<&str>,
-    request: CreateReviewSubmissionRequest,
-) -> Result<CommitOutcome<ReviewDetail>, ServerError> {
-    if let Some(coordination) = repository::load_coordination(tx, review_id).await? {
-        lock_org_draft_selection_coordination_for_project(tx, &coordination.project_id).await?;
-    }
-    let Some(primary_request) = request.drafts.first() else {
-        return Err(ServerError::InvalidRequest(
-            "a review must contain at least one draft".to_owned(),
-        ));
-    };
-    let primary_expected_version = primary_request.expected_draft_version;
-    let distinct_draft_ids = request
-        .drafts
-        .iter()
-        .map(|draft| &draft.draft_id)
-        .collect::<BTreeSet<_>>();
-    if distinct_draft_ids.len() != request.drafts.len() {
-        return Err(ServerError::InvalidRequest(
-            "a review must not contain duplicate drafts".to_owned(),
-        ));
-    }
-    let row = repository::lock_submission_state(tx, review_id)
-        .await?
-        .ok_or_else(|| ServerError::not_found("review", review_id))?;
-
-    let draft_author_user_id: String = row.author_user_id.clone();
-    if draft_author_user_id != author_user_id {
-        return Err(ServerError::Forbidden(
-            "only the draft author can resubmit its review".to_owned(),
-        ));
-    }
-    let review_status: String = row.review_status.clone();
-    if review_status != "rejected" {
-        return Err(ServerError::invalid_transition(
-            "review",
-            &review_status,
-            "resubmitted",
-        ));
-    }
-    let review_version: i64 = row.review_version;
-    if review_version != request.expected_review_version {
-        return Err(ServerError::version_conflict(
-            "review",
-            request.expected_review_version,
-            review_version,
-        ));
-    }
-    let draft_status: String = row.draft_status.clone();
-    if draft_status != "open" {
-        return Err(ServerError::invalid_transition(
-            "draft",
-            &draft_status,
-            "submitted",
-        ));
-    }
-    let draft_version: i64 = row.draft_version;
-    if draft_version != primary_expected_version {
-        return Err(ServerError::version_conflict(
-            "draft",
-            primary_expected_version,
-            draft_version,
-        ));
-    }
-
-    let draft_id: String = row.draft_id.clone();
-    if primary_request.draft_id != draft_id {
-        return Err(ServerError::InvalidRequest(
-            "a resubmission must keep the review's primary draft first".to_owned(),
-        ));
-    }
-    let project_id: String = row.project_id.clone();
-    let scope = resource_scope(row.resource_scope.clone().as_str())?;
-    let current_ref = target_ref_for_draft(tx, &project_id, scope).await?;
-    if current_ref.as_deref() != expected_ref {
-        return Err(ServerError::precondition_failed(
-            expected_ref,
-            current_ref.as_deref(),
-        ));
-    }
-    if let Some(error) =
-        missing_review_reconciliation_candidate(tx, &current_ref, &request.drafts).await?
-    {
-        return Ok(CommitOutcome::Failure(error));
-    }
-    let base_commit_id: Option<String> = row.base_commit_id.clone();
-    reconcile_review_draft(
-        tx,
-        author_user_id,
-        expected_ref,
-        &current_ref,
-        primary_request,
-        base_commit_id,
-    )
-    .await?;
-    let operations = load_draft_operations(tx, &draft_id).await?;
-    if operations.is_empty() {
-        return Err(ServerError::InvalidRequest(
-            "a review draft must contain at least one operation".to_owned(),
-        ));
-    }
-    if scope == ResourceScope::Org {
-        let org_id = project_org_id(tx, &project_id).await?;
-        validate_stored_org_draft_operations_in_org(
-            tx,
-            &project_id,
-            &org_id,
-            current_ref.as_deref(),
-            &operations,
-        )
-        .await?;
-    }
-    for requested in request.drafts.iter().skip(1) {
-        let linked_review_id: Option<String> =
-            repository::find_draft_review(tx, &requested.draft_id).await?;
-        if linked_review_id
-            .as_deref()
-            .is_some_and(|linked_review_id| linked_review_id != review_id)
-        {
-            return Err(ServerError::already_exists(
-                "review for draft",
-                &requested.draft_id,
-            ));
-        }
-        let additional =
-            repository::lock_required_additional_draft(tx, &requested.draft_id).await?;
-        if additional.author_user_id.clone() != author_user_id {
-            return Err(ServerError::Forbidden(
-                "only the draft author can resubmit its review".to_owned(),
-            ));
-        }
-        let additional_status: String = additional.status.clone();
-        if additional_status != "open" {
-            return Err(ServerError::invalid_transition(
-                "draft",
-                &additional_status,
-                "submitted",
-            ));
-        }
-        let actual_version: i64 = additional.version;
-        if actual_version != requested.expected_draft_version {
-            return Err(ServerError::version_conflict(
-                "draft",
-                requested.expected_draft_version,
-                actual_version,
-            ));
-        }
-        if additional.project_id.clone() != project_id
-            || resource_scope(additional.resource_scope.clone().as_str())? != scope
-        {
-            return Err(ServerError::InvalidRequest(
-                "all drafts in a review must share one project and scope".to_owned(),
-            ));
-        }
-        let base_commit_id: Option<String> = additional.base_commit_id.clone();
-        reconcile_review_draft(
-            tx,
-            author_user_id,
-            expected_ref,
-            &current_ref,
-            requested,
-            base_commit_id,
-        )
-        .await?;
-        let operations = load_draft_operations(tx, &requested.draft_id).await?;
-        if operations.is_empty() {
-            return Err(ServerError::InvalidRequest(
-                "a review draft must contain at least one operation".to_owned(),
-            ));
-        }
-        if scope == ResourceScope::Org {
-            let org_id = project_org_id(tx, &project_id).await?;
-            validate_stored_org_draft_operations_in_org(
-                tx,
-                &project_id,
-                &org_id,
-                current_ref.as_deref(),
-                &operations,
-            )
-            .await?;
-        }
-    }
-    let next_draft_version: i64 = repository::resubmit_primary_draft(tx, &draft_id).await?;
-    invalidate_draft_candidates(tx, &draft_id).await?;
-    repository::reopen_review(tx, review_id, request.title, request.description).await?;
-    insert_draft_event(
-        tx,
-        &draft_id,
-        &project_id,
-        DraftEventType::Submitted,
-        next_draft_version,
-        None,
-    )
-    .await?;
-    for requested in request.drafts.iter().skip(1) {
-        let submitted = repository::submit_draft(tx, &requested.draft_id).await?;
-        invalidate_draft_candidates(tx, &requested.draft_id).await?;
-        insert_draft_event(
-            tx,
-            &requested.draft_id,
-            &submitted.project_id.clone(),
-            DraftEventType::Submitted,
-            submitted.version,
-            None,
-        )
-        .await?;
-    }
-
-    repository::delete_review_drafts(tx, review_id).await?;
-    for (ordinal, requested) in request.drafts.iter().enumerate() {
-        repository::insert_review_draft(tx, review_id, &requested.draft_id, ordinal as i32).await?;
-    }
-
-    if let Some(entries) = request.org_contribution {
-        super::contribution::record_intent(tx, review_id, scope, &request.drafts, entries).await?;
-    }
-    let detail = load_review_detail(tx, review_id).await?;
-    crate::app::inbox::notify_review(
-        tx,
-        review_id,
         author_user_id,
         "review_requested",
         &format!("review_requested:{}", detail.review.version),

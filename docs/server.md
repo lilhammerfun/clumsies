@@ -52,7 +52,7 @@ revision before atomically changing `base_commit_id` and operations.
 Applying a clean candidate always uses the Server's canonical proposed result;
 only a conflicts candidate accepts a complete user-resolved state.
 
-Creating or resubmitting a Review and approving it for publication are
+Creating a Review and approving it for publication are
 coordination boundaries. A Project member may propose, submit, inspect, and
 comment. Project owners/admins publish Project Reviews; Organization
 owners/admins publish Org Reviews. Optional Org contributions are independent

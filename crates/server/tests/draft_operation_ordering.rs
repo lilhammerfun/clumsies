@@ -144,7 +144,7 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     )
     .await
     .unwrap();
-    assert_eq!(detail.review.review_id, first_submission.review.review_id);
+    assert_ne!(detail.review.review_id, first_submission.review.review_id);
     assert_eq!(detail.review.draft_ids.len(), 2);
     assert_eq!(detail.drafts.len(), 2);
     assert!(
@@ -188,7 +188,9 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     let reviews = reviews
         .expect("a review list must not wait for a blob payload table lock")
         .unwrap();
-    assert_eq!(reviews.items, vec![detail.review.clone()]);
+    assert_eq!(reviews.items.len(), 2);
+    assert!(reviews.items.contains(&detail.review));
+    assert!(reviews.items.contains(&rejected.review));
 
     let approved = server::app::review::create_review_decision(
         &pool,

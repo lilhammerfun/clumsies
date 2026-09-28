@@ -126,7 +126,7 @@ Create/update operations carry `content: { content: "Markdown…", description?:
 
 A Review contains at least one Draft. The `review_drafts` relation records membership and order; one Draft cannot belong to different Reviews simultaneously. API `draft_ids` and detail `drafts[]` describe the full group. Retained singular fields `draft_id`, `draft`, and `operations` refer to the first Draft; they are not the complete multi-file change.
 
-Each submitted Draft includes `expected_draft_version`. A behind Draft can also provide a `candidate_id`, with a complete `resolved_state` when conflicts need resolution. Server can apply these confirmed candidates within the create/resubmit Review transaction.
+Each submitted Draft includes `expected_draft_version`. A behind Draft can also provide a `candidate_id`, with a complete `resolved_state` when conflicts need resolution. Server can apply these confirmed candidates within the create Review transaction.
 
 Review states are `open`, `approved`, `rejected`, and `merged`. Its `version` guards operations on the Review. `approved_result_hash` binds approval to the full proposed result. Changed results cannot use an old approval; a rebase that preserves the result can retain approval. An authorized publisher can also merge an open Review directly, with Server recording the decision and actor.
 

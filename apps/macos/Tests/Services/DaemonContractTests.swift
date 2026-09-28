@@ -454,7 +454,6 @@ final class DaemonContractTests: XCTestCase {
         store.navigation.selectedItemId = resource.id
         store.bundleSelection.selectedBundleId = bundle.id
         store.reviews.selectedReviewId = "review-old"
-        store.reviews.pendingReviewReconciliationId = "review-old"
         store.navigation.tabs = [tab]
         store.navigation.activeTabId = tab.id
 
@@ -478,7 +477,6 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertNil(store.navigation.selectedItemId)
         XCTAssertNil(store.bundleSelection.selectedBundleId)
         XCTAssertNil(store.reviews.selectedReviewId)
-        XCTAssertNil(store.reviews.pendingReviewReconciliationId)
         XCTAssertNil(store.reviews.reviewDecisionReadiness)
         XCTAssertTrue(store.navigation.tabs.isEmpty)
         XCTAssertNil(store.navigation.activeTabId)
@@ -1760,8 +1758,7 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(object["expected_draft_version"] as? Int, 7)
         XCTAssertNil(object["resolved_state"])
 
-        let submission = CreateReviewSubmissionRequest(
-            expectedReviewVersion: 4,
+        let submission = CreateReviewRequest(
             drafts: [.init(
                 draftId: candidate.draftId,
                 expectedDraftVersion: candidate.draftVersion,
@@ -1776,7 +1773,6 @@ final class DaemonContractTests: XCTestCase {
             JSONSerialization.jsonObject(with: submissionData) as? [String: Any]
         )
         XCTAssertNil(submissionObject["candidate_id"])
-        XCTAssertEqual(submissionObject["expected_review_version"] as? Int, 4)
         let submissionDrafts = try XCTUnwrap(submissionObject["drafts"] as? [[String: Any]])
         XCTAssertEqual(submissionDrafts.first?["candidate_id"] as? String, "candidate-1")
         XCTAssertEqual(submissionDrafts.first?["expected_draft_version"] as? Int, 7)

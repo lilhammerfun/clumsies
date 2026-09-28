@@ -241,6 +241,10 @@ struct ReviewQueueStatePresentation: Equatable {
                 isQueueSignal: false
             )
         }
+        if review.status == "rejected" {
+            return .init(title: String(localized: "Rejected"), symbolName: "xmark.circle",
+                         tone: .negative, isQueueSignal: false)
+        }
         if let reconciliation = ReviewReconciliationState.resolve(
             freshness: review.freshness, reconciliation: review.reconciliation, autoRebased: review.autoRebased
         ) {
@@ -272,20 +276,6 @@ struct ReviewQueueStatePresentation: Equatable {
                 symbolName: "checkmark.circle",
                 tone: .positive,
                 isQueueSignal: false
-            )
-        case "rejected" where isAuthor:
-            return .init(
-                title: String(localized: "Resubmit"),
-                symbolName: "arrow.clockwise.circle",
-                tone: .negative,
-                isQueueSignal: true
-            )
-        case "rejected":
-            return .init(
-                title: String(localized: "Awaiting Author"),
-                symbolName: "clock",
-                tone: .neutral,
-                isQueueSignal: true
             )
         default:
             return .init(

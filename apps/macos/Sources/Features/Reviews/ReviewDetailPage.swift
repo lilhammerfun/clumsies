@@ -65,9 +65,6 @@ struct ReviewDetailPage: View {
             self.model.invalidateDetailRequests()
         }
         .navigationTitle(model.review?.title ?? String(localized: "Review"))
-        .onChange(of: reviewModel.pendingReviewReconciliationId) { _, reviewId in
-            self.model.handlePendingReconciliation(reviewId)
-        }
         .onChange(of: model.selectedFileId) { _, _ in
             self.model.selectCurrentFile()
         }
@@ -85,7 +82,7 @@ struct ReviewDetailPage: View {
             Text(review.scope == .project ? String(localized: "Publishes to Project Memory") : String(localized: "Publishes to Organization Memory"))
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.bottom, 12)
-            if review.freshness == .behind, review.reconciliation == .conflicts, !workspaceContext.isReviewAuthor(review) {
+            if ["open", "approved"].contains(review.status), review.freshness == .behind, review.reconciliation == .conflicts, !workspaceContext.isReviewAuthor(review) {
                 Text("The author needs to resolve the conflicts in this Review.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -392,7 +389,7 @@ struct ReviewDetailPage: View {
     private func decisionTitle(_ status: String) -> String {
         switch status {
         case "approved": String(localized: "Approved")
-        case "rejected": String(localized: "Changes requested")
+        case "rejected": String(localized: "Rejected")
         case "merged": String(localized: "Merged")
         default: ReviewStatusIndicator.title(for: status)
         }

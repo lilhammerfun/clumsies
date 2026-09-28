@@ -60,9 +60,10 @@ struct ReviewFileDescriptor: Identifiable, Hashable, Sendable {
     let hasConflicts: Bool
     var autoRebased = false
     var isDirectory = false
+    var isClosed = false
 
     var reconciliationState: ReviewReconciliationState? {
-        .resolve(freshness: needsUpdate ? .behind : .current,
+        isClosed ? nil : .resolve(freshness: needsUpdate ? .behind : .current,
                  reconciliation: hasConflicts ? .conflicts : .unknown, autoRebased: autoRebased)
     }
 
@@ -166,12 +167,14 @@ final class ReviewDetailModel: ObservableObject {
 
     var fileDescriptors: [ReviewFileDescriptor] {
         draftDetails.map {
-            ReviewFileDescriptor.resolve(
+            var descriptor = ReviewFileDescriptor.resolve(
                 reviewId: self.reviewId,
                 detail: $0,
                 loadedPath: self.loadedPaths[$0.draft.draftId],
                 loadedIsDirectory: self.loadedDirectoryTypes[$0.draft.draftId]
             )
+            descriptor.isClosed = ["rejected", "merged"].contains(review?.status ?? "")
+            return descriptor
         }
     }
 
@@ -468,11 +471,5 @@ final class ReviewDetailModel: ObservableObject {
                 await refreshDetail()
             }
         }
-    }
-
-    func handlePendingReconciliation(_ pendingReviewId: String?) {
-        guard pendingReviewId == reviewId, let review else { return }
-        reviewModel.pendingReviewReconciliationId = nil
-        reviewModel.beginUpdate(review)
     }
 }

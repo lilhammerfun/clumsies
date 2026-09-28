@@ -82,7 +82,6 @@ struct ReviewToolbarOwnership: Equatable {
                 ReviewMenuAction.reject,
                 .approve,
                 .merge,
-                .resubmit,
             ].filter {
                 $0.isAvailable(
                     for: review,

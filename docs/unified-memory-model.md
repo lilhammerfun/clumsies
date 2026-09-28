@@ -55,7 +55,7 @@ A Draft can be `submitted + behind + clean`: submitted for review, behind upstre
 
 Server compares Base, Current, and Draft Result. A candidate is bound to Draft version and current Ref; generating it does not modify the Draft. Rebase saves the previous Draft revision, advances Base, and expresses operations against that new baseline. It does not publish.
 
-Each behind Draft in a single- or multi-Draft submission can carry its own confirmed candidate. Server applies the candidates within the create/resubmit Review transaction. Missing candidates return reconciliation information; stale candidates require rereading and comparing again.
+Each behind Draft in a single- or multi-Draft submission can carry its own confirmed candidate. Server applies the candidates within the create Review transaction. Missing candidates return reconciliation information; stale candidates require rereading and comparing again.
 
 ## Review transactions and approval
 

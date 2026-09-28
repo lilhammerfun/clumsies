@@ -80,11 +80,11 @@ This domain answers **which proposed changes are being reviewed, and who can pub
 | Submit Drafts | `POST /api/v1/reviews` | Author-owned, open Drafts from one Project and one scope; each Draft version + authority Ref `If-Match` |
 | Read Review/detail/comments | `GET /api/v1/reviews`, `GET /api/v1/reviews/{review_id}`, `GET /api/v1/reviews/{review_id}/comments` | Authorized Review readers |
 | Comment | `POST /api/v1/reviews/{review_id}/comments` | Expected Review version; optional paired `anchor_path` and one-based `anchor_line` |
-| Resubmit after changes | `POST /api/v1/reviews/{review_id}/submissions` | Draft author; expected Review version, each Draft version, authority Ref `If-Match` |
+| Submit revised Drafts as a new Review | `POST /api/v1/reviews` | Same creation checks; rejected Reviews remain closed |
 | Record a decision | `POST /api/v1/reviews/{review_id}/decisions` | Publication owner/admin; `approved` or `rejected`, expected Review version |
 | Approve and publish | `POST /api/v1/reviews/{review_id}/merges` | Publication owner/admin; expected Review version + authority Ref `If-Match` |
 
-The current Desktop **Approve** action calls `/merges`: an `open` Review becomes `merged`, with decision metadata and the new authority Commit recorded in the same transaction. The separate `/decisions` API remains implemented: `approved` records approval without publishing, and `/merges` can subsequently publish an `approved` Review if its approved content still matches. A rejection reopens the Drafts for editing.
+The current Desktop **Approve** action calls `/merges`: an `open` Review becomes `merged`, with decision metadata and the new authority Commit recorded in the same transaction. The separate `/decisions` API remains implemented: `approved` records approval without publishing, and `/merges` can subsequently publish an `approved` Review if its approved content still matches. A rejection closes the Review and freezes its proposal content, while reopening the Drafts for editing. Submit revised Drafts through normal creation to receive a new Review identity; the legacy `/submissions` endpoint returns `400` without changing history.
 
 A Project Review can include an explicit `org_contribution` selection. After Project merge, it creates a separate Org Review from that fixed commit; `POST /api/v1/reviews/{review_id}/org-contribution` retries creation idempotently. Failure or rejection leaves the Project publication intact.
 
