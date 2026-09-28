@@ -174,8 +174,7 @@ commit 接口仍返回完整快照。它的首次下载是选中 diff 所必需�
 
 ## 5. 工具栏决策
 
-工具栏保留 Reject 和 Approve 为直接操作。Updates、
-Merge 和 Resubmit 使用
+工具栏保留 Reject 和 Approve 为直接操作。Updates 和 Merge 使用
 **Review Actions (…)** 中的明确文字条目，权限和就绪检查相同。
 **Save Conflict Resolutions** 只在作者拥有的 Review
 中已准备好的冲突时显示。
@@ -201,8 +200,7 @@ Merge 和 Resubmit 使用
   result hash 时保留
   **Review Actions (…) → Merge Review**。
   没有该不可变结果身份的旧批准仍然可见，但不能合并。
-- Rejected：Draft 作者可看到
-  **Review Actions (…) → Resubmit Review**。
+- Rejected：保留关闭时的内容，不提供更新或重新提交操作。作者编辑 Draft 后从正常入口创建新的 Review。
 
 Filter 只属于列表页。决策工具只属于活动详情。Sync 保持自己的工具位。
 Search 保持独立且在最右侧。跨区域工具栏分组和 macOS 14-26

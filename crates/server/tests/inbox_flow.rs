@@ -264,7 +264,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
             .await
             .unwrap();
     assert_eq!(count_before, count_after);
-    let (status, rejected_review) = request(
+    let (status, _) = request(
         &owner,
         "POST",
         &format!("/api/v1/reviews/{review_id}/decisions"),
@@ -274,35 +274,41 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
     assert_eq!(status, StatusCode::OK);
     let rejected = source_inbox(&author).await;
     assert_eq!(rejected.items[0].kind, "review_rejected");
-    assert!(rejected.items[0].needs_action);
+    assert!(!rejected.items[0].needs_action);
     assert!(!source_inbox(&owner).await.items[0].needs_action);
     let draft_path = format!(
         "/api/v1/drafts/{}",
         draft["draft"]["draft_id"].as_str().unwrap()
     );
     let (_, reopened) = request(&author, "GET", &draft_path, Value::Null).await;
-    let (status, resubmitted) = post_with_ref(&author, &format!("/api/v1/reviews/{review_id}/submissions"), json!({
-        "expected_review_version": rejected_review["review"]["version"],
+    let (status, resubmitted) = post_with_ref(&author, "/api/v1/reviews", json!({
         "drafts": [{"draft_id": reopened["draft"]["draft_id"], "expected_draft_version": reopened["draft"]["version"]}]
     })).await;
     assert_eq!(status, StatusCode::OK, "{resubmitted}");
+    let new_review_id = resubmitted["review"]["review_id"].as_str().unwrap();
+    assert_ne!(new_review_id, review_id);
     let request_again = source_inbox(&owner).await;
-    assert_eq!(request_again.items[0].kind, "review_requested");
-    assert_eq!(request_again.items[0].version, 3);
-    assert!(request_again.items[0].needs_action);
-    let merge_path = format!("/api/v1/reviews/{review_id}/merges");
+    let requested = request_again
+        .items
+        .iter()
+        .find(|item| item.target_id == new_review_id)
+        .unwrap();
+    assert_eq!(requested.kind, "review_requested");
+    assert_eq!(requested.version, 1);
+    assert!(requested.needs_action);
+    let merge_path = format!("/api/v1/reviews/{new_review_id}/merges");
     let merge_body = json!({"expected_review_version": resubmitted["review"]["version"]});
     let (status, merged) = post_with_ref(&owner, &merge_path, merge_body.clone()).await;
     assert_eq!(status, StatusCode::OK, "{merged}");
     let published = source_inbox(&author).await;
-    assert_eq!(published.items.len(), 2);
+    assert_eq!(published.items.len(), 3);
     let outcome = published
         .items
         .iter()
         .find(|item| item.kind == "review_merged")
         .unwrap();
     assert_eq!(
-        outcome.version, 3,
+        outcome.version, 1,
         "Direct merge emits one outcome, without an intermediate approval."
     );
     assert!(!outcome.needs_action);
@@ -318,59 +324,44 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
     assert_eq!(shared.version, 1);
     assert!(source_inbox(&outsider).await.items.is_empty());
     assert!(!source_inbox(&owner).await.items[0].needs_action);
-    let (status, first_page) =
-        request(&author, "GET", "/api/v1/me/inbox?limit=1", Value::Null).await;
-    assert_eq!(status, StatusCode::OK);
-    let first_page: InboxListResponse = serde_json::from_value(first_page).unwrap();
-    assert_eq!(first_page.items.len(), 1);
-    let (_, second_page) = request(
-        &author,
-        "GET",
-        &format!(
-            "/api/v1/me/inbox?limit=1&cursor={}",
-            first_page.next_cursor.unwrap()
-        ),
-        Value::Null,
-    )
-    .await;
-    let second_page: InboxListResponse = serde_json::from_value(second_page).unwrap();
-    assert_eq!(second_page.items.len(), 1);
-    let (_, third_page) = request(
-        &author,
-        "GET",
-        &format!(
-            "/api/v1/me/inbox?limit=1&cursor={}",
-            second_page.next_cursor.unwrap()
-        ),
-        Value::Null,
-    )
-    .await;
-    let third_page: InboxListResponse = serde_json::from_value(third_page).unwrap();
-    assert_eq!(third_page.items[0].kind, "welcome");
-    assert!(third_page.next_cursor.is_none());
-    assert_ne!(
-        first_page.items[0].notification_id,
-        second_page.items[0].notification_id
+    let mut paged_ids = Vec::new();
+    let mut page_path = "/api/v1/me/inbox?limit=1".to_owned();
+    loop {
+        let (status, body) = request(&author, "GET", &page_path, Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        let page: InboxListResponse = serde_json::from_value(body).unwrap();
+        assert_eq!(page.items.len(), 1);
+        paged_ids.push(page.items[0].notification_id.clone());
+        assert!(paged_ids.len() <= 4, "pagination must terminate");
+        let Some(cursor) = page.next_cursor else {
+            break;
+        };
+        page_path = format!("/api/v1/me/inbox?limit=1&cursor={cursor}");
+    }
+    assert_eq!(
+        paged_ids,
+        inbox(&author)
+            .await
+            .items
+            .iter()
+            .map(|item| item.notification_id.clone())
+            .collect::<Vec<_>>()
     );
     assert_ne!(
         post_with_ref(&owner, &merge_path, merge_body).await.0,
         StatusCode::OK
     );
+    let after_retry = source_inbox(&author).await;
     assert_eq!(
-        source_inbox(&author)
-            .await
-            .items
-            .iter()
-            .map(|item| item.version)
-            .collect::<Vec<_>>(),
-        vec![3, 1]
+        serde_json::to_value(after_retry.items).unwrap(),
+        serde_json::to_value(published.items).unwrap()
     );
     assert_eq!(
         request(
             &owner,
             "PATCH",
             &receipt_path,
-            json!({"version": 3, "action": "archive"})
+            json!({"version": 2, "action": "archive"})
         )
         .await
         .0,
@@ -388,8 +379,14 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         StatusCode::OK
     );
     assert_eq!(
-        source_inbox(&owner).await.items[0].archived_version,
-        3,
+        source_inbox(&owner)
+            .await
+            .items
+            .iter()
+            .find(|item| item.target_id == review_id)
+            .unwrap()
+            .archived_version,
+        2,
         "Old restore cannot undo a newer archive."
     );
     assert_eq!(
@@ -397,7 +394,7 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
             &owner,
             "PATCH",
             &receipt_path,
-            json!({"version": 3, "action": "read"})
+            json!({"version": 2, "action": "read"})
         )
         .await
         .0,
@@ -415,8 +412,14 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
         StatusCode::OK
     );
     assert_eq!(
-        source_inbox(&owner).await.items[0].read_version,
-        3,
+        source_inbox(&owner)
+            .await
+            .items
+            .iter()
+            .find(|item| item.target_id == review_id)
+            .unwrap()
+            .read_version,
+        2,
         "An old unread action cannot undo a newer read receipt."
     );
     assert_eq!(
@@ -424,14 +427,32 @@ async fn review_notifications_survive_refresh_and_old_receipts_do_not_hide_new_e
             &owner,
             "PATCH",
             &receipt_path,
-            json!({"version": 3, "action": "unread"})
+            json!({"version": 2, "action": "unread"})
         )
         .await
         .0,
         StatusCode::OK
     );
-    assert_eq!(source_inbox(&owner).await.items[0].read_version, 0);
-    assert_eq!(source_inbox(&owner).await.items[0].archived_version, 3);
+    assert_eq!(
+        source_inbox(&owner)
+            .await
+            .items
+            .iter()
+            .find(|item| item.target_id == review_id)
+            .unwrap()
+            .read_version,
+        0
+    );
+    assert_eq!(
+        source_inbox(&owner)
+            .await
+            .items
+            .iter()
+            .find(|item| item.target_id == review_id)
+            .unwrap()
+            .archived_version,
+        2
+    );
     sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2")
         .bind(&installation.project_id)
         .bind(&installation.user_id)

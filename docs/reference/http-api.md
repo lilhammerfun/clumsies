@@ -26,7 +26,7 @@ These values protect different data. They cannot be substituted for each other.
 | --- | --- | --- |
 | Mutable object version/revision | `If-Match: "4"` | Draft/Project changes, Bundle changes, Project selection replacement, depending on the endpoint |
 | Expected object version in JSON | `"expected_draft_version": 4`, `"expected_review_version": 2` | Batch operations, reconciliation and Review actions |
-| Authority Ref ETag | `If-Match: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"` | Review creation/resubmission, Draft rebase and publication |
+| Authority Ref ETag | `If-Match: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"` | Review creation, Draft rebase and publication |
 
 An empty Ref uses the literal strong ETag `"ref-none"`. Ref preconditions require quotes; weak ETags such as `W/"…"` are rejected. For an Organization-scoped Draft, use the **Organization authority Ref**, not the carrying Project's projection Ref. Their Commit IDs can differ even when the Project displays the same Memory.
 

@@ -67,7 +67,7 @@ pub(super) async fn create_review_update(
     ))
 }
 
-/// Validate an author's proposal set and create or resubmit its review in one transaction.
+/// Validate an author's proposal set and create a new review in one transaction.
 ///
 /// # Errors
 /// Rejects inaccessible or foreign-authored proposals, invalid proposal sets, stale revisions,
@@ -162,12 +162,10 @@ pub(super) async fn create_review_decision(
     ))
 }
 
-/// Validate access and proposal ownership before resubmitting a rejected review.
+/// Reject legacy resubmission requests without changing closed reviews.
 ///
 /// # Errors
-/// Rejects inaccessible or foreign-authored proposals, invalid resubmission state, and stale
-/// revisions. Required reconciliation evidence is committed before its conflict is returned;
-/// other failures do not commit the submission.
+/// Rejects inaccessible reviews, malformed requests, and all resubmission attempts.
 pub(super) async fn create_review_submission(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,

@@ -29,7 +29,7 @@ Only the welcome message has original body content and its own reading view. Rev
 | First successful login | One welcome per user, persisted with the first session; no repeat across devices or later logins, and no retroactive notice for existing users with sessions | Original welcome body |
 | Added to or removed from a project | The affected member, excluding self-actions; one notice per actual change | Existing project Memory when still accessible; removal is informational |
 | Project or organization role changed | The affected member; previous and new roles and actor, with explicit scope; no notice for an unchanged role | Existing project Memory when applicable and accessible |
-| Review submitted or resubmitted | Active owner/admin project members, excluding the actor; one entry per Review | Review detail |
+| New Review submitted | Active owner/admin project members, excluding the actor; one entry per Review | Review detail |
 | Review comment | Author, participants, and existing recipients who retain membership, excluding the actor | Review detail |
 | Review approved, rejected, or merged | Author, participants, and existing recipients who retain membership, excluding the actor | Review detail |
 | Remote Memory publication | Members of affected projects, excluding the actor; one entry per project | Existing Memory workspace and document Diff tabs |
@@ -60,4 +60,4 @@ Project membership currently takes effect immediately when an administrator adds
 - Local sync-error and remote-update fallback receipts do not synchronize across devices.
 - Notification history aggregates by subject and reloads all pages. It is not an audit log. Comments open their Review, without scrolling to an individual comment.
 
-`InboxTests` covers receipt persistence, revision races, authority invalidation, offline errors, and existing remote changes. `inbox_flow` exercises the HTTP API against isolated PostgreSQL, including the submission/comment/rejection/resubmission/merge lifecycle, remote publication, selection-scoped delivery for updates/renames/deletions, pagination, stale receipts, revoked access, welcome deduplication across sign-ins, unchanged roles, and personal notices surviving removal and project deletion.
+`InboxTests` covers receipt persistence, revision races, authority invalidation, offline errors, and existing remote changes. `inbox_flow` exercises the HTTP API against isolated PostgreSQL, including the submission/comment/rejection/new submission/merge lifecycle, remote publication, selection-scoped delivery for updates/renames/deletions, pagination, stale receipts, revoked access, welcome deduplication across sign-ins, unchanged roles, and personal notices surviving removal and project deletion.

@@ -812,14 +812,24 @@ pub(crate) async fn draft_result_state(
         id: row.target_id.clone(),
         path: row.path.clone(),
     };
+    draft_operations_result_state(tx, row.base_commit_id.as_deref(), &resource, &operations).await
+}
+
+/// Materialize live or frozen proposal operations against their immutable base commit.
+///
+/// # Errors
+/// Propagates snapshot lookup and operation validation failures.
+pub(crate) async fn draft_operations_result_state(
+    tx: &mut Transaction<'_, Postgres>,
+    base_commit_id: Option<&str>,
+    resource: &DraftResourceRef,
+    operations: &[DraftOperation],
+) -> Result<ReconciliationResourceState, ServerError> {
     let allow_path_lookup = operations
         .first()
         .is_none_or(|operation| operation.input.action != DraftOperationAction::Create);
-    let base_commit_id: Option<String> = row.base_commit_id.clone();
-    let base =
-        resource_state_at_commit(tx, base_commit_id.as_deref(), &resource, allow_path_lookup)
-            .await?;
-    apply_operations_to_state(base, &operations)
+    let base = resource_state_at_commit(tx, base_commit_id, resource, allow_path_lookup).await?;
+    apply_operations_to_state(base, operations)
 }
 
 /// Persist a reusable three-way result for the exact proposal and upstream revisions.

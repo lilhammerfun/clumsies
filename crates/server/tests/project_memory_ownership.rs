@@ -359,6 +359,7 @@ async fn contribution_retries_use_one_fixed_project_publication_and_independent_
     )
     .await
     .unwrap();
+    let rejected_id = item.review_id.clone();
     let reopened = draft::get_draft(pool, &owner, &item.draft_id)
         .await
         .unwrap();
@@ -385,6 +386,16 @@ async fn contribution_retries_use_one_fixed_project_publication_and_independent_
     .await
     .unwrap()
     .review;
+    assert_ne!(item.review_id, rejected_id);
+    let rejected = review::get_review(pool, &owner, &rejected_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        rejected.org_contribution.as_ref().unwrap().entries[0]
+            .path
+            .as_deref(),
+        Some("shared-payments.md")
+    );
     assert_eq!(
         item.org_contribution.as_ref().unwrap().entries[0]
             .path

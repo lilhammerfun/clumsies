@@ -71,6 +71,6 @@ Other Projects retain the original Org version. To share this improvement with t
 - **Request Review… is unavailable**: confirm you are in Payments, the file has a modified Draft, and synchronization has finished. Use **Retry Draft Sync** if it is offered.
 - **Only the author can submit**: use the account that created the Draft. A reviewer opens the Review after submission.
 - **Approval is unavailable**: check Project publication permissions, detail loading, and whether the Review needs reconciliation with the latest shared changes.
-- **The Review is still Open or was rejected**: the change is not published. Address the feedback in the Draft; the author resubmits a rejected Review for another review.
+- **The Review is still Open or was rejected**: the change is not published. Address the feedback in the Draft; the author submits the revised Drafts as a new Review. The rejected Review remains closed.
 
 After these checks, you have completed one cycle: select knowledge, use it with Codex, explicitly request an update, publish it through human review, and have Codex read the published result. Continue to the [guides](/guides/).

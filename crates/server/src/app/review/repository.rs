@@ -5,7 +5,7 @@ use crate::app::auth::AuthPrincipal;
 use crate::app::draft::dto::{DraftCoordination, DraftFreshness, DraftReconciliationStatus};
 use crate::app::draft::model::aggregate_draft_coordination;
 use crate::app::organization::dto::UserRef;
-use crate::app::review::dto::{Review, ReviewComment, ReviewListResponse};
+use crate::app::review::dto::{Review, ReviewComment, ReviewDraftDetail, ReviewListResponse};
 use crate::error::ServerError;
 use crate::pagination::page_info;
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
@@ -21,7 +21,7 @@ pub(super) async fn lock_review_for_draft(
 ) -> Result<Option<String>, ServerError> {
     Ok(sqlx::query_scalar(
         "SELECT r.review_id FROM reviews r JOIN review_drafts rd USING (review_id)
-         WHERE rd.draft_id = $1 AND r.status != 'merged' FOR UPDATE OF r",
+         WHERE rd.draft_id = $1 AND r.status IN ('open', 'approved') FOR UPDATE OF r",
     )
     .bind(draft_id)
     .fetch_optional(&mut **tx)
@@ -129,6 +129,9 @@ pub(crate) async fn load_review_list_projections(
     let rows = sqlx::query(
         "SELECT
             rd.review_id, rd.draft_id, d.base_commit_id,
+            (SELECT snapshot -> 'draft' -> 'coordination'
+             FROM jsonb_array_elements(r.closed_drafts) snapshot
+             WHERE snapshot -> 'draft' ->> 'draft_id' = rd.draft_id) AS closed_coordination,
             current_ref.commit_id AS current_commit_id,
             candidate.status AS candidate_status,
             candidate.candidate_id,
@@ -150,6 +153,7 @@ pub(crate) async fn load_review_list_projections(
                 ELSE TRUE
             END AS has_upstream_resource_changes
          FROM review_drafts rd
+         JOIN reviews r ON r.review_id = rd.review_id
          JOIN drafts d ON d.draft_id = rd.draft_id
          JOIN projects p ON p.project_id = d.project_id
          JOIN refs current_ref
@@ -259,7 +263,11 @@ pub(crate) async fn load_review_list_projections(
         };
         let projection = projections.entry(row.try_get("review_id")?).or_default();
         projection.0.push(row.try_get("draft_id")?);
-        projection.1.push(coordination);
+        let closed: Option<sqlx::types::Json<DraftCoordination>> =
+            row.try_get("closed_coordination")?;
+        projection
+            .1
+            .push(closed.map_or(coordination, |value| value.0));
     }
     Ok(projections)
 }
@@ -382,26 +390,6 @@ pub(crate) async fn review_is_accessible(
     .bind(&principal.user_id)
     .fetch_one(pool)
     .await?)
-}
-
-/// Find a rejected review previously associated with the primary proposal.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(crate) async fn find_rejected_review(
-    pool: &PgPool,
-    draft_id: &str,
-) -> Result<Option<(String, i64)>, ServerError> {
-    let row = sqlx::query(
-        "SELECT review_id, version
-         FROM reviews
-         WHERE draft_id = $1 AND status = 'rejected'",
-    )
-    .bind(draft_id)
-    .fetch_optional(pool)
-    .await?;
-    row.map(|row| Ok((row.try_get("review_id")?, row.try_get("version")?)))
-        .transpose()
 }
 
 /// Require a review identity to exist before assembling its dependent records.
@@ -854,138 +842,6 @@ pub(super) async fn insert_review_draft(
     Ok(())
 }
 
-/// Lock a review and its primary proposal together before resubmission.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// Database locks acquired here remain held until the caller ends the transaction.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(super) async fn lock_submission_state(
-    tx: &mut Transaction<'_, Postgres>,
-    review_id: &str,
-) -> Result<Option<ReviewSubmissionState>, ServerError> {
-    Ok(sqlx::query_as::<_, ReviewSubmissionState>(
-        "SELECT r.draft_id, r.status AS review_status, r.version AS review_version,
-                    d.project_id, d.author_user_id, d.status AS draft_status,
-                    d.version AS draft_version, d.base_commit_id, d.resource_scope
-             FROM reviews r
-             JOIN drafts d ON d.draft_id = r.draft_id
-             WHERE r.review_id = $1
-             FOR UPDATE OF r, d",
-    )
-    .bind(review_id)
-    .fetch_optional(&mut **tx)
-    .await?)
-}
-
-/// Read the review currently linked to a proposal, if any.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(super) async fn find_draft_review(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-) -> Result<Option<String>, ServerError> {
-    Ok(
-        sqlx::query_scalar("SELECT review_id FROM review_drafts WHERE draft_id = $1")
-            .bind(draft_id)
-            .fetch_optional(&mut **tx)
-            .await?,
-    )
-}
-
-/// Lock a required additional proposal before replacing a review's submission set.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// Database locks acquired here remain held until the caller ends the transaction.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(super) async fn lock_required_additional_draft(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-) -> Result<AdditionalDraftState, ServerError> {
-    Ok(sqlx::query_as::<_, AdditionalDraftState>(
-        "SELECT project_id, author_user_id, status, version, base_commit_id, resource_scope
-                 FROM drafts WHERE draft_id = $1 FOR UPDATE",
-    )
-    .bind(draft_id)
-    .fetch_one(&mut **tx)
-    .await?)
-}
-
-/// Advance the primary proposal to submitted and return its new revision.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(super) async fn resubmit_primary_draft(
-    tx: &mut Transaction<'_, Postgres>,
-    draft_id: &str,
-) -> Result<i64, ServerError> {
-    Ok(sqlx::query_scalar(
-        "UPDATE drafts
-             SET status = 'submitted', version = version + 1, updated_at = now()
-             WHERE draft_id = $1
-             RETURNING version",
-    )
-    .bind(draft_id)
-    .fetch_one(&mut **tx)
-    .await?)
-}
-
-/// Clear obsolete decision state, apply supplied metadata, and reopen the review.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(super) async fn reopen_review(
-    tx: &mut Transaction<'_, Postgres>,
-    review_id: &str,
-    title: Option<String>,
-    description: Option<String>,
-) -> Result<(), ServerError> {
-    sqlx::query(
-        "UPDATE reviews
-             SET status = 'open', version = version + 1, decision_body = NULL,
-                 approved_result_hash = NULL,
-                 decided_by_user_id = NULL, decided_at = NULL,
-                 title = COALESCE($2, title), description = COALESCE($3, description),
-                 updated_at = now()
-             WHERE review_id = $1",
-    )
-    .bind(review_id)
-    .bind(title)
-    .bind(description)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-/// Remove prior ordered proposal links before replacing the submission set.
-///
-/// Uses the caller's transaction without committing it.
-///
-/// # Errors
-/// Propagates database access and row-decoding failures.
-pub(super) async fn delete_review_drafts(
-    tx: &mut Transaction<'_, Postgres>,
-    review_id: &str,
-) -> Result<(), ServerError> {
-    sqlx::query("DELETE FROM review_drafts WHERE review_id = $1")
-        .bind(review_id)
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
 /// Read the primary proposal's carrying project and scope for publication locking.
 ///
 /// Uses the caller's transaction without committing it.
@@ -1241,29 +1097,6 @@ pub(super) struct AdditionalDraftState {
     pub(super) resource_scope: String,
 }
 
-/// Locked review and primary proposal state required to validate resubmission.
-#[derive(sqlx::FromRow)]
-pub(super) struct ReviewSubmissionState {
-    /// Stable identifier of the editable proposal.
-    pub(super) draft_id: String,
-    /// Persisted review lifecycle state used for transition checks.
-    pub(super) review_status: String,
-    /// Review revision observed when the action or comment was created.
-    pub(super) review_version: i64,
-    /// Project boundary containing the resource or proposal.
-    pub(super) project_id: String,
-    /// Persisted identity of the author whose ownership is checked by the use case.
-    pub(super) author_user_id: String,
-    /// Persisted proposal lifecycle state used for transition checks.
-    pub(super) draft_status: String,
-    /// Proposal revision to which this record or candidate applies.
-    pub(super) draft_version: i64,
-    /// Commit against which the proposal was authored; absent before the first commit.
-    pub(super) base_commit_id: Option<String>,
-    /// Persisted organization or project ownership category.
-    pub(super) resource_scope: String,
-}
-
 /// Carrying project and proposal scope used to acquire publication coordination locks.
 #[derive(sqlx::FromRow)]
 pub(super) struct ReviewCoordination {
@@ -1444,5 +1277,41 @@ pub(super) async fn record_contribution_error(
 ) -> Result<(), ServerError> {
     sqlx::query("UPDATE review_org_contributions SET last_error = $2 WHERE source_review_id = $1 AND org_review_id IS NULL")
         .bind(review_id).bind(error.chars().take(1000).collect::<String>()).execute(pool).await?;
+    Ok(())
+}
+
+/// Read the proposal snapshot retained when a review was closed.
+///
+/// # Errors
+/// Propagates database and snapshot decoding failures.
+pub(super) async fn load_closed_drafts(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+) -> Result<Option<Vec<ReviewDraftDetail>>, ServerError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<sqlx::types::Json<Vec<ReviewDraftDetail>>>>(
+            "SELECT closed_drafts FROM reviews WHERE review_id = $1",
+        )
+        .bind(review_id)
+        .fetch_one(&mut **tx)
+        .await?
+        .map(|value| value.0),
+    )
+}
+
+/// Freeze the reviewed content before returning its drafts to the author.
+///
+/// # Errors
+/// Propagates database and serialization failures.
+pub(super) async fn save_closed_drafts(
+    tx: &mut Transaction<'_, Postgres>,
+    review_id: &str,
+    drafts: &[ReviewDraftDetail],
+) -> Result<(), ServerError> {
+    sqlx::query("UPDATE reviews SET closed_drafts = $2 WHERE review_id = $1")
+        .bind(review_id)
+        .bind(sqlx::types::Json(drafts))
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }

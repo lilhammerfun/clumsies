@@ -1475,7 +1475,7 @@ async fn invalid_org_projection_rolls_back_authority_and_every_ref() {
 }
 
 #[tokio::test]
-async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
+async fn rejected_review_keeps_history_while_edited_drafts_create_a_new_review() {
     let postgres = common::migrated_postgres().await;
     let bootstrap = common::initialize_installation(
         postgres.pool.clone(),
@@ -1697,15 +1697,14 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         },
     )
     .await;
-    assert_eq!(stale_review_submission.status(), StatusCode::CONFLICT);
+    assert_eq!(stale_review_submission.status(), StatusCode::BAD_REQUEST);
 
     let stale_draft_submission = post_response_with_etag(
         owner_app.clone(),
-        &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
+        "/api/v1/reviews",
         &submission_ref_etag,
-        &CreateReviewSubmissionRequest {
+        &CreateReviewRequest {
             org_contribution: None,
-            expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
                 expected_draft_version: edited.draft.version - 1,
@@ -1721,11 +1720,10 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
 
     let member_submission = post_response_with_etag(
         member_app,
-        &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
+        "/api/v1/reviews",
         &submission_ref_etag,
-        &CreateReviewSubmissionRequest {
+        &CreateReviewRequest {
             org_contribution: None,
-            expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
                 expected_draft_version: edited.draft.version,
@@ -1746,15 +1744,14 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
     assert_eq!(still_rejected.review.status, ReviewStatus::Rejected);
     assert_eq!(still_rejected.review.version, rejected.review.version);
     assert_eq!(still_rejected.draft.status, DraftStatus::Open);
-    assert_eq!(still_rejected.draft.version, edited.draft.version);
+    assert_eq!(still_rejected, rejected);
 
     let reconciliation_required = post_response_with_etag(
         owner_app.clone(),
-        &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
+        "/api/v1/reviews",
         &submission_ref_etag,
-        &CreateReviewSubmissionRequest {
+        &CreateReviewRequest {
             org_contribution: None,
-            expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
                 expected_draft_version: edited.draft.version,
@@ -1802,11 +1799,10 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
 
     let resubmitted: ReviewDetail = post_json_with_etag(
         owner_app.clone(),
-        &format!("/api/v1/reviews/{}/submissions", rejected.review.review_id),
+        "/api/v1/reviews",
         &submission_ref_etag,
-        &CreateReviewSubmissionRequest {
+        &CreateReviewRequest {
             org_contribution: None,
-            expected_review_version: rejected.review.version,
             drafts: vec![ReviewDraftRequest {
                 draft_id: edited.draft.draft_id.clone(),
                 expected_draft_version: edited.draft.version,
@@ -1818,9 +1814,9 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         },
     )
     .await;
-    assert_eq!(resubmitted.review.review_id, submitted.review.review_id);
+    assert_ne!(resubmitted.review.review_id, submitted.review.review_id);
     assert_eq!(resubmitted.review.status, ReviewStatus::Open);
-    assert_eq!(resubmitted.review.version, 4);
+    assert_eq!(resubmitted.review.version, 1);
     assert_eq!(resubmitted.review.title, "Revised review lifecycle context");
     assert_eq!(resubmitted.review.decision_body, None);
     assert_eq!(resubmitted.review.decided_by, None);
@@ -1868,7 +1864,7 @@ async fn rejected_review_reopens_its_draft_and_reuses_the_same_review() {
         .fetch_one(&postgres.pool)
         .await
         .unwrap();
-    assert_eq!(review_count, 1);
+    assert_eq!(review_count, 2);
     let events: DraftEventListResponse = get_json(owner_app, "/api/v1/draft-events").await;
     let draft_events = events
         .events

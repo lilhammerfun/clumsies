@@ -65,9 +65,9 @@ project                                        <local date and time>
   this inline placement. A conflict takes precedence over completed automatic
   updates elsewhere in the Review. `Checking…` is transient and failures show `Retry Needed`.
 - `Auto-rebased` means the server saved a clean result, not merely calculated a preview.
-  Never ask the user to save an automatic rebase. Merged Reviews show their lifecycle
-  rather than reconciliation badges. Legacy `Ready to Merge` and author resubmission
-  actions remain available according to permissions.
+  Never ask the user to save an automatic rebase. Merged and rejected Reviews show their lifecycle
+  rather than reconciliation badges. Legacy `Ready to Merge` actions remain
+  available according to permissions.
 - Let macOS draw separators, focus, hover/press feedback, and inactive-window
   state. Do not draw an outer list border, per-row cards, or empty-space zebra
   stripes. `NavigationLink` and the stack path are the only navigation state;
@@ -195,8 +195,7 @@ the UI labels these honestly rather than pretending they are inline comments.
 
 ## 5. Toolbar decisions
 
-The toolbar keeps Reject and Approve as direct actions. Updates, Merge, and
-Resubmit use explicit text entries in **Review Actions (…)**, with the same
+The toolbar keeps Reject and Approve as direct actions. Updates and Merge use explicit text entries in **Review Actions (…)**, with the same
 permissions and readiness checks. **Save Conflict Resolutions** appears only for
 prepared conflicts in a Review owned by the author. The ellipsis stays last in its group. It is disabled while loading, saving, or
 awaiting conflict choices. The menu remains openable when that entry is disabled.
@@ -221,7 +220,7 @@ Decision actions retain menu-command parity:
   permitted and the Server supplied a nonempty approved result hash. Legacy
   approvals without that immutable result identity remain visible but cannot
   be merged.
-- Rejected: **Review Actions (…) → Resubmit Review** for the Draft author.
+- Rejected: closed history, without update or resubmit actions. Edit Drafts and create a new Review.
 
 Filter belongs only to the list page. Decision tools belong only to an active
 detail. Sync remains its own utility slot. Search remains independent and
