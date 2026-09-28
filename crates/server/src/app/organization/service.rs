@@ -57,20 +57,28 @@ pub async fn update_admin_org(
                 "organization name must not be empty".to_owned(),
             ));
         }
-        None => current.name,
+        None => current.name.clone(),
     };
     let allowed_email_domains = match request.allowed_email_domains {
         Some(domains) => normalize_email_domains(domains)?,
-        None => current.allowed_email_domains,
+        None => current.allowed_email_domains.clone(),
     };
     repository::update_admin_org(&mut tx, &principal.org_id, &name, &allowed_email_domains).await?;
-    audit_event::insert_audit_event(
+    audit_event::insert_audit_event_with_changes(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
         "admin.org_updated",
         "org",
         Some(&principal.org_id),
+        &audit_event::changes(&[
+            ("name", &current.name, &name),
+            (
+                "allowed_email_domains",
+                &current.allowed_email_domains.join(", "),
+                &allowed_email_domains.join(", "),
+            ),
+        ]),
     )
     .await?;
     tx.commit().await?;
@@ -213,13 +221,17 @@ pub async fn update_admin_member(
     if next_status == "disabled" {
         repository::revoke_user_sessions(&mut tx, &principal.org_id, user_id).await?;
     }
-    audit_event::insert_audit_event(
+    audit_event::insert_audit_event_with_changes(
         &mut tx,
         &principal.org_id,
         Some(&principal.user_id),
         "admin.member_updated",
         "user",
         Some(user_id),
+        &audit_event::changes(&[
+            ("role", &current.role, &next_role),
+            ("status", &current.status, &next_status),
+        ]),
     )
     .await?;
     tx.commit().await?;

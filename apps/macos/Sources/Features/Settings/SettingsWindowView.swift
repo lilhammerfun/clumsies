@@ -198,10 +198,7 @@ struct SettingsWindowView: View {
                 organizationLink(.members)
                 organizationLink(.projects)
                 organizationLink(.access)
-            }
-            Section {
-                Button("Activity Log…") { navigation.navigate(to: .organization(.audit)) }
-                    .accessibilityIdentifier("settings-organization-audit")
+                organizationLink(.audit)
             }
         }
         .formStyle(.grouped)

@@ -221,11 +221,14 @@ final class AdministrationLoadingTests: XCTestCase {
         XCTAssertNil(audit.actorDisplayName)
         XCTAssertNil(audit.actorEmail)
         XCTAssertNil(audit.targetDisplayName)
+        XCTAssertNil(audit.changes)
         var named = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(legacy.utf8)) as? [String: Any])
         named["target_display_name"] = "Ada"
+        named["changes"] = [["field": "role", "before": "member", "after": "admin"]]
         let enriched = try JSONCoding.decoder().decode(AdminAuditEventRecord.self,
             from: JSONSerialization.data(withJSONObject: named))
         XCTAssertEqual(enriched.targetDisplayName, "Ada")
+        XCTAssertEqual(enriched.changes, [AdminAuditChange(field: "role", before: "member", after: "admin")])
     }
 
     @MainActor

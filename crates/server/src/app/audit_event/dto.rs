@@ -21,11 +21,25 @@ pub struct AuditEvent {
     pub target_type: String,
     /// Stable identity of the resource affected by the operation.
     pub target_id: Option<String>,
-    /// Current human-readable label of the audited resource, when resolvable.
+    /// Event-time label, or a best-effort current label for events predating snapshots.
     pub target_display_name: Option<String>,
+    /// Safe field changes; empty for historical events without details.
+    #[serde(default)]
+    pub changes: Vec<AuditChange>,
     /// UTC timestamp at which the record was created.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+/// An explicitly selected, non-secret field change.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditChange {
+    /// Stable field name.
+    pub field: String,
+    /// Value before the operation.
+    pub before: String,
+    /// Value after the operation.
+    pub after: String,
 }
 
 /// Administrative audit history page with continuation metadata.
@@ -52,6 +66,7 @@ mod tests {
             target_type: "test".to_owned(),
             target_display_name: None,
             target_id: None,
+            changes: Vec::new(),
             created_at: OffsetDateTime::UNIX_EPOCH,
         };
 
