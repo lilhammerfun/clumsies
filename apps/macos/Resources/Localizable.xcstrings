@@ -1,54 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "Checking for changes…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking for changes…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在检查更新…"
-          }
-        }
-      }
-    },
-    "Last checked": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Last checked"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "上次检查"
-          }
-        }
-      }
-    },
-    "Not checked yet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not checked yet"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未检查"
-          }
-        }
-      }
-    },
     "Showing previous data. Refresh to check for changes.": {
       "localizations": {
         "en": {

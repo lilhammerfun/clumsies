@@ -1,8 +1,38 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import Clumsies
 
 @MainActor
 final class WorkspaceRefreshTests: XCTestCase {
+    func testRefreshFooterIsHiddenDuringNormalPollingAndStableWhileRetryingFailure() async throws {
+        let scheduler = WorkspaceRefreshScheduler()
+        let response = Response()
+        scheduler.register(.memory) { response.available ? .updated : .retained }
+
+        func footerHeight() -> CGFloat {
+            let host = NSHostingView(rootView: WorkspaceRefreshStatusView(scheduler: scheduler).frame(width: 600))
+            return host.fittingSize.height
+        }
+
+        XCTAssertEqual(footerHeight(), 0, "An unchecked page must not reserve a status bar")
+        let first = try XCTUnwrap(scheduler.request(.memory))
+        XCTAssertEqual(scheduler.statuses[.memory]?.isRefreshing, true)
+        XCTAssertEqual(footerHeight(), 0, "Background polling must not flash a loading bar")
+        await first.value
+        XCTAssertEqual(footerHeight(), 0, "Successful checks must not show a ticking timestamp")
+
+        response.available = false
+        await scheduler.request(.memory)?.value
+        let warningHeight = footerHeight()
+        XCTAssertGreaterThan(warningHeight, 0, "Retained data must still have a recovery prompt")
+        response.available = true
+        let retry = try XCTUnwrap(scheduler.request(.memory))
+        XCTAssertEqual(footerHeight(), warningHeight, "Keep the warning in place while retrying")
+        await retry.value
+        XCTAssertEqual(footerHeight(), 0, "Recovery restores the full content area")
+    }
+
     func testCancellationBeforeExecutionDoesNotStartLoader() async {
         let scheduler = WorkspaceRefreshScheduler()
         var calls = 0

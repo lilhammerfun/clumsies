@@ -108,6 +108,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if menuItem.action == #selector(checkForUpdates(_:)) {
             return softwareUpdateController.canCheckForUpdates
         }
+        if menuItem.action == #selector(refreshWorkspace(_:)) {
+            return mainWindow?.isKeyWindow == true && store.context.phase == .ready
+                && [.memory, .reviews, .inbox, .dashboard].contains(store.navigation.selectedSection)
+                && store.refreshes.statuses[store.refreshes.visible]?.isRefreshing == false
+        }
         if menuItem.action == #selector(newProject(_:)) {
             return store.context.canCreateProject && store.context.phase == .ready
         }
@@ -528,6 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let sidebar = viewMenu.addItem(withTitle: String(localized: "Toggle Sidebar"), action: #selector(toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .option]
         sidebar.target = self
+        let refresh = viewMenu.addItem(withTitle: String(localized: "Refresh"), action: #selector(refreshWorkspace(_:)), keyEquivalent: "r")
+        refresh.target = self
         viewItem.submenu = viewMenu
 
         let reviewItem = NSMenuItem()
@@ -608,6 +615,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func checkForUpdates(_ sender: Any?) {
         softwareUpdateController.checkForUpdates()
+    }
+
+    @objc private func refreshWorkspace(_ sender: Any?) {
+        store.refreshes.request(store.refreshes.visible)
     }
 
     @objc private func showSearch(_ sender: Any?) {

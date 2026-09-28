@@ -152,26 +152,20 @@ struct WorkspaceRefreshStatusView: View {
     var body: some View {
         let domain = scheduler.visible
         let status = scheduler.statuses[domain] ?? .init()
-        HStack(spacing: 8) {
-            if status.isRefreshing {
-                ProgressView().controlSize(.small)
-                Text("Checking for changes…")
-            } else if status.isStale {
-                Label("Showing previous data. Refresh to check for changes.", systemImage: "clock.badge.exclamationmark")
-            } else if let date = status.lastSuccess {
-                Text("Last checked")
-                Text(date, style: .relative)
-            } else {
-                Text("Not checked yet")
+        Group {
+            if status.isStale {
+                HStack(spacing: 8) {
+                    Label("Showing previous data. Refresh to check for changes.", systemImage: "clock.badge.exclamationmark")
+                    Spacer()
+                    Button("Refresh", systemImage: "arrow.clockwise") { scheduler.request(domain) }
+                        .disabled(status.isRefreshing)
+                        .accessibilityIdentifier("workspace-refresh")
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(.bar)
             }
-            Spacer()
-            Button("Refresh", systemImage: "arrow.clockwise") { scheduler.request(domain) }
-                .disabled(status.isRefreshing)
-                .accessibilityIdentifier("workspace-refresh")
         }
-        .font(.caption).foregroundStyle(.secondary)
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(.bar)
         .onChange(of: status.requestID) { _, requestID in
             if let requestID {
                 ClientDiagnostics.record("workspace_refresh_presented", ["domain": domain.rawValue, "request_id": requestID])
