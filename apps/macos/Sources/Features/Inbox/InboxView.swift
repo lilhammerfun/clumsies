@@ -219,9 +219,12 @@ struct InboxView: View {
             ToolbarSpacer(.flexible, placement: .automatic)
         }
         ToolbarItem(id: "inbox.select-all", placement: .trailingPinned) {
-            Button(allVisibleSelected ? "Deselect All" : "Select All",
-                   systemImage: allVisibleSelected ? "checkmark.square" : "square") {
+            Button {
                 selection = allVisibleSelected ? [] : Set(visibleItems.map(\.id))
+            } label: {
+                Label(allVisibleSelected ? "Deselect All" : "Select All",
+                      systemImage: allVisibleSelected ? "checkmark.square" : "square")
+                    .padding(.horizontal, 8)
             }
             .labelStyle(.titleAndIcon)
             .toolbarHelp(String(localized: "Select or deselect all notifications matching the current filters"))
