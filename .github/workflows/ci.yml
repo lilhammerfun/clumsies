@@ -35,6 +35,7 @@ jobs:
       server_image: ${{ steps.impact.outputs.server_image }}
       server_delivery: ${{ steps.impact.outputs.server_delivery }}
       site_delivery: ${{ steps.impact.outputs.site_delivery }}
+      observability_delivery: ${{ steps.impact.outputs.observability_delivery }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,6 +97,8 @@ jobs:
           sh -n deploy/observability/host/clumsies-observability-metrics
           shellcheck deploy/observability/host/clumsies-observability-metrics
           python3 deploy/observability/test.py
+          python3 deploy/observability/test-delivery.py
+          shellcheck deploy/observability/deploy.sh
 
       - name: Check macOS packaging scripts
         run: |
@@ -304,3 +307,21 @@ jobs:
       DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+
+  observability_delivery:
+    needs: [changes, build, site_delivery, server_delivery]
+    if: >-
+      always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.build.result == 'success' && needs.changes.outputs.observability_delivery == 'true' &&
+      (needs.site_delivery.result == 'success' || needs.site_delivery.result == 'skipped') &&
+      (needs.server_delivery.result == 'success' || needs.server_delivery.result == 'skipped')
+    uses: ./.github/workflows/observability-delivery.yml
+    with:
+      prerequisites_deployed: >-
+        ${{ (needs.changes.outputs.server_delivery != 'true' || needs.server_delivery.outputs.deployed == 'true') &&
+            (needs.changes.outputs.site_delivery != 'true' || needs.site_delivery.outputs.deployed == 'true') }}
+    secrets:
+      SITE_DEPLOY_HOST: ${{ secrets.SITE_DEPLOY_HOST }}
+      SITE_DEPLOY_SSH_KEY: ${{ secrets.SITE_DEPLOY_SSH_KEY }}
+      SITE_DEPLOY_USER: ${{ secrets.SITE_DEPLOY_USER }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
