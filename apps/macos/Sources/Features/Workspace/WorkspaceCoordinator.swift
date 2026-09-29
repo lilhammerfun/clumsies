@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class WorkspaceCoordinator {
+    static let agentReconciliationKey = "ClumsiesAgentSetupCheckedBuildIdentity"
     let agents: AgentIntegrationService
     let bundleSelection: BundlesModel
     let bundles: BundleStore
@@ -600,6 +601,10 @@ final class WorkspaceCoordinator {
 
     private func startAgentReconciliation(using loader: WorkspaceLoader, health: DaemonHealth) {
         let identity = health.daemonInstallationId + ":" + health.agentRuntime.buildId
+        guard Self.needsAgentReconciliation(identity: identity, defaults: .standard) else {
+            ClientDiagnostics.record("agent_reconciliation_skipped", ["reason": "unchanged_build"])
+            return
+        }
         guard adapterReconciliationIdentity != identity else { return }
         adapterReconciliationIdentity = identity
         adapterReconciliationTask?.cancel()
@@ -607,18 +612,26 @@ final class WorkspaceCoordinator {
         ClientDiagnostics.record("agent_reconciliation_started", [:])
         adapterReconciliationTask = Task { @MainActor [weak self] in
             let result: LocalAgentAdapterReconciliationResult
+            let completed: Bool
             do {
                 result = try await loader.reconcileManagedAgentAdapters()
+                completed = true
             } catch {
                 result = .init(conflicts: [], inspectionWarning: error.userFacingMessage)
+                completed = false
             }
             guard let self, !Task.isCancelled, self.adapterReconciliationIdentity == identity else { return }
+            if completed { UserDefaults.standard.set(identity, forKey: Self.agentReconciliationKey) }
             self.agents.applyManagedAdapterResult(result)
             ClientDiagnostics.record("agent_reconciliation_completed", [
                 "elapsed_ms": String(Int(Date().timeIntervalSince(started) * 1_000))
             ])
             self.adapterReconciliationTask = nil
         }
+    }
+
+    static func needsAgentReconciliation(identity: String, defaults: UserDefaults) -> Bool {
+        defaults.string(forKey: agentReconciliationKey) != identity
     }
 
     private func cancelPostReadyWork() {

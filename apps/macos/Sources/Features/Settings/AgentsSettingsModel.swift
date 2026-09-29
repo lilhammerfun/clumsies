@@ -68,9 +68,9 @@ final class AgentsSettingsModel: ObservableObject {
         isWorking = true
         defer { isWorking = false }
         do {
-            for adapter in ProjectAgentAdapterKind.allCases {
+            for setting in settings where Self.needsSave(setting, selected: selected) {
                 try Task.checkCancellation()
-                settings = try await agentIntegration.setAgentAdapter(adapter, enabled: selected.contains(adapter))
+                settings = try await agentIntegration.setAgentAdapter(setting.adapter, enabled: selected.contains(setting.adapter))
             }
             errorMessage = nil
             if refreshStatus { codexStatus = try await agentIntegration.codexPluginStatus() }
@@ -79,5 +79,11 @@ final class AgentsSettingsModel: ObservableObject {
             errorMessage = error.actionMessage
             return false
         }
+    }
+
+    static func needsSave(_ setting: DaemonAgentAdapterSetting, selected: Set<ProjectAgentAdapterKind>) -> Bool {
+        let enabled = selected.contains(setting.adapter)
+        return enabled != setting.enabled || (enabled && !setting.configured)
+            || (!enabled && (setting.installed || setting.legacyRepositories > 0))
     }
 }

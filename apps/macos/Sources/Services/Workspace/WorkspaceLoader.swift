@@ -403,18 +403,15 @@ struct WorkspaceLoader: Sendable {
         }
     }
 
-    /// Move every daemon-owned integration to the runtime embedded in the
-    /// currently running App before authentication or Server access. Adapter
-    /// files deliberately point at the App bundle, so an App update must
-    /// reconcile existing installations even while the user is signed out or
-    /// the Hub is unreachable.
+    /// Update installed integrations after an App upgrade. Disabled adapters
+    /// with no installed or legacy files have nothing to repair.
     func reconcileManagedAgentAdapters() async throws
         -> LocalAgentAdapterReconciliationResult {
         let runtimePath = try Self.bundledAgentRuntimePath()
         let codexHostPath = await MainActor.run { try? Self.installedCodexHostBinaryPath() }
         var warnings: [String] = []
         let settings = try await daemon.agentAdapterSettings()
-        for setting in settings where setting.configured {
+        for setting in settings where Self.needsAgentAdapterRepair(setting) {
             do {
                 _ = try await daemon.setAgentAdapter(.init(
                     adapter: setting.adapter,
@@ -427,6 +424,10 @@ struct WorkspaceLoader: Sendable {
             }
         }
         return .init(conflicts: [], inspectionWarning: warnings.isEmpty ? nil : warnings.joined(separator: "\n"))
+    }
+
+    static func needsAgentAdapterRepair(_ setting: DaemonAgentAdapterSetting) -> Bool {
+        setting.configured && (setting.enabled || setting.installed || setting.legacyRepositories > 0)
     }
 
     func inspectLegacyAgentAdapters() async -> LocalAgentAdapterReconciliationResult {

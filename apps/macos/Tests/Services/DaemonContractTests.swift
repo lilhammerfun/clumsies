@@ -781,6 +781,34 @@ final class DaemonContractTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testAgentRepairRunsAfterBuildChangeOnlyForRelevantSettings() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(WorkspaceCoordinator.needsAgentReconciliation(identity: "install:build-2", defaults: defaults))
+        defaults.set("install:build-1", forKey: WorkspaceCoordinator.agentReconciliationKey)
+        XCTAssertTrue(WorkspaceCoordinator.needsAgentReconciliation(identity: "install:build-2", defaults: defaults))
+        defaults.set("install:build-2", forKey: WorkspaceCoordinator.agentReconciliationKey)
+        XCTAssertFalse(WorkspaceCoordinator.needsAgentReconciliation(identity: "install:build-2", defaults: defaults))
+
+        let disabled = DaemonAgentAdapterSetting(adapter: .claudeCode, enabled: false,
+            configured: true, installed: false, legacyRepositories: 0)
+        XCTAssertFalse(WorkspaceLoader.needsAgentAdapterRepair(disabled))
+        XCTAssertFalse(AgentsSettingsModel.needsSave(disabled, selected: []))
+        XCTAssertTrue(AgentsSettingsModel.needsSave(disabled, selected: [.claudeCode]))
+        XCTAssertTrue(AgentsSettingsModel.needsSave(.init(adapter: .codex, enabled: true,
+            configured: false, installed: false, legacyRepositories: 0), selected: [.codex]))
+        XCTAssertTrue(AgentsSettingsModel.needsSave(.init(adapter: .codex, enabled: true,
+            configured: false, installed: false, legacyRepositories: 0), selected: []))
+        XCTAssertTrue(WorkspaceLoader.needsAgentAdapterRepair(.init(adapter: .codex, enabled: true,
+            configured: true, installed: false, legacyRepositories: 0)))
+        XCTAssertTrue(WorkspaceLoader.needsAgentAdapterRepair(.init(adapter: .claudeCode, enabled: false,
+            configured: true, installed: true, legacyRepositories: 0)))
+        XCTAssertTrue(WorkspaceLoader.needsAgentAdapterRepair(.init(adapter: .claudeCode, enabled: false,
+            configured: true, installed: false, legacyRepositories: 1)))
+    }
+
     func testLegacyInspectionExplainsOlderDaemonRuntimeRejection() {
         let warning = WorkspaceLoader.legacyAgentAdapterInspectionWarning(
             for: DaemonXPCError.daemon(.init(
