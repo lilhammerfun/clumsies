@@ -127,6 +127,7 @@ final class ReviewDetailModel: ObservableObject {
     @Published var detail: ReviewDetail?
     private var fileLoader: ReviewFileLoader?
     private var fileLoadTask: Task<Void, Never>?
+    private var pathLoadTask: Task<Void, Never>?
     @Published var loadedPaths: [String: String] = [:]
     @Published var loadedDirectoryTypes: [String: Bool] = [:]
     @Published var loadingFile = false
@@ -335,6 +336,8 @@ final class ReviewDetailModel: ObservableObject {
         isSubmittingComment = false
         fileLoadTask?.cancel()
         fileLoadTask = nil
+        pathLoadTask?.cancel()
+        pathLoadTask = nil
         if let fileLoader { Task { await fileLoader.cancel() } }
         fileLoader = nil
         changeSources = nil
@@ -371,6 +374,23 @@ final class ReviewDetailModel: ObservableObject {
         let client = workspaceContext.server
         fileLoader = ReviewFileLoader { id in
             try await client.get("/api/v1/commits/\(id)")
+        }
+        let unresolved = draftDetails.filter { detail in
+            guard let id = detail.draft.resource.id else { return false }
+            return ReviewFileDescriptor.resolve(reviewId: reviewId, detail: detail).path == id
+        }
+        if !unresolved.isEmpty, let fileLoader {
+            pathLoadTask = Task {
+                do {
+                    let paths = try await fileLoader.paths(for: unresolved)
+                    guard !Task.isCancelled, detailRequestGeneration == request.generation else { return }
+                    loadedPaths.merge(paths.mapValues { $0.path }) { _, resolved in resolved }
+                    loadedDirectoryTypes.merge(paths.mapValues { $0.isDirectory }) { _, resolved in resolved }
+                } catch is CancellationError {
+                } catch {
+                    ClientDiagnostics.record("review_file_paths_load_failed", ClientDiagnostics.failureFields(error))
+                }
+            }
         }
         loading = false
         loadError = nil

@@ -2224,6 +2224,28 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(requests, ["commit-base"])
     }
 
+    func testReviewFileTreeResolvesIdOnlyUpdateFromCommitPath() async throws {
+        let resource = ServerDraftResourceReference(scope: "org", id: "mem-1", path: nil)
+        let review = reviewDetail(resource: resource, operations: [
+            .init(action: "update", resource: resource,
+                  content: .init(description: nil, content: "Updated body"), newPath: nil,
+                  operationId: "op-1", createdAt: timestamp)
+        ])
+        let draft = ReviewDraftDetail(draft: review.draft, operations: review.operations)
+        let payload = commit(id: "commit-base", resource: resource, body: "Base body",
+                             treePath: "knowledge/note.md")
+        let probe = ReviewCommitProbe(payload: payload)
+        let loader = ReviewFileLoader { try await probe.fetch($0) }
+
+        let paths = try await loader.paths(for: [draft])
+        XCTAssertEqual(paths["draft-1"]?.path, "knowledge/note.md")
+        XCTAssertEqual(ReviewFileDescriptor.resolve(reviewId: "review-1", detail: draft,
+                                                    loadedPath: paths["draft-1"]?.path).path,
+                       "knowledge/note.md")
+        let requests = await probe.requests
+        XCTAssertEqual(requests, ["commit-base"])
+    }
+
     func testReviewSnapshotFailureCanRetryAndInvalidatedLoaderRejectsLateResults() async throws {
         let resource = ServerDraftResourceReference(scope: "org", id: "memory-1", path: "notes/a.md")
         let review = reviewDetail(resource: resource, operations: [])
