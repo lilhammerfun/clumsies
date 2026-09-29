@@ -42,10 +42,17 @@ jobs:
           ldd target/release/clumsies-desktop | tee /tmp/client-dependencies
           ldd target/release/clumsiesd | tee /tmp/daemon-dependencies
           ! grep 'not found' /tmp/client-dependencies /tmp/daemon-dependencies
+      - name: Assemble the package
+        run: |
+          VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
+          apps/desktop/packaging/assemble-linux.sh "$VERSION" target/release dist
+
       - uses: actions/upload-artifact@v4
         with:
           name: clumsies-linux-x86_64
           path: |
+            dist/*.tar.gz
+            dist/*.sha256
             target/release/clumsies-desktop
             target/release/clumsiesd
           if-no-files-found: error
@@ -80,10 +87,18 @@ jobs:
           } finally {
             Get-Process clumsiesd -ErrorAction SilentlyContinue | Stop-Process
           }
+      - name: Assemble the package
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path apps/macos/project.yml -Pattern 'MARKETING_VERSION: "([^"]+)"').Matches[0].Groups[1].Value
+          pwsh -File apps/desktop/packaging/assemble-windows.ps1 $version target/release dist
+
       - uses: actions/upload-artifact@v4
         with:
           name: clumsies-windows-x86_64
           path: |
+            dist/*.zip
+            dist/*.sha256
             target/release/clumsies-desktop.exe
             target/release/clumsiesd.exe
           if-no-files-found: error

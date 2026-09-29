@@ -151,22 +151,7 @@ jobs:
           pkill -f 'target/release/clumsiesd' || true
 
       - name: Assemble the package
-        run: |
-          VERSION=${CLUMSIES_VERSION}
-          PACKAGE="Clumsies-${VERSION}-linux-x86_64"
-          mkdir -p "dist/${PACKAGE}/icons"
-          # A downloaded program does not need symbols: they are a third of the
-          # two binaries and belong to a local build.
-          strip --strip-all target/release/clumsies-desktop target/release/clumsiesd
-          install -m 755 target/release/clumsies-desktop target/release/clumsiesd "dist/${PACKAGE}/"
-          install -m 755 apps/desktop/packaging/install.sh "dist/${PACKAGE}/install.sh"
-          install -m 644 apps/desktop/packaging/clumsies.desktop "dist/${PACKAGE}/clumsies.desktop"
-          install -m 644 apps/desktop/packaging/README.txt "dist/${PACKAGE}/README.txt"
-          cp apps/desktop/assets/icons/clumsies-*.png "dist/${PACKAGE}/icons/"
-          tar -C dist -czf "dist/${PACKAGE}.tar.gz" "${PACKAGE}"
-          cd dist
-          sha256sum "${PACKAGE}.tar.gz" > "${PACKAGE}.tar.gz.sha256"
-          tar -tzf "${PACKAGE}.tar.gz" | sort
+        run: apps/desktop/packaging/assemble-linux.sh "$CLUMSIES_VERSION" target/release dist
 
       - uses: actions/upload-artifact@v4
         with:
@@ -208,16 +193,7 @@ jobs:
         shell: pwsh
         run: |
           $version = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.TrimStart('v') } else { (Select-String -Path apps/macos/project.yml -Pattern 'MARKETING_VERSION: "([^"]+)"').Matches[0].Groups[1].Value }
-          $package = "Clumsies-$version-windows-x86_64"
-          New-Item -ItemType Directory -Force -Path "dist/$package/icons" | Out-Null
-          Copy-Item target/release/clumsies-desktop.exe, target/release/clumsiesd.exe "dist/$package/"
-          Copy-Item apps/desktop/packaging/README.txt "dist/$package/README.txt"
-          Copy-Item apps/desktop/assets/icons/clumsies-256.png "dist/$package/icons/"
-          Copy-Item apps/desktop/assets/icons/clumsies.ico "dist/$package/icons/"
-          Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
-          $hash = (Get-FileHash "dist/$package.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $package.zip" | Out-File -Encoding ascii "dist/$package.zip.sha256"
-          Get-ChildItem dist | Select-Object Name, Length
+          pwsh -File apps/desktop/packaging/assemble-windows.ps1 $version target/release dist
 
       - uses: actions/upload-artifact@v4
         with:
