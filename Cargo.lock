@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "clumsiesd"
-version = "0.20.2"
+version = "0.20.5"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -7867,7 +7867,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.20.2"
+version = "0.20.5"
 dependencies = [
  "argon2",
  "async-trait",

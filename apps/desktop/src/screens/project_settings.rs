@@ -408,8 +408,6 @@ impl Render for ProjectSettingsDialog {
         // borrow the context mutably to build their own controls.
         let theme = _cx.theme();
         let danger = theme.danger;
-        let muted = theme.muted_foreground;
-        let foreground = theme.foreground;
 
         rows.extend(self.memory_space(_cx));
         rows.push(modal::heading("Memory", _cx));
