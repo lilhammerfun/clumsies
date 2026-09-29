@@ -266,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .workspaceEnvironment(store),
             title: store.context.organization?.name ?? "Clumsies Lab"
         )
+        ClientDiagnostics.record("main_window_opened", [:])
     }
 
     private func presentMainLoading() {

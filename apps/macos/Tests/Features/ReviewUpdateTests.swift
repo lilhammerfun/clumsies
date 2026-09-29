@@ -454,6 +454,23 @@ final class ReviewUpdateTests: XCTestCase {
         XCTAssertEqual(model.reviewLoadState, .loaded)
     }
 
+    func testPrefetchedReviewListIsUsedWithoutSecondRequest() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.phase = .ready
+        let record = WorkspaceLoader.mapReview(fixture().detail.review)
+        let model = ReviewsModel(context: workspace.context, edits: workspace.edits,
+            feedback: workspace.feedback, navigation: workspace.navigation,
+            reconciliation: workspace.reconciliation, sessions: workspace.sessions,
+            fetchReviews: { XCTFail("Prefetched reviews should be reused"); return ([], false) })
+        let prefetched = Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error> {
+            (records: [record], hasStaleServerResponse: false)
+        }
+        model.startLoading(generation: workspace.context.workspaceReloadGeneration,
+            requiresFreshData: false, baseSnapshotWasStale: false, prefetched: prefetched)
+        for _ in 0..<100 where model.reviewLoadState != .loaded { await Task.yield() }
+        XCTAssertEqual(model.reviews, [record])
+    }
+
     private func fixture(description: String = "") -> ReviewUpdatePlan {
         let user = UserReference(userId: "author", email: "author@example.test", displayName: "Author",
             avatarUrl: nil, role: "admin")

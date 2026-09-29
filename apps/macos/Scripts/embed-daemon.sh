@@ -28,6 +28,8 @@ else
   cp "$repo_root/target/debug/clumsiesd" "$destination"
 fi
 
+printf '%s\n' "$CLUMSIES_AGENT_RUNTIME_BUILD_ID" > "$(dirname "$destination")/clumsiesd-build-id"
+
 chmod 755 "$destination"
 
 if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ] && [ "$EXPANDED_CODE_SIGN_IDENTITY" != "-" ]; then

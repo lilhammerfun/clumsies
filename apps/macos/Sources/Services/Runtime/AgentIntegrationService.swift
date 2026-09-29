@@ -13,6 +13,8 @@ final class AgentIntegrationService: ObservableObject {
 
     @Published var legacyAgentAdapterConflicts: [DaemonLegacyAgentAdapterConflict] = []
     @Published var legacyAgentAdapterInspectionWarning: String?
+    private var managedAdapterWarning: String?
+    private var legacyInspectionWarning: String?
 
     private var legacyAgentAdapterInspectionTask: Task<Void, Never>?
 
@@ -54,6 +56,22 @@ final class AgentIntegrationService: ObservableObject {
         legacyAgentAdapterConflicts = result.conflicts
         legacyAgentAdapterInspectionWarning = result.inspectionWarning
         feedback.errorMessage = nextErrorMessage
+    }
+
+    func applyManagedAdapterResult(_ result: LocalAgentAdapterReconciliationResult) {
+        managedAdapterWarning = result.inspectionWarning
+        applyLocalAgentAdapterResult(.init(
+            conflicts: legacyAgentAdapterConflicts,
+            inspectionWarning: Self.combinedAgentAdapterWarning(managedAdapterWarning, legacyInspectionWarning)
+        ))
+    }
+
+    func applyLegacyInspectionResult(_ result: LocalAgentAdapterReconciliationResult) {
+        legacyInspectionWarning = result.inspectionWarning
+        applyLocalAgentAdapterResult(.init(
+            conflicts: result.conflicts,
+            inspectionWarning: Self.combinedAgentAdapterWarning(managedAdapterWarning, legacyInspectionWarning)
+        ))
     }
 
     nonisolated static func errorMessageAfterUpdatingLocalAgentAdapters(
@@ -119,13 +137,7 @@ final class AgentIntegrationService: ObservableObject {
                   !Task.isCancelled else {
                 return
             }
-            applyLocalAgentAdapterResult(.init(
-                conflicts: result.conflicts,
-                inspectionWarning: AgentIntegrationService.combinedAgentAdapterWarning(
-                    legacyAgentAdapterInspectionWarning,
-                    result.inspectionWarning
-                )
-            ))
+            applyLegacyInspectionResult(result)
         }
     }
 
