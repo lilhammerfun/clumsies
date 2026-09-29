@@ -325,8 +325,7 @@ final class AdministrationLoadingTests: XCTestCase {
                     logDir: "/unused", localDb: .init(path: "/unused", ready: true, schemaVersion: 1)
                 ),
                 sync: nil, serverDataSource: "live"
-            ),
-            legacyAgentAdapterConflicts: [], legacyAgentAdapterInspectionWarning: nil
+            )
         )
     }
 

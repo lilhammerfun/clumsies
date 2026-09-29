@@ -145,6 +145,7 @@ struct WorkspaceView: View {
             }
         }
         .task {
+            ClientDiagnostics.record("workspace_view_appeared", [:])
             store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
             await store.runRefreshLoop()
         }

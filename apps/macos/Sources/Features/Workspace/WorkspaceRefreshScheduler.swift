@@ -87,6 +87,14 @@ final class WorkspaceRefreshScheduler: ObservableObject {
         }
     }
 
+    /// The initial workspace load already fetched these domains; start their polling interval now.
+    func didStartInitialLoad(_ domains: [Domain]) {
+        for domain in domains where jobs[domain] != nil {
+            jobs[domain]?.invalidated = false
+            jobs[domain]?.lastAttempt = now()
+        }
+    }
+
     @discardableResult
     func request(_ domain: Domain) -> Task<Void, Never>? {
         guard var job = jobs[domain] else { return nil }

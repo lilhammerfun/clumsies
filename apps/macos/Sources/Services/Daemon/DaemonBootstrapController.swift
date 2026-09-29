@@ -52,6 +52,14 @@ struct DaemonBootstrapController: Sendable {
         }.value
     }
 
+    func bundledBuildID() throws -> String? {
+        try AppBundleRuntimeLocation.requireStable(Bundle.main.bundleURL)
+        guard let url = Bundle.main.resourceURL?.appending(path: "clumsiesd-build-id"),
+              let buildID = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              !buildID.isEmpty else { return nil }
+        return buildID
+    }
+
     func status() async -> DaemonBootstrapState {
         do {
             return try await Task.detached {

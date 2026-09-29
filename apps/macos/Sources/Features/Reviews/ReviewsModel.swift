@@ -85,6 +85,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     private var reviewLoadTask: Task<Void, Never>?
+    private var prefetchedReviewTask: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>?
 
     var selectedReview: ReviewRecord? {
         reviews.first { $0.id == self.selectedReviewId } ?? reviews.first
@@ -428,17 +429,25 @@ final class ReviewsModel: ObservableObject {
     func startLoading(
         generation: UUID,
         requiresFreshData: Bool,
-        baseSnapshotWasStale: Bool
+        baseSnapshotWasStale: Bool,
+        prefetched: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>? = nil
     ) {
         cancelLoading()
+        prefetchedReviewTask = prefetched
         let request = UUID()
         reviewRequestGeneration = request
         reviewLoadState = .loading
         reviewLoadTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { if self.reviewRequestGeneration == request { self.reviewLoadTask = nil } }
+            defer {
+                if self.reviewRequestGeneration == request {
+                    self.reviewLoadTask = nil
+                    self.prefetchedReviewTask = nil
+                }
+            }
             _ = await self.loadReviewList(generation: generation,
-                requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale, request: request)
+                requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale,
+                request: request, prefetched: prefetched)
         }
     }
 
@@ -449,12 +458,19 @@ final class ReviewsModel: ObservableObject {
     }
 
     private func loadReviewList(generation: UUID, requiresFreshData: Bool,
-                                baseSnapshotWasStale: Bool, request: UUID = UUID()) async -> WorkspaceRefreshScheduler.Result {
+                                baseSnapshotWasStale: Bool, request: UUID = UUID(),
+                                prefetched: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>? = nil
+    ) async -> WorkspaceRefreshScheduler.Result {
         guard !Task.isCancelled, context.workspaceReloadGeneration == generation else { return .deferred }
         reviewRequestGeneration = request
         let baseline = reviews
         do {
-            let loaded = try await fetchReviews()
+            let loaded: (records: [ReviewRecord], hasStaleServerResponse: Bool)
+            if let prefetched {
+                loaded = try await prefetched.value
+            } else {
+                loaded = try await fetchReviews()
+            }
             try Task.checkCancellation()
             guard context.workspaceReloadGeneration == generation, context.phase == .ready,
                   reviewRequestGeneration == request else { return .deferred }
@@ -483,6 +499,8 @@ final class ReviewsModel: ObservableObject {
         reviewRequestGeneration = UUID()
         reviewLoadTask?.cancel()
         reviewLoadTask = nil
+        prefetchedReviewTask?.cancel()
+        prefetchedReviewTask = nil
     }
 
     func resetAuthority() {

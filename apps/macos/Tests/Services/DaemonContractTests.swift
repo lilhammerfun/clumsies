@@ -197,7 +197,7 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertNil(payload["server_url"])
     }
 
-    func testWorkspaceCoreReconcilesManagedAdaptersWithoutLegacyInspection() async {
+    func testWorkspaceIdentityChecksCredentialsBeforeServerRequest() async {
         actor EventRecorder {
             var events: [String] = []
 
@@ -210,11 +210,6 @@ final class DaemonContractTests: XCTestCase {
 
         do {
             _ = try await WorkspaceLoader.loadAuthenticatedWorkspaceIdentity(
-                reconcileManagedAgentAdapters: {
-                    await recorder.append("list-all-native")
-                    await recorder.append("install-native")
-                    return .init(conflicts: [], inspectionWarning: nil)
-                },
                 projectConfig: {
                     await recorder.append("project-config")
                     return .init(
@@ -229,14 +224,11 @@ final class DaemonContractTests: XCTestCase {
                 currentUser: {
                     await recorder.append("api-v1-me")
                     throw DaemonContractTestError.unexpectedServerRequest
-                },
-                onManagedAgentAdapters: { _ in
-                    await recorder.append("publish-managed-result")
                 }
             )
             XCTFail("Expected authenticationRequired")
         } catch WorkspaceLoadError.authenticationRequired {
-            // Managed cutover completes before auth; legacy inspection is post-ready.
+            // Signed-out startup does not call the Server.
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
@@ -244,11 +236,26 @@ final class DaemonContractTests: XCTestCase {
         let events = await recorder.events
         XCTAssertEqual(
             events,
-            [
-                "list-all-native", "install-native",
-                "publish-managed-result", "project-config",
-            ]
+            ["project-config"]
         )
+    }
+
+    @MainActor
+    func testAgentWarningsSurviveEitherCompletionOrder() {
+        for managedFirst in [true, false] {
+            let context = WorkspaceContext()
+            let service = AgentIntegrationService(context: context, feedback: WorkspaceFeedback(context: context))
+            let managed = LocalAgentAdapterReconciliationResult(conflicts: [], inspectionWarning: "Managed warning")
+            let legacy = LocalAgentAdapterReconciliationResult(conflicts: [], inspectionWarning: "Legacy warning")
+            if managedFirst {
+                service.applyManagedAdapterResult(managed)
+                service.applyLegacyInspectionResult(legacy)
+            } else {
+                service.applyLegacyInspectionResult(legacy)
+                service.applyManagedAdapterResult(managed)
+            }
+            XCTAssertEqual(service.legacyAgentAdapterInspectionWarning, "Managed warning\nLegacy warning")
+        }
     }
 
     func testWorkspaceCoreCarriesCurrentUserRequestFreshness() async throws {
@@ -266,11 +273,8 @@ final class DaemonContractTests: XCTestCase {
             capabilities: []
         )
 
-        let (_, loadedUser, managedResult, currentUserWasStale) =
+        let (_, loadedUser, currentUserWasStale) =
             try await WorkspaceLoader.loadAuthenticatedWorkspaceIdentity(
-                reconcileManagedAgentAdapters: {
-                    .init(conflicts: [], inspectionWarning: nil)
-                },
                 projectConfig: {
                     .init(
                         serverUrl: "https://app.clumsies.ai",
@@ -285,7 +289,6 @@ final class DaemonContractTests: XCTestCase {
             )
 
         XCTAssertEqual(loadedUser.user.userId, "user-1")
-        XCTAssertTrue(managedResult.conflicts.isEmpty)
         XCTAssertTrue(currentUserWasStale)
     }
 

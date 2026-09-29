@@ -5,6 +5,21 @@ import XCTest
 
 @MainActor
 final class WorkspaceRefreshTests: XCTestCase {
+    func testInitialPageLoadStartsPollingIntervalWithoutDuplicateRead() async {
+        var date = Date(timeIntervalSince1970: 100)
+        let scheduler = WorkspaceRefreshScheduler(now: { date })
+        var reads = 0
+        scheduler.visible = .reviews
+        scheduler.register(.reviews) { reads += 1; return .updated }
+        scheduler.didStartInitialLoad([.reviews])
+        scheduler.tick()
+        XCTAssertEqual(reads, 0)
+        date += 5
+        scheduler.tick()
+        await scheduler.request(.reviews)?.value
+        XCTAssertEqual(reads, 1)
+    }
+
     func testRefreshFooterIsHiddenDuringNormalPollingAndStableWhileRetryingFailure() async throws {
         let scheduler = WorkspaceRefreshScheduler()
         let response = Response()
