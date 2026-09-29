@@ -326,7 +326,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 isAuthor: true,
                 canMerge: false
             ).title,
-            "Resubmit"
+            "Rejected"
         )
         XCTAssertEqual(
             ReviewQueueStatePresentation.resolve(
@@ -334,7 +334,7 @@ final class WorkspaceNavigationTests: XCTestCase {
                 isAuthor: false,
                 canMerge: false
             ).title,
-            "Awaiting Author"
+            "Rejected"
         )
     }
 
@@ -462,6 +462,20 @@ final class WorkspaceNavigationTests: XCTestCase {
             ).items,
             [.decision(.reject), .decision(.approve)]
         )
+    }
+
+    func testRejectedReviewHasNoActionsOrReconciliationSignal() {
+        let rejected = reviewRecord(status: "rejected", freshness: .behind)
+        for isAuthor in [true, false] {
+            XCTAssertTrue(ReviewToolbarOwnership.resolve(
+                surface: .detail, review: rejected, canDecideReviews: true,
+                canMergeReviews: true, isAuthor: isAuthor
+            ).items.isEmpty)
+            let presentation = ReviewQueueStatePresentation.resolve(
+                review: rejected, isAuthor: isAuthor, canMerge: true)
+            XCTAssertEqual(presentation.title, "Rejected")
+            XCTAssertFalse(presentation.isQueueSignal)
+        }
     }
 
     func testMemoryToolbarNavigationAndMoreActionsDoNotRequireAnOpenDocument() throws {

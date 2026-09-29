@@ -1226,7 +1226,7 @@ async fn apply_project_plan(
         .map(|draft| draft.draft_id.as_str())
         .collect::<Vec<_>>();
     if !draft_ids.is_empty() {
-        sqlx::query(
+        let closed_ids: Vec<String> = sqlx::query_scalar(
             "UPDATE reviews review
              SET status = 'rejected', version = version + 1,
                  decision_body = 'Legacy Project authority migrated to Organization Drafts.',
@@ -1236,12 +1236,15 @@ async fn apply_project_plan(
                  SELECT review_draft.review_id
                  FROM review_drafts review_draft
                  WHERE review_draft.draft_id = ANY($1)
-             ) AND review.status IN ('open', 'approved')",
+             ) AND review.status IN ('open', 'approved') RETURNING review.review_id",
         )
         .bind(&draft_ids)
         .bind(author_user_id)
-        .execute(&mut **tx)
+        .fetch_all(&mut **tx)
         .await?;
+        for review_id in closed_ids {
+            crate::app::review::freeze_review_drafts(tx, &review_id).await?;
+        }
         sqlx::query(
             "UPDATE draft_reconciliation_candidates
              SET invalidated_at = now()

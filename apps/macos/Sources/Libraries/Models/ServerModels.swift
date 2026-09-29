@@ -580,12 +580,6 @@ struct CreateReviewRequest: Codable, Sendable {
     let description: String
 }
 
-struct CreateReviewSubmissionRequest: Codable, Sendable {
-    let expectedReviewVersion: Int
-    let drafts: [ReviewDraftRequest]
-    let title: String
-    let description: String
-}
 
 struct ReviewDraftRequest: Codable, Sendable {
     let draftId: String

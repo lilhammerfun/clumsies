@@ -30,6 +30,22 @@ actor ReviewFileLoader {
         return ReviewFileContent(sources: sources, diff: diff)
     }
 
+    func paths(for details: [ReviewDraftDetail]) async throws -> [String: (path: String, isDirectory: Bool)] {
+        var paths: [String: (path: String, isDirectory: Bool)] = [:]
+        for detail in details {
+            try checkCancellation()
+            async let base = commit(detail.draft.baseCommitId)
+            async let current = commit(detail.draft.coordination.currentCommitId)
+            let sources = try await Self.mapReviewChangeSources(
+                draft: detail.draft, operations: detail.operations, base: base, current: current
+            )
+            if let path = sources.proposedPath {
+                paths[detail.draft.draftId] = (path, sources.isDirectory)
+            }
+        }
+        return paths
+    }
+
     func cancel() {
         cancelled = true
         for task in commits.values { task.cancel() }

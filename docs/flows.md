@@ -158,7 +158,7 @@ The current Desktop approval action uses the merge endpoint to approve and publi
 
 **Publication transaction.** Server applies the complete ordered Draft set, creates a Project Commit, advances the Project Ref, and marks the Review and Drafts as merged. The Organization resource remains unchanged. If the author selected an Org contribution, Server separately creates an Org Review from this fixed Project commit. Org approval, rejection, or a retryable creation failure cannot undo the Project publication.
 
-The whole Draft set publishes atomically. A stale Ref or an unresolved conflict prevents publication; it does not publish just the first few files. Rejecting a Review reopens its Drafts for editing and later resubmission.
+The whole Draft set publishes atomically. A stale Ref or an unresolved conflict prevents publication; it does not publish just the first few files. Rejecting a Review permanently closes it and preserves its proposal content. Its Drafts reopen for editing and can be submitted through normal creation as a new Review.
 
 ## 7. Make the new version usable on every Mac
 

@@ -101,7 +101,7 @@ struct InboxItem: Identifiable, Sendable {
     private static func updatedReviewReason(_ status: String?) -> String {
         switch status {
         case "approved": String(localized: "Review approved")
-        case "rejected": String(localized: "Changes requested")
+        case "rejected": String(localized: "Rejected")
         case "merged": String(localized: "Review merged")
         default: String(localized: "Review updated")
         }
@@ -132,7 +132,7 @@ struct InboxItem: Identifiable, Sendable {
         case "review_requested": notice.reviewStatus == "open" ? String(localized: "Review requested") : updatedReviewReason(notice.reviewStatus)
         case "review_comment": String(localized: "New review comment")
         case "review_approved": String(localized: "Review approved")
-        case "review_rejected": String(localized: "Changes requested")
+        case "review_rejected": String(localized: "Rejected")
         case "review_merged": String(localized: "Review merged")
         default: String(localized: "Remote Memory updated")
         }

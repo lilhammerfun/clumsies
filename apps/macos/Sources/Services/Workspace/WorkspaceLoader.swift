@@ -7,17 +7,15 @@ struct WorkspaceLoader: Sendable {
     let bootstrap: DaemonBootstrapController
     let server: ServerClient
 
-    func load(
-        onLocalAgentAdapters: @MainActor @Sendable (LocalAgentAdapterReconciliationResult) async
-            -> Void = { _ in }
-    ) async throws -> WorkspaceSnapshot {
+    func load(onDaemonReady: @MainActor @Sendable (DaemonHealth) -> Void = { _ in }) async throws -> WorkspaceSnapshot {
+        let started = Date()
         server.resetDataSource()
         let health = try await ensureDaemon()
-        let (config, me, localAgentAdapters, currentUserWasStale) =
+        ClientDiagnostics.record("workspace_load_phase", ["phase": "daemon_ready",
+            "elapsed_ms": String(Int(Date().timeIntervalSince(started) * 1_000))])
+        await onDaemonReady(health)
+        let (config, me, currentUserWasStale) =
             try await Self.loadAuthenticatedWorkspaceIdentity(
-            reconcileManagedAgentAdapters: {
-                try await reconcileManagedAgentAdapters()
-            },
             projectConfig: {
                 try await daemon.projectConfig()
             },
@@ -25,15 +23,17 @@ struct WorkspaceLoader: Sendable {
                 let result: (value: CurrentUserResponse, response: DaemonServerResponse) =
                     try await server.getWithMetadata("/api/v1/me")
                 return (result.value, result.response.isStaleCache)
-            },
-            onManagedAgentAdapters: { result in
-                await onLocalAgentAdapters(result)
             }
         )
+        ClientDiagnostics.record("workspace_load_phase", ["phase": "identity_ready",
+            "elapsed_ms": String(Int(Date().timeIntervalSince(started) * 1_000))])
         let activeProjectId = configuredProject(config, me: me)
         if let activeProjectId, config.projectId != activeProjectId {
             _ = try await daemon.selectProject(activeProjectId)
         }
+        let reviewTask = Task { try await loadReviews() }
+        var returned = false
+        defer { if !returned { reviewTask.cancel() } }
 
         async let orgCommitRequest: (value: CommitStateResponse, response: DaemonServerResponse) = server.getWithMetadata(
             "/api/v1/org/commit-state"
@@ -72,17 +72,26 @@ struct WorkspaceLoader: Sendable {
             )
         }
         let resources = resourceGroups.flatMap { $0.resources }
+        ClientDiagnostics.record("workspace_load_phase", ["phase": "memory_list_ready",
+            "elapsed_ms": String(Int(Date().timeIntervalSince(started) * 1_000))])
 
-        let verifiedOrgCommit: (value: CommitStateResponse, response: DaemonServerResponse) =
-            try await server.getWithMetadata("/api/v1/org/commit-state")
+        async let verifiedOrgRequest: (value: CommitStateResponse, response: DaemonServerResponse) =
+            server.getWithMetadata("/api/v1/org/commit-state")
+        let verifiedProjectTask =
+            activeProjectId.flatMap { id in
+                me.projects.first(where: { $0.projectId == id })
+            }.map { reference in
+                Task { try await loadProjectStateWithMetadata(reference) }
+            }
+        defer { verifiedProjectTask?.cancel() }
+        let verifiedOrgCommit = try await verifiedOrgRequest
         guard verifiedOrgCommit.value.ref.commitId == orgCommit.value.ref.commitId else {
             throw WorkspaceLoadError.sharedStateChangedDuringLoad
         }
         var verifiedProjectWasStale = false
         if let activeProjectId,
            let initialProject = projectStates.first(where: { $0.id == activeProjectId }),
-           let reference = me.projects.first(where: { $0.projectId == activeProjectId }) {
-            let verifiedProject = try await loadProjectStateWithMetadata(reference)
+           let verifiedProject = try await verifiedProjectTask?.value {
             verifiedProjectWasStale = verifiedProject.hasStaleServerResponse
             guard verifiedProject.state.refCommitId == initialProject.refCommitId,
                   verifiedProject.state.selectedOrgResourceIds == initialProject.selectedOrgResourceIds,
@@ -96,6 +105,9 @@ struct WorkspaceLoader: Sendable {
             || resourceGroups.contains { $0.hasStaleServerResponse }
             || verifiedOrgCommit.response.isStaleCache
             || verifiedProjectWasStale
+        returned = true
+        ClientDiagnostics.record("workspace_load_phase", ["phase": "snapshot_ready",
+            "elapsed_ms": String(Int(Date().timeIntervalSince(started) * 1_000))])
         return .init(
             account: me.user,
             organization: me.org,
@@ -113,8 +125,7 @@ struct WorkspaceLoader: Sendable {
                 sync: nil,
                 serverDataSource: hasStaleServerResponse ? "stale" : "live"
             ),
-            legacyAgentAdapterConflicts: localAgentAdapters.conflicts,
-            legacyAgentAdapterInspectionWarning: localAgentAdapters.inspectionWarning
+            prefetchedReviews: reviewTask
         )
     }
 
@@ -353,6 +364,13 @@ struct WorkspaceLoader: Sendable {
 
     private func ensureDaemon() async throws -> DaemonHealth {
         let readiness = DaemonStartupReadiness()
+        if ProcessInfo.processInfo.environment["CLUMSIES_SKIP_DAEMON_BUILD"] != "1",
+           let buildID = try bootstrap.bundledBuildID(),
+           let health = try? await daemon.health(timeout: 0.5),
+           health.agentRuntime.buildId == buildID,
+           health.serverUrl == ClumsiesIdentifiers.serverURL.absoluteString {
+            return health
+        }
         if ProcessInfo.processInfo.environment["CLUMSIES_SKIP_DAEMON_BUILD"] != "1" {
             _ = try await bootstrap.ensureRunning()
         }
@@ -385,18 +403,15 @@ struct WorkspaceLoader: Sendable {
         }
     }
 
-    /// Move every daemon-owned integration to the runtime embedded in the
-    /// currently running App before authentication or Server access. Adapter
-    /// files deliberately point at the App bundle, so an App update must
-    /// reconcile existing installations even while the user is signed out or
-    /// the Hub is unreachable.
-    private func reconcileManagedAgentAdapters() async throws
+    /// Update installed integrations after an App upgrade. Disabled adapters
+    /// with no installed or legacy files have nothing to repair.
+    func reconcileManagedAgentAdapters() async throws
         -> LocalAgentAdapterReconciliationResult {
         let runtimePath = try Self.bundledAgentRuntimePath()
         let codexHostPath = await MainActor.run { try? Self.installedCodexHostBinaryPath() }
         var warnings: [String] = []
         let settings = try await daemon.agentAdapterSettings()
-        for setting in settings where setting.configured {
+        for setting in settings where Self.needsAgentAdapterRepair(setting) {
             do {
                 _ = try await daemon.setAgentAdapter(.init(
                     adapter: setting.adapter,
@@ -409,6 +424,10 @@ struct WorkspaceLoader: Sendable {
             }
         }
         return .init(conflicts: [], inspectionWarning: warnings.isEmpty ? nil : warnings.joined(separator: "\n"))
+    }
+
+    static func needsAgentAdapterRepair(_ setting: DaemonAgentAdapterSetting) -> Bool {
+        setting.configured && (setting.enabled || setting.installed || setting.legacyRepositories > 0)
     }
 
     func inspectLegacyAgentAdapters() async -> LocalAgentAdapterReconciliationResult {
@@ -436,23 +455,16 @@ struct WorkspaceLoader: Sendable {
     }
 
     static func loadAuthenticatedWorkspaceIdentity(
-        reconcileManagedAgentAdapters: () async throws
-            -> LocalAgentAdapterReconciliationResult,
         projectConfig: () async throws -> DaemonProjectConfig,
         currentUser: () async throws -> (
             value: CurrentUserResponse,
             hasStaleServerResponse: Bool
-        ),
-        onManagedAgentAdapters: @MainActor @Sendable (LocalAgentAdapterReconciliationResult) async
-            -> Void = { _ in }
+        )
     ) async throws -> (
         DaemonProjectConfig,
         CurrentUserResponse,
-        LocalAgentAdapterReconciliationResult,
         Bool
     ) {
-        let localAgentAdapters = try await reconcileManagedAgentAdapters()
-        await onManagedAgentAdapters(localAgentAdapters)
         let config = try await projectConfig()
         guard config.hasAccessToken && config.hasRefreshToken else {
             throw WorkspaceLoadError.authenticationRequired
@@ -461,7 +473,6 @@ struct WorkspaceLoader: Sendable {
         return (
             config,
             currentUser.value,
-            localAgentAdapters,
             currentUser.hasStaleServerResponse
         )
     }

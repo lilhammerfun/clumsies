@@ -145,6 +145,7 @@ struct WorkspaceView: View {
             }
         }
         .task {
+            ClientDiagnostics.record("workspace_view_appeared", [:])
             store.refreshVisiblePage(isForeground: NSApplication.shared.isActive)
             await store.runRefreshLoop()
         }
@@ -606,8 +607,7 @@ struct WorkspaceView: View {
                 }
             }
             if reviewModel.canSaveConflictResolutions(review)
-                || reviewToolbarOwnership.contains(.decision(.merge))
-                || reviewToolbarOwnership.contains(.decision(.resubmit)) {
+                || reviewToolbarOwnership.contains(.decision(.merge)) {
                 ToolbarItem(id: "review.actions", placement: .automatic) {
                     Menu {
                         if reviewModel.canSaveConflictResolutions(review), let update = reviewModel.updates[review.id] {
@@ -619,10 +619,7 @@ struct WorkspaceView: View {
                             Button("Merge Review") { performReviewToolbarAction(.merge) }
                                 .disabled(!reviewModel.canPerformReviewMenuAction(.merge))
                         }
-                        if reviewToolbarOwnership.contains(.decision(.resubmit)) {
-                            Button("Resubmit Review") { performReviewToolbarAction(.resubmit) }
-                                .disabled(!reviewModel.canPerformReviewMenuAction(.resubmit))
-                        }
+
                     } label: {
                         reviewToolbarActionLabel(
                             systemImage: "ellipsis", isPending: pendingReviewToolbarAction != nil)

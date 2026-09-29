@@ -89,8 +89,7 @@ pub(super) async fn list(
                 COALESCE(u.display_name, u.email) AS actor_name, r.status AS review_status,
                 ((d.status IN ('open', 'submitted') AND EXISTS(SELECT 1 FROM draft_reconciliation_candidates rc
                     WHERE rc.draft_id = d.draft_id AND rc.draft_version = d.version AND rc.status = 'conflicts' AND rc.invalidated_at IS NULL)) OR
-                 (((r.status = 'open' AND r.author_user_id <> $1) OR r.status = 'approved') AND ($5 IN ('owner', 'admin') OR (m.role IN ('owner', 'admin') AND EXISTS(SELECT 1 FROM drafts rd WHERE rd.draft_id = r.draft_id AND rd.resource_scope = 'project')))
-                  OR (r.status = 'rejected' AND r.author_user_id = $1))) AS needs_action
+                 (((r.status = 'open' AND r.author_user_id <> $1) OR r.status = 'approved') AND ($5 IN ('owner', 'admin') OR (m.role IN ('owner', 'admin') AND EXISTS(SELECT 1 FROM drafts rd WHERE rd.draft_id = r.draft_id AND rd.resource_scope = 'project'))))) AS needs_action
          FROM inbox_notifications n
          LEFT JOIN projects p ON p.project_id = n.project_id AND p.org_id = n.org_id
          LEFT JOIN project_members m ON m.project_id = p.project_id AND m.user_id = $1
@@ -168,9 +167,14 @@ pub(super) async fn update(
                 OR EXISTS (
                     SELECT 1 FROM projects p JOIN project_members m ON m.project_id = p.project_id
                     WHERE p.project_id = n.project_id AND p.org_id = n.org_id AND m.user_id = $1
-                      AND (n.kind = 'shared_update' OR EXISTS (
-                          SELECT 1 FROM reviews r WHERE r.review_id = n.target_id AND r.project_id = p.project_id
-                      ))
+                      AND (n.kind = 'shared_update'
+                          OR (n.kind = 'draft_conflict' AND EXISTS (
+                              SELECT 1 FROM drafts d WHERE d.draft_id = n.target_id
+                                  AND d.project_id = p.project_id AND d.author_user_id = $1
+                          ))
+                          OR (n.kind IN ('review_requested', 'review_comment', 'review_approved', 'review_rejected', 'review_merged') AND EXISTS (
+                              SELECT 1 FROM reviews r WHERE r.review_id = n.target_id AND r.project_id = p.project_id
+                          )))
                 ))",
     ).bind(&principal.user_id).bind(&principal.org_id).bind(id).bind(request.version)
         .bind(action).execute(pool).await?;

@@ -70,10 +70,10 @@ pub struct ProjectReviewSource {
     pub commit_id: String,
 }
 
-/// Updated proposal revisions and reconciliation data for a rejected review.
+/// Legacy resubmission payload, retained to return a clear error to older clients.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateReviewSubmissionRequest {
-    /// Optional replacement contribution choices when resubmitting a Project Review.
+    /// Legacy contribution field, accepted for decoding but never applied.
     #[serde(default)]
     pub org_contribution: Option<Vec<OrgContributionEntry>>,
     /// Review revision on which the caller's decision or mutation is based.
@@ -111,7 +111,7 @@ pub struct CreateReviewUpdateRequest {
     pub drafts: Vec<ReviewDraftRequest>,
 }
 
-/// Lifecycle governing review decisions, resubmission, and publication.
+/// Lifecycle governing review decisions and publication.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewStatus {
@@ -119,7 +119,7 @@ pub enum ReviewStatus {
     Open,
     /// The recorded content fingerprint has been accepted for publication.
     Approved,
-    /// The submission was rejected and may be revised before resubmission.
+    /// The review is closed; its author may edit drafts and create a new review.
     Rejected,
     /// Reviewed content was published and the review is complete.
     Merged,
@@ -150,7 +150,7 @@ pub struct Review {
     pub title: String,
     /// Human-readable explanation associated with the resource.
     pub description: String,
-    /// Review lifecycle controlling decisions, resubmission, and publication.
+    /// Review lifecycle controlling decisions and publication.
     pub status: ReviewStatus,
     /// Monotonic revision or snapshot sequence used to detect concurrent changes.
     pub version: i64,

@@ -135,6 +135,86 @@ async fn publish(app: &Router, review: &ReviewDetail, head: Option<&str>) -> Rev
     .await
 }
 
+#[tokio::test]
+async fn rejection_freezes_history_and_normal_submission_creates_a_distinct_review() {
+    let (_pg, app, project) = fixture().await;
+    let first = draft(&app, &project, "first.md").await;
+    let second = draft(&app, &project, "second.md").await;
+    let initial = review(&app, &[first, second]).await;
+    let closed: ReviewDetail = post(
+        &app,
+        &format!("/api/v1/reviews/{}/decisions", initial.review.review_id),
+        serde_json::json!({"decision":"rejected", "expected_review_version":initial.review.version,
+                          "body":"Revise both files."}),
+        None,
+    )
+    .await;
+
+    for endpoint in ["submissions", "update-plans", "auto-rebases", "updates"] {
+        let (status, _) = request(
+            &app,
+            "POST",
+            &format!("/api/v1/reviews/{}/{endpoint}", closed.review.review_id),
+            serde_json::json!({"expected_review_version":closed.review.version,
+                "drafts":[{"draft_id":closed.draft.draft_id,
+                           "expected_draft_version":closed.draft.version}]}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{endpoint}");
+    }
+
+    let _: ReviewComment = post(
+        &app,
+        &format!("/api/v1/reviews/{}/comments", closed.review.review_id),
+        serde_json::json!({"expected_review_version":closed.review.version,
+            "body":"Keep this discussion", "anchor_path":"first.md", "anchor_line":1}),
+        None,
+    )
+    .await;
+    let frozen = get_review(&app, &closed.review.review_id).await;
+
+    let mut edited = Vec::new();
+    for item in closed.drafts.iter().rev() {
+        edited.push(
+            post::<DraftDetail>(
+                &app,
+                &format!("/api/v1/drafts/{}/operations", item.draft.draft_id),
+                serde_json::json!({"action":"create", "resource":item.draft.resource,
+                              "content":{"content":"# Revised\n\nA new third line\n"}}),
+                Some(&item.draft.version.to_string()),
+            )
+            .await,
+        );
+    }
+    // Later edits must not expand the line range of the closed Review.
+    let (status, _) = request(
+        &app,
+        "POST",
+        &format!("/api/v1/reviews/{}/comments", closed.review.review_id),
+        serde_json::json!({"expected_review_version":closed.review.version,
+            "body":"This line did not exist", "anchor_path":"first.md", "anchor_line":3}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Swapping the primary also covers drafts previously linked as secondary members.
+    let fresh = review(&app, &edited).await;
+    assert_ne!(fresh.review.review_id, closed.review.review_id);
+    assert_eq!(fresh.review.version, 1);
+    assert_eq!(get_review(&app, &closed.review.review_id).await, frozen);
+    let (_, bytes) = request(&app, "GET", "/api/v1/reviews", (), None).await;
+    let list: ReviewListResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(list.items.len(), 2);
+    assert!(
+        list.items
+            .iter()
+            .any(|r| r.review_id == closed.review.review_id && r.status == ReviewStatus::Rejected)
+    );
+    publish(&app, &fresh, None).await;
+    assert_eq!(get_review(&app, &closed.review.review_id).await, frozen);
+}
+
 async fn discard(app: &Router, detail: &ReviewDetail, index: usize) {
     let draft = &detail.drafts[index].draft;
     let (status, body) = request(
@@ -673,4 +753,67 @@ async fn already_published_changes_auto_rebase_to_no_operations_and_can_be_appro
     let merged = publish(&app, &plan.detail, published.commit_id.as_deref()).await;
     assert_eq!(merged.review.status, ReviewStatus::Merged);
     assert_eq!(merged.applied_operation_count, 0);
+}
+
+#[tokio::test]
+async fn upgrade_preserves_rejected_content_and_allows_a_new_review() {
+    let pg = common::postgres_without_migrations().await;
+    let previous = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            server::infra::database::MIGRATOR
+                .iter()
+                .filter(|migration| migration.version < 20260928000200)
+                .cloned()
+                .collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    previous.run(&pg.pool).await.unwrap();
+    let installation = common::initialize_installation(
+        pg.pool.clone(),
+        "Upgrade",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Upgrade",
+    )
+    .await;
+    sqlx::query("INSERT INTO drafts (draft_id, project_id, author_user_id, title, resource_scope,
+        resource_kind, path, status, daemon_installation_id)
+        VALUES ('legacy-draft', $1, $2, 'Legacy proposal', 'project', 'memory', 'legacy.md', 'open', 'migration')")
+        .bind(&installation.project_id).bind(&installation.user_id).execute(&pg.pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO draft_operations (operation_id, draft_id, action, resource_scope,
+        resource_kind, path, content, ordinal) VALUES ('legacy-operation', 'legacy-draft', 'create',
+        'project', 'memory', 'legacy.md', '{\"content\":\"Legacy content\"}', 1);
+        INSERT INTO reviews (review_id, draft_id, project_id, author_user_id, title, status, decision_body)
+        SELECT 'legacy-review', draft_id, project_id, author_user_id, title, 'rejected', 'Please revise' FROM drafts;
+        INSERT INTO review_drafts VALUES ('legacy-review', 'legacy-draft', 0);")
+        .execute(&pg.pool).await.unwrap();
+    server::infra::database::run_migrations(&pg.pool)
+        .await
+        .unwrap();
+    server::infra::database::run_migrations(&pg.pool)
+        .await
+        .unwrap();
+    let (app, _) = common::authenticated_router(pg.pool.clone()).await;
+    let frozen = get_review(&app, "legacy-review").await;
+    assert_eq!(
+        frozen.review.decision_body.as_deref(),
+        Some("Please revise")
+    );
+    assert_eq!(
+        frozen.operations[0].input.content.as_ref().unwrap().content,
+        "Legacy content"
+    );
+    let edited: DraftDetail = post(
+        &app,
+        "/api/v1/drafts/legacy-draft/operations",
+        serde_json::json!({"action":"create", "resource":{"scope":"project","path":"legacy.md"},
+            "content":{"content":"Changed after upgrade"}}),
+        Some("1"),
+    )
+    .await;
+    let fresh = review(&app, &[edited]).await;
+    assert_ne!(fresh.review.review_id, "legacy-review");
+    assert_eq!(get_review(&app, "legacy-review").await, frozen);
 }

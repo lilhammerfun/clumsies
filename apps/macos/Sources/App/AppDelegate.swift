@@ -136,9 +136,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if menuItem.action == #selector(mergeReview(_:)) {
             return store.reviews.canPerformReviewMenuAction(.merge)
         }
-        if menuItem.action == #selector(resubmitReview(_:)) {
-            return store.reviews.canPerformReviewMenuAction(.resubmit)
-        }
         return true
     }
 
@@ -269,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .workspaceEnvironment(store),
             title: store.context.organization?.name ?? "Clumsies Lab"
         )
+        ClientDiagnostics.record("main_window_opened", [:])
     }
 
     private func presentMainLoading() {
@@ -562,13 +560,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         )
         merge.keyEquivalentModifierMask = [.command, .option]
         merge.target = self
-        let resubmit = reviewMenu.addItem(
-            withTitle: String(localized: "Resubmit"),
-            action: #selector(resubmitReview(_:)),
-            keyEquivalent: "u"
-        )
-        resubmit.keyEquivalentModifierMask = [.command, .option]
-        resubmit.target = self
         reviewItem.submenu = reviewMenu
 
         let windowItem = NSMenuItem()
@@ -649,9 +640,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func mergeReview(_ sender: Any?) {
         Task { await store.reviews.performReviewMenuAction(.merge) }
-    }
-
-    @objc private func resubmitReview(_ sender: Any?) {
-        Task { await store.reviews.performReviewMenuAction(.resubmit) }
     }
 }

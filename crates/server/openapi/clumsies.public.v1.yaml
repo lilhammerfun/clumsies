@@ -1105,7 +1105,7 @@ paths:
               $ref: "#/components/schemas/CreateReviewUpdateRequest"
       responses:
         "200":
-          description: Updated Review, still awaiting approval or resubmission.
+          description: Updated Review; rejection permanently closes the Review.
           content:
             application/json:
               schema:
@@ -1151,7 +1151,8 @@ paths:
       - $ref: "#/components/parameters/ReviewId"
     post:
       operationId: createReviewSubmission
-      summary: Reconcile when required and resubmit an edited draft to its rejected review.
+      deprecated: true
+      summary: Reject legacy resubmission; edit Drafts and create a new Review instead.
       parameters:
         - $ref: "#/components/parameters/IfMatch"
       requestBody:
@@ -1161,20 +1162,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateReviewSubmissionRequest"
       responses:
-        "200":
-          description: Reopened review and resubmitted draft, atomically rebased when confirmed per-Draft candidates were supplied.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReviewDetail"
-        "409":
-          description: The source draft requires explicit reconciliation with the current Ref.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorEnvelope"
-        "412":
-          description: The If-Match Ref is no longer current.
+        "400":
+          description: Reviews cannot be reopened; submit revised Drafts with POST /api/v1/reviews.
           content:
             application/json:
               schema:
@@ -2196,7 +2185,7 @@ components:
         org_contribution:
           type: [array, "null"]
           minItems: 1
-          description: Replace contribution choices on resubmission; omitted choices preserve existing intent.
+          description: Legacy field accepted for decoding; this endpoint rejects all resubmissions.
           items:
             $ref: "#/components/schemas/OrgContributionEntry"
         expected_review_version:

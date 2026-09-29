@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class WorkspaceCoordinator {
+    static let agentReconciliationKey = "ClumsiesAgentSetupCheckedBuildIdentity"
     let agents: AgentIntegrationService
     let bundleSelection: BundlesModel
     let bundles: BundleStore
@@ -21,6 +22,8 @@ final class WorkspaceCoordinator {
     let sessions: DocumentSessions
     let sync: MemorySyncService
     private var refreshLoopIsRunning = false
+    private var adapterReconciliationIdentity: String?
+    private var adapterReconciliationTask: Task<Void, Never>?
     private var observations: Set<AnyCancellable> = []
 
     init(storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil,
@@ -154,15 +157,18 @@ final class WorkspaceCoordinator {
         context.phase = .loading
         feedback.errorMessage = nil
         do {
-            let snapshot = try await WorkspaceLoader(
+            let loader = WorkspaceLoader(
                 daemon: context.daemon,
                 bootstrap: context.bootstrap,
                 server: context.server
-            ).load { [weak self] result in
-                guard self?.context.workspaceReloadGeneration == generation else { return }
-                self?.agents.applyLocalAgentAdapterResult(result)
+            )
+            let snapshot = try await loader.load { [weak self] health in
+                self?.startAgentReconciliation(using: loader, health: health)
             }
-            guard context.workspaceReloadGeneration == generation else { return }
+            guard context.workspaceReloadGeneration == generation else {
+                snapshot.prefetchedReviews?.cancel()
+                return
+            }
             let sameAuthority = WorkspaceLoadPolicy.preservesDeferredAuthority(
                 currentAccount: context.account,
                 currentOrganization: context.organization,
@@ -175,6 +181,7 @@ final class WorkspaceCoordinator {
                 sameAuthority: sameAuthority,
                 snapshotWasStale: snapshotWasStale
             ) {
+                snapshot.prefetchedReviews?.cancel()
                 clearAuthorityScopedWorkspace()
                 context.phase = .failed(
                     String(localized: "Fresh account data is required before switching workspaces. The previous account workspace was cleared.")
@@ -189,7 +196,8 @@ final class WorkspaceCoordinator {
                 startPostReadyWork(
                     generation: generation,
                     requiresFreshData: true,
-                    baseSnapshotWasStale: true
+                    baseSnapshotWasStale: true,
+                    prefetchedReviews: snapshot.prefetchedReviews
                 )
                 return
             }
@@ -200,7 +208,8 @@ final class WorkspaceCoordinator {
                 requiresFreshData: WorkspaceLoadPolicy.deferredLoadRequiresFreshData(
                     hadLoadedWorkspace: hadLoadedWorkspace
                 ),
-                baseSnapshotWasStale: false
+                baseSnapshotWasStale: false,
+                prefetchedReviews: snapshot.prefetchedReviews
             )
         } catch WorkspaceLoadError.authenticationRequired {
             guard context.workspaceReloadGeneration == generation else { return }
@@ -588,10 +597,41 @@ final class WorkspaceCoordinator {
         navigation.applyWorkspace()
         refresh.applyRuntime(snapshot.runtime)
         inbox.prepare(serverURL: snapshot.runtime.health.serverUrl)
-        agents.applyLocalAgentAdapterResult(.init(
-            conflicts: snapshot.legacyAgentAdapterConflicts,
-            inspectionWarning: snapshot.legacyAgentAdapterInspectionWarning
-        ))
+    }
+
+    private func startAgentReconciliation(using loader: WorkspaceLoader, health: DaemonHealth) {
+        let identity = health.daemonInstallationId + ":" + health.agentRuntime.buildId
+        guard Self.needsAgentReconciliation(identity: identity, defaults: .standard) else {
+            ClientDiagnostics.record("agent_reconciliation_skipped", ["reason": "unchanged_build"])
+            return
+        }
+        guard adapterReconciliationIdentity != identity else { return }
+        adapterReconciliationIdentity = identity
+        adapterReconciliationTask?.cancel()
+        let started = Date()
+        ClientDiagnostics.record("agent_reconciliation_started", [:])
+        adapterReconciliationTask = Task { @MainActor [weak self] in
+            let result: LocalAgentAdapterReconciliationResult
+            let completed: Bool
+            do {
+                result = try await loader.reconcileManagedAgentAdapters()
+                completed = true
+            } catch {
+                result = .init(conflicts: [], inspectionWarning: error.userFacingMessage)
+                completed = false
+            }
+            guard let self, !Task.isCancelled, self.adapterReconciliationIdentity == identity else { return }
+            if completed { UserDefaults.standard.set(identity, forKey: Self.agentReconciliationKey) }
+            self.agents.applyManagedAdapterResult(result)
+            ClientDiagnostics.record("agent_reconciliation_completed", [
+                "elapsed_ms": String(Int(Date().timeIntervalSince(started) * 1_000))
+            ])
+            self.adapterReconciliationTask = nil
+        }
+    }
+
+    static func needsAgentReconciliation(identity: String, defaults: UserDefaults) -> Bool {
+        defaults.string(forKey: agentReconciliationKey) != identity
     }
 
     private func cancelPostReadyWork() {
@@ -606,13 +646,16 @@ final class WorkspaceCoordinator {
     private func startPostReadyWork(
         generation: UUID,
         requiresFreshData: Bool,
-        baseSnapshotWasStale: Bool
+        baseSnapshotWasStale: Bool,
+        prefetchedReviews: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>?
     ) {
         guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
         agents.startLoading(generation: generation)
         edits.startLoading(generation: generation, requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale)
         bundles.startLoading(generation: generation, requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale)
-        reviews.startLoading(generation: generation, requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale)
+        reviews.startLoading(generation: generation, requiresFreshData: requiresFreshData,
+                             baseSnapshotWasStale: baseSnapshotWasStale, prefetched: prefetchedReviews)
+        if !baseSnapshotWasStale { refreshes.didStartInitialLoad([.memory, .reviews]) }
         refresh.startLoading(generation: generation)
     }
 

@@ -1123,7 +1123,7 @@ pub(super) async fn lock_review_approval(
         "SELECT reviews.review_id, reviews.status, reviews.approved_result_hash
          FROM reviews
          JOIN review_drafts ON review_drafts.review_id = reviews.review_id
-         WHERE review_drafts.draft_id = $1
+         WHERE review_drafts.draft_id = $1 AND reviews.status IN ('open', 'approved')
          FOR UPDATE OF reviews",
     )
     .bind(draft_id)
@@ -1197,12 +1197,13 @@ pub(super) async fn find_review(
     tx: &mut Transaction<'_, Postgres>,
     draft_id: &str,
 ) -> Result<Option<String>, ServerError> {
-    Ok(
-        sqlx::query_scalar::<_, String>("SELECT review_id FROM review_drafts WHERE draft_id = $1")
-            .bind(draft_id)
-            .fetch_optional(&mut **tx)
-            .await?,
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT r.review_id FROM review_drafts rd JOIN reviews r USING (review_id)
+             WHERE rd.draft_id = $1 AND r.status IN ('open', 'approved')",
     )
+    .bind(draft_id)
+    .fetch_optional(&mut **tx)
+    .await?)
 }
 
 /// Persist initial proposal identity, ownership, lifecycle, and ancestor metadata.

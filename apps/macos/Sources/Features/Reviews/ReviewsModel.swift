@@ -27,15 +27,15 @@ final class ReviewsModel: ObservableObject {
     @Published var reviews: [ReviewRecord] = []
     @Published var reviewLoadState: WorkspaceCollectionLoadState = .loading
     @Published var selectedReviewId: String?
-    @Published var pendingReviewReconciliationId: String?
     @Published var reviewDecisionReadiness: ReviewDecisionReadiness?
     @Published private(set) var updates: [String: ReviewUpdateModel] = [:]
 
     @discardableResult
     func beginUpdate(_ review: ReviewRecord) -> ReviewUpdateModel? {
+        guard ["open", "approved"].contains(review.status) else { return nil }
         if let existing = updates[review.id] { return existing }
-        guard context.isReviewAuthor(review) || context.canMergeReview(review), review.freshness == .behind,
-              ["open", "approved", "rejected"].contains(review.status) else { return nil }
+        guard context.isReviewAuthor(review) || context.canMergeReview(review),
+              review.freshness == .behind else { return nil }
         if reviewDecisionReadiness?.reviewId == review.id { reviewDecisionReadiness = nil }
         let update = ReviewUpdateModel(review: review, canResolveConflicts: context.isReviewAuthor(review), prepare: { [weak self] in
             guard let self else { throw CancellationError() }
@@ -74,7 +74,8 @@ final class ReviewsModel: ObservableObject {
     }
 
     func canSaveConflictResolutions(_ review: ReviewRecord) -> Bool {
-        guard context.isReviewAuthor(review), let update = updates[review.id] else { return false }
+        guard ["open", "approved"].contains(review.status), context.isReviewAuthor(review),
+              let update = updates[review.id] else { return false }
         return update.candidates.contains { $0.status == .conflicts }
     }
 
@@ -84,6 +85,7 @@ final class ReviewsModel: ObservableObject {
     }
 
     private var reviewLoadTask: Task<Void, Never>?
+    private var prefetchedReviewTask: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>?
 
     var selectedReview: ReviewRecord? {
         reviews.first { $0.id == self.selectedReviewId } ?? reviews.first
@@ -171,13 +173,6 @@ final class ReviewsModel: ObservableObject {
                 try await decide(review, decision: "rejected", note: "")
             case .merge:
                 try await merge(review)
-            case .resubmit:
-                let detail = try await reviewDetail(review.id)
-                if detail.draft.coordination.freshness == .behind {
-                    pendingReviewReconciliationId = review.id
-                } else {
-                    try await resubmit(review, detail: detail)
-                }
             }
         } catch {
             guard context.authorityGeneration == authority, !(error is CancellationError) else { return }
@@ -330,52 +325,6 @@ final class ReviewsModel: ObservableObject {
         didMutate.send()
     }
 
-    func resubmit(
-        _ review: ReviewRecord,
-        detail: ReviewDetail,
-        candidate: DraftReconciliationCandidate? = nil,
-        resolvedState: ReconciliationResourceState? = nil
-    ) async throws {
-        let authority = context.authorityGeneration
-        guard context.isReviewAuthor(review) else {
-            throw ServerClientError.forbidden(String(localized: "Only the draft author can resubmit this Review."))
-        }
-        guard detail.draft.coordination.freshness == .current || candidate != nil else {
-            throw ReviewRequestError.reconciliationRequired
-        }
-        let updated: ReviewDetail = try await context.server.send(
-            method: "POST",
-            path: "/api/v1/reviews/\(review.id)/submissions",
-            headers: [
-                "If-Match": DraftReconciliationService.refETag(
-                    candidate?.currentCommitId ?? detail.draft.coordination.currentCommitId
-                )
-            ],
-            body: CreateReviewSubmissionRequest(
-                expectedReviewVersion: review.version,
-                drafts: (detail.drafts ?? [
-                    ReviewDraftDetail(draft: detail.draft, operations: detail.operations)
-                ]).map { draftDetail in
-                    let reconciliation = candidate.flatMap { candidate in
-                        candidate.draftId == draftDetail.draft.draftId ? candidate : nil
-                    }
-                    return ReviewDraftRequest(
-                        draftId: draftDetail.draft.draftId,
-                        expectedDraftVersion: reconciliation?.draftVersion
-                            ?? draftDetail.draft.version,
-                        candidateId: reconciliation?.candidateId,
-                        resolvedState: reconciliation == nil ? nil : resolvedState
-                    )
-                },
-                title: review.title,
-                description: review.description
-            )
-        )
-        try context.ensureAuthority(authority)
-        replaceReview(with: WorkspaceLoader.mapReview(updated))
-        didMutate.send()
-    }
-
     func reviewDetail(_ reviewId: String, requiresFresh: Bool = false) async throws -> ReviewDetail {
         let authority = context.authorityGeneration
         let result: (value: ReviewDetail, response: DaemonServerResponse) =
@@ -480,17 +429,25 @@ final class ReviewsModel: ObservableObject {
     func startLoading(
         generation: UUID,
         requiresFreshData: Bool,
-        baseSnapshotWasStale: Bool
+        baseSnapshotWasStale: Bool,
+        prefetched: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>? = nil
     ) {
         cancelLoading()
+        prefetchedReviewTask = prefetched
         let request = UUID()
         reviewRequestGeneration = request
         reviewLoadState = .loading
         reviewLoadTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { if self.reviewRequestGeneration == request { self.reviewLoadTask = nil } }
+            defer {
+                if self.reviewRequestGeneration == request {
+                    self.reviewLoadTask = nil
+                    self.prefetchedReviewTask = nil
+                }
+            }
             _ = await self.loadReviewList(generation: generation,
-                requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale, request: request)
+                requiresFreshData: requiresFreshData, baseSnapshotWasStale: baseSnapshotWasStale,
+                request: request, prefetched: prefetched)
         }
     }
 
@@ -501,12 +458,19 @@ final class ReviewsModel: ObservableObject {
     }
 
     private func loadReviewList(generation: UUID, requiresFreshData: Bool,
-                                baseSnapshotWasStale: Bool, request: UUID = UUID()) async -> WorkspaceRefreshScheduler.Result {
+                                baseSnapshotWasStale: Bool, request: UUID = UUID(),
+                                prefetched: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>? = nil
+    ) async -> WorkspaceRefreshScheduler.Result {
         guard !Task.isCancelled, context.workspaceReloadGeneration == generation else { return .deferred }
         reviewRequestGeneration = request
         let baseline = reviews
         do {
-            let loaded = try await fetchReviews()
+            let loaded: (records: [ReviewRecord], hasStaleServerResponse: Bool)
+            if let prefetched {
+                loaded = try await prefetched.value
+            } else {
+                loaded = try await fetchReviews()
+            }
             try Task.checkCancellation()
             guard context.workspaceReloadGeneration == generation, context.phase == .ready,
                   reviewRequestGeneration == request else { return .deferred }
@@ -535,6 +499,8 @@ final class ReviewsModel: ObservableObject {
         reviewRequestGeneration = UUID()
         reviewLoadTask?.cancel()
         reviewLoadTask = nil
+        prefetchedReviewTask?.cancel()
+        prefetchedReviewTask = nil
     }
 
     func resetAuthority() {
@@ -543,7 +509,6 @@ final class ReviewsModel: ObservableObject {
         reviews.removeAll()
         reviewLoadState = .loading
         selectedReviewId = nil
-        pendingReviewReconciliationId = nil
         reviewDecisionReadiness = nil
     }
 
@@ -555,7 +520,6 @@ final class ReviewsModel: ObservableObject {
         if let selectedReviewId, !reviews.contains(where: { $0.id == selectedReviewId }) {
             self.selectedReviewId = nil
             reviewDecisionReadiness = nil
-            pendingReviewReconciliationId = nil
         }
     }
 }
@@ -564,7 +528,6 @@ enum ReviewMenuAction: Sendable, Equatable {
     case approve
     case reject
     case merge
-    case resubmit
 
     func isAvailable(
         for review: ReviewRecord,
@@ -581,8 +544,6 @@ enum ReviewMenuAction: Sendable, Equatable {
             return review.status == "approved"
                 && review.approvedResultHash?.isEmpty == false
                 && canMergeReviews
-        case .resubmit:
-            return review.status == "rejected" && isAuthor
         }
     }
 }

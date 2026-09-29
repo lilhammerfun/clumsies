@@ -197,7 +197,7 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertNil(payload["server_url"])
     }
 
-    func testWorkspaceCoreReconcilesManagedAdaptersWithoutLegacyInspection() async {
+    func testWorkspaceIdentityChecksCredentialsBeforeServerRequest() async {
         actor EventRecorder {
             var events: [String] = []
 
@@ -210,11 +210,6 @@ final class DaemonContractTests: XCTestCase {
 
         do {
             _ = try await WorkspaceLoader.loadAuthenticatedWorkspaceIdentity(
-                reconcileManagedAgentAdapters: {
-                    await recorder.append("list-all-native")
-                    await recorder.append("install-native")
-                    return .init(conflicts: [], inspectionWarning: nil)
-                },
                 projectConfig: {
                     await recorder.append("project-config")
                     return .init(
@@ -229,14 +224,11 @@ final class DaemonContractTests: XCTestCase {
                 currentUser: {
                     await recorder.append("api-v1-me")
                     throw DaemonContractTestError.unexpectedServerRequest
-                },
-                onManagedAgentAdapters: { _ in
-                    await recorder.append("publish-managed-result")
                 }
             )
             XCTFail("Expected authenticationRequired")
         } catch WorkspaceLoadError.authenticationRequired {
-            // Managed cutover completes before auth; legacy inspection is post-ready.
+            // Signed-out startup does not call the Server.
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
@@ -244,11 +236,26 @@ final class DaemonContractTests: XCTestCase {
         let events = await recorder.events
         XCTAssertEqual(
             events,
-            [
-                "list-all-native", "install-native",
-                "publish-managed-result", "project-config",
-            ]
+            ["project-config"]
         )
+    }
+
+    @MainActor
+    func testAgentWarningsSurviveEitherCompletionOrder() {
+        for managedFirst in [true, false] {
+            let context = WorkspaceContext()
+            let service = AgentIntegrationService(context: context, feedback: WorkspaceFeedback(context: context))
+            let managed = LocalAgentAdapterReconciliationResult(conflicts: [], inspectionWarning: "Managed warning")
+            let legacy = LocalAgentAdapterReconciliationResult(conflicts: [], inspectionWarning: "Legacy warning")
+            if managedFirst {
+                service.applyManagedAdapterResult(managed)
+                service.applyLegacyInspectionResult(legacy)
+            } else {
+                service.applyLegacyInspectionResult(legacy)
+                service.applyManagedAdapterResult(managed)
+            }
+            XCTAssertEqual(service.legacyAgentAdapterInspectionWarning, "Managed warning\nLegacy warning")
+        }
     }
 
     func testWorkspaceCoreCarriesCurrentUserRequestFreshness() async throws {
@@ -266,11 +273,8 @@ final class DaemonContractTests: XCTestCase {
             capabilities: []
         )
 
-        let (_, loadedUser, managedResult, currentUserWasStale) =
+        let (_, loadedUser, currentUserWasStale) =
             try await WorkspaceLoader.loadAuthenticatedWorkspaceIdentity(
-                reconcileManagedAgentAdapters: {
-                    .init(conflicts: [], inspectionWarning: nil)
-                },
                 projectConfig: {
                     .init(
                         serverUrl: "https://app.clumsies.ai",
@@ -285,7 +289,6 @@ final class DaemonContractTests: XCTestCase {
             )
 
         XCTAssertEqual(loadedUser.user.userId, "user-1")
-        XCTAssertTrue(managedResult.conflicts.isEmpty)
         XCTAssertTrue(currentUserWasStale)
     }
 
@@ -454,7 +457,6 @@ final class DaemonContractTests: XCTestCase {
         store.navigation.selectedItemId = resource.id
         store.bundleSelection.selectedBundleId = bundle.id
         store.reviews.selectedReviewId = "review-old"
-        store.reviews.pendingReviewReconciliationId = "review-old"
         store.navigation.tabs = [tab]
         store.navigation.activeTabId = tab.id
 
@@ -478,7 +480,6 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertNil(store.navigation.selectedItemId)
         XCTAssertNil(store.bundleSelection.selectedBundleId)
         XCTAssertNil(store.reviews.selectedReviewId)
-        XCTAssertNil(store.reviews.pendingReviewReconciliationId)
         XCTAssertNil(store.reviews.reviewDecisionReadiness)
         XCTAssertTrue(store.navigation.tabs.isEmpty)
         XCTAssertNil(store.navigation.activeTabId)
@@ -778,6 +779,34 @@ final class DaemonContractTests: XCTestCase {
             ),
             "Codex repair failed\nLegacy inspection failed"
         )
+    }
+
+    @MainActor
+    func testAgentRepairRunsAfterBuildChangeOnlyForRelevantSettings() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(WorkspaceCoordinator.needsAgentReconciliation(identity: "install:build-2", defaults: defaults))
+        defaults.set("install:build-1", forKey: WorkspaceCoordinator.agentReconciliationKey)
+        XCTAssertTrue(WorkspaceCoordinator.needsAgentReconciliation(identity: "install:build-2", defaults: defaults))
+        defaults.set("install:build-2", forKey: WorkspaceCoordinator.agentReconciliationKey)
+        XCTAssertFalse(WorkspaceCoordinator.needsAgentReconciliation(identity: "install:build-2", defaults: defaults))
+
+        let disabled = DaemonAgentAdapterSetting(adapter: .claudeCode, enabled: false,
+            configured: true, installed: false, legacyRepositories: 0)
+        XCTAssertFalse(WorkspaceLoader.needsAgentAdapterRepair(disabled))
+        XCTAssertFalse(AgentsSettingsModel.needsSave(disabled, selected: []))
+        XCTAssertTrue(AgentsSettingsModel.needsSave(disabled, selected: [.claudeCode]))
+        XCTAssertTrue(AgentsSettingsModel.needsSave(.init(adapter: .codex, enabled: true,
+            configured: false, installed: false, legacyRepositories: 0), selected: [.codex]))
+        XCTAssertTrue(AgentsSettingsModel.needsSave(.init(adapter: .codex, enabled: true,
+            configured: false, installed: false, legacyRepositories: 0), selected: []))
+        XCTAssertTrue(WorkspaceLoader.needsAgentAdapterRepair(.init(adapter: .codex, enabled: true,
+            configured: true, installed: false, legacyRepositories: 0)))
+        XCTAssertTrue(WorkspaceLoader.needsAgentAdapterRepair(.init(adapter: .claudeCode, enabled: false,
+            configured: true, installed: true, legacyRepositories: 0)))
+        XCTAssertTrue(WorkspaceLoader.needsAgentAdapterRepair(.init(adapter: .claudeCode, enabled: false,
+            configured: true, installed: false, legacyRepositories: 1)))
     }
 
     func testLegacyInspectionExplainsOlderDaemonRuntimeRejection() {
@@ -1760,8 +1789,7 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(object["expected_draft_version"] as? Int, 7)
         XCTAssertNil(object["resolved_state"])
 
-        let submission = CreateReviewSubmissionRequest(
-            expectedReviewVersion: 4,
+        let submission = CreateReviewRequest(
             drafts: [.init(
                 draftId: candidate.draftId,
                 expectedDraftVersion: candidate.draftVersion,
@@ -1776,7 +1804,6 @@ final class DaemonContractTests: XCTestCase {
             JSONSerialization.jsonObject(with: submissionData) as? [String: Any]
         )
         XCTAssertNil(submissionObject["candidate_id"])
-        XCTAssertEqual(submissionObject["expected_review_version"] as? Int, 4)
         let submissionDrafts = try XCTUnwrap(submissionObject["drafts"] as? [[String: Any]])
         XCTAssertEqual(submissionDrafts.first?["candidate_id"] as? String, "candidate-1")
         XCTAssertEqual(submissionDrafts.first?["expected_draft_version"] as? Int, 7)
@@ -2226,6 +2253,65 @@ final class DaemonContractTests: XCTestCase {
         _ = try await loader.load(drafts[0])
         let requests = await probe.requests
         XCTAssertEqual(requests, ["commit-base"])
+    }
+
+    func testReviewFileTreeResolvesIdOnlyUpdateFromCommitPath() async throws {
+        let resource = ServerDraftResourceReference(scope: "org", id: "mem-1", path: nil)
+        let review = reviewDetail(resource: resource, operations: [
+            .init(action: "update", resource: resource,
+                  content: .init(description: nil, content: "Updated body"), newPath: nil,
+                  operationId: "op-1", createdAt: timestamp)
+        ])
+        let draft = ReviewDraftDetail(draft: review.draft, operations: review.operations)
+        let payload = commit(id: "commit-base", resource: resource, body: "Base body",
+                             treePath: "knowledge/note.md")
+        let probe = ReviewCommitProbe(payload: payload)
+        let loader = ReviewFileLoader { try await probe.fetch($0) }
+
+        let paths = try await loader.paths(for: [draft])
+        XCTAssertEqual(paths["draft-1"]?.path, "knowledge/note.md")
+        XCTAssertEqual(ReviewFileDescriptor.resolve(reviewId: "review-1", detail: draft,
+                                                    loadedPath: paths["draft-1"]?.path).path,
+                       "knowledge/note.md")
+        let requests = await probe.requests
+        XCTAssertEqual(requests, ["commit-base"])
+    }
+
+    @MainActor
+    func testIdOnlyReviewWaitsForPathsBeforeShowingFileTree() async throws {
+        let resource = ServerDraftResourceReference(scope: "org", id: "mem-1", path: nil)
+        let review = reviewDetail(resource: resource, operations: [
+            .init(action: "update", resource: resource,
+                  content: .init(description: nil, content: "Updated body"), newPath: nil,
+                  operationId: "op-1", createdAt: timestamp)
+        ])
+        let payload = commit(id: "commit-base", resource: resource, body: "Base body",
+                             treePath: "knowledge/note.md")
+        let body = String(decoding: try JSONCoding.encoder().encode(payload), as: UTF8.self)
+        let started = expectation(description: "Commit path loading")
+        let latch = DaemonContractTestLatch()
+        let workspace = WorkspaceCoordinator()
+        workspace.context.server = ServerClient(daemon: workspace.context.daemon, sendRequest: { request in
+            guard request.path == "/api/v1/commits/commit-base" else {
+                throw DaemonContractTestError.unexpectedServerRequest
+            }
+            started.fulfill()
+            await latch.wait()
+            return .init(status: 200, headers: [:], body: body)
+        })
+        let model = ReviewDetailModel(reviewId: "review-1", context: workspace.context,
+                                      feedback: workspace.feedback, reviews: workspace.reviews,
+                                      fetchDetail: { _ in review })
+        let loading = Task { await model.load() }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(model.loading)
+        XCTAssertNil(model.detail)
+        XCTAssertTrue(model.fileDescriptors.isEmpty)
+        await latch.open()
+        await loading.value
+        XCTAssertFalse(model.loading)
+        XCTAssertNil(model.loadError)
+        XCTAssertEqual(model.fileDescriptors.map(\.path), ["knowledge/note.md"])
     }
 
     func testReviewSnapshotFailureCanRetryAndInvalidatedLoaderRejectsLateResults() async throws {

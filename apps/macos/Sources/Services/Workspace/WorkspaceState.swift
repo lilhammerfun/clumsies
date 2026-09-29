@@ -34,8 +34,7 @@ struct WorkspaceSnapshot: Sendable {
     let orgRefEtag: String
     let resources: [MemoryResource]
     let runtime: RuntimeState
-    let legacyAgentAdapterConflicts: [DaemonLegacyAgentAdapterConflict]
-    let legacyAgentAdapterInspectionWarning: String?
+    var prefetchedReviews: Task<(records: [ReviewRecord], hasStaleServerResponse: Bool), Error>? = nil
 }
 
 enum WorkspaceLoadError: UserFacingError, Sendable {

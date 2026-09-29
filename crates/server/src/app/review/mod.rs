@@ -18,8 +18,8 @@ pub use service::{
 };
 
 pub(crate) use service::{
-    load_review, refresh_review_after_draft_content_change, remove_discarded_draft,
-    review_result_hash,
+    freeze_review_drafts, load_review, refresh_review_after_draft_content_change,
+    remove_discarded_draft, review_result_hash,
 };
 
 pub use contribution::retry_org_contribution;
