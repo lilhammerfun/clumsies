@@ -2246,6 +2246,43 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertEqual(requests, ["commit-base"])
     }
 
+    @MainActor
+    func testIdOnlyReviewWaitsForPathsBeforeShowingFileTree() async throws {
+        let resource = ServerDraftResourceReference(scope: "org", id: "mem-1", path: nil)
+        let review = reviewDetail(resource: resource, operations: [
+            .init(action: "update", resource: resource,
+                  content: .init(description: nil, content: "Updated body"), newPath: nil,
+                  operationId: "op-1", createdAt: timestamp)
+        ])
+        let payload = commit(id: "commit-base", resource: resource, body: "Base body",
+                             treePath: "knowledge/note.md")
+        let body = String(decoding: try JSONCoding.encoder().encode(payload), as: UTF8.self)
+        let started = expectation(description: "Commit path loading")
+        let latch = DaemonContractTestLatch()
+        let workspace = WorkspaceCoordinator()
+        workspace.context.server = ServerClient(daemon: workspace.context.daemon, sendRequest: { request in
+            guard request.path == "/api/v1/commits/commit-base" else {
+                throw DaemonContractTestError.unexpectedServerRequest
+            }
+            started.fulfill()
+            await latch.wait()
+            return .init(status: 200, headers: [:], body: body)
+        })
+        let model = ReviewDetailModel(reviewId: "review-1", context: workspace.context,
+                                      feedback: workspace.feedback, reviews: workspace.reviews,
+                                      fetchDetail: { _ in review })
+        let loading = Task { await model.load() }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(model.loading)
+        XCTAssertNil(model.detail)
+        XCTAssertTrue(model.fileDescriptors.isEmpty)
+        await latch.open()
+        await loading.value
+        XCTAssertFalse(model.loading)
+        XCTAssertNil(model.loadError)
+        XCTAssertEqual(model.fileDescriptors.map(\.path), ["knowledge/note.md"])
+    }
+
     func testReviewSnapshotFailureCanRetryAndInvalidatedLoaderRejectsLateResults() async throws {
         let resource = ServerDraftResourceReference(scope: "org", id: "memory-1", path: "notes/a.md")
         let review = reviewDetail(resource: resource, operations: [])

@@ -127,7 +127,6 @@ final class ReviewDetailModel: ObservableObject {
     @Published var detail: ReviewDetail?
     private var fileLoader: ReviewFileLoader?
     private var fileLoadTask: Task<Void, Never>?
-    private var pathLoadTask: Task<Void, Never>?
     @Published var loadedPaths: [String: String] = [:]
     @Published var loadedDirectoryTypes: [String: Bool] = [:]
     @Published var loadingFile = false
@@ -253,7 +252,7 @@ final class ReviewDetailModel: ObservableObject {
         }
         do {
             let loadedDetail = try await fetchDetail(reviewId)
-            applyLoadedDetail(
+            try await applyLoadedDetail(
                 loadedDetail,
                 request: request
             )
@@ -269,7 +268,7 @@ final class ReviewDetailModel: ObservableObject {
         let request = beginDetailRequest()
         do {
             let loadedDetail = try await fetchDetail(reviewId)
-            applyLoadedDetail(
+            try await applyLoadedDetail(
                 loadedDetail,
                 request: request
             )
@@ -290,7 +289,7 @@ final class ReviewDetailModel: ObservableObject {
     /// selection and loaded Diff alive when polling that unchanged proposal.
     func refreshInBackground() async -> WorkspaceRefreshScheduler.Result {
         guard !loading, !isSubmittingComment else { return .deferred }
-        let generation = detailRequestGeneration
+        var generation = detailRequestGeneration
         let baseline = storedReviewDecisionSignature
         do {
             let loaded = try await fetchBackgroundDetail(reviewId)
@@ -311,7 +310,8 @@ final class ReviewDetailModel: ObservableObject {
             } else {
                 guard reviewModel.updates[reviewId] == nil else { return .retained }
                 let request = beginDetailRequest()
-                applyLoadedDetail(loaded, request: request)
+                generation = request.generation
+                try await applyLoadedDetail(loaded, request: request)
             }
             return .updated
         } catch where error.isUserCancellation { return .deferred }
@@ -336,8 +336,6 @@ final class ReviewDetailModel: ObservableObject {
         isSubmittingComment = false
         fileLoadTask?.cancel()
         fileLoadTask = nil
-        pathLoadTask?.cancel()
-        pathLoadTask = nil
         if let fileLoader { Task { await fileLoader.cancel() } }
         fileLoader = nil
         changeSources = nil
@@ -356,7 +354,7 @@ final class ReviewDetailModel: ObservableObject {
     private func applyLoadedDetail(
         _ loadedDetail: ReviewDetail,
         request: DetailRequest
-    ) {
+    ) async throws {
         guard !Task.isCancelled,
               detailRequestGeneration == request.generation,
               storedReviewDecisionSignature == request.baseline else { return }
@@ -368,30 +366,31 @@ final class ReviewDetailModel: ObservableObject {
             return
         }
 
-        detail = loadedDetail
-        loadedPaths = [:]
-        loadedDirectoryTypes = [:]
         let client = workspaceContext.server
-        fileLoader = ReviewFileLoader { id in
+        let loader = ReviewFileLoader { id in
             try await client.get("/api/v1/commits/\(id)")
         }
-        let unresolved = draftDetails.filter { detail in
+        fileLoader = loader
+        let drafts = loadedDetail.drafts ?? [ReviewDraftDetail(draft: loadedDetail.draft, operations: loadedDetail.operations)]
+        let unresolved = drafts.filter { detail in
             guard let id = detail.draft.resource.id else { return false }
             return ReviewFileDescriptor.resolve(reviewId: reviewId, detail: detail).path == id
         }
-        if !unresolved.isEmpty, let fileLoader {
-            pathLoadTask = Task {
-                do {
-                    let paths = try await fileLoader.paths(for: unresolved)
-                    guard !Task.isCancelled, detailRequestGeneration == request.generation else { return }
-                    loadedPaths.merge(paths.mapValues { $0.path }) { _, resolved in resolved }
-                    loadedDirectoryTypes.merge(paths.mapValues { $0.isDirectory }) { _, resolved in resolved }
-                } catch is CancellationError {
-                } catch {
-                    ClientDiagnostics.record("review_file_paths_load_failed", ClientDiagnostics.failureFields(error))
-                }
+        let paths: [String: (path: String, isDirectory: Bool)]
+        do {
+            paths = try await loader.paths(for: unresolved)
+            guard paths.count == unresolved.count else {
+                throw ActionFailure(String(localized: "Some Review file paths couldn't be found. Try again."))
             }
+        } catch {
+            ClientDiagnostics.record("review_file_paths_load_failed", ClientDiagnostics.failureFields(error))
+            throw error
         }
+        guard !Task.isCancelled, detailRequestGeneration == request.generation,
+              storedReviewDecisionSignature == request.baseline else { return }
+        detail = loadedDetail
+        loadedPaths = paths.mapValues { $0.path }
+        loadedDirectoryTypes = paths.mapValues { $0.isDirectory }
         loading = false
         loadError = nil
         ClientDiagnostics.record("review_directory_loaded", ["file_count": String(draftDetails.count)])
