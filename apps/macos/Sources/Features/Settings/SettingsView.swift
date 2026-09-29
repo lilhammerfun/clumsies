@@ -53,14 +53,6 @@ struct GeneralSettingsView: View {
                         set: { self.softwareUpdateController.automaticallyChecksForUpdates = $0 }
                     )
                 )
-                Toggle(
-                    "Automatically download updates",
-                    isOn: Binding(
-                        get: { self.softwareUpdateController.automaticallyDownloadsUpdates },
-                        set: { self.softwareUpdateController.automaticallyDownloadsUpdates = $0 }
-                    )
-                )
-                .disabled(!self.softwareUpdateController.allowsAutomaticUpdates)
                 LabeledContent("Software updates") {
                     Button("Check for Updates…") { self.softwareUpdateController.checkForUpdates() }
                         .disabled(!self.softwareUpdateController.canCheckForUpdates)

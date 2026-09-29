@@ -16,6 +16,13 @@ final class SoftwareUpdateController: NSObject, ObservableObject {
     private var updater: SPUUpdater { injectedUpdater ?? controller.updater }
     private var observation: AnyCancellable?
     private var preparedToInstallOnQuit = false
+    private var probeTask: Task<Void, Never>?
+    private var isProbing = false
+    private var preferences: UserDefaults {
+        UserDefaults(suiteName: updater.hostBundle.bundleIdentifier ?? "") ?? .standard
+    }
+
+    deinit { probeTask?.cancel() }
 
     init(startingUpdater: Bool = true) {
         injectedUpdater = nil
@@ -35,12 +42,33 @@ final class SoftwareUpdateController: NSObject, ObservableObject {
     private func observeUpdater() {
         observation = Publishers.MergeMany([
             updater.publisher(for: \.canCheckForUpdates, options: [.new]),
-            updater.publisher(for: \.automaticallyChecksForUpdates, options: [.new]),
-            updater.publisher(for: \.automaticallyDownloadsUpdates, options: [.new]),
-            updater.publisher(for: \.allowsAutomaticUpdates, options: [.new]),
         ])
         .receive(on: RunLoop.main)
-        .sink { [weak self] _ in self?.objectWillChange.send() }
+        .sink { [weak self] _ in
+            self?.objectWillChange.send()
+            self?.startProbeScheduler()
+        }
+    }
+
+    private func startProbeScheduler() {
+        guard injectedUpdater == nil, probeTask == nil, canCheckForUpdates else { return }
+        probeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.probeIfEnabled()
+                try? await Task.sleep(for: .seconds(3600))
+            }
+        }
+    }
+
+    private func probeIfEnabled() {
+        guard automaticallyChecksForUpdates else { return }
+        checkForUpdateInformation()
+    }
+
+    func checkForUpdateInformation() {
+        guard canCheckForUpdates, !updater.sessionInProgress, !isProbing else { return }
+        isProbing = true
+        updater.checkForUpdateInformation()
     }
 
     func checkForUpdates() {
@@ -50,17 +78,13 @@ final class SoftwareUpdateController: NSObject, ObservableObject {
     }
 
     var automaticallyChecksForUpdates: Bool {
-        get { updater.automaticallyChecksForUpdates }
-        set { updater.automaticallyChecksForUpdates = newValue }
-    }
-
-    var automaticallyDownloadsUpdates: Bool {
-        get { updater.automaticallyDownloadsUpdates }
-        set { updater.automaticallyDownloadsUpdates = newValue }
-    }
-
-    var allowsAutomaticUpdates: Bool {
-        updater.allowsAutomaticUpdates
+        get { preferences.object(forKey: "SUEnableAutomaticChecks") as? Bool ?? false }
+        set {
+            preferences.set(newValue, forKey: "SUEnableAutomaticChecks")
+            objectWillChange.send()
+            if newValue { probeIfEnabled() }
+            else { hasAvailableUpdate = false }
+        }
     }
 
     var canCheckForUpdates: Bool {
@@ -72,7 +96,12 @@ extension SoftwareUpdateController: SPUUpdaterDelegate, @preconcurrency SPUStand
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        if isProbing, automaticallyChecksForUpdates { hasAvailableUpdate = true }
         Self.log.info("Update found; can_check=\(self.canCheckForUpdates)")
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        if isProbing { hasAvailableUpdate = false }
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock: @escaping () -> Void) -> Bool {
@@ -83,6 +112,10 @@ extension SoftwareUpdateController: SPUUpdaterDelegate, @preconcurrency SPUStand
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        if isProbing {
+            isProbing = false
+            return
+        }
         // Sparkle releases the background session before this callback, so its prepared
         // installation can now be resumed by checkForUpdates without starting a download.
         hasAvailableUpdate = preparedToInstallOnQuit && error == nil

@@ -83,7 +83,9 @@ targets:
         NSHumanReadableCopyright: Copyright © 2026 Clumsies Lab
         NSPrincipalClass: NSApplication
         SUFeedURL: $(CLUMSIES_UPDATE_FEED_URL)
-        SUScheduledCheckInterval: 3600
+        SUEnableAutomaticChecks: false
+        SUScheduledCheckInterval: 0
+        SUAllowsAutomaticUpdates: false
         SUVerifyUpdateBeforeExtraction: true
         SUPublicEDKey: oCAiBe/ez4wochO1I9ziO1uCEpmES+e7ypC74HJwIvw=
     settings:
