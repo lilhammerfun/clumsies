@@ -32,3 +32,5 @@ uuid = { version = "1.23.4", features = ["v4"] }
 # workspace's lock file, through the Server's own use of them.
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 iana-time-zone = "0.1.65"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+tempfile = "3.27.0"

@@ -65,13 +65,19 @@ guessed from the client's side: the Server's own `/api/v1/auth/methods` decides
 which controls exist, and the four shapes this client mirrors are pinned by
 tests.
 
-**Settings** opens on the Account pane, which is what the account block in the
-sidebar is in macOS: the username, the local password, and the identity provider,
-each with the one thing that can be done about it. Both changes — setting or
-changing a password, and connecting a provider — answer with a fresh session
-that goes to the daemon before the change is reported, because a password change
-signs every other session out. General and Support say what this window is
-signed in as, what it is talking to, and where the engine keeps its logs.
+**Settings** uses the shared GPUI settings component with Account, General,
+Agents and Support pages. It initially opens General, like macOS. General
+contains the app version; account credentials and their inline Cancel/Save
+actions stay in Account. Password fields clear after each submission, and
+closing a dirty account form asks before discarding it. Credential changes
+install the fresh session in the daemon before reporting success.
+
+Agents are machine-wide integrations, separate from project work folders.
+Codex status reflects plugin inspection, including a missing host or a plugin
+needing repair. Support opens the logs folder and exports a diagnostic ZIP
+containing build metadata and bounded, allowlisted logs, excluding symlinks.
+Organization administration, language selection, automatic updates and macOS
+settings navigation history are not yet ported.
 
 **Settings and the account menu** are the macOS client's own two: the identity
 at the foot of the rail opens Settings — a dialog here, because this client has
@@ -82,3 +88,57 @@ with a Server address and nothing else, and puts the form back.
 What is still missing is screen coverage, not data: Inbox, Bundles and Activity
 are not translated, and Reviews is missing comments, resubmission and the
 permission checks macOS makes from its own capabilities.
+
+### Linux Memory UI test data
+
+With the local instance running, execute `just seed-memory-ui`. Select
+**Memory UI 验收** from the project filter (restart the client to refresh its
+project list if needed). The seed creates a separate project with 35 published
+documents and three open drafts, without changing existing projects. Repeating
+the command preserves edits and deletions made during testing.
+
+- `00-从这里开始.md`: test checklist.
+- `01-目录层级`: nested folders; collapse, switch projects, and restart to check state restoration.
+- `02-长名称`, `03-同名文件`, `05-特殊名称`: truncation, tooltips, duplicate basenames and Unicode paths.
+- `04-草稿状态`: compare unchanged, edited (amber) and unpublished (green) files; inspect preview, edit and diff.
+- `06-滚动与批量`: 24 disposable documents for scrolling, Ctrl/Shift selection, row menus, rename and delete.
+- `07-仅草稿目录`: a folder inferred entirely from an unpublished file.
+
+- `08-空目录` and `09-未发布空目录`: persisted and draft-only empty directories.
+- `04-草稿状态/待删除.md`: a published file with a deletion draft (red filename).
+
+These are synthetic, disposable documents. The seed preserves existing edits on rerun.
+The ignored `engine::memory::tests::local_memory_roundtrip` integration test,
+explicitly enabled with `CLUMSIES_MEMORY_UI_TEST=1` against the isolated daemon,
+covers publication, rename, deletion, clean rebase, manual content-conflict resolution,
+and organization selection/proposal/removal. It creates disposable test projects.
+Permission-denied accounts and native Windows interaction still need platform testing.
+
+## Connect a work folder and AI tool
+
+1. Select the project, then open **More → Project settings**.
+2. Choose **Link folder…** and select the local work folder. The folder is routed
+   to this project; its files are not copied into Memory. A folder already bound
+   to another project is refused instead of silently reassigned.
+3. Open the account menu → **Settings → Agents**, enable your tool, then
+   start a new AI session in the linked folder. Connections are shared across
+   the machine's linked projects. Codex uses the existing managed plugin
+   installer and requires its CLI on PATH; other Linux adapters use their
+   existing daemon-managed configuration.
+4. **Unlink** in project settings removes the folder routing. Disabling the agent in **Settings → Agents** removes the managed
+   tool integration. The daemon preserves unrelated user configuration and
+   reports conflicting configuration instead of replacing it.
+
+Distributions place `clumsiesd` (`clumsiesd.exe` on Windows) beside the desktop
+executable. Developers may set `CLUMSIES_AGENT_RUNTIME_BINARY`; `just dev-linux`
+sets it automatically. Agent installation is disabled in isolated development
+instances; non-Codex Windows integrations are not yet supported.
+The client still requires a running daemon; installers and daemon auto-start
+are separate delivery work.
+
+The explicit local connection test binds a temporary folder, rejects a
+conflicting rebind, invokes a real MCP process with the generated configuration,
+checks retrieval and full-document loading, then unlinks the folder:
+`cargo test -p desktop local_connection_routes_real_mcp_and_unlinks -- --ignored`.
+It requires `CLUMSIES_MEMORY_UI_TEST=1`, the isolated daemon root and runtime
+binary environment variables, and the seeded Memory UI fixture.

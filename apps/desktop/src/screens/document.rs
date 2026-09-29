@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use clumsiesd::DaemonDraftSummary;
 use gpui_kit::base::StyledExt;
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme, Disableable};
 use gpui_kit::*;
 
 use crate::app::DesktopApp;
@@ -161,6 +161,21 @@ impl DocumentPane {
             .update(cx, |state, cx| state.set_value(text, window, cx));
     }
 
+    pub fn refresh(
+        &mut self,
+        document: &MemoryDocument,
+        window: &mut Window,
+        cx: &mut Context<DesktopApp>,
+    ) {
+        let text = document.draft_content.as_ref().unwrap_or(&document.content);
+        if !self.pending_save()
+            && !self.dirty(cx)
+            && (self.saved_text != *text || self.base_text != document.content)
+        {
+            self.load(document, window, cx);
+        }
+    }
+
     /// Puts the caret in the editor, which is where a reader who has just
     /// opened a document types next. macOS does the same when a document
     /// becomes the active tab.
@@ -235,6 +250,36 @@ impl DocumentPane {
         self.save = save;
     }
 
+    pub fn more_tool(
+        can_review: bool,
+        can_project_settings: bool,
+        cx: &mut Context<DesktopApp>,
+    ) -> impl IntoElement + use<> {
+        let app = cx.entity();
+        header::button("document-more")
+            .icon(Icon::default().path("icons/ellipsis.svg"))
+            .tooltip("More")
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
+                let reviewing = app.clone();
+                let settings = app.clone();
+                menu.item(
+                    PopupMenuItem::new("Request review…")
+                        .disabled(!can_review)
+                        .on_click(move |_, window, cx| {
+                            reviewing.update(cx, |app, cx| app.request_review(window, cx));
+                        }),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new("Project settings…")
+                        .disabled(!can_project_settings)
+                        .on_click(move |_, window, cx| {
+                            settings.update(cx, |app, cx| app.open_project_settings(window, cx));
+                        }),
+                )
+            })
+    }
+
     /// The pane's tools, at the right of the toolbar row: what the engine is
     /// doing with the document, then what a reader can do with it. Editing and
     /// diffing are tools rather than a mode switch — a document opens to be
@@ -242,7 +287,13 @@ impl DocumentPane {
     ///
     /// macOS keeps the same commands in its window toolbar; this is the pane
     /// they act on.
-    pub fn tools(&self, focus: &FocusHandle, cx: &mut Context<DesktopApp>) -> AnyElement {
+    pub fn tools(
+        &self,
+        focus: &FocusHandle,
+        can_project_settings: bool,
+        can_edit: bool,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
         let this = cx.entity();
         let tool = |id: &'static str,
                     icon: Icon,
@@ -258,41 +309,24 @@ impl DocumentPane {
                     this.update(cx, action);
                 })
         };
-        let can_review = self.can_review();
-        let more = {
-            let this = this.clone();
-            // A plain button that opens the menu: the library's dropdown button
-            // adds a caret and a divider of its own, which squares off the end
-            // of the pill for a mark the reader does not need.
-            header::button("document-more")
-                .bg(transparent_black())
-                .icon(Icon::default().path("icons/ellipsis.svg"))
-                .tooltip("More")
-                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                    let this = this.clone();
-                    menu.item(
-                        PopupMenuItem::new("Request review…")
-                            .disabled(!can_review)
-                            .on_click(move |_event, window, cx| {
-                                this.update(cx, |app, cx| app.request_review(window, cx));
-                            }),
-                    )
-                })
-        };
+        let more = Self::more_tool(self.can_review(), can_project_settings, cx);
         header::group()
             .id("document-tools")
             .track_focus(focus)
             .tab_stop(true)
             .children(self.header_status(cx))
             .children(self.header_notice(cx))
-            .child(tool(
-                "document-edit",
-                Icon::default().path("icons/pencil.svg"),
-                "Edit this document",
-                self.mode == Mode::Edit,
-                this.clone(),
-                DesktopApp::toggle_document_edit,
-            ))
+            .child(
+                tool(
+                    "document-edit",
+                    Icon::default().path("icons/pencil.svg"),
+                    "Edit this document",
+                    self.mode == Mode::Edit,
+                    this.clone(),
+                    DesktopApp::toggle_document_edit,
+                )
+                .disabled(!can_edit && self.mode != Mode::Edit),
+            )
             .child(tool(
                 "document-diff",
                 Icon::default().path("icons/file-diff.svg"),
@@ -307,7 +341,12 @@ impl DocumentPane {
 
     /// The work itself, under the toolbar: the document, read the way the pane
     /// is set to read it.
-    pub fn body(&self, window: &Window, cx: &mut Context<DesktopApp>) -> AnyElement {
+    pub fn body(
+        &self,
+        editable: bool,
+        window: &Window,
+        cx: &mut Context<DesktopApp>,
+    ) -> AnyElement {
         let text = self.text(cx);
 
         let body: AnyElement = match self.mode {
@@ -319,6 +358,7 @@ impl DocumentPane {
                 let height = self.editor_height.clone();
                 let this = cx.entity().downgrade();
                 let editor = Textarea::new(&self.editor)
+                    .disabled(!editable)
                     .appearance(false)
                     .bordered(false)
                     .h(height.get().max(px(1.)));
@@ -418,6 +458,11 @@ impl DocumentPane {
             draft_id: self.draft.as_ref().map(|draft| draft.draft_id.clone()),
             resource_id: target.document.resource_id.clone(),
             published: target.document.published,
+            is_directory: target.document.is_directory,
+            org_owned: self
+                .draft
+                .as_ref()
+                .is_some_and(|d| d.scope == clumsiesd::DaemonDraftScope::Org),
             path: target.document.path.clone(),
             content: self.text(cx),
         };

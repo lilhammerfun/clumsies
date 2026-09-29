@@ -67,3 +67,7 @@ test-dev-macos:
 # "up --seed-memory" publishes starter Memory for the client to show.
 dev-linux command="up":
     python3 dev/dev-instance-linux.py {{command}}
+
+# Add isolated Memory UI fixtures to the running Linux Dev Instance.
+seed-memory-ui:
+    python3 dev/seed-memory-ui-linux.py

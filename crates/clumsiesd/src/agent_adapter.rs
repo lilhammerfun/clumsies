@@ -4020,11 +4020,24 @@ fn canonical_agent_runtime_binary(path: &str) -> Result<PathBuf, DaemonError> {
             canonical.display()
         )));
     }
+    #[cfg(target_os = "macos")]
     if !canonical.ends_with("Contents/Resources/clumsiesd") {
         return Err(DaemonError::InvalidRequest(format!(
             "Agent runtime path {} is not an App-bundled clumsiesd",
             canonical.display()
         )));
+    }
+    #[cfg(not(target_os = "macos"))]
+    if canonical.file_name().and_then(|name| name.to_str())
+        != Some(if cfg!(windows) {
+            "clumsiesd.exe"
+        } else {
+            "clumsiesd"
+        })
+    {
+        return Err(DaemonError::InvalidRequest(
+            "Select the clumsiesd engine executable.".into(),
+        ));
     }
     if !is_executable(&canonical)? {
         return Err(DaemonError::InvalidRequest(format!(
@@ -4810,6 +4823,22 @@ mod tests {
         fs::write(&legacy, b"legacy").unwrap();
         fs::set_permissions(&legacy, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(canonical_agent_runtime_binary(legacy.to_str().unwrap()).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_runtime_accepts_packaged_engine_and_rejects_nonexecutables() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("clumsiesd");
+        fs::write(&runtime, b"engine").unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(canonical_agent_runtime_binary(runtime.to_str().unwrap()).is_err());
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            canonical_agent_runtime_binary(runtime.to_str().unwrap()).unwrap(),
+            fs::canonicalize(runtime).unwrap()
+        );
     }
 
     #[cfg(target_os = "macos")]

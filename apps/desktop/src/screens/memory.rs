@@ -17,7 +17,7 @@ use clumsiesd::{
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::*;
-use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tree::TreeState;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::*;
@@ -28,6 +28,7 @@ use crate::components::{header, memory_tree};
 use crate::engine::{Checkout, DocumentEdit, MemoryDocument};
 use crate::screens::document::{DocumentPane, Mode, Notice, PaneContext};
 use crate::ui::{self, Typography};
+use gpui_kit::prelude::FluentBuilder;
 
 /// What an empty Memory offers: the starting point macOS offers from the same
 /// state, which is the guidelines file and a folder for each kind of knowledge.
@@ -113,6 +114,7 @@ pub struct MemoryScreen {
     /// and a new tab's editor needs one. The request carries to the next frame,
     /// which has a window.
     pending_open: Option<String>,
+    pending_refresh: bool,
     /// The documents the last run had open, and whether this one has put them
     /// back yet. macOS restores the same thing from its workspace model.
     remembered: crate::state::WindowState,
@@ -136,6 +138,7 @@ pub struct MemoryScreen {
     drafts: Vec<DaemonDraftSummary>,
     /// Why the documents could not be read, when they could not be.
     error: Option<String>,
+    operation_error: Option<String>,
     /// Where the pane's tools take the keyboard. The tools belong to the pane
     /// but the region is the window's (F6 walks it), so the handle is handed
     /// over once instead of being threaded through every call.
@@ -229,6 +232,7 @@ impl MemoryScreen {
             back: Vec::new(),
             forward: Vec::new(),
             pending_open: None,
+            pending_refresh: false,
             remembered: crate::state::load(),
             restored: false,
             pending_restore: None,
@@ -237,6 +241,7 @@ impl MemoryScreen {
             query: String::new(),
             drafts: Vec::new(),
             error: None,
+            operation_error: None,
             tools_focus: cx.focus_handle(),
             list_focus: cx.focus_handle(),
             _selection: selection,
@@ -271,10 +276,24 @@ impl MemoryScreen {
         // the workspace's authority resets.
         let another_project = self.project_id != project_id;
         if another_project {
+            if let Some(project) = &self.project_id {
+                self.remembered
+                    .folded_by_project
+                    .insert(project.clone(), self.folded.clone());
+            }
+            self.folded = project_id
+                .as_ref()
+                .and_then(|project| self.remembered.folded_by_project.get(project))
+                .cloned()
+                .unwrap_or_default();
             self.open.clear();
             self.active = None;
             self.back.clear();
             self.forward.clear();
+        }
+        self.pending_refresh = !another_project;
+        if another_project {
+            self.operation_error = None;
         }
         self.project_id = project_id;
         self.commit_id = commit_id;
@@ -342,6 +361,75 @@ impl MemoryScreen {
     pub fn set_drafts(&mut self, drafts: Vec<DaemonDraftSummary>, cx: &mut Context<DesktopApp>) {
         self.drafts = drafts;
         self.publish(cx);
+    }
+
+    pub fn set_error(&mut self, message: String) {
+        self.operation_error = Some(message);
+    }
+
+    pub fn export_entries(&self, paths: &[String], cx: &App) -> Vec<(String, bool, String)> {
+        let targets = if paths.is_empty() {
+            self.paths()
+        } else {
+            self.targets(paths)
+        };
+        self.documents
+            .iter()
+            .filter(|d| targets.contains(&d.path) && !d.draft_deleted)
+            .map(|d| {
+                let text = self
+                    .pane_for_resource(&d.resource_id)
+                    .map(|pane| pane.text(cx))
+                    .unwrap_or_else(|| d.draft_content.as_ref().unwrap_or(&d.content).clone());
+                (d.path.clone(), d.is_directory, text)
+            })
+            .collect()
+    }
+    pub fn org_resources(&self, paths: &[String]) -> Vec<String> {
+        let targets = self.targets(paths);
+        self.documents
+            .iter()
+            .filter(|d| d.org_owned && d.published && targets.contains(&d.path))
+            .map(|d| d.resource_id.clone())
+            .collect()
+    }
+
+    pub fn entries(&self) -> Vec<(String, bool)> {
+        self.documents
+            .iter()
+            .map(|d| (d.path.clone(), d.is_directory))
+            .collect()
+    }
+
+    pub fn folders(&self) -> Vec<String> {
+        let mut folders = BTreeSet::new();
+        for doc in &self.documents {
+            if doc.is_directory {
+                folders.insert(doc.path.clone());
+            }
+            let mut path = doc.path.as_str();
+            while let Some((parent, _)) = path.rsplit_once('/') {
+                folders.insert(parent.to_owned());
+                path = parent;
+            }
+        }
+        folders.into_iter().collect()
+    }
+
+    pub fn can_mutate(&self, paths: &[String]) -> bool {
+        self.project_id
+            .as_deref()
+            .is_some_and(|p| p != crate::engine::ORGANIZATION_MEMORY)
+            && self.targets(paths).iter().all(|path| {
+                let doc = self.documents.iter().find(|d| &d.path == path).unwrap();
+                self.draft_for(doc).is_none_or(|d| {
+                    d.status == DaemonLocalDraftStatus::Open
+                        && d.pending_operation_count == 0
+                        && d.failed_operation_count == 0
+                }) && self
+                    .pane_for_resource(&doc.resource_id)
+                    .is_none_or(|pane| !pane.pending_save())
+            })
     }
 
     pub fn set_notice(&mut self, notice: Option<Notice>) {
@@ -460,7 +548,10 @@ impl MemoryScreen {
     /// already the one in front. A folder is not a document: clicking one
     /// expands it and nothing else happens.
     fn ask_for(&mut self, path: &str) {
-        if let Some(document) = self.documents.iter().find(|document| document.path == path)
+        if let Some(document) = self
+            .documents
+            .iter()
+            .find(|document| document.path == path && !document.is_directory)
             && self.active_id() != Some(document.resource_id.as_str())
         {
             self.pending_open = Some(document.resource_id.clone());
@@ -477,6 +568,18 @@ impl MemoryScreen {
         // What the last run had open goes back before anything else, so the tab
         // in front is the one the reader left.
         self.restore(window, cx);
+        if std::mem::take(&mut self.pending_refresh) {
+            for tab in &mut self.open {
+                if let Some(document) = self
+                    .documents
+                    .iter()
+                    .find(|d| d.resource_id == tab.resource_id)
+                {
+                    tab.pane.refresh(document, window, cx);
+                }
+            }
+            self.sync_draft();
+        }
         // A request that names a path becomes a request for the document that
         // path is, once the read that carries it has happened.
         if let Some((path, mode)) = self.pending_path.clone()
@@ -492,7 +595,7 @@ impl MemoryScreen {
         let Some(document) = self
             .documents
             .iter()
-            .position(|document| document.resource_id == resource_id)
+            .position(|document| document.resource_id == resource_id && !document.is_directory)
         else {
             return;
         };
@@ -569,7 +672,12 @@ impl MemoryScreen {
             self.document_for_resource(resource_id)
                 .map(|document| document.path.clone())
         };
+        let mut folded_by_project = self.remembered.folded_by_project.clone();
+        if let Some(project) = &self.project_id {
+            folded_by_project.insert(project.clone(), self.folded.clone());
+        }
         let state = crate::state::WindowState {
+            folded_by_project,
             project_id: self.project_id.clone(),
             open: self
                 .open
@@ -733,8 +841,8 @@ impl MemoryScreen {
         Some(MenuTarget {
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             can_review: draft.is_some_and(|draft| draft.status == DaemonLocalDraftStatus::Open),
-            is_folder: false,
-            has_drafts: false,
+            is_folder: document.is_directory,
+            has_drafts: document.is_directory && self.folder_has_drafts(path),
             proposal: !document.published,
             draft: draft.map(DraftState::of),
         })
@@ -747,7 +855,7 @@ impl MemoryScreen {
         let inside = format!("{folder}/");
         self.documents
             .iter()
-            .filter(|document| document.path.starts_with(&inside))
+            .filter(|document| document.path == folder || document.path.starts_with(&inside))
             .collect()
     }
 
@@ -763,7 +871,14 @@ impl MemoryScreen {
             .filter_map(|document| {
                 let rest = document.path.strip_prefix(folder)?.trim_start_matches('/');
                 let edit = self.edit_for_path(&document.path)?;
-                Some((edit, format!("{parent}/{rest}")))
+                Some((
+                    edit,
+                    if rest.is_empty() {
+                        parent.clone()
+                    } else {
+                        format!("{parent}/{rest}")
+                    },
+                ))
             })
             .collect()
     }
@@ -799,6 +914,21 @@ impl MemoryScreen {
             })
             .filter_map(|path| Some((path.clone(), self.edit_for_path(&path)?)))
             .collect()
+    }
+
+    pub fn unpublished_deletions(&self, paths: &[String]) -> Vec<(String, String, String)> {
+        self.discard_plan(paths)
+            .into_iter()
+            .filter(|(path, _, _)| {
+                self.documents
+                    .iter()
+                    .any(|d| d.path == *path && !d.published)
+            })
+            .collect()
+    }
+
+    pub fn clear_error(&mut self) {
+        self.operation_error = None;
     }
 
     /// The drafts a set of rows carries, which are what discarding throws away.
@@ -839,11 +969,14 @@ impl MemoryScreen {
     /// it is the paths that share a prefix, which is how the tree draws them.
     fn is_folder(&self, path: &str) -> bool {
         let inside = format!("{path}/");
-        !self.documents.iter().any(|document| document.path == path)
-            && self
-                .documents
-                .iter()
-                .any(|document| document.path.starts_with(&inside))
+        self.documents
+            .iter()
+            .any(|doc| doc.path == path && doc.is_directory)
+            || (!self.documents.iter().any(|document| document.path == path)
+                && self
+                    .documents
+                    .iter()
+                    .any(|document| document.path.starts_with(&inside)))
     }
 
     /// Opens or closes a folder, which is what its own disclosure control does.
@@ -856,6 +989,7 @@ impl MemoryScreen {
         // the reader to whatever document happens to be open, which may be one
         // of the rows that just went away.
         self.selection.only(path);
+        self.remember(cx);
         self.publish(cx);
         self.show_selection(cx);
     }
@@ -867,6 +1001,7 @@ impl MemoryScreen {
             return;
         };
         if self.folded.remove(&path) {
+            self.remember(cx);
             self.publish(cx);
         }
     }
@@ -879,6 +1014,7 @@ impl MemoryScreen {
         };
         if self.is_folder(&path) && !self.folded.contains(&path) {
             self.folded.insert(path.clone());
+            self.remember(cx);
             self.selection.only(&path);
             self.publish(cx);
             self.show_selection(cx);
@@ -945,6 +1081,8 @@ impl MemoryScreen {
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             resource_id: document.resource_id.clone(),
             published: document.published,
+            is_directory: document.is_directory,
+            org_owned: draft.is_some_and(|d| d.scope == clumsiesd::DaemonDraftScope::Org),
             path: document.path.clone(),
             content: document
                 .draft_content
@@ -975,7 +1113,7 @@ impl MemoryScreen {
         let Some(document) = self
             .documents
             .iter()
-            .find(|document| document.path == path)
+            .find(|document| document.path == path && !document.is_directory)
             .cloned()
         else {
             return false;
@@ -1099,29 +1237,14 @@ impl MemoryScreen {
     }
 
     /// The project scope stays above the file list; content search is deferred.
-    pub fn list(
-        &self,
-        project: AnyElement,
-        settings: AnyElement,
-        window: &Window,
-        cx: &App,
-    ) -> AnyElement {
-        let header = header::row()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .overflow_hidden()
-                    .child(project),
-            )
-            .child(div().flex_shrink_0().child(settings));
-        // The tree's region takes the keyboard as one thing, and says so with a
-        // ring, the way every other focusable region in this window does.
-        let ring = if self.list_focused(window) {
-            cx.theme().ring
-        } else {
-            transparent_black()
-        };
+    pub fn list(&self, project: AnyElement, cx: &App) -> AnyElement {
+        let header = header::row().child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .child(project),
+        );
         // A filter that matches nothing says so where the tree was, which is
         // macOS's own empty state for a search with no results.
         let body = if self.visible_documents().is_empty() && !self.documents.is_empty() {
@@ -1138,7 +1261,21 @@ impl MemoryScreen {
                 &self.selection,
                 &self.drafted_paths(),
                 &self.proposal_paths(),
+                &self
+                    .documents
+                    .iter()
+                    .filter(|d| d.draft_deleted)
+                    .map(|d| d.path.clone())
+                    .collect(),
+                &self
+                    .documents
+                    .iter()
+                    .filter(|d| d.is_directory)
+                    .map(|d| d.path.clone())
+                    .collect(),
+                cx,
                 tree_clicked,
+                tree_moved,
                 tree_menu,
             )
             .into_any_element()
@@ -1148,20 +1285,32 @@ impl MemoryScreen {
             .v_flex()
             .h_full()
             .child(header)
+            .children(self.operation_error.as_ref().map(|error| {
+                div()
+                    .px_3()
+                    .child(ui::message(error.clone(), cx.theme().danger))
+            }))
             .child(ui::rule(cx))
             .child(
                 div()
                     .id("memory-tree")
+                    .on_drop({
+                        let tree = self.tree.entity_id();
+                        move |drag: &file_tree::DragPaths, _, cx| {
+                            if drag.tree == tree {
+                                tree_moved(&drag.paths, "", cx);
+                            }
+                        }
+                    })
                     .flex_1()
                     .min_h(px(0.))
-                    .m_2()
-                    .p_1()
+                    .mx(px(ui::PANE_INSET))
+                    .my_2()
                     .rounded(px(ui::RADIUS))
-                    .border_1()
-                    .border_color(ring)
                     .track_focus(&self.list_focus)
                     .tab_stop(true)
-                    .child(body),
+                    .child(body)
+                    .context_menu(|menu, window, cx| tree_menu("", menu, window, cx)),
             )
             .into_any_element()
     }
@@ -1169,10 +1318,15 @@ impl MemoryScreen {
     /// Tabs stay on the left; all tools stay on the right, even with no tab open.
     pub fn detail(
         &self,
+        busy: bool,
         focus: &FocusHandle,
         window: &Window,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
+        let can_project_settings = self
+            .project_id
+            .as_deref()
+            .is_some_and(|p| p != crate::engine::ORGANIZATION_MEMORY);
         let pane = self.active_pane();
         let tabs = self.tabs(cx);
         let toolbar = header::row()
@@ -1183,16 +1337,33 @@ impl MemoryScreen {
                     .children(tabs)
             }))
             .child(div().flex_1())
-            .child(
-                div()
-                    .h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .children(pane.map(|pane| pane.tools(focus, cx))),
-            );
+            .child(div().h_flex().flex_shrink_0().items_center().gap_1().child(
+                if let Some(pane) = pane {
+                    pane.tools(
+                        focus,
+                        can_project_settings,
+                        self.selected_document().is_some_and(|doc| {
+                            !busy && !doc.draft_deleted && self.can_mutate(&[doc.path.clone()])
+                        }),
+                        cx,
+                    )
+                } else {
+                    header::group()
+                        .child(DocumentPane::more_tool(false, can_project_settings, cx))
+                        .into_any_element()
+                },
+            ));
         let body = if let Some(pane) = pane {
-            pane.body(window, cx)
+            pane.body(
+                !busy
+                    && self.selected_document().is_some_and(|doc| {
+                        !doc.draft_deleted
+                            && self.project_id.as_deref()
+                                != Some(crate::engine::ORGANIZATION_MEMORY)
+                    }),
+                window,
+                cx,
+            )
         } else {
             match (&self.error, self.documents.is_empty()) {
                 (None, true) => empty_memory_state(cx),
@@ -1326,12 +1497,8 @@ impl MemoryScreen {
     /// restored in the same update: the frame after it must not look like a
     /// reader who selected nothing, which would close the open document.
     fn publish(&mut self, cx: &mut Context<DesktopApp>) {
-        let paths: Vec<String> = self
-            .visible_documents()
-            .into_iter()
-            .map(|document| document.path.clone())
-            .collect();
-        let items = memory_tree::items(&paths, &self.folded);
+        let documents = self.visible_documents();
+        let items = memory_tree::items(&documents, &self.folded);
         self.tree.update(cx, |state, cx| state.set_items(items, cx));
         // A renamed, deleted or filtered-away file is not a selected file.
         self.selection.retain(&self.row_paths(cx));
@@ -1550,11 +1717,167 @@ fn tree_clicked(click: RowClick, _window: &mut Window, cx: &mut App) {
 /// — opening, deleting, and the drafts a Review or a discard could take. The
 /// menu itself is the component library's, so arrows move, Enter chooses and
 /// Escape closes the way they do everywhere else on this platform.
-fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) -> PopupMenu {
+fn tree_moved(paths: &[String], destination: &str, cx: &mut App) {
+    if let Some(app) = TREE_APP.with(|slot| slot.borrow().as_ref().and_then(|weak| weak.upgrade()))
+    {
+        app.update(cx, |app, cx| app.move_memory(paths, destination, cx));
+    }
+}
+
+fn tree_menu(path: &str, menu: PopupMenu, window: &mut Window, cx: &mut App) -> PopupMenu {
     let Some(this) = TREE_APP.with(|slot| slot.borrow().as_ref().and_then(|weak| weak.upgrade()))
     else {
         return menu;
     };
+    let (selection, ids, projects, current_project, busy, editable) =
+        this.read_with(cx, |app, _| {
+            let memory = app.memory_ref();
+            let rows = if path.is_empty() {
+                memory.paths()
+            } else if memory.selection.contains(path) {
+                memory.selected_paths()
+            } else {
+                vec![path.into()]
+            };
+            (
+                rows.clone(),
+                memory.org_resources(&rows),
+                app.manageable_projects(),
+                memory.project_id().map(str::to_owned),
+                app.memory_busy(),
+                memory.can_mutate(&rows),
+            )
+        });
+    let export_app = this.clone();
+    let exporting = selection.clone();
+    let mut menu = menu.item(
+        PopupMenuItem::new("Export as ZIP…")
+            .disabled(busy || selection.is_empty())
+            .on_click(move |_, _, cx| {
+                export_app.update(cx, |app, cx| app.export_memory(&exporting, cx));
+            }),
+    );
+    if !ids.is_empty() {
+        let add_app = this.clone();
+        let adding = ids.clone();
+        let submenu = PopupMenu::build(window, cx, move |mut menu, _, _| {
+            for project in projects {
+                let app = add_app.clone();
+                let ids = adding.clone();
+                menu = menu.item(PopupMenuItem::new(project.name).disabled(busy).on_click(
+                    move |_, _, cx| {
+                        app.update(cx, |app, cx| {
+                            app.change_memory_selection(
+                                project.project_id.clone(),
+                                ids.clone(),
+                                true,
+                                cx,
+                            )
+                        });
+                    },
+                ));
+            }
+            menu
+        });
+        menu = menu.item(PopupMenuItem::submenu("Add to Project", submenu));
+        if let Some(project) = current_project
+            .as_ref()
+            .filter(|p| p.as_str() != crate::engine::ORGANIZATION_MEMORY)
+        {
+            let manager = this.read(cx).can_manage_project(project);
+            let project = project.clone();
+            let app = this.clone();
+            menu = menu.item(
+                PopupMenuItem::new("Remove from Project")
+                    .disabled(!manager || busy)
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |app, cx| {
+                            app.change_memory_selection(project.clone(), ids.clone(), false, cx)
+                        });
+                    }),
+            );
+            if selection.len() == 1 {
+                let app = this.clone();
+                let path = path.to_owned();
+                menu = menu.item(
+                    PopupMenuItem::new("Propose Organization Change…")
+                        .disabled(!editable || busy)
+                        .on_click(move |_, _, cx| {
+                            app.update(cx, |app, cx| app.propose_organization_change(&path, cx));
+                        }),
+                );
+            }
+        }
+    }
+    let folder = if path.is_empty() || this.read(cx).memory_ref().is_folder(path) {
+        path.to_owned()
+    } else {
+        path.rsplit_once('/')
+            .map(|(p, _)| p.to_owned())
+            .unwrap_or_default()
+    };
+    let new_file_app = this.clone();
+    let new_folder_app = this.clone();
+    let new_file_parent = folder.clone();
+    let menu = menu
+        .item(
+            PopupMenuItem::new("New file…")
+                .disabled(
+                    busy || current_project.as_deref() == Some(crate::engine::ORGANIZATION_MEMORY),
+                )
+                .on_click(move |_, window, cx| {
+                    new_file_app.update(cx, |app, cx| {
+                        app.open_new_memory_dialog(&new_file_parent, window, cx)
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new("New folder…")
+                .disabled(
+                    busy || current_project.as_deref() == Some(crate::engine::ORGANIZATION_MEMORY),
+                )
+                .on_click(move |_, window, cx| {
+                    new_folder_app.update(cx, |app, cx| {
+                        app.open_new_folder_dialog(&folder, window, cx)
+                    });
+                }),
+        );
+    if path.is_empty() {
+        return menu;
+    }
+    let (rows, destinations, entries, can_mutate) = this.read_with(cx, |app, _| {
+        let memory = app.memory_ref();
+        let rows = if memory.selection.contains(path) {
+            memory.selected_paths()
+        } else {
+            vec![path.to_owned()]
+        };
+        let can_mutate = !app.memory_busy() && memory.can_mutate(&rows);
+        (rows, memory.folders(), memory.entries(), can_mutate)
+    });
+    let move_app = this.clone();
+    let move_menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
+        for destination in std::iter::once(String::new()).chain(destinations) {
+            let disabled = !can_mutate
+                || crate::memory_paths::relocate(&entries, &rows, &destination).is_err();
+            let label = if destination.is_empty() {
+                "Top level".to_owned()
+            } else {
+                destination.clone()
+            };
+            let app = move_app.clone();
+            let paths = rows.clone();
+            menu = menu.item(PopupMenuItem::new(label).disabled(disabled).on_click(
+                move |_, _, cx| {
+                    app.update(cx, |app, cx| app.move_memory(&paths, &destination, cx));
+                },
+            ));
+        }
+        menu
+    });
+    let menu = menu
+        .separator()
+        .item(PopupMenuItem::submenu("Move To", move_menu));
     let (target, targets, deletes, drafts, discards) = this.read_with(cx, |app, _| {
         let memory = app.memory_ref();
         // The menu is about the selection when the row is part of one, and
@@ -1575,7 +1898,7 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
     let Some(target) = target else {
         return menu;
     };
-    if targets.len() > 1 {
+    if selection.len() > 1 {
         return batch_menu(&targets, deletes, drafts, discards, menu, &this, cx);
     }
     let opening = this.clone();
@@ -1586,61 +1909,70 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
     let editing_path = path.to_owned();
     let reviewing_path = path.to_owned();
     let discarding_path = path.to_owned();
-    let mut menu = menu
-        .item(
+    let mut menu = menu.when(!target.is_folder, |menu| {
+        menu.item(
             PopupMenuItem::new("Open").on_click(move |_event, window, cx| {
                 opening.update(cx, |app, cx| {
                     app.open_document(&opening_path, Mode::Preview, window, cx)
                 });
             }),
         )
-        .item(
-            PopupMenuItem::new("Edit").on_click(move |_event, window, cx| {
+        .item(PopupMenuItem::new("Edit").disabled(!can_mutate).on_click(
+            move |_event, window, cx| {
                 editing.update(cx, |app, cx| {
                     app.open_document(&editing_path, Mode::Edit, window, cx)
                 });
-            }),
-        );
+            },
+        ))
+    });
     if target.is_folder {
-        let creating = this.clone();
         let renaming = this.clone();
         let deleting = this.clone();
         let discarding = this.clone();
-        let created = path.to_owned();
         let renamed = path.to_owned();
         let deleted = vec![path.to_owned()];
         let discarded = vec![path.to_owned()];
         menu = menu
             .separator()
             .item(
-                PopupMenuItem::new("New file…").on_click(move |_event, window, cx| {
-                    creating.update(cx, |app, cx| {
-                        app.open_new_memory_dialog(&created, window, cx)
-                    });
-                }),
-            );
-        menu = menu
-            .separator()
-            .item(
-                PopupMenuItem::new("Rename folder…").on_click(move |_event, window, cx| {
-                    renaming.update(cx, |app, cx| {
-                        app.open_rename_folder_dialog(&renamed, window, cx)
-                    });
-                }),
+                PopupMenuItem::new("Rename folder…")
+                    .disabled(!can_mutate)
+                    .on_click(move |_event, window, cx| {
+                        renaming.update(cx, |app, cx| {
+                            app.open_rename_folder_dialog(&renamed, window, cx)
+                        });
+                    }),
             )
             .item(
-                PopupMenuItem::new("Delete folder…").on_click(move |_event, window, cx| {
-                    deleting.update(cx, |app, cx| app.open_delete_dialog(&deleted, window, cx));
-                }),
+                PopupMenuItem::new("Delete folder…")
+                    .disabled(!can_mutate)
+                    .on_click(move |_event, window, cx| {
+                        deleting.update(cx, |app, cx| app.open_delete_dialog(&deleted, window, cx));
+                    }),
             );
+        if drafts > 0 {
+            let app = this.clone();
+            let paths = vec![path.to_owned()];
+            menu = menu.item(
+                PopupMenuItem::new("Request review…")
+                    .disabled(!can_mutate)
+                    .on_click(move |_, window, cx| {
+                        app.update(cx, |app, cx| {
+                            app.request_review_for_selection(&paths, window, cx)
+                        });
+                    }),
+            );
+        }
         if target.has_drafts {
-            menu = menu.item(PopupMenuItem::new("Discard drafts in folder…").on_click(
-                move |_event, window, cx| {
-                    discarding.update(cx, |app, cx| {
-                        app.open_discard_dialog(&discarded, window, cx)
-                    });
-                },
-            ));
+            menu = menu.item(
+                PopupMenuItem::new("Discard drafts in folder…")
+                    .disabled(!can_mutate)
+                    .on_click(move |_event, window, cx| {
+                        discarding.update(cx, |app, cx| {
+                            app.open_discard_dialog(&discarded, window, cx)
+                        });
+                    }),
+            );
         }
         return menu;
     }
@@ -1648,25 +1980,28 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
     // splits its own row menu the same way, and the two sections do not mix.
     let renaming = this.clone();
     let rename_path = path.to_owned();
-    menu =
-        menu.separator().item(
-            PopupMenuItem::new("Rename…").on_click(move |_event, window, cx| {
+    menu = menu.separator().item(
+        PopupMenuItem::new("Rename…")
+            .disabled(!can_mutate)
+            .on_click(move |_event, window, cx| {
                 renaming.update(cx, |app, cx| {
                     app.open_rename_dialog(&rename_path, window, cx)
                 });
             }),
-        );
+    );
     // A document the Project does not hold yet has nothing to delete: the draft
     // that proposes it is what a discard throws away.
     if !target.proposal {
         let deleting = this.clone();
         let delete_paths = vec![path.to_owned()];
         menu = menu.item(
-            PopupMenuItem::new("Delete…").on_click(move |_event, window, cx| {
-                deleting.update(cx, |app, cx| {
-                    app.open_delete_dialog(&delete_paths, window, cx)
-                });
-            }),
+            PopupMenuItem::new("Delete…")
+                .disabled(!can_mutate)
+                .on_click(move |_event, window, cx| {
+                    deleting.update(cx, |app, cx| {
+                        app.open_delete_dialog(&delete_paths, window, cx)
+                    });
+                }),
         );
     }
     if target.can_review {
@@ -1697,10 +2032,16 @@ fn tree_menu(path: &str, menu: PopupMenu, _window: &mut Window, cx: &mut App) ->
         } else if !state.uploaded {
             menu = menu.item(PopupMenuItem::new("Draft not ready").disabled(true));
         }
-        if state.conflicts {
-            menu = menu.item(PopupMenuItem::new("Draft needs reconciling").disabled(true));
-        } else if state.behind {
-            menu = menu.item(PopupMenuItem::new("Behind the remote version").disabled(true));
+        if state.conflicts || state.behind {
+            let app = this.clone();
+            let path = path.to_owned();
+            menu = menu.item(
+                PopupMenuItem::new("Update draft…")
+                    .disabled(busy || state.uploading)
+                    .on_click(move |_, window, cx| {
+                        app.update(cx, |app, cx| app.reconcile_memory(&path, window, cx));
+                    }),
+            );
         }
     }
     if target.draft_id.is_some() {
@@ -1731,8 +2072,9 @@ fn batch_menu(
     discards: usize,
     menu: PopupMenu,
     app: &Entity<DesktopApp>,
-    _cx: &mut App,
+    cx: &mut App,
 ) -> PopupMenu {
+    let can_mutate = !app.read(cx).memory_busy() && app.read(cx).memory_ref().can_mutate(targets);
     let opening = app.clone();
     let opening_paths = targets.to_vec();
     let mut menu = menu.item(
@@ -1750,13 +2092,15 @@ fn batch_menu(
         } else {
             format!("Delete {deletes} Files…")
         };
-        menu = menu.separator().item(PopupMenuItem::new(label).on_click(
-            move |_event, window, cx| {
-                deleting.update(cx, |app, cx| {
-                    app.open_delete_dialog(&deleting_paths, window, cx)
-                });
-            },
-        ));
+        menu = menu
+            .separator()
+            .item(PopupMenuItem::new(label).disabled(!can_mutate).on_click(
+                move |_event, window, cx| {
+                    deleting.update(cx, |app, cx| {
+                        app.open_delete_dialog(&deleting_paths, window, cx)
+                    });
+                },
+            ));
     }
     if drafts == 0 && discards == 0 {
         return menu;
@@ -1770,13 +2114,13 @@ fn batch_menu(
         } else {
             format!("Request review for {drafts} changes…")
         };
-        menu = menu.item(
-            PopupMenuItem::new(label).on_click(move |_event, window, cx| {
+        menu = menu.item(PopupMenuItem::new(label).disabled(!can_mutate).on_click(
+            move |_event, window, cx| {
                 reviewing.update(cx, |app, cx| {
                     app.request_review_for_selection(&reviewing_paths, window, cx)
                 });
-            }),
-        );
+            },
+        ));
     }
     if discards > 0 {
         let discarding = app.clone();
@@ -1786,13 +2130,13 @@ fn batch_menu(
         } else {
             format!("Discard {discards} drafts…")
         };
-        menu = menu.item(
-            PopupMenuItem::new(label).on_click(move |_event, window, cx| {
+        menu = menu.item(PopupMenuItem::new(label).disabled(!can_mutate).on_click(
+            move |_event, window, cx| {
                 discarding.update(cx, |app, cx| {
                     app.open_discard_dialog(&discarding_paths, window, cx)
                 });
-            }),
-        );
+            },
+        ));
     }
     menu
 }
@@ -1821,6 +2165,9 @@ mod tests {
         MemoryDocument {
             resource_id: format!("mem_{path}"),
             published: true,
+            is_directory: false,
+            org_owned: false,
+            draft_deleted: false,
             path: path.to_owned(),
             content: content.to_owned(),
             draft_content: None,

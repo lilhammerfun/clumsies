@@ -365,22 +365,9 @@ impl ReviewsScreen {
         self.list_focus.is_focused(window)
     }
 
-    /// The section's list column: the queue of Reviews, under a header row of
-    /// its own that names the section.
-    pub fn list(
-        &self,
-        project: AnyElement,
-        window: &Window,
-        cx: &mut Context<DesktopApp>,
-    ) -> AnyElement {
-        let header = crate::components::header::row()
-            .child(div().text_style(&ui::BODY).child("Reviews"))
-            .child(project);
-        let ring = if self.list_focused(window) {
-            cx.theme().ring
-        } else {
-            transparent_black()
-        };
+    /// The review queue, with only the project scope in its shared header.
+    pub fn list(&self, project: AnyElement, cx: &mut Context<DesktopApp>) -> AnyElement {
+        let header = crate::components::header::row().child(project);
 
         let mut rows: Vec<AnyElement> = Vec::with_capacity(self.reviews.len());
         for (index, review) in self.reviews.iter().enumerate() {
@@ -409,11 +396,9 @@ impl ReviewsScreen {
                     .v_flex()
                     .flex_1()
                     .min_h(px(0.))
-                    .m_2()
-                    .p_1()
+                    .mx(px(ui::PANE_INSET))
+                    .my_2()
                     .rounded(px(ui::RADIUS))
-                    .border_1()
-                    .border_color(ring)
                     .track_focus(&self.list_focus)
                     .tab_stop(true)
                     .overflow_y_scroll()

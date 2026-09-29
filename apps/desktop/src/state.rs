@@ -9,6 +9,7 @@
 //! Anything unreadable is simply no memory at all: a client that refused to
 //! start over a file it wrote itself would be worse than one that forgets.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,9 @@ pub struct WindowState {
     /// The path of the document that was in front.
     #[serde(default)]
     pub active: Option<String>,
+    /// Collapsed folders are scoped to their project, independently of open tabs.
+    #[serde(default)]
+    pub folded_by_project: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Where the state lives: one small file under `XDG_STATE_HOME`, or the
@@ -88,6 +92,7 @@ mod tests {
             project_id: Some("prj_one".to_owned()),
             open: vec!["a.md".to_owned(), "b/c.md".to_owned()],
             active: Some("b/c.md".to_owned()),
+            folded_by_project: [("prj_one".to_owned(), ["b".to_owned()].into())].into(),
         };
         write(&path, &state).expect("the state should be writable");
         assert_eq!(read(&path), state);
@@ -103,5 +108,12 @@ mod tests {
         std::fs::write(&path, "not json").expect("the file should be writable");
         assert_eq!(read(&path), WindowState::default());
         let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn older_window_state_without_folders_remains_readable() {
+        let state: WindowState =
+            serde_json::from_str(r#"{"project_id":"p","open":["a.md"],"active":"a.md"}"#).unwrap();
+        assert_eq!(state.active.as_deref(), Some("a.md"));
+        assert!(state.folded_by_project.is_empty());
     }
 }

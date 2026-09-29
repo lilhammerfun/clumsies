@@ -12,6 +12,8 @@ use gpui_kit::*;
 
 /// Spacing steps on the 4px grid.
 pub const SPACE_XS: f32 = 4.;
+/// Shared outer horizontal inset for pane toolbars and navigator lists.
+pub const PANE_INSET: f32 = SPACE_XS;
 pub const SPACE_SM: f32 = 8.;
 pub const SPACE_MD: f32 = 12.;
 pub const SPACE_LG: f32 = 16.;
@@ -124,6 +126,8 @@ pub fn apply_brand(cx: &mut App) {
     tokens.colors.selection = selection;
     let theme = Theme::global_mut(cx);
     theme.apply_semantic_tokens(&tokens);
+    // Lists use the same neutral selection surface as document tabs.
+    theme.list.active_highlight = false;
     theme.link = link;
     theme.link_hover = hover;
     theme.link_active = active;

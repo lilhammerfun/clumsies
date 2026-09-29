@@ -74,7 +74,7 @@ will do. Ordered the way the macOS client uses them.
 | `DashboardModel` + `DashboardSummary` (1 screen) | Two reads joined: the Server's published inventory, and the daemon's local retrieval telemetry. | Ported: `engine::dashboard` asks the Server through the proxy and the engine over its socket, with the Server's own day boundaries so both halves describe the same days. The daemon does not export the nested types of its answer, so the fields this client draws are mirrored in `engine.rs` and pinned by a test. |
 | `NativeTextEditor` (1 screen) | The document body: plain text, undo, find, a centred column. | Library. `input::Textarea`, sized by `components/fill.rs`; the centred column is `DocumentContentMetrics`' idea and is not built. |
 | `DocumentTabStrip` (1 screen) | Pill tabs, a close button revealed on hover, width-aware layout. | Compose, for now in `screens/memory.rs`: the library's `tab` has no per-tab close button. It moves to `components/` when a second screen wants tabs. |
-| `FileTreeView` (1 screen) | The Memory navigator: multi-select, draft-coloured titles, rename, context menu. | Ours, partly. Selection works, one row or a set of them, with the row menu acting on the selection and reporting the draft's synchronization; a folder is opened by its own control or by Left/Right rather than by a click on the row, and a draft is marked with a label rather than a colour. |
+| `FileTreeView` (1 screen) | The Memory navigator: multi-select, draft-coloured titles, rename, context menu. | Ours, partly. Selection works, one row or a set of them, with the row menu acting on the selection and reporting the draft's synchronization; a folder is opened by its own control or by Left/Right rather than by a click on the row, and filenames use semantic theme colors for new, modified and deleted drafts. |
 | `ReviewRequestSheet` (3 files) | Title, description, batch confirmation, conflict steps. | Ours: `document::ReviewDialog` asks for one draft or for a whole selection's worth in a single Review; candidates and conflicts are unbuilt. |
 | `ReviewCommentRow`, `ReviewCommentComposer` (2 files each) | One comment, and a 2–6 line composer. | Library pieces (`input`, `avatar`, `button`), composed when Reviews lands. |
 | `DraftConflictView`, `DraftResolutionContent`, `DraftReconciliationView` (2 files each) | Choosing between remote and draft, per conflict. | Ours later. Nothing in the library is close; it is a domain surface and needs its own component. |
@@ -147,9 +147,9 @@ tokens independently.
 
 ## File rows and menus
 
-The reusable path tree composes GPUI Tree, ListItem, Icon, Tooltip and Tag.
+The reusable path tree composes GPUI Tree, ListItem, Icon and Tooltip.
 Rows use the library's small text scale and radius, with folder/file icons,
-truncated names and a trailing secondary status tag. Folder icons toggle expansion and show open/closed state without a separate
+truncated names and semantic filename colors (new: success, modified: warning, deleted: danger). Selection preserves semantic filename colors for files and directories; only names without a status color use the selected foreground. The library selection background identifies the active row. No draft tags are added. Folder icons toggle expansion and show open/closed state without a separate
 arrow; multi-selection uses the same ListItem color tokens as single
 selection. Keep our path projection and selection behavior, not a second set
 of widget styles.
@@ -157,3 +157,11 @@ of widget styles.
 All action and project menus use PopupMenu unchanged. The shared theme maps
 its semantic popup surface at startup and on appearance changes, using GPUI's
 existing colors; no per-menu palette or hand-mixed colors are allowed.
+
+Memory operations reuse PopupMenu submenus, native save dialogs, the shared modal and GPUI Input/Textarea and Diff components. Explicit directory records remain in the model even when empty; path validation is shared by Move To and drag/drop. Organization selections and reconciliation use existing server APIs through the daemon session.
+
+All pane header rows (Memory, Reviews and Dashboard) and navigator lists (Memory and Reviews) use the shared 4px outer horizontal inset, defined once as `ui::PANE_INSET`. Do not stack an extra horizontal padding layer around the tree; keep row hit-area padding and directory indentation inside the reusable row.
+
+Project settings live in the content toolbar’s More menu, including when no document tab is open. Do not add a separate settings button to the navigator header.
+
+Project settings own only work-folder bindings, using the existing modal, buttons and native directory picker. Machine-wide Agent connections belong to application Settings → Agents, matching macOS SettingsNavigation and AgentsSettingsView; reuse GPUI SettingPage, SettingItem and Switch. The MCP configuration clipboard action also lives on that Agents page. Bindings and managed AI configuration stay owned by daemon IPC; the desktop does not write host configuration files itself.

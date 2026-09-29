@@ -74,14 +74,23 @@ fn write(level: &str, message: &str) {
 }
 
 /// The file this client logs to, if it has one.
+pub fn path() -> Option<std::path::PathBuf> {
+    match std::env::var("CLUMSIES_DESKTOP_LOG") {
+        Ok(path) if !path.is_empty() => Some(path.into()),
+        _ => match std::env::var_os("CLUMSIES_DAEMON_ROOT") {
+            Some(root) => Some(std::path::PathBuf::from(root).join("desktop.log")),
+            None => clumsiesd::DaemonConfig::from_env()
+                .ok()
+                .map(|config| config.log_dir.join("client.log")),
+        },
+    }
+}
+
 fn log_file() -> Option<File> {
-    let path = match std::env::var("CLUMSIES_DESKTOP_LOG") {
-        Ok(path) if !path.is_empty() => std::path::PathBuf::from(path),
-        _ => {
-            let root = std::env::var("CLUMSIES_DAEMON_ROOT").ok()?;
-            std::path::Path::new(&root).join("desktop.log")
-        }
-    };
+    let path = path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
     OpenOptions::new()
         .create(true)
         .append(true)

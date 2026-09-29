@@ -13,7 +13,7 @@ pub fn row() -> Div {
         .h_flex()
         .h(px(HEIGHT))
         .flex_shrink_0()
-        .px_3()
+        .px(px(crate::ui::PANE_INSET))
         .gap_2()
         .items_center()
 }

@@ -8,6 +8,7 @@ mod assets;
 mod components;
 mod engine;
 mod logging;
+mod memory_paths;
 mod screens;
 mod shell;
 mod sign_in;

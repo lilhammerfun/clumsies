@@ -15,6 +15,7 @@ pub struct NewMemoryDialog {
     /// The folder the new document goes in, which is the row it was asked for
     /// from; empty means the Project's root.
     folder: String,
+    directory: bool,
     name: Entity<InputState>,
 }
 
@@ -26,18 +27,34 @@ impl NewMemoryDialog {
         window: &mut Window,
         cx: &mut Context<DesktopApp>,
     ) {
+        Self::open_kind(app, folder, suggested, false, window, cx);
+    }
+
+    pub fn open_kind(
+        app: WeakEntity<DesktopApp>,
+        folder: &str,
+        suggested: &str,
+        directory: bool,
+        window: &mut Window,
+        cx: &mut Context<DesktopApp>,
+    ) {
         let field = cx.new(|cx| InputState::new(window, cx).default_value(suggested.to_owned()));
         let folder = folder.to_owned();
         let view = cx.new(|_| Self {
             app,
             folder,
             name: field,
+            directory,
         });
         let footer_view = view.clone();
         modal::open(
             window,
             cx,
-            "New memory",
+            if directory {
+                "New folder"
+            } else {
+                "New memory"
+            },
             modal::NARROW,
             move |dialog, _window, cx| {
                 let ready = footer_view.read(cx).ready(cx);
@@ -63,7 +80,7 @@ impl NewMemoryDialog {
     /// and the daemon validates the path it is given.
     fn ready(&self, cx: &App) -> bool {
         let name = self.name.read(cx).value().trim().to_owned();
-        !name.is_empty() && name != "." && name != ".." && !name.contains('/')
+        crate::memory_paths::valid(&name) && !name.contains('/')
     }
 
     fn create(&mut self, window: &mut Window, cx: &mut App) {
@@ -76,7 +93,9 @@ impl NewMemoryDialog {
         } else {
             format!("{}/{name}", self.folder)
         };
-        let _ = self.app.update(cx, |app, cx| app.create_memory(&path, cx));
+        let _ = self.app.update(cx, |app, cx| {
+            app.create_memory_entry(&path, self.directory, cx)
+        });
         window.close_dialog(cx);
     }
 }
@@ -96,7 +115,7 @@ impl Render for NewMemoryDialog {
                     .text_style(&ui::CAPTION)
                     .text_color(cx.theme().muted_foreground)
                     .child(format!(
-                        "A new Memory document in {shown}. It is saved as a draft, and exists for the Project once its Review is merged."
+                        "A new {} in {shown}. It is saved as a draft and shared after review and merge.", if self.directory { "folder" } else { "document" }
                     )),
             )
             .child(Input::new(&self.name))

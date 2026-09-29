@@ -16,11 +16,9 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::component::{Icon, IconName, Sizable};
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::ui;
@@ -30,11 +28,15 @@ use crate::ui;
 #[derive(Clone, PartialEq, Eq)]
 pub struct PathEntry {
     pub path: String,
+    pub directory: bool,
 }
 
 impl PathEntry {
     pub fn new(path: impl Into<String>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            directory: false,
+        }
     }
 }
 
@@ -169,7 +171,7 @@ impl RowClick {
 #[derive(Default)]
 pub struct Decoration {
     pub tone: Option<Hsla>,
-    pub label: Option<&'static str>,
+    pub directory: bool,
 }
 
 /// The flat list of paths becomes the directories that imply it: directories
@@ -179,7 +181,7 @@ pub struct Decoration {
 pub fn items(entries: &[PathEntry], folded: &BTreeSet<String>) -> Vec<TreeItem> {
     let mut root = Directory::default();
     for entry in entries {
-        root.insert(&entry.path);
+        root.insert(&entry.path, entry.directory);
     }
     root.into_items("", folded)
 }
@@ -191,11 +193,11 @@ struct Directory {
 }
 
 impl Directory {
-    fn insert(&mut self, path: &str) {
+    fn insert(&mut self, path: &str, directory: bool) {
         let mut parts = path.split('/').peekable();
         let mut node = self;
         while let Some(part) = parts.next() {
-            if parts.peek().is_none() {
+            if parts.peek().is_none() && !directory {
                 node.files.push(part.to_owned());
             } else {
                 node = node.directories.entry(part.to_owned()).or_default();
@@ -228,6 +230,17 @@ fn join(prefix: &str, name: &str) -> String {
     }
 }
 
+#[derive(Clone)]
+pub struct DragPaths {
+    pub paths: Vec<String>,
+    pub tree: EntityId,
+}
+impl Render for DragPaths {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        ListItem::new("dragged-paths").child(format!("{} selected", self.paths.len()))
+    }
+}
+
 /// The tree, with a screen's decoration on every row, a screen's menu on every
 /// row, and the selection the screen keeps. The path is handed to both the
 /// decoration and the menu, because that is all a screen needs to decide what a
@@ -237,14 +250,18 @@ pub fn path_tree(
     selection: &Selection,
     decorate: impl Fn(&str) -> Decoration + 'static,
     on_click: impl Fn(RowClick, &mut Window, &mut App) + 'static,
+    on_move: impl Fn(&[String], &str, &mut App) + 'static,
     build_menu: impl Fn(&str, PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
 ) -> impl IntoElement {
+    let tree_id = state.entity_id();
+    let moving = Rc::new(on_move);
     let selected = Rc::new(selection.clone());
     let clicked = Rc::new(on_click);
     tree(state, move |index, entry, _lead, _window, cx| {
         let path = entry.item().id.to_string();
         let decoration = decorate(&path);
-        let icon = if entry.is_folder() {
+        let is_folder = entry.is_folder() || decoration.directory;
+        let icon = if is_folder {
             Icon::default().path(if entry.is_expanded() {
                 "icons/folder-open.svg"
             } else {
@@ -253,12 +270,9 @@ pub fn path_tree(
         } else {
             Icon::new(IconName::FileText)
         };
-        let label = decoration
-            .label
-            .map(|label| Tag::secondary().xsmall().child(label));
         // The folder icon toggles expansion; the rest of the row selects.
         // Files and folders each occupy a single icon slot.
-        let leading_icon = if entry.is_folder() {
+        let leading_icon = if is_folder {
             let pressed = clicked.clone();
             let control_path = path.clone();
             div()
@@ -312,10 +326,15 @@ pub fn path_tree(
                             .flex_1()
                             .min_w(px(0.))
                             .truncate()
-                            .when_some(decoration.tone, |this, tone| this.text_color(tone))
+                            .text_color(decoration.tone.unwrap_or_else(|| {
+                                if selected.contains(&path) {
+                                    cx.theme().accent_foreground
+                                } else {
+                                    cx.theme().foreground
+                                }
+                            }))
                             .child(entry.item().label.clone()),
-                    )
-                    .children(label),
+                    ),
             );
         // GPUI Tree owns one active row. Our multi-selection uses exactly the
         // same GPUI ListItem selection token, rather than a second palette.
@@ -328,6 +347,30 @@ pub fn path_tree(
         } else {
             item
         };
+        let drag = DragPaths {
+            paths: if selected.contains(&path) {
+                selected.paths().cloned().collect()
+            } else {
+                vec![path.clone()]
+            },
+            tree: tree_id,
+        };
+        let destination = if is_folder {
+            path.clone()
+        } else {
+            path.rsplit_once('/')
+                .map(|(parent, _)| parent.to_owned())
+                .unwrap_or_default()
+        };
+        let moved = moving.clone();
+        let item = item
+            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .on_drop(move |drag: &DragPaths, _, cx| {
+                if drag.tree == tree_id {
+                    cx.stop_propagation();
+                    moved(&drag.paths, &destination, cx);
+                }
+            });
         let press = clicked.clone();
         let pressed_path = path.clone();
         let menu_row = selected.clone();

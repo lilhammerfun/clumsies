@@ -10,7 +10,7 @@ use gpui_kit::base::Disableable;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::*;
-use gpui_kit::component::{Icon, Root, Theme, WindowExt as _};
+use gpui_kit::component::{Root, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::components::header;
@@ -70,6 +70,7 @@ pub struct DesktopApp {
     /// Which debounced store owns the editor. A store that a later keystroke
     /// has superseded must not report its result as the editor's state.
     save_generation: u64,
+    memory_busy: bool,
     /// Dropping it stops watching the system's light or dark preference.
     _appearance: Subscription,
 }
@@ -134,6 +135,7 @@ impl DesktopApp {
             sign_in,
             signed_in,
             save_generation: 0,
+            memory_busy: false,
             _appearance: appearance,
         };
         // A Project that already holds a proposal must show it on the first
@@ -176,17 +178,6 @@ impl DesktopApp {
         &self.memory
     }
 
-    /// Project settings, right-aligned above the Memory navigator.
-    fn settings_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let button = crate::components::header::button("project-settings")
-            .icon(Icon::default().path("icons/settings.svg"))
-            .tooltip("Project settings")
-            .on_click(cx.listener(|app, _event, window, cx| app.open_project_settings(window, cx)));
-        crate::components::header::group()
-            .child(button)
-            .into_any_element()
-    }
-
     /// Opens Settings: whose account this window is signed in as, what it is
     /// talking to, and where this machine keeps what a reader would be asked
     /// for.
@@ -207,39 +198,42 @@ impl DesktopApp {
             "Settings",
             modal::WIDE,
             move |dialog, _window, cx| {
-                let footer = match dialog_view.read(cx).footer_state(cx) {
-                    settings::FooterState::Done => modal::footer(
-                        None,
-                        modal::primary("settings-done", "Done", true)
-                            .on_click(|_event, window, cx| window.close_dialog(cx))
-                            .into_any_element(),
-                    ),
-                    settings::FooterState::Action {
-                        confirm,
-                        enabled,
-                        busy,
-                    } => {
-                        let cancel = dialog_view.clone();
-                        let ok = dialog_view.clone();
-                        modal::footer(
-                            Some(
-                                modal::primary("settings-cancel-action", "Cancel", true)
-                                    .on_click(move |_event, _window, cx| {
-                                        let _ = cancel
-                                            .update(cx, |dialog, cx| dialog.cancel_action(cx));
-                                    })
-                                    .into_any_element(),
-                            ),
-                            modal::primary("settings-confirm", confirm, enabled)
-                                .loading(busy)
-                                .on_click(move |_event, _window, cx| {
-                                    let _ = ok.update(cx, |dialog, cx| dialog.confirm_action(cx));
+                let closing = dialog_view.clone();
+                let keeping = dialog_view.clone();
+                let done = dialog_view.clone();
+                let confirming = dialog_view.read(cx).confirm_close;
+                let working = dialog_view.read(cx).working();
+                let footer = if confirming {
+                    modal::footer(
+                        Some(
+                            Button::new("settings-keep-editing")
+                                .label("Keep editing")
+                                .on_click(move |_, _, cx| {
+                                    keeping.update(cx, |view, cx| view.keep_editing(cx));
                                 })
                                 .into_any_element(),
-                        )
-                    }
+                        ),
+                        Button::new("settings-discard")
+                            .label("Discard changes and close")
+                            .on_click(|_, window, cx| window.close_dialog(cx))
+                            .into_any_element(),
+                    )
+                } else {
+                    modal::footer(
+                        None,
+                        modal::primary("settings-done", "Done", !working)
+                            .on_click(move |_, window, cx| {
+                                if done.update(cx, |view, cx| view.request_close(cx)) {
+                                    window.close_dialog(cx);
+                                }
+                            })
+                            .into_any_element(),
+                    )
                 };
                 dialog
+                    .on_cancel(move |_, _, cx| {
+                        closing.update(cx, |view, cx| view.request_close(cx))
+                    })
                     .content({
                         let view = view.clone();
                         move |content, _window, _cx| content.child(view.clone())
@@ -259,8 +253,6 @@ impl DesktopApp {
         };
         settings::Facts {
             account: engine::account(),
-            server: health.map(|health| health.server_url.clone()),
-            daemon: health.map(|health| health.daemon_version.clone()),
             log_dir: health.map(|health| health.log_dir.clone()),
             client: env!("CARGO_PKG_VERSION"),
         }
@@ -323,7 +315,7 @@ impl DesktopApp {
             log_dir: health.map(|health| health.log_dir.clone()),
         };
         let app = cx.entity().downgrade();
-        let view = cx.new(|_| ProjectSettingsDialog::new(app, settings));
+        let view = cx.new(|cx| ProjectSettingsDialog::new(app, settings, cx));
         modal::open(
             window,
             cx,
@@ -354,6 +346,9 @@ impl DesktopApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if mode == Mode::Edit && (self.memory_busy || !self.memory.can_mutate(&[path.into()])) {
+            return;
+        }
         if self.memory.open_now(path, Some(mode), window, cx) {
             cx.notify();
         }
@@ -383,35 +378,22 @@ impl DesktopApp {
     /// Throws away the draft that carries a document's edits. macOS does this
     /// without asking; the published document is untouched either way.
     pub fn discard_draft_for(&mut self, path: &str, cx: &mut Context<Self>) {
+        if self.memory_busy || !self.memory.can_mutate(&[path.into()]) {
+            return;
+        }
         let Some((draft_id, resource_id)) = self.memory.draft_for_path(path) else {
             return;
         };
         let Some(project_id) = self.memory.project_id().map(str::to_owned) else {
             return;
         };
-        let discarded = resource_id.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { engine::discard_draft(&project_id, &draft_id, &resource_id) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            this.update(cx, |app, cx| {
-                match result {
-                    Ok(response) => crate::logging::info(&format!(
-                        "discarded {} for {}",
-                        response.draft_id, discarded
-                    )),
-                    Err(error) => crate::logging::error(&format!(
-                        "could not discard the draft for {discarded}: {error}"
-                    )),
-                }
-                app.refresh_drafts(cx);
-                app.reload_memory(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        self.run_plan(
+            "Discard draft".into(),
+            vec![Box::new(move || {
+                engine::discard_draft(&project_id, &draft_id, &resource_id).map(|_| ())
+            })],
+            cx,
+        );
     }
 
     /// Starts a new Memory document in a folder, which is the one command the
@@ -425,9 +407,40 @@ impl DesktopApp {
         NewMemoryDialog::open(cx.entity().downgrade(), folder, "untitled.md", window, cx);
     }
 
+    pub fn open_new_folder_dialog(
+        &mut self,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        NewMemoryDialog::open_kind(
+            cx.entity().downgrade(),
+            folder,
+            "New folder",
+            true,
+            window,
+            cx,
+        );
+    }
+
     /// Writes a new document as a draft. The file exists for the Project once
     /// the Review carrying it is merged.
-    pub fn create_memory(&mut self, path: &str, cx: &mut Context<Self>) {
+    pub fn create_memory_entry(&mut self, path: &str, directory: bool, cx: &mut Context<Self>) {
+        if self.memory_busy || !crate::memory_paths::valid(path) {
+            return;
+        }
+        if self
+            .memory
+            .paths()
+            .iter()
+            .chain(self.memory.folders().iter())
+            .any(|existing| existing == path)
+        {
+            self.memory
+                .set_error(format!("A file or folder already exists at {path}"));
+            cx.notify();
+            return;
+        }
         let Some(project_id) = self
             .selected_project
             .and_then(|index| self.projects.get(index))
@@ -445,9 +458,17 @@ impl DesktopApp {
             .trim_end_matches(".md")
             .to_owned();
         let content = format!("# {title}\n");
+        self.memory_busy = true;
         let asked = path.clone();
         let work = cx.background_executor().spawn(async move {
-            engine::create_document(&project_id, commit.as_deref(), &asked, &content).map(|_| ())
+            engine::create_memory_entry(
+                &project_id,
+                commit.as_deref(),
+                &asked,
+                if directory { "" } else { &content },
+                directory,
+            )
+            .map(|_| ())
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -457,7 +478,7 @@ impl DesktopApp {
                 // The file is a draft until a Review carries it, so it arrives
                 // as a proposal row on the read above and opens to be written
                 // in, which is what macOS does with a new Memory document.
-                if created {
+                if created && !directory {
                     app.memory.open_when_loaded(&path, Some(Mode::Edit));
                 }
             })
@@ -476,11 +497,203 @@ impl DesktopApp {
         RenameFolderDialog::open(cx.entity().downgrade(), folder, window, cx);
     }
 
+    pub fn propose_organization_change(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(project) = self
+            .memory
+            .project_id()
+            .filter(|p| *p != engine::ORGANIZATION_MEMORY)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let ids = self.memory.org_resources(&[path.to_owned()]);
+        if ids.len() != 1 || !self.memory.can_mutate(&[path.to_owned()]) {
+            return;
+        }
+        let resource = ids[0].clone();
+        self.run_plan(
+            "Propose organization change".into(),
+            vec![Box::new(move || {
+                engine::propose_org_change(&project, &resource)
+            })],
+            cx,
+        );
+    }
+
+    pub fn reconcile_memory(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.memory_busy {
+            return;
+        }
+        let Some((draft, _)) = self.memory.draft_for_path(path) else {
+            return;
+        };
+        let Some(project) = self.memory.project_id().map(str::to_owned) else {
+            return;
+        };
+        if !self.memory.pending_saves().is_empty() {
+            self.memory
+                .set_error("Wait for pending edits to save before updating the draft.".into());
+            cx.notify();
+            return;
+        }
+        crate::screens::reconciliation::ReconciliationDialog::open(
+            cx.entity().downgrade(),
+            project,
+            draft,
+            window,
+            cx,
+        );
+    }
+    pub fn apply_memory_reconciliation(
+        &mut self,
+        project: String,
+        candidate: engine::ReconciliationCandidate,
+        state: Option<engine::ReconciliationState>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.memory.project_id() != Some(project.as_str()) {
+            return;
+        }
+        self.run_plan(
+            "Update draft".into(),
+            vec![Box::new(move || {
+                engine::apply_reconciliation(&project, &candidate, state)
+            })],
+            cx,
+        );
+    }
+
+    pub fn memory_busy(&self) -> bool {
+        self.memory_busy
+    }
+
+    pub fn manageable_projects(&self) -> Vec<Project> {
+        self.projects
+            .iter()
+            .filter(|p| self.can_manage_project(&p.project_id))
+            .cloned()
+            .collect()
+    }
+    pub fn can_manage_project(&self, project: &str) -> bool {
+        self.account.as_ref().is_some_and(|a| {
+            a.capabilities.iter().any(|c| c == "admin:write")
+                || a.project_roles
+                    .get(project)
+                    .is_some_and(|r| r == "owner" || r == "admin")
+        })
+    }
+    pub fn change_memory_selection(
+        &mut self,
+        project: String,
+        ids: Vec<String>,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_manage_project(&project) || self.memory_busy {
+            return;
+        }
+        self.run_plan(
+            if add {
+                "Add to Project"
+            } else {
+                "Remove from Project"
+            }
+            .into(),
+            vec![Box::new(move || {
+                engine::change_org_selection(&project, &ids, add)
+            })],
+            cx,
+        );
+    }
+    pub fn export_memory(&mut self, paths: &[String], cx: &mut Context<Self>) {
+        let entries = self.memory.export_entries(paths, cx);
+        if entries.is_empty() || self.memory_busy {
+            return;
+        }
+        let directory = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        let choice = cx.prompt_for_new_path(&directory, Some("Memory.zip"));
+        cx.spawn(async move |this, cx| {
+            let path = match choice.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) => return,
+                _ => {
+                    this.update(cx, |app, cx| {
+                        app.memory
+                            .set_error("Could not open the save dialog".into());
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { engine::export_memory(&entries, &path) })
+                .await;
+            this.update(cx, |app, cx| {
+                if let Err(error) = result {
+                    app.memory.set_error(error);
+                } else {
+                    app.memory.set_notice(Some(Notice {
+                        text: "Memory exported".into(),
+                    }));
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn move_memory(&mut self, paths: &[String], destination: &str, cx: &mut Context<Self>) {
+        if self.memory_busy || !self.memory.can_mutate(paths) {
+            self.memory.set_error(
+                "Wait for pending saves and draft synchronization before moving files.".into(),
+            );
+            cx.notify();
+            return;
+        }
+        match crate::memory_paths::relocate(&self.memory.entries(), paths, destination) {
+            Ok(changes) => {
+                let calls = changes
+                    .into_iter()
+                    .filter_map(|(path, target)| {
+                        let edit = self.memory.edit_for_path(&path)?;
+                        Some(
+                            Box::new(move || engine::rename_document(&edit, &target).map(|_| ()))
+                                as Box<dyn FnOnce() -> Result<(), String> + Send>,
+                        )
+                    })
+                    .collect();
+                self.run_plan("Move Memory".into(), calls, cx);
+            }
+            Err(error) => {
+                self.memory.set_error(error);
+                cx.notify();
+            }
+        }
+    }
+
     /// Renames a folder by renaming each document below it, in path order, so
     /// that the relative paths inside the folder survive.
     pub fn rename_folder(&mut self, folder: &str, name: &str, cx: &mut Context<Self>) {
+        if self.memory_busy || !self.memory.can_mutate(&[folder.into()]) {
+            return;
+        }
         let plan = self.memory.folder_rename_plan(folder, name);
         if plan.is_empty() {
+            return;
+        }
+        let changes: Vec<_> = plan
+            .iter()
+            .map(|(edit, path)| (edit.path.clone(), path.clone()))
+            .collect();
+        if let Err(error) = crate::memory_paths::validate_changes(&self.memory.entries(), &changes)
+        {
+            self.memory.set_error(error);
+            cx.notify();
             return;
         }
         let what = format!("{folder} renamed to {name}");
@@ -650,12 +863,8 @@ impl DesktopApp {
         // Deleting is about what the Project holds: a document that only exists
         // as a proposal is thrown away by a discard, which is the dialog its own
         // row offers.
-        let documents: Vec<String> = self
-            .memory
-            .delete_plan(paths)
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
+        let documents = self.memory.targets(paths);
+        let unpublished = self.memory.unpublished_deletions(paths).len();
         if documents.is_empty() {
             return;
         }
@@ -683,6 +892,11 @@ impl DesktopApp {
                 ),
                 "Delete files",
             ),
+        };
+        let message = if unpublished > 0 {
+            format!("{message}\n\n{unpublished} unpublished entries will be discarded immediately.")
+        } else {
+            message
         };
         ConfirmDialog::open(
             cx.entity().downgrade(),
@@ -764,6 +978,12 @@ impl DesktopApp {
         calls: Vec<Box<dyn FnOnce() -> Result<(), String> + Send>>,
         cx: &mut Context<Self>,
     ) {
+        if self.memory_busy || calls.is_empty() {
+            return;
+        }
+        self.memory_busy = true;
+        self.memory.clear_error();
+        cx.notify();
         let total = calls.len();
         let work = cx.background_executor().spawn(async move {
             let mut done = 0usize;
@@ -778,11 +998,12 @@ impl DesktopApp {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |app, cx| {
+                app.memory_busy = false;
                 match result {
                     Ok(done) => crate::logging::info(&format!("{what}: {done} of {total}")),
-                    Err((done, error)) => {
-                        crate::logging::error(&format!("{what}: {done} of {total}, then {error}"))
-                    }
+                    Err((done, error)) => app
+                        .memory
+                        .set_error(format!("{what}: {done} of {total} completed. {error}")),
                 }
                 app.refresh_drafts(cx);
                 app.reload_memory(cx);
@@ -807,6 +1028,18 @@ impl DesktopApp {
     /// decide.
     /// Writes a new path for a document as a draft operation.
     pub fn rename_document(&mut self, edit: DocumentEdit, new_path: &str, cx: &mut Context<Self>) {
+        if self.memory_busy || !self.memory.can_mutate(&[edit.path.clone()]) {
+            return;
+        }
+        if let Err(error) = crate::memory_paths::validate_changes(
+            &self.memory.entries(),
+            &[(edit.path.clone(), new_path.to_owned())],
+        ) {
+            self.memory.set_error(error);
+            cx.notify();
+            return;
+        }
+        self.memory_busy = true;
         let path = new_path.to_owned();
         let asked = new_path.to_owned();
         let work = cx
@@ -847,21 +1080,31 @@ impl DesktopApp {
                 );
             }
             DialogAction::DeleteDocuments { paths } => {
-                let plan = self.memory.delete_plan(&paths);
-                if plan.is_empty() {
+                if self.memory_busy || !self.memory.can_mutate(&paths) {
                     return;
                 }
-                let what = self.batch_name(&paths, plan.len());
-                let calls: Vec<_> = plan
+                let plan = self.memory.delete_plan(&paths);
+                let unpublished = self.memory.unpublished_deletions(&paths);
+                let project = self.memory.project_id().unwrap_or_default().to_owned();
+                let what = self.batch_name(&paths, plan.len() + unpublished.len());
+                let mut calls: Vec<_> = plan
                     .into_iter()
                     .map(|(_, edit)| {
                         Box::new(move || engine::delete_document(&edit).map(|_| ()))
                             as Box<dyn FnOnce() -> Result<(), String> + Send>
                     })
                     .collect();
-                self.run_plan(format!("{what} proposed for deletion"), calls, cx);
+                calls.extend(unpublished.into_iter().map(|(_, draft, resource)| {
+                    let project = project.clone();
+                    Box::new(move || engine::discard_draft(&project, &draft, &resource).map(|_| ()))
+                        as Box<dyn FnOnce() -> Result<(), String> + Send>
+                }));
+                self.run_plan(format!("{what} deleted"), calls, cx);
             }
             DialogAction::DiscardDrafts { paths } => {
+                if self.memory_busy || !self.memory.can_mutate(&paths) {
+                    return;
+                }
                 let plan = self.memory.discard_plan(&paths);
                 if plan.is_empty() {
                     return;
@@ -922,9 +1165,12 @@ impl DesktopApp {
         result: Result<(), String>,
         cx: &mut Context<Self>,
     ) {
+        self.memory_busy = false;
         match result {
             Ok(()) => crate::logging::info(&format!("{path} {what}")),
-            Err(error) => crate::logging::error(&format!("could not change {path}: {error}")),
+            Err(error) => self
+                .memory
+                .set_error(format!("Could not change {path}: {error}")),
         }
         self.refresh_drafts(cx);
         self.reload_memory(cx);
@@ -955,6 +1201,12 @@ impl DesktopApp {
     /// The sections are the shell's, so the window only has to be told which one
     /// is open.
     pub fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        if section != Section::Memory
+            && self.selected_project.is_none()
+            && !self.projects.is_empty()
+        {
+            self.select_project(0, cx);
+        }
         self.shell.set_section(section);
         // The Reviews queue is read when the section is first opened, not at
         // every switch: the Server is asked, and its answer does not change by
@@ -973,6 +1225,24 @@ impl DesktopApp {
 
     /// A Project was picked from the list header's panel.
     pub fn choose_project(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.memory_busy || !self.memory.pending_saves().is_empty() {
+            self.memory.set_error(
+                "Wait for pending saves and operations before switching projects.".into(),
+            );
+            cx.notify();
+            return;
+        }
+        if index == self.projects.len() {
+            self.selected_project = None;
+            let result = engine::organization_memory();
+            let (checkout, error) = match result {
+                Ok(c) => (Some(c), None),
+                Err(e) => (None, Some(e)),
+            };
+            self.memory.set_checkout(checkout, error, cx);
+            cx.notify();
+            return;
+        }
         self.select_project(index, cx);
     }
 
@@ -1343,7 +1613,19 @@ impl DesktopApp {
         self.set_document_mode(mode, cx);
     }
 
+    pub fn can_edit_memory(&self) -> bool {
+        !self.memory_busy
+            && self.memory.selected_document().is_some_and(|doc| {
+                !doc.is_directory
+                    && !doc.draft_deleted
+                    && self.memory.can_mutate(&[doc.path.clone()])
+            })
+    }
+
     pub fn set_document_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        if mode == Mode::Edit && !self.can_edit_memory() {
+            return;
+        }
         if let Some(pane) = self.memory.active_pane_mut() {
             pane.set_mode(mode);
         }
@@ -1385,6 +1667,8 @@ impl DesktopApp {
             draft_id: draft.map(|draft| draft.draft_id.clone()),
             resource_id: document.resource_id.clone(),
             published: document.published,
+            is_directory: document.is_directory,
+            org_owned: draft.is_some_and(|d| d.scope == clumsiesd::DaemonDraftScope::Org),
             path: document.path.clone(),
             content: pane.text(cx),
         })
@@ -1402,13 +1686,18 @@ impl DesktopApp {
         else {
             return;
         };
+        let scope = project_id.clone();
         let work = cx
             .background_executor()
             .spawn(async move { engine::drafts(&project_id) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
-            this.update(cx, |app, cx| app.drafts_refreshed(result, cx))
-                .ok();
+            this.update(cx, |app, cx| {
+                if app.memory.project_id() == Some(scope.as_str()) {
+                    app.drafts_refreshed(result, cx);
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -1717,6 +2006,15 @@ impl DesktopApp {
 
     /// Re-reads the Project's Memory, which a publication changes.
     fn reload_memory(&mut self, cx: &mut Context<Self>) {
+        if self.selected_project.is_none()
+            && self.memory.project_id() == Some(engine::ORGANIZATION_MEMORY)
+        {
+            match engine::organization_memory() {
+                Ok(c) => self.memory.set_checkout(Some(c), None, cx),
+                Err(e) => self.memory.set_error(e),
+            }
+            return;
+        }
         let Some(project) = self
             .selected_project
             .and_then(|index| self.projects.get(index))
@@ -1907,8 +2205,12 @@ impl DesktopApp {
             self.projects
                 .iter()
                 .map(|project| project.name.clone())
+                .chain(
+                    (self.shell.section() == Section::Memory)
+                        .then(|| "Organization Memory".to_owned()),
+                )
                 .collect(),
-            self.selected_project,
+            self.selected_project.or(Some(self.projects.len())),
             move |index, _, cx| app.update(cx, |app, cx| app.choose_project(index, cx)),
         )
     }
@@ -1916,18 +2218,10 @@ impl DesktopApp {
     /// The open section's list column, where the section has one. A section
     /// that has no screen yet says so rather than drawing an empty column with
     /// no explanation.
-    fn section_list(
-        &self,
-        picker: AnyElement,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    fn section_list(&self, picker: AnyElement, cx: &mut Context<Self>) -> Option<AnyElement> {
         match self.shell.section() {
-            Section::Memory => {
-                let settings = self.settings_button(cx);
-                Some(self.memory.list(picker, settings, window, cx))
-            }
-            Section::Reviews => Some(self.reviews.list(picker, window, cx)),
+            Section::Memory => Some(self.memory.list(picker, cx)),
+            Section::Reviews => Some(self.reviews.list(picker, cx)),
             // macOS's Dashboard is a sidebar beside one page: it has no
             // navigator, and the Project filter travels in the page's own
             // header, which is where macOS keeps it too.
@@ -1945,7 +2239,10 @@ impl DesktopApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match self.shell.section() {
-            Section::Memory => self.memory.detail(&self.actions_focus, window, cx),
+            Section::Memory => {
+                self.memory
+                    .detail(self.memory_busy, &self.actions_focus, window, cx)
+            }
             Section::Reviews => self.reviews.detail(actions, window, cx),
             // The Dashboard's cards and panels are laid out by the width they
             // are given, which is the page's own and not the window's — and the
@@ -2067,7 +2364,7 @@ impl Render for DesktopApp {
         chrome.width = width;
         let picker = self.project_filter(cx);
         let slots = Slots {
-            list: self.section_list(picker, window, cx),
+            list: self.section_list(picker, cx),
             detail: self.section_detail(actions, window, cx),
         };
         let shell = self.shell.render(window, cx, chrome, slots);

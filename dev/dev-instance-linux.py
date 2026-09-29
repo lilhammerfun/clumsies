@@ -306,7 +306,8 @@ class Instance:
             [self.client_binary],
             log=os.path.join(self.logs, "client.log"),
             pid_file=self.client_pid,
-            environment={"CLUMSIES_DAEMON_ROOT": self.daemon_root},
+            environment={"CLUMSIES_DAEMON_ROOT": self.daemon_root,
+                         "CLUMSIES_AGENT_RUNTIME_BINARY": self.daemon_binary},
         )
 
     # -- the session

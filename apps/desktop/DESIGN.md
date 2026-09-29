@@ -245,10 +245,13 @@ every other dialog is:
 - **Three widths, never a number picked at the call site**: `NARROW` (448, the
   library's own default) for a question, `MEDIUM` (560) for a form or a
   read-out, `WIDE` (760) for a surface with a navigation column of its own.
-- **The actions live in the dialog's footer**, never in the content, so they
+- **Dialog actions live in the footer**, so they
   cannot scroll away from the reader who needs them. The safe action comes
-  first, the primary last.
-- **Escape always closes; a click outside does not.** A dialog here holds a form
+  first, the primary last. Settings page actions are the exception: Account
+  Cancel/Save stays with its form, as in macOS; the dialog footer only closes
+  Settings or confirms discarding edits.
+- **Escape requests closing; a click outside does not.** Unsaved account edits
+  require a discard decision, and active mutations finish before closing. A dialog here holds a form
   or a settings surface, and losing half-typed input to a stray click is worse
   than the extra Escape. macOS sheets behave the same way.
 - **The body scrolls**, which the library already does; a dialog taller than the
@@ -336,7 +339,7 @@ Three rules belong to the shell so that no screen repeats them:
   application draws minimize, maximize and close itself in that case.
 - **The keyboard reaches every region.** F6 moves the keyboard to the next
   region of Memory's window — the list, the work, the actions over it — and
-  Shift+F6 to the previous one; the focused region shows a ring. Enter or Space
+  Shift+F6 to the previous one; individual controls retain their focus feedback, but navigator lists have no enclosing focus ring. Enter or Space
   runs the focused action. F6 is the Windows key for moving between a window's
   regions, and it is the only way into the list and the actions at all, because a
   document editor consumes Tab. Inside the list the arrow keys move the
@@ -390,3 +393,17 @@ exist yet is not a deviation.
 | --- | --- | --- |
 | A draft that fell behind cannot be brought up to date | memory tree | macOS offers `Update from Remote Version` and `Review Remote Changes` where this client states the fact, because the daemon has no call for it: `project_retry_sync` re-uploads a draft, it does not rebase one onto what was published. Fix: a daemon call that applies the reconciliation candidate, and then the row offers the action. |
 | F6 stops at the work while the document in front is being read | F6's region walk | `focus_content` always hands the keyboard to the open pane's editor, and in Preview that editor's element is not in the view tree: the keyboard moves to a handle nothing draws, so the next F6 is never delivered and the walk cannot reach the actions or the rail. The walk is this client's own invention and the keyboard is not a priority (see the rules above), so this is **recorded rather than fixed**: whoever next takes the keyboard in hand decides whether a pane in Preview takes the keyboard itself, or whether the walk steps over a region that cannot take it. |
+
+### Navigator chrome
+
+The Reviews list header contains the project filter, without a repeated
+section title. Do not draw a focus border around the whole review queue;
+keep keyboard focus tracking and row selection feedback without framing
+the list in an accent color. The same rule applies to the Memory tree.
+GPUI lists use neutral accent selection (`active_highlight = false`), matching
+document tabs, rather than the library default blue list highlight.
+Pane headers use the shared header geometry.
+
+Memory folder collapse state is remembered separately for each project,
+including when no document tab is open. Older saved window state without
+folder information remains readable.

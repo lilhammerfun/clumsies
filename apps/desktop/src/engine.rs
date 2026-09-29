@@ -5,6 +5,13 @@
 //! message rather than panicking, because a signed-out or unreachable engine is
 //! a state the screens draw.
 
+mod diagnostics;
+pub use diagnostics::*;
+mod connections;
+pub use connections::*;
+mod memory;
+pub use memory::*;
+
 use std::collections::BTreeMap;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -64,6 +71,8 @@ pub struct MemoryDocument {
     /// with the create operation, and throwing it away is what deleting it
     /// means.
     pub published: bool,
+    pub is_directory: bool,
+    pub org_owned: bool,
     pub path: String,
     /// What the Project publishes today.
     pub content: String,
@@ -71,6 +80,7 @@ pub struct MemoryDocument {
     /// is what the reader last wrote, and the diff measures against
     /// [Self::content], because that is what a reviewer would see.
     pub draft_content: Option<String>,
+    pub draft_deleted: bool,
 }
 
 /// A Project's checkout: its documents and the Project ref they resolved from.
@@ -449,7 +459,7 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
             project_id: project_id.to_owned(),
         })
         .map_err(|error| error.to_string())?;
-    let mut documents = editable_documents(checkout.resources);
+    let mut documents = memory_entries(checkout.resources);
     let drafts = drafts(project_id)?;
     // A document with a proposal is opened as the proposal has it, which is
     // what the macOS client's catalog does when it builds a Project's list.
@@ -463,25 +473,62 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
         else {
             continue;
         };
-        document.draft_content = proposed_text_of(draft);
+        if let Ok(detail) = client().get_draft(&draft.draft_id) {
+            document.draft_content = proposed_text(&detail);
+            document.draft_deleted = detail
+                .operations
+                .iter()
+                .rev()
+                .find_map(|op| {
+                    if op.operation.delete.is_some() {
+                        Some(true)
+                    } else if op.operation.create.is_some() || op.operation.update.is_some() {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(false);
+            if let Some(path) = detail.operations.iter().rev().find_map(|op| {
+                op.operation
+                    .rename
+                    .as_ref()
+                    .map(|r| r.new_path.clone())
+                    .or_else(|| op.operation.create.as_ref().map(|c| c.path.clone()))
+            }) {
+                document.path = path;
+            }
+        }
     }
     // A draft that creates a file proposes a document the Project does not hold
     // yet, and that document is a row like any other: the reader can open it,
     // edit it, rename it, ask for a Review of it and throw it away. Nothing is
     // published behind it, which is what `published` says.
     for draft in &drafts {
+        if draft
+            .target_id
+            .as_ref()
+            .is_some_and(|id| documents.iter().any(|d| &d.resource_id == id))
+        {
+            continue;
+        }
         let Some(path) = draft.path.clone() else {
             continue;
         };
         if documents.iter().any(|document| document.path == path) {
             continue;
         }
+        let detail = client().get_draft(&draft.draft_id).ok();
+        let proposed = detail.as_ref().and_then(proposed_content);
         documents.push(MemoryDocument {
             resource_id: draft.draft_id.clone(),
             published: false,
+            is_directory: proposed.is_some_and(|content| content.is_directory),
+            org_owned: draft.scope == DaemonDraftScope::Org,
+            draft_deleted: false,
             path,
             content: String::new(),
-            draft_content: proposed_text_of(draft),
+            draft_content: proposed.map(|content| content.content.clone()),
         });
     }
     documents.sort_by(|left, right| left.path.cmp(&right.path));
@@ -494,13 +541,15 @@ pub fn checkout(project_id: &str) -> Result<Checkout, String> {
 
 /// Keep directory records out of the document-only editor. Files beneath
 /// them still produce the inferred tree folders supported by this client.
-fn editable_documents(resources: Vec<DaemonProjectCheckoutResource>) -> Vec<MemoryDocument> {
+fn memory_entries(resources: Vec<DaemonProjectCheckoutResource>) -> Vec<MemoryDocument> {
     let mut documents: Vec<_> = resources
         .into_iter()
-        .filter(|resource| !resource.content.is_directory)
         .map(|resource| MemoryDocument {
             resource_id: resource.resource_id,
             published: true,
+            is_directory: resource.content.is_directory,
+            org_owned: resource.scope == DaemonDraftScope::Org,
+            draft_deleted: false,
             path: resource.path,
             content: resource.content.content,
             draft_content: None,
@@ -564,6 +613,8 @@ pub fn sign_out(server_url: &str) -> Result<(), String> {
 pub struct Account {
     pub user: AccountUser,
     pub organization: String,
+    pub capabilities: Vec<String>,
+    pub project_roles: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -598,6 +649,16 @@ impl AccountUser {
 struct MeResponse {
     user: AccountUser,
     org: OrgName,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    projects: Vec<ProjectRole>,
+}
+
+#[derive(Deserialize)]
+struct ProjectRole {
+    project_id: String,
+    role: String,
 }
 
 #[derive(Deserialize)]
@@ -617,6 +678,12 @@ pub fn account() -> Result<Account, String> {
     Ok(Account {
         user: me.user,
         organization: me.org.name,
+        capabilities: me.capabilities,
+        project_roles: me
+            .projects
+            .into_iter()
+            .map(|p| (p.project_id, p.role))
+            .collect(),
     })
 }
 
@@ -742,6 +809,16 @@ pub fn create_document(
     path: &str,
     content: &str,
 ) -> Result<DaemonDraftOperationResponse, String> {
+    create_memory_entry(project_id, base_commit_id, path, content, false)
+}
+
+pub fn create_memory_entry(
+    project_id: &str,
+    base_commit_id: Option<&str>,
+    path: &str,
+    content: &str,
+    is_directory: bool,
+) -> Result<DaemonDraftOperationResponse, String> {
     draft_operation(&DaemonDraftOperationRequest {
         draft_id: None,
         base_commit_id: base_commit_id.map(str::to_owned),
@@ -752,7 +829,7 @@ pub fn create_document(
             create: Some(DaemonCreateDraftOperation {
                 path: path.to_owned(),
                 content: DaemonDraftContent {
-                    is_directory: false,
+                    is_directory,
                     org_source: None,
                     description: None,
                     content: content.to_owned(),
@@ -783,6 +860,8 @@ pub struct DocumentEdit {
     /// Whether the Project already holds this document. A proposal is written
     /// with the create operation, and has nothing to delete.
     pub published: bool,
+    pub is_directory: bool,
+    pub org_owned: bool,
     /// Where the document is, which is the path the create operation names.
     pub path: String,
     pub content: String,
@@ -816,7 +895,11 @@ pub fn rename_document(
         draft_id: document.draft_id.clone(),
         base_commit_id: document.base_commit_id.clone(),
         project_id: document.project_id.clone(),
-        scope: DaemonDraftScope::Project,
+        scope: if document.org_owned {
+            DaemonDraftScope::Org
+        } else {
+            DaemonDraftScope::Project
+        },
         resource: DaemonDraftResourceKind::Memory,
         op,
         source: Some(DaemonDraftOperationSource::Desktop),
@@ -830,7 +913,11 @@ pub fn delete_document(document: &DocumentEdit) -> Result<DaemonDraftOperationRe
         draft_id: document.draft_id.clone(),
         base_commit_id: document.base_commit_id.clone(),
         project_id: document.project_id.clone(),
-        scope: DaemonDraftScope::Project,
+        scope: if document.org_owned {
+            DaemonDraftScope::Org
+        } else {
+            DaemonDraftScope::Project
+        },
         resource: DaemonDraftResourceKind::Memory,
         op: DaemonDraftOperation {
             create: None,
@@ -881,13 +968,14 @@ pub fn discard_draft(
     draft_id: &str,
     resource_id: &str,
 ) -> Result<DaemonDraftOperationResponse, String> {
+    let detail = client().get_draft(draft_id).map_err(|e| e.to_string())?;
     let request = DaemonDraftOperationRequest {
         draft_id: Some(draft_id.to_owned()),
         base_commit_id: None,
         // The daemon resolves a draft by its id and checks that it belongs to
         // the Project the request names, so an empty one is refused.
         project_id: project_id.to_owned(),
-        scope: DaemonDraftScope::Project,
+        scope: detail.draft.scope,
         resource: DaemonDraftResourceKind::Memory,
         op: DaemonDraftOperation {
             create: None,
@@ -957,7 +1045,11 @@ pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationRespons
         draft_id: edit.draft_id.clone(),
         base_commit_id: edit.base_commit_id.clone(),
         project_id: edit.project_id.clone(),
-        scope: DaemonDraftScope::Project,
+        scope: if edit.org_owned {
+            DaemonDraftScope::Org
+        } else {
+            DaemonDraftScope::Project
+        },
         resource: DaemonDraftResourceKind::Memory,
         op,
         source: Some(DaemonDraftOperationSource::Desktop),
@@ -967,7 +1059,7 @@ pub fn store_document(edit: &DocumentEdit) -> Result<DaemonDraftOperationRespons
 /// The document's text as a draft carries it.
 fn content_of(edit: &DocumentEdit) -> DaemonDraftContent {
     DaemonDraftContent {
-        is_directory: false,
+        is_directory: edit.is_directory,
         org_source: None,
         description: None,
         content: edit.content.clone(),
@@ -1010,7 +1102,7 @@ pub fn submit_documents_review(
 /// it holds — whether that is the update that rewrote a published document or
 /// the create that would write a new one. Either way the operation carries the
 /// whole document, which is what this client stores.
-fn proposed_text(detail: &DaemonDraftDetail) -> Option<String> {
+fn proposed_content(detail: &DaemonDraftDetail) -> Option<&DaemonDraftContent> {
     detail.operations.iter().rev().find_map(|operation| {
         operation
             .operation
@@ -1024,18 +1116,11 @@ fn proposed_text(detail: &DaemonDraftDetail) -> Option<String> {
                     .as_ref()
                     .map(|create| &create.content)
             })
-            .map(|content| content.content.clone())
     })
 }
 
-/// What a draft proposes for its document, read from the daemon. Reading it is
-/// one daemon call per draft, and a draft whose text cannot be read leaves the
-/// document showing what the Project publishes.
-fn proposed_text_of(draft: &DaemonDraftSummary) -> Option<String> {
-    client()
-        .get_draft(&draft.draft_id)
-        .ok()
-        .and_then(|detail| proposed_text(&detail))
+fn proposed_text(detail: &DaemonDraftDetail) -> Option<String> {
+    proposed_content(detail).map(|content| content.content.clone())
 }
 
 /// The drafts of one Project that are still proposals: an open one takes
@@ -1764,7 +1849,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn directory_records_never_become_editable_documents() {
+    fn memory_entries_preserve_explicit_directory_metadata() {
         let resources: Vec<DaemonProjectCheckoutResource> =
             serde_json::from_value(serde_json::json!([
                 { "resource_id": "dir", "scope": "project", "resource_kind": "memory",
@@ -1783,8 +1868,15 @@ mod tests {
             .filter(|r| r.content.is_directory)
             .cloned()
             .collect();
-        assert!(editable_documents(directories).is_empty());
-        let documents = editable_documents(resources);
+        assert!(
+            memory_entries(directories)
+                .iter()
+                .all(|entry| entry.is_directory)
+        );
+        let documents: Vec<_> = memory_entries(resources)
+            .into_iter()
+            .filter(|entry| !entry.is_directory)
+            .collect();
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].resource_id, "file");
         assert_eq!(documents[0].path, "notes/readme.md");
