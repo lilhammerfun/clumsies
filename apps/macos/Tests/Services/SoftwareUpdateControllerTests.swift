@@ -8,21 +8,36 @@ import XCTest
 final class SoftwareUpdateControllerTests: XCTestCase {
     func testPreviewBuildVerifiesInstallableUpdatesBeforeExtraction() {
         XCTAssertTrue((Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String)?.hasSuffix("/preview-appcast.xml") == true)
-        XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "SUAllowsAutomaticUpdates"))
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "SUAllowsAutomaticUpdates") as? Bool, false)
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "SUEnableAutomaticChecks") as? Bool, false)
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "SUScheduledCheckInterval") as? Int, 0)
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "SUVerifyUpdateBeforeExtraction") as? Bool, true)
     }
 
-    func testSparkleChangesReachSettingsWithoutWritingTheInstalledAppsPreferences() async throws {
-        let bundle = try makeBundle(feedURL: "https://updates.invalid/empty")
+    func testManualOnlyUpdatesIgnorePreviouslyEnabledAutomaticPreferences() throws {
+        let bundle = try makeBundle(feedURL: "https://updates.invalid/empty", manualOnly: true)
         let identifier = try XCTUnwrap(bundle.bundleIdentifier)
-        let defaults = UserDefaults(suiteName: identifier)!
+        UserDefaults(suiteName: identifier)?.set(true, forKey: "SUAutomaticallyUpdate")
+        UserDefaults(suiteName: identifier)?.set(true, forKey: "SUEnableAutomaticChecks")
+        let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
+        let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: nil)
+        try updater.start()
+
+        XCTAssertFalse(updater.automaticallyChecksForUpdates)
+        XCTAssertFalse(updater.allowsAutomaticUpdates)
+        XCTAssertFalse(updater.automaticallyDownloadsUpdates)
+        XCTAssertTrue(updater.canCheckForUpdates)
+    }
+
+    func testSparkleReadinessReachesSettings() async throws {
+        let bundle = try makeBundle(feedURL: "https://updates.invalid/empty")
         let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
         let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: nil)
         let controller = SoftwareUpdateController(updater: updater)
         XCTAssertFalse(controller.canCheckForUpdates)
 
         let started = expectation(description: "Settings observes Sparkle becoming ready")
-        var observation = controller.objectWillChange
+        let observation = controller.objectWillChange
             .filter { controller.canCheckForUpdates }
             .prefix(1)
             .sink { started.fulfill() }
@@ -31,28 +46,6 @@ final class SoftwareUpdateControllerTests: XCTestCase {
         observation.cancel()
         XCTAssertTrue(controller.canCheckForUpdates)
         XCTAssertFalse(controller.hasAvailableUpdate, "Being ready to check must not advertise an update")
-
-        controller.automaticallyChecksForUpdates = true
-        controller.automaticallyDownloadsUpdates = true
-        XCTAssertTrue(controller.allowsAutomaticUpdates)
-        XCTAssertTrue(defaults.bool(forKey: "SUEnableAutomaticChecks"))
-        XCTAssertTrue(defaults.bool(forKey: "SUAutomaticallyUpdate"))
-        // Drain the setting changes before testing a change made outside the wrapper.
-        let enabled = expectation(description: "Enabled preferences reach Settings")
-        observation = controller.objectWillChange.prefix(1).sink { enabled.fulfill() }
-        await fulfillment(of: [enabled], timeout: 2)
-        observation.cancel()
-
-        let changed = expectation(description: "Sparkle preference changes reach Settings")
-        observation = controller.objectWillChange
-            .filter { !controller.automaticallyChecksForUpdates && !controller.allowsAutomaticUpdates }
-            .prefix(1)
-            .sink { changed.fulfill() }
-        updater.automaticallyChecksForUpdates = false
-        await fulfillment(of: [changed], timeout: 2)
-        observation.cancel()
-        XCTAssertFalse(controller.automaticallyDownloadsUpdates)
-        XCTAssertFalse(defaults.bool(forKey: "SUEnableAutomaticChecks"))
     }
 
     func testSparkleDistinguishesEmptyCurrentNewAndMissingFeeds() async throws {
@@ -72,17 +65,18 @@ final class SoftwareUpdateControllerTests: XCTestCase {
             let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: observer)
             let controller = SoftwareUpdateController(updater: updater)
             observer.controller = controller
+            controller.automaticallyChecksForUpdates = true
             var advertisedUpdate = false
             let observation = controller.$hasAvailableUpdate.sink { advertisedUpdate = advertisedUpdate || $0 }
 
             try updater.start()
-            updater.checkForUpdateInformation()
+            controller.checkForUpdateInformation()
             await fulfillment(of: [observer.finished], timeout: 5)
 
             XCTAssertEqual(observer.version, version, path)
             XCTAssertEqual(observer.error?.code, errorCode, path)
-            XCTAssertFalse(advertisedUpdate, "A version probe cannot present an update: \(path)")
-            XCTAssertFalse(controller.hasAvailableUpdate, "Completed probes do not leave stale reminders")
+            XCTAssertEqual(advertisedUpdate, path == "new", "A probe should only advertise an available update: \(path)")
+            XCTAssertEqual(controller.hasAvailableUpdate, path == "new", "The latest probe result should control the reminder: \(path)")
             observation.cancel()
         }
     }
@@ -198,7 +192,7 @@ final class SoftwareUpdateControllerTests: XCTestCase {
         return listener
     }
 
-    private func makeBundle(feedURL: String) throws -> Bundle {
+    private func makeBundle(feedURL: String, manualOnly: Bool = false) throws -> Bundle {
         let identifier = "ai.clumsies.update-test.\(UUID().uuidString)"
         let directory = FileManager.default.temporaryDirectory.appending(path: "\(identifier).app")
         let contents = directory.appending(path: "Contents")
@@ -207,7 +201,7 @@ final class SoftwareUpdateControllerTests: XCTestCase {
             try FileManager.default.removeItem(at: directory)
         }
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
-        let plist: [String: Any] = [
+        var plist: [String: Any] = [
             "CFBundleIdentifier": identifier,
             "CFBundleName": "Update Test",
             "CFBundleVersion": "1",
@@ -217,6 +211,10 @@ final class SoftwareUpdateControllerTests: XCTestCase {
             "SUVerifyUpdateBeforeExtraction": true,
             "SUPublicEDKey": "oCAiBe/ez4wochO1I9ziO1uCEpmES+e7ypC74HJwIvw=",
         ]
+        if manualOnly {
+            plist["SUAllowsAutomaticUpdates"] = false
+            plist["SUScheduledCheckInterval"] = 0
+        }
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: contents.appending(path: "Info.plist"))
         return try XCTUnwrap(Bundle(url: directory))
@@ -260,6 +258,10 @@ private final class UpdateCheckObserver: NSObject, SPUUpdaterDelegate, @preconcu
         if let controller {
             (controller as SPUUpdaterDelegate).updater?(updater, didFindValidUpdate: item)
         }
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        controller?.updaterDidNotFindUpdate(updater, error: error)
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
