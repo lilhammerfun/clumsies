@@ -160,8 +160,9 @@ struct PathTreeView: View {
                         badge: item.badge,
                         badgeColor: item.badgeColor
                     )
-                    .onTapGesture(count: 2) {
+                    .onTapGesture {
                         if item.isDirectory { toggleDirectory(entry.id) }
+                        selection = item.id
                     }
                     .accessibilityAction(named: String(localized: "Open")) {
                         if item.isDirectory { toggleDirectory(entry.id) }
