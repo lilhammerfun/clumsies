@@ -368,6 +368,10 @@ fn target_matches_scope(
 
 #[cfg(test)]
 mod tests {
+    // A symlink is how the tests reach a path the legacy layout refused; the
+    // Windows job builds these tests too, so the import travels with the tests
+    // that use it.
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     use serde_json::json;
@@ -467,6 +471,9 @@ mod tests {
         );
     }
 
+    // The one test that makes a symlink, which is a Unix call: the Windows job
+    // builds this module, so it is the test that is gated rather than the file.
+    #[cfg(unix)]
     #[test]
     fn symlink_manifest_is_never_followed() {
         let root = TempDir::new().unwrap();

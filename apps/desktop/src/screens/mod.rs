@@ -4,6 +4,7 @@ pub mod document;
 pub mod guidelines;
 pub mod memory;
 pub mod new_memory;
+pub mod new_memory_space;
 pub mod project_settings;
 pub mod reviews;
 pub mod settings;

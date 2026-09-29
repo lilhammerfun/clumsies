@@ -307,6 +307,9 @@ impl DesktopApp {
         let settings = ProjectSettings {
             project: project.name.clone(),
             project_id: project.project_id.clone(),
+            description: project.description.clone(),
+            revision: project.revision,
+            guidelines: engine::memory_guidelines_path(),
             storage: engine::project_storage(&project.project_id),
             server: health.map(|health| health.server_url.clone()),
             daemon: health
@@ -315,7 +318,7 @@ impl DesktopApp {
             log_dir: health.map(|health| health.log_dir.clone()),
         };
         let app = cx.entity().downgrade();
-        let view = cx.new(|cx| ProjectSettingsDialog::new(app, settings, cx));
+        let view = cx.new(|cx| ProjectSettingsDialog::new(app, settings, window, cx));
         modal::open(
             window,
             cx,
@@ -1224,7 +1227,7 @@ impl DesktopApp {
     }
 
     /// A Project was picked from the list header's panel.
-    pub fn choose_project(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub fn choose_project(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
         if self.memory_busy || !self.memory.pending_saves().is_empty() {
             self.memory.set_error(
                 "Wait for pending saves and operations before switching projects.".into(),
@@ -1232,7 +1235,7 @@ impl DesktopApp {
             cx.notify();
             return;
         }
-        if index == self.projects.len() {
+        let Some(index) = index else {
             self.selected_project = None;
             let result = engine::organization_memory();
             let (checkout, error) = match result {
@@ -1242,7 +1245,7 @@ impl DesktopApp {
             self.memory.set_checkout(checkout, error, cx);
             cx.notify();
             return;
-        }
+        };
         self.select_project(index, cx);
     }
 
@@ -1832,6 +1835,38 @@ impl DesktopApp {
         }
     }
 
+    /// Opens the dialog that makes a memory space, which the Project filter
+    /// offers and nothing else did.
+    pub fn open_new_memory_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let app = cx.entity().downgrade();
+        crate::screens::new_memory_space::NewMemorySpaceDialog::open(app, window, cx);
+    }
+
+    /// A memory space the Server has just created: the list is re-read, and the
+    /// window works in the space the reader made rather than the one it was in.
+    pub fn memory_space_created(&mut self, project_id: &str, cx: &mut Context<Self>) {
+        let (projects, projects_error) = read_projects();
+        self.projects = projects;
+        self.projects_error = projects_error;
+        match self
+            .projects
+            .iter()
+            .position(|project| project.project_id == project_id)
+        {
+            Some(index) => self.select_project(index, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// A memory space was renamed or described again: the Project list, which
+    /// every header draws the name from, is re-read.
+    pub fn memory_space_changed(&mut self, cx: &mut Context<Self>) {
+        let (projects, projects_error) = read_projects();
+        self.projects = projects;
+        self.projects_error = projects_error;
+        cx.notify();
+    }
+
     /// Re-reads whose session the daemon holds, which is what the Account pane
     /// changes: a password change or a connected identity provider hands the
     /// window a new session, and the rail's foot names it.
@@ -2200,18 +2235,20 @@ impl DesktopApp {
     }
 
     fn project_filter(&self, cx: &mut Context<Self>) -> AnyElement {
-        let app = cx.entity();
+        let selecting = cx.entity();
+        let creating = cx.entity();
         crate::components::project_filter::project_filter(
             self.projects
                 .iter()
                 .map(|project| project.name.clone())
-                .chain(
-                    (self.shell.section() == Section::Memory)
-                        .then(|| "Organization Memory".to_owned()),
-                )
                 .collect(),
-            self.selected_project.or(Some(self.projects.len())),
-            move |index, _, cx| app.update(cx, |app, cx| app.choose_project(index, cx)),
+            self.selected_project,
+            move |index, _, cx| {
+                selecting.update(cx, |app, cx| app.choose_project(index, cx));
+            },
+            move |window, cx| {
+                creating.update(cx, |app, cx| app.open_new_memory_space(window, cx));
+            },
         )
     }
 

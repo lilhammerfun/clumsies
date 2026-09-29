@@ -52,6 +52,14 @@ pub enum EngineStatus {
 pub struct Project {
     pub project_id: String,
     pub name: String,
+    /// What the space says about itself, which is the second thing a reader
+    /// sets when the name alone is not enough.
+    #[serde(default)]
+    pub description: String,
+    /// The revision the Server guards a write with: a change carries the one it
+    /// read, and the answer carries the next.
+    #[serde(default)]
+    pub revision: i64,
 }
 
 #[derive(Deserialize)]
@@ -450,6 +458,63 @@ pub fn projects() -> Result<Vec<Project>, String> {
         .map_err(|error| format!("unreadable Project list: {error}"))
 }
 
+/// Creates a memory space: a Project in this Organization, which is what the
+/// reader then works in. The Server names it and answers with the record.
+pub fn create_project(name: &str, description: &str) -> Result<Project, String> {
+    let body = serde_json::json!({ "name": name, "description": description }).to_string();
+    // The Server deduplicates creation on this key, so a retry of one click is
+    // one space rather than two.
+    let mut headers = json_headers();
+    headers.insert(
+        "Idempotency-Key".to_owned(),
+        uuid::Uuid::new_v4().to_string(),
+    );
+    let response = server("POST", "/api/v1/projects", headers, Some(body))?;
+    if response.status != 200 && response.status != 201 {
+        return Err(server_error(&response));
+    }
+    serde_json::from_str(&response.body).map_err(|error| format!("unreadable Project: {error}"))
+}
+
+/// Where this memory space keeps its guidelines on this machine, which is the
+/// one thing about a Project that the daemon owns rather than the Server.
+///
+/// It is read and not written: the daemon's only call for it carries the session
+/// as well, and the daemon deliberately does not hand the session back — macOS
+/// reads this path for the same reason and no more.
+pub fn memory_guidelines_path() -> Option<String> {
+    client()
+        .project_config()
+        .ok()
+        .and_then(|config| config.memory_guidelines_path)
+}
+
+/// Changes what a memory space is called, or what it says about itself.
+///
+/// The write carries the revision it was read at, which is what stops two
+/// members' edits from silently replacing each other; the answer is the space
+/// at its next revision.
+pub fn update_project(
+    project_id: &str,
+    name: &str,
+    description: &str,
+    revision: i64,
+) -> Result<Project, String> {
+    let body = serde_json::json!({ "name": name, "description": description }).to_string();
+    let mut headers = json_headers();
+    headers.insert("If-Match".to_owned(), revision.to_string());
+    let response = server(
+        "PATCH",
+        &format!("/api/v1/projects/{project_id}"),
+        headers,
+        Some(body),
+    )?;
+    if response.status != 200 {
+        return Err(server_error(&response));
+    }
+    serde_json::from_str(&response.body).map_err(|error| format!("unreadable Project: {error}"))
+}
+
 /// Every Memory document the Project currently resolves to, in path order.
 /// The daemon serves these from its own checkout; a Project that has not
 /// synced yet reports that instead of an empty list.
@@ -623,7 +688,6 @@ pub struct AccountUser {
     pub email: Option<String>,
     pub username: Option<String>,
     pub display_name: Option<String>,
-    pub role: String,
 }
 
 impl AccountUser {

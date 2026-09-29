@@ -16,6 +16,7 @@ use crate::engine::{self, ProjectStorage};
 use crate::screens::dialogs::{ConfirmDialog, DialogAction};
 use crate::ui::{self, Typography};
 use gpui_kit::component::Disableable;
+use gpui_kit::component::input::{Input, InputState};
 
 /// Everything the dialog shows. It is read before the dialog opens, because
 /// each line is a socket call to the daemon and a dialog that arrives while it
@@ -24,6 +25,14 @@ pub struct ProjectSettings {
     pub project: String,
     /// The Project the commands act on.
     pub project_id: String,
+    /// What the space says about itself, as the Server last answered.
+    pub description: String,
+    /// The revision those two were read at, which the next write carries.
+    pub revision: i64,
+    /// Where this space keeps its guidelines on this machine, when the daemon
+    /// was told. It is read rather than written: the daemon's only call for it
+    /// carries the session, which it does not hand back.
+    pub guidelines: Option<String>,
     /// Where the Project's Memory is; the daemon's own sentence when it could
     /// not say.
     pub storage: Result<ProjectStorage, String>,
@@ -37,6 +46,14 @@ pub struct ProjectSettingsDialog {
     app: WeakEntity<DesktopApp>,
     settings: ProjectSettings,
     connections: Option<engine::Connections>,
+    /// The Memory space section's own form: what the space is called, and what
+    /// it says about itself, while the reader is changing either.
+    editing: bool,
+    name: Entity<InputState>,
+    description: Entity<InputState>,
+    saving: bool,
+    space_error: Option<String>,
+    space_notice: Option<String>,
     busy: bool,
     connection_error: Option<String>,
     connection_notice: Option<String>,
@@ -46,18 +63,189 @@ impl ProjectSettingsDialog {
     pub fn new(
         app: WeakEntity<DesktopApp>,
         settings: ProjectSettings,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let name = cx.new(|cx| InputState::new(window, cx).default_value(settings.project.clone()));
+        let description =
+            cx.new(|cx| InputState::new(window, cx).default_value(settings.description.clone()));
         let mut view = Self {
             app,
             settings,
             connections: None,
+            editing: false,
+            name,
+            description,
+            saving: false,
+            space_error: None,
+            space_notice: None,
             busy: false,
             connection_error: None,
             connection_notice: None,
         };
         view.refresh_connections(cx);
         view
+    }
+
+    /// The Memory space section: what the space is called, what it says about
+    /// itself, and where its guidelines live on this machine.
+    fn memory_space(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = vec![modal::heading("Memory space", cx)];
+        if !self.editing {
+            rows.push(modal::entry(
+                "Name",
+                div()
+                    .text_style(&ui::BODY)
+                    .child(self.settings.project.clone()),
+                cx,
+            ));
+            rows.push(modal::entry(
+                "About",
+                div()
+                    .text_style(&ui::BODY)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if self.settings.description.is_empty() {
+                        "Not set".to_owned()
+                    } else {
+                        self.settings.description.clone()
+                    }),
+                cx,
+            ));
+            rows.push(modal::entry(
+                "Guidelines",
+                div()
+                    .text_style(&ui::BODY)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        self.settings
+                            .guidelines
+                            .clone()
+                            .unwrap_or_else(|| "The default location".to_owned()),
+                    ),
+                cx,
+            ));
+            rows.push(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("memory-space-edit")
+                            .label("Edit…")
+                            .on_click(cx.listener(|dialog, _event, _window, cx| {
+                                dialog.editing = true;
+                                dialog.space_error = None;
+                                dialog.space_notice = None;
+                                cx.notify();
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        } else {
+            rows.push(Input::new(&self.name).into_any_element());
+            rows.push(Input::new(&self.description).into_any_element());
+            rows.push(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("memory-space-save")
+                            .primary()
+                            .label("Save")
+                            .disabled(self.saving || !self.space_ready(cx))
+                            .on_click(cx.listener(|dialog, _event, _window, cx| {
+                                dialog.save_space(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("memory-space-cancel")
+                            .label("Cancel")
+                            .disabled(self.saving)
+                            .on_click(cx.listener(|dialog, _event, _window, cx| {
+                                dialog.editing = false;
+                                dialog.name.update(cx, |state, cx| {
+                                    state.set_value(dialog.settings.project.clone(), _window, cx)
+                                });
+                                dialog.description.update(cx, |state, cx| {
+                                    state.set_value(
+                                        dialog.settings.description.clone(),
+                                        _window,
+                                        cx,
+                                    )
+                                });
+                                cx.notify();
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if let Some(error) = &self.space_error {
+            rows.push(
+                div()
+                    .text_style(&ui::BODY)
+                    .text_color(cx.theme().danger)
+                    .child(error.clone())
+                    .into_any_element(),
+            );
+        }
+        if let Some(notice) = &self.space_notice {
+            rows.push(
+                div()
+                    .text_style(&ui::BODY)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(notice.clone())
+                    .into_any_element(),
+            );
+        }
+        rows
+    }
+
+    /// A space with no name cannot be told apart from the next one.
+    fn space_ready(&self, cx: &Context<Self>) -> bool {
+        !self.name.read(cx).value().trim().is_empty()
+    }
+
+    fn save_space(&mut self, cx: &mut Context<Self>) {
+        if self.saving || !self.space_ready(cx) {
+            return;
+        }
+        let project_id = self.settings.project_id.clone();
+        let revision = self.settings.revision;
+        let name = self.name.read(cx).value().trim().to_owned();
+        let description = self.description.read(cx).value().trim().to_owned();
+        self.saving = true;
+        self.space_error = None;
+        self.space_notice = None;
+        cx.notify();
+        let app = self.app.clone();
+        let task = cx.background_executor().spawn({
+            let project_id = project_id.clone();
+            let name = name.clone();
+            let description = description.clone();
+            async move { engine::update_project(&project_id, &name, &description, revision) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |dialog, cx| {
+                dialog.saving = false;
+                match result {
+                    Ok(project) => {
+                        dialog.settings.project = project.name;
+                        dialog.settings.description = project.description;
+                        dialog.settings.revision = project.revision;
+                        dialog.editing = false;
+                        dialog.space_notice = Some("Saved.".to_owned());
+                        // The filter and the headers name the space, so the
+                        // window re-reads the list it draws them from.
+                        let _ = app.update(cx, |app, cx| app.memory_space_changed(cx));
+                    }
+                    Err(error) => dialog.space_error = Some(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn refresh_connections(&mut self, cx: &mut Context<Self>) {
@@ -216,8 +404,14 @@ impl ProjectSettingsDialog {
 impl Render for ProjectSettingsDialog {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let mut rows = self.connection_rows(_cx);
+        // The colours are read once and copied, because the sections below
+        // borrow the context mutably to build their own controls.
         let theme = _cx.theme();
+        let danger = theme.danger;
+        let muted = theme.muted_foreground;
+        let foreground = theme.foreground;
 
+        rows.extend(self.memory_space(_cx));
         rows.push(modal::heading("Memory", _cx));
         match &self.settings.storage {
             Ok(storage) => {
@@ -231,7 +425,7 @@ impl Render for ProjectSettingsDialog {
             Err(error) => rows.push(
                 div()
                     .text_style(&ui::BODY)
-                    .text_color(theme.danger)
+                    .text_color(danger)
                     .child(error.clone())
                     .into_any_element(),
             ),
