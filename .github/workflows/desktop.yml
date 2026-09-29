@@ -62,7 +62,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
       - name: Test Windows IPC and credential vault
-        run: cargo test --locked -p clumsiesd --lib windows:: -- --nocapture
+        run: |
+          cargo test --locked -p clumsiesd --lib windows:: -- --nocapture
       - name: Test desktop
         run: cargo test --locked -p desktop
       - name: Build bundled client and daemon
