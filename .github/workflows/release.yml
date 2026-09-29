@@ -113,7 +113,7 @@ jobs:
           if-no-files-found: error
 
   desktop-linux:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.distribution == 'preview'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -125,6 +125,8 @@ jobs:
       - name: Verify the tagged version and the client's own
         run: |
           VERSION=${GITHUB_REF_NAME#v}
+          case "$GITHUB_REF_NAME" in v*) ;; *) VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml) ;; esac
+          echo "CLUMSIES_VERSION=$VERSION" >> "$GITHUB_ENV"
           test "$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)" = "$VERSION" \
             || { echo "apps/macos/project.yml does not carry $VERSION"; exit 1; }
           test "$(awk -F'"' '/^version = / { print $2; exit }' apps/desktop/Cargo.toml)" = "$VERSION" \
@@ -150,7 +152,7 @@ jobs:
 
       - name: Assemble the package
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=${CLUMSIES_VERSION}
           PACKAGE="Clumsies-${VERSION}-linux-x86_64"
           mkdir -p "dist/${PACKAGE}/icons"
           # A downloaded program does not need symbols: they are a third of the
@@ -175,7 +177,7 @@ jobs:
           if-no-files-found: error
 
   desktop-windows:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.distribution == 'preview'
     runs-on: windows-2025
     timeout-minutes: 60
     env:
@@ -205,7 +207,7 @@ jobs:
       - name: Assemble the package
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $version = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.TrimStart('v') } else { (Select-String -Path apps/macos/project.yml -Pattern 'MARKETING_VERSION: "([^"]+)"').Matches[0].Groups[1].Value }
           $package = "Clumsies-$version-windows-x86_64"
           New-Item -ItemType Directory -Force -Path "dist/$package/icons" | Out-Null
           Copy-Item target/release/clumsies-desktop.exe, target/release/clumsiesd.exe "dist/$package/"
