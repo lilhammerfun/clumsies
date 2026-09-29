@@ -1,0 +1,51 @@
+name: Desktop
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CLUMSIES_AGENT_RUNTIME_BUILD_ID: desktop-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake pkg-config libssl-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libwayland-dev libvulkan-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+      - name: Check and test the actual desktop crate
+        run: |
+          cargo fmt -p desktop --check
+          cargo test --locked -p desktop
+      - name: Build bundled client and daemon
+        run: cargo build --locked --release -p desktop -p clumsiesd
+      - name: Check runtime dependencies
+        run: |
+          ldd target/release/clumsies-desktop | tee /tmp/client-dependencies
+          ldd target/release/clumsiesd | tee /tmp/daemon-dependencies
+          ! grep 'not found' /tmp/client-dependencies /tmp/daemon-dependencies
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clumsies-linux-x86_64
+          path: |
+            target/release/clumsies-desktop
+            target/release/clumsiesd
+          if-no-files-found: error
