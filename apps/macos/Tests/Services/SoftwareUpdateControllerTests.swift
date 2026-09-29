@@ -126,21 +126,20 @@ final class SoftwareUpdateControllerTests: XCTestCase {
                 driver.reply = nil
                 reply(.dismiss)
                 await fulfillment(of: [observer.finished], timeout: 5)
-                XCTAssertFalse(controller.hasAvailableUpdate, "Dismissing an update must clear the reminder")
+                XCTAssertTrue(controller.hasAvailableUpdate, "Remind Me Later must keep the Update button")
             }
             driver.dismissUpdateInstallation()
         }
     }
 
     func testInstallOnQuitReminderSurvivesCycleCompletionWithoutTakingOverInstallation() throws {
-        let bundle = try makeBundle(feedURL: "https://updates.invalid/empty")
-        let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
-        let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: nil)
-        let controller = SoftwareUpdateController(updater: updater)
-        let delegate = controller as SPUUpdaterDelegate
-        try updater.start()
-
         for error in [nil, NSError(domain: SUSparkleErrorDomain, code: Int(SUError.installationError.rawValue))] {
+            let bundle = try makeBundle(feedURL: "https://updates.invalid/empty")
+            let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
+            let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: nil)
+            let controller = SoftwareUpdateController(updater: updater)
+            let delegate = controller as SPUUpdaterDelegate
+            try updater.start()
             // Replay SPUAutomaticUpdateDriver's preparation -> install-on-quit -> cycle-ended handoff.
             // No installer is launched and Sparkle must retain ownership of automatic installation.
             let handled = delegate.updater?(updater, willInstallUpdateOnQuit: .empty(), immediateInstallationBlock: {
@@ -154,9 +153,7 @@ final class SoftwareUpdateControllerTests: XCTestCase {
             XCTAssertTrue(controller.canCheckForUpdates)
 
             controller.standardUserDriverWillFinishUpdateSession()
-            XCTAssertFalse(controller.hasAvailableUpdate)
-            controller.updater(updater, didFinishUpdateCycleFor: .updatesInBackground, error: nil)
-            XCTAssertFalse(controller.hasAvailableUpdate, "An old install-on-quit callback must not revive a dismissed reminder")
+            XCTAssertEqual(controller.hasAvailableUpdate, error == nil, "Dismissing a prepared update keeps its reminder")
         }
     }
 
@@ -262,6 +259,10 @@ private final class UpdateCheckObserver: NSObject, SPUUpdaterDelegate, @preconcu
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
         controller?.updaterDidNotFindUpdate(updater, error: error)
+    }
+
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice, forUpdate item: SUAppcastItem, state: SPUUserUpdateState) {
+        controller?.updater(updater, userDidMake: choice, forUpdate: item, state: state)
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
