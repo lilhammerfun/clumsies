@@ -167,9 +167,14 @@ pub(super) async fn update(
                 OR EXISTS (
                     SELECT 1 FROM projects p JOIN project_members m ON m.project_id = p.project_id
                     WHERE p.project_id = n.project_id AND p.org_id = n.org_id AND m.user_id = $1
-                      AND (n.kind = 'shared_update' OR EXISTS (
-                          SELECT 1 FROM reviews r WHERE r.review_id = n.target_id AND r.project_id = p.project_id
-                      ))
+                      AND (n.kind = 'shared_update'
+                          OR (n.kind = 'draft_conflict' AND EXISTS (
+                              SELECT 1 FROM drafts d WHERE d.draft_id = n.target_id
+                                  AND d.project_id = p.project_id AND d.author_user_id = $1
+                          ))
+                          OR (n.kind IN ('review_requested', 'review_comment', 'review_approved', 'review_rejected', 'review_merged') AND EXISTS (
+                              SELECT 1 FROM reviews r WHERE r.review_id = n.target_id AND r.project_id = p.project_id
+                          )))
                 ))",
     ).bind(&principal.user_id).bind(&principal.org_id).bind(id).bind(request.version)
         .bind(action).execute(pool).await?;
