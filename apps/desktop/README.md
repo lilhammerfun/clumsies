@@ -6,6 +6,26 @@ The Windows and Linux client. macOS keeps its own native Swift app in `apps/maco
 - Engine: the local `clumsiesd` engine, shared with the macOS client.
 - Design rules: [DESIGN.md](DESIGN.md).
 
+## Shipping
+
+A release ships three packages from one tag: the macOS DMG (its own workflow),
+`Clumsies-<version>-linux-x86_64.tar.gz`, and
+`Clumsies-<version>-windows-x86_64.zip`. The last two are built by `release.yml`
+on `v*` tags and attached to the same GitHub release, each with a SHA-256 file.
+
+Each package contains the two programs — `clumsies-desktop` and the engine it
+starts, `clumsiesd` — plus the launcher entry and icons on Linux, a README, and
+an `install.sh` that puts them in `~/.local` (or `--prefix /usr/local`). Nothing
+else is needed: the client starts the engine itself, from beside its own
+executable.
+
+The client reports the product version, so `apps/desktop/Cargo.toml` is bumped
+with `MARKETING_VERSION` in the release commit; the packaging job refuses to
+build a package whose tag and versions disagree. `--smoke-test` is what the job
+runs against the assembled package before uploading it: it starts the bundled
+engine and waits for its socket, which is the one thing a package can break that
+compiling cannot catch.
+
 ## Run
 
 ```sh

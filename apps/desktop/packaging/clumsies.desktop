@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Clumsies
+GenericName=Memory client
+Comment=The collaborative Memory platform for agent coding
+Exec=clumsies-desktop
+Icon=clumsies
+Terminal=false
+Categories=Development;Utility;
+Keywords=memory;agents;knowledge;
+StartupNotify=true
+# The window sets this id itself (`WindowOptions::app_id`), and the compositor
+# matches it to this entry: without it the launcher shows a second, unnamed
+# Clumsies icon while the client is running.
+StartupWMClass=ai.clumsies.desktop

@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.1.0"
+version = "0.20.4"
 edition = "2024"
 publish = false
 description = "Clumsies desktop client for Windows and Linux."
@@ -34,3 +34,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 iana-time-zone = "0.1.65"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tempfile = "3.27.0"
+
+# Explorer, the taskbar and every shortcut take a Windows program's icon from a
+# resource inside the executable, so the client needs a resource compiler on
+# Windows and nothing anywhere else.
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1.12"
