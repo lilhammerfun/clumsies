@@ -18,6 +18,7 @@ final class SoftwareUpdateController: NSObject, ObservableObject {
     private var preparedToInstallOnQuit = false
     private var probeTask: Task<Void, Never>?
     private var isProbing = false
+    private var knownAvailableUpdate = false
     private var preferences: UserDefaults {
         UserDefaults(suiteName: updater.hostBundle.bundleIdentifier ?? "") ?? .standard
     }
@@ -83,7 +84,10 @@ final class SoftwareUpdateController: NSObject, ObservableObject {
             preferences.set(newValue, forKey: "SUEnableAutomaticChecks")
             objectWillChange.send()
             if newValue { probeIfEnabled() }
-            else { hasAvailableUpdate = false }
+            else {
+                knownAvailableUpdate = false
+                hasAvailableUpdate = false
+            }
         }
     }
 
@@ -96,12 +100,21 @@ extension SoftwareUpdateController: SPUUpdaterDelegate, @preconcurrency SPUStand
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        knownAvailableUpdate = true
         if isProbing, automaticallyChecksForUpdates { hasAvailableUpdate = true }
         Self.log.info("Update found; can_check=\(self.canCheckForUpdates)")
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
-        if isProbing { hasAvailableUpdate = false }
+        knownAvailableUpdate = false
+        hasAvailableUpdate = false
+    }
+
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice, forUpdate item: SUAppcastItem, state: SPUUserUpdateState) {
+        if choice == .skip {
+            knownAvailableUpdate = false
+            hasAvailableUpdate = false
+        }
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock: @escaping () -> Void) -> Bool {
@@ -116,9 +129,13 @@ extension SoftwareUpdateController: SPUUpdaterDelegate, @preconcurrency SPUStand
             isProbing = false
             return
         }
+        if updateCheck == .updatesInBackground, error != nil, !preparedToInstallOnQuit {
+            knownAvailableUpdate = false
+        }
         // Sparkle releases the background session before this callback, so its prepared
         // installation can now be resumed by checkForUpdates without starting a download.
-        hasAvailableUpdate = preparedToInstallOnQuit && error == nil
+        knownAvailableUpdate = knownAvailableUpdate || (preparedToInstallOnQuit && error == nil)
+        hasAvailableUpdate = knownAvailableUpdate
         preparedToInstallOnQuit = false
         let errorCode = (error as NSError?)?.code ?? 0
         Self.log.info("Update cycle finished; kind=\(updateCheck.rawValue), failed=\(error != nil), error_code=\(errorCode), reminder=\(self.hasAvailableUpdate), can_check=\(self.canCheckForUpdates)")
@@ -132,7 +149,7 @@ extension SoftwareUpdateController: SPUUpdaterDelegate, @preconcurrency SPUStand
     }
 
     func standardUserDriverWillFinishUpdateSession() {
-        hasAvailableUpdate = false
-        Self.log.info("Update presentation ended; reminder=false")
+        hasAvailableUpdate = knownAvailableUpdate
+        Self.log.info("Update presentation ended; reminder=\(self.hasAvailableUpdate)")
     }
 }
