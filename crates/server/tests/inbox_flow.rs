@@ -927,3 +927,133 @@ async fn membership_notices_record_real_changes_and_survive_revoked_project_acce
     );
     db.shutdown().await;
 }
+
+#[tokio::test]
+async fn draft_conflict_receipts_follow_draft_ownership_and_project_access() {
+    let db = common::migrated_postgres().await;
+    let installation = common::initialize_installation(
+        db.pool.clone(),
+        "Inbox",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Shared",
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO users (user_id, email, display_name, role, status)
+        VALUES ('usr_author', 'author@example.com', 'Author', 'member', 'active')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1, 'usr_author', 'member')")
+        .bind(&installation.project_id).execute(&db.pool).await.unwrap();
+    let (author, _) = common::authenticated_router_as(
+        db.pool.clone(),
+        "author@example.com",
+        "subject-author",
+        "Author",
+    )
+    .await;
+    let (owner, _) = common::authenticated_router(db.pool.clone()).await;
+    let (status, draft) = request(
+        &author,
+        "POST",
+        "/api/v1/drafts",
+        json!({
+            "daemon_installation_id":"inbox-test", "project_id":installation.project_id,
+            "title":"Resolve draft", "resource":{"scope":"org","path":"guide.md"},
+            "operations":[{"action":"create","resource":{"scope":"org","path":"guide.md"},
+                "content":{"content":"# Guide"}}]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let draft_id = draft["draft"]["draft_id"].as_str().unwrap();
+    let notice_id = format!("draft-conflict:{draft_id}");
+    // Seed the persisted conflict notice to isolate receipt handling from reconciliation.
+    sqlx::query("INSERT INTO inbox_notifications (user_id, notification_id, org_id, project_id, kind, target_id, event_key)
+        VALUES ('usr_author', $1, $2, $3, 'draft_conflict', $4, 'conflict-test')")
+        .bind(&notice_id).bind(&installation.org_id).bind(&installation.project_id).bind(draft_id)
+        .execute(&db.pool).await.unwrap();
+    let path = format!("/api/v1/me/inbox/{notice_id}");
+    assert_eq!(
+        source_inbox(&author).await.items[0].notification_id,
+        notice_id
+    );
+    for (action, read, archived) in [
+        ("read", 1, 0),
+        ("archive", 1, 1),
+        ("unread", 0, 1),
+        ("restore", 0, 0),
+    ] {
+        let (status, body) = request(
+            &author,
+            "PATCH",
+            &path,
+            json!({"version":1,"action":action}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{action}: {body}");
+        let item = source_inbox(&author).await.items.remove(0);
+        assert_eq!((item.read_version, item.archived_version), (read, archived));
+    }
+    assert_eq!(
+        request(&owner, "PATCH", &path, json!({"version":1,"action":"read"}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(
+            &author,
+            "PATCH",
+            &path,
+            json!({"version":2,"action":"read"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query("UPDATE drafts SET author_user_id = $1 WHERE draft_id = $2")
+        .bind(&installation.user_id)
+        .bind(draft_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(source_inbox(&author).await.items.is_empty());
+    assert_eq!(
+        request(
+            &author,
+            "PATCH",
+            &path,
+            json!({"version":1,"action":"read"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query("UPDATE drafts SET author_user_id = 'usr_author' WHERE draft_id = $1")
+        .bind(draft_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = 'usr_author'")
+        .bind(&installation.project_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(source_inbox(&author).await.items.is_empty());
+    assert_eq!(
+        request(
+            &author,
+            "PATCH",
+            &path,
+            json!({"version":1,"action":"archive"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
