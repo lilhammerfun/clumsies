@@ -192,27 +192,9 @@ fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> Result<(), Credenti
     })
 }
 
-#[cfg(not(unix))]
-impl CredentialStore for SystemCredentialStore {
-    fn load(&self) -> Result<Option<ServerCredentials>, CredentialStoreError> {
-        Err(unsupported_platform_error())
-    }
-
-    fn replace(&self, _credentials: &ServerCredentials) -> Result<(), CredentialStoreError> {
-        Err(unsupported_platform_error())
-    }
-
-    fn clear(&self) -> Result<(), CredentialStoreError> {
-        Err(unsupported_platform_error())
-    }
-}
-
-#[cfg(not(unix))]
-fn unsupported_platform_error() -> CredentialStoreError {
-    CredentialStoreError::new(
-        "this platform has no credential store yet; macOS uses the Keychain and Linux uses an owner-only file",
-    )
-}
+#[cfg(windows)]
+#[path = "credentials/windows.rs"]
+mod windows;
 
 #[cfg(test)]
 mod tests {

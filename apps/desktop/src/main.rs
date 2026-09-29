@@ -5,6 +5,7 @@
 
 mod app;
 mod assets;
+mod bootstrap;
 mod components;
 mod engine;
 mod logging;
@@ -25,6 +26,20 @@ fn main() {
     // The log starts before anything else, so a failure while the window is
     // being built leaves a reason behind.
     logging::init();
+    let startup = bootstrap::ensure_daemon();
+    if std::env::args().any(|arg| arg == "--smoke-test") {
+        match startup {
+            Ok(()) => println!("Packaged daemon IPC is ready"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if let Err(error) = startup {
+        logging::error(&error);
+    }
     logging::info(&format!(
         "starting; daemon root {}, log {}",
         std::env::var("CLUMSIES_DAEMON_ROOT").unwrap_or_else(|_| "unset".to_owned()),

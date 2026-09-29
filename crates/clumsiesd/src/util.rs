@@ -8,11 +8,13 @@ use crate::MemoryKind;
 use crate::config::ProjectConfig;
 
 pub(crate) fn home_dir() -> Result<PathBuf, DaemonError> {
-    env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
-        DaemonError::InvalidConfig(
-            "HOME is required when daemon runtime paths are not configured".to_owned(),
-        )
-    })
+    env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            DaemonError::InvalidConfig(
+                "HOME is required when daemon runtime paths are not configured".to_owned(),
+            )
+        })
 }
 
 pub(crate) fn non_empty_string(value: String) -> Option<String> {

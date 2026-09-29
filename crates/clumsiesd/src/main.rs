@@ -357,6 +357,22 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // One resident process owns each root. Keep the lock until shutdown;
+    // concurrent GUI launches must not replace an active Unix socket.
+    #[cfg(not(target_os = "macos"))]
+    let _instance_lock = {
+        std::fs::create_dir_all(&config.root_dir)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(config.root_dir.join("daemon.lock"))?;
+        file.try_lock()
+            .map_err(|e| format!("Another daemon owns this root: {e}"))?;
+        file
+    };
+
     let writer: Box<dyn std::io::Write + Send> = match open_daemon_log(&config.log_dir) {
         Ok(log) => Box::new(log),
         Err(error) => {
