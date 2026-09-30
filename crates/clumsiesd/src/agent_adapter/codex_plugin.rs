@@ -443,10 +443,13 @@ fn canonical_codex_cli(path: &str) -> Result<PathBuf, DaemonError> {
     let canonical = fs::canonicalize(path).map_err(|error| {
         DaemonError::InvalidRequest(format!("Codex CLI path {path} cannot be resolved: {error}"))
     })?;
-    if !canonical.is_file()
-        || !canonical.ends_with("Contents/Resources/codex")
-        || !is_executable(&canonical)?
-    {
+    let expected_location = if cfg!(target_os = "macos") {
+        canonical.ends_with("Contents/Resources/codex")
+    } else {
+        canonical.file_name().and_then(|name| name.to_str())
+            == Some(if cfg!(windows) { "codex.exe" } else { "codex" })
+    };
+    if !canonical.is_file() || !expected_location || !is_executable(&canonical)? {
         return Err(DaemonError::InvalidRequest(format!(
             "Codex CLI path {} is not an App-bundled executable",
             canonical.display()
@@ -509,6 +512,23 @@ async fn verify_codex_cli(_path: &Path) -> Result<(), DaemonError> {
 mod tests {
     use super::super::shell_single_quote;
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_codex_cli_accepts_installed_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let cli = root.path().join("codex");
+        fs::write(&cli, b"cli").unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            canonical_codex_cli(cli.to_str().unwrap()).unwrap(),
+            fs::canonicalize(&cli).unwrap()
+        );
+        let other = root.path().join("other");
+        fs::rename(cli, &other).unwrap();
+        assert!(canonical_codex_cli(other.to_str().unwrap()).is_err());
+    }
 
     #[cfg(unix)]
     #[tokio::test]

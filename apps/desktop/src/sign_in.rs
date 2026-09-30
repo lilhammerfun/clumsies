@@ -1,11 +1,14 @@
 //! Signing in to a Server, and setting one up when it has never been configured.
 //!
-//! A desktop client cannot ask a human to install a session, so it runs the
-//! same authorization a browser would: a loopback listener for the callback,
-//! PKCE, the system browser for the identity provider, and then the tokens to
-//! the daemon -- which owns them, not this process. The macOS client does the
-//! same in `AuthenticationClient` and `NativeServerSetupClient`; this is that
-//! flow for the platforms that have no Keychain to hand a session to.
+//! Two ways in, both of them the macOS client's: a local password, which the
+//! Server offers only when its deployment enables it, and the browser round
+//! trip, which is a loopback listener for the callback, PKCE, the system browser
+//! for the identity provider, and then the tokens to the daemon -- which owns
+//! them, not this process. An invitation and a password reset are the same
+//! password call with a one-time credential in place of the password's
+//! authority: macOS's `AuthenticationClient` and `NativeServerSetupClient` do
+//! all of this, and this is that flow for the platforms that have no Keychain to
+//! hand a session to.
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
@@ -22,7 +25,6 @@ const CALLBACK_PATH: &str = "/callback";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SetupStatus {
     /// `setup_required` until the deployment has an organization.
     pub state: String,
@@ -34,14 +36,12 @@ pub struct SetupStatus {
 }
 
 #[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SetupSessionStatus {
     pub configuration: Option<SetupConfiguration>,
 }
 
 /// First-run settings awaiting an owner, in the shape the Server stages them.
 #[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SetupConfiguration {
     pub org_name: String,
     pub default_project_name: String,
@@ -85,39 +85,13 @@ pub fn complete_setup(
     default_project: &str,
     allowed_email_domains: &[String],
 ) -> Result<Session, String> {
-    let client = client()?;
-    let session = client
-        .post(format!("{origin}/api/v1/setup/sessions"))
-        .json(&serde_json::json!({ "setupCode": setup_code }))
-        .send()
-        .map_err(|error| unreachable_server(origin, &error))?;
-    // The setup session arrives as an HttpOnly cookie. This is the only place
-    // that needs it, so it is passed along by hand rather than carrying a
-    // cookie store through the whole client.
-    let cookie = session
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .filter_map(|value| value.split(';').next())
-        .collect::<Vec<_>>()
-        .join("; ");
-    let session: SetupSession = read_json(session, "the setup session")?;
-
-    let csrf = session.csrf_token;
-    let response = client
-        .put(format!("{origin}/api/v1/setup/configuration"))
-        .header("cookie", &cookie)
-        .header("x-csrf-token", &csrf)
-        .json(&serde_json::json!({
-            "orgName": organization,
-            "defaultProjectName": default_project,
-            "allowedEmailDomains": allowed_email_domains,
-        }))
-        .send()
-        .map_err(|error| unreachable_server(origin, &error))?;
-    ensure_success(response, "saving the Server configuration")?;
-
+    let (client, cookie, csrf) = open_setup(
+        origin,
+        setup_code,
+        organization,
+        default_project,
+        allowed_email_domains,
+    )?;
     let (verifier, challenge, state) = pkce();
     let redirect = loopback_redirect()?;
     let response = client
@@ -133,7 +107,6 @@ pub fn complete_setup(
         .send()
         .map_err(|error| unreachable_server(origin, &error))?;
     #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
     struct Authorization {
         authorization_url: String,
     }
@@ -146,6 +119,146 @@ pub fn complete_setup(
         &verifier,
         &state,
     )
+}
+
+/// What a Server offers someone who is not signed in yet, which is what the
+/// form is built from — macOS's `NativeLoginMethods`.
+///
+/// The Server's own field names, here and in every other mirror in this module:
+/// its DTOs are snake_case and have been since they were written, so a mirror
+/// that renames them reads nothing at all. The tests below pin the shapes.
+#[derive(Clone, Deserialize)]
+pub struct LoginMethods {
+    /// Whether this deployment accepts a local username and password.
+    pub password_enabled: bool,
+    /// Whether it has an identity provider configured at all.
+    pub oidc_enabled: bool,
+    /// Whether that provider is Google, which macOS brands its button for.
+    pub google: bool,
+}
+
+pub fn login_methods(origin: &str) -> Result<LoginMethods, String> {
+    let client = client()?;
+    let response = client
+        .get(format!("{origin}/api/v1/auth/methods"))
+        .send()
+        .map_err(|error| unreachable_server(origin, &error))?;
+    read_json(response, "the Server's sign-in methods")
+}
+
+/// Signs in with a local password, the same call the macOS form makes when the
+/// deployment has passwords enabled.
+pub fn password_login(origin: &str, username: &str, password: &str) -> Result<Session, String> {
+    let client = client()?;
+    let response = client
+        .post(format!("{origin}/api/v1/auth/password/sessions"))
+        .json(&serde_json::json!({ "username": username, "password": password }))
+        .send()
+        .map_err(|error| unreachable_server(origin, &error))?;
+    read_json(response, "the sign-in")
+}
+
+/// Redeems a one-time credential: an invitation, which also names the account,
+/// or a password reset, which does not.
+///
+/// macOS picks between the two paths by the same flag, and takes the username
+/// only for an invitation.
+pub fn redeem_credential(
+    origin: &str,
+    credential: &str,
+    username: Option<&str>,
+    password: &str,
+    invitation: bool,
+) -> Result<Session, String> {
+    let path = if invitation {
+        "/api/v1/auth/invitations/accept"
+    } else {
+        "/api/v1/auth/password/reset"
+    };
+    let client = client()?;
+    let response = client
+        .post(format!("{origin}{path}"))
+        .json(&serde_json::json!({
+            "token": credential,
+            "username": username,
+            "password": password,
+        }))
+        .send()
+        .map_err(|error| unreachable_server(origin, &error))?;
+    read_json(response, "the credential")
+}
+
+/// Completes the first run with a local owner rather than the browser, which is
+/// what a deployment with passwords enabled offers instead of an identity
+/// provider.
+pub fn complete_password_setup(
+    origin: &str,
+    setup_code: &str,
+    organization: &str,
+    default_project: &str,
+    allowed_email_domains: &[String],
+    username: &str,
+    password: &str,
+) -> Result<Session, String> {
+    let (client, cookie, csrf) = open_setup(
+        origin,
+        setup_code,
+        organization,
+        default_project,
+        allowed_email_domains,
+    )?;
+    let response = client
+        .post(format!("{origin}/api/v1/setup/password-owner"))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &csrf)
+        .json(&serde_json::json!({ "username": username, "password": password }))
+        .send()
+        .map_err(|error| unreachable_server(origin, &error))?;
+    read_json(response, "the owner")
+}
+
+/// Opens a setup session and saves the first-run settings. Both endings of the
+/// first run need this much: the browser one then authorizes an identity
+/// provider, and the password one creates the owner directly.
+fn open_setup(
+    origin: &str,
+    setup_code: &str,
+    organization: &str,
+    default_project: &str,
+    allowed_email_domains: &[String],
+) -> Result<(reqwest::blocking::Client, String, String), String> {
+    let client = client()?;
+    let session = client
+        .post(format!("{origin}/api/v1/setup/sessions"))
+        .json(&serde_json::json!({ "setup_code": setup_code }))
+        .send()
+        .map_err(|error| unreachable_server(origin, &error))?;
+    // The setup session arrives as an HttpOnly cookie. This is the only place
+    // that needs it, so it is passed along by hand rather than carrying a
+    // cookie store through the whole client.
+    let cookie = session
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|value| value.split(';').next())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let session: SetupSession = read_json(session, "the setup session")?;
+
+    let response = client
+        .put(format!("{origin}/api/v1/setup/configuration"))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &session.csrf_token)
+        .json(&serde_json::json!({
+            "org_name": organization,
+            "default_project_name": default_project,
+            "allowed_email_domains": allowed_email_domains,
+        }))
+        .send()
+        .map_err(|error| unreachable_server(origin, &error))?;
+    ensure_success(response, "saving the Server configuration")?;
+    Ok((client, cookie, session.csrf_token))
 }
 
 /// The ordinary path: the Server is configured, and this authorizes a user.
@@ -169,7 +282,7 @@ pub fn authenticate(origin: &str) -> Result<Session, String> {
 }
 
 /// Opens the browser, waits for the callback, and exchanges the code.
-fn finish_authorization(
+pub(crate) fn finish_authorization(
     client: &reqwest::blocking::Client,
     origin: &str,
     redirect: Callback,
@@ -249,9 +362,33 @@ fn read_callback(mut stream: std::net::TcpStream, expected_state: &str) -> Resul
         .ok_or_else(|| "the callback carried no authorization code".to_owned())
 }
 
-struct Callback {
+pub(crate) struct Callback {
     listener: TcpListener,
-    uri: String,
+    /// The loopback URL the Server sends the browser back to.
+    pub uri: String,
+}
+
+/// A browser authorization in progress: what the request that starts it has to
+/// send, and what the callback that finishes it has to check. Signing in and
+/// connecting an identity provider are the same round trip with a different
+/// first request, so both hold these.
+pub(crate) struct Authorization {
+    pub redirect: Callback,
+    pub verifier: String,
+    pub state: String,
+    pub challenge: String,
+}
+
+/// Opens the loopback listener and picks the PKCE pair, which is everything the
+/// first request needs.
+pub(crate) fn begin_authorization() -> Result<Authorization, String> {
+    let (verifier, challenge, state) = pkce();
+    Ok(Authorization {
+        redirect: loopback_redirect()?,
+        verifier,
+        state,
+        challenge,
+    })
 }
 
 fn loopback_redirect() -> Result<Callback, String> {
@@ -287,7 +424,7 @@ fn random_bytes_b64() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes())
 }
 
-fn client() -> Result<reqwest::blocking::Client, String> {
+pub(crate) fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
@@ -358,4 +495,57 @@ fn open_browser(url: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("could not open a browser for sign-in: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The shapes the Server answers and accepts, copied from its own DTOs
+    // (`crates/server/src/app/installation/dto.rs` and `auth/dto.rs`). Every one
+    // of them is snake_case, and a mirror that renames them reads nothing: this
+    // is what a client that speaks camelCase at a snake_case Server gets, which
+    // is `missing field` on the first field it asks for.
+
+    #[test]
+    fn a_setup_status_is_snake_case() {
+        let status: SetupStatus = serde_json::from_str(
+            r#"{"state":"setup_required","setup_code_configured":true,"oidc_configured":false,
+                "session":{"expires_at":"2026-09-28T12:00:00Z",
+                           "configuration":{"org_name":"Acme","default_project_name":"Default",
+                                            "allowed_email_domains":["acme.test"]}}}"#,
+        )
+        .expect("a staged first run");
+        assert!(needs_setup(&status));
+        assert!(status.setup_code_configured);
+        let configuration = status
+            .session
+            .expect("a live session")
+            .configuration
+            .expect("staged settings");
+        assert_eq!(configuration.org_name, "Acme");
+        assert_eq!(configuration.allowed_email_domains, ["acme.test"]);
+    }
+
+    #[test]
+    fn login_methods_are_snake_case() {
+        let methods: LoginMethods =
+            serde_json::from_str(r#"{"password_enabled":true,"oidc_enabled":true,"google":false}"#)
+                .expect("the ways in");
+        assert!(methods.password_enabled);
+        assert!(methods.oidc_enabled);
+        assert!(!methods.google);
+    }
+
+    #[test]
+    fn a_session_is_snake_case() {
+        let session: Session = serde_json::from_str(
+            r#"{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":3600,
+                "user":{"user_id":"usr_1","email":null,"username":"owner","display_name":null,
+                        "avatar_url":null,"role":"owner"}}"#,
+        )
+        .expect("a session");
+        assert_eq!(session.access_token, "a");
+        assert_eq!(session.refresh_token.as_deref(), Some("r"));
+    }
 }

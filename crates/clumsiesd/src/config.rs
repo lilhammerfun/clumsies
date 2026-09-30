@@ -377,12 +377,25 @@ fn platform_paths(home: PathBuf, dev_instance_id: Option<&str>) -> DaemonRuntime
     DaemonRuntimePaths::from_home(home, dev_instance_id)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(windows)))]
 fn platform_paths(home: PathBuf, dev_instance_id: Option<&str>) -> DaemonRuntimePaths {
     DaemonRuntimePaths::from_base(
         xdg_dir("XDG_DATA_HOME", &home, ".local/share"),
         xdg_dir("XDG_CACHE_HOME", &home, ".cache"),
         xdg_dir("XDG_STATE_HOME", &home, ".local/state"),
+        dev_instance_id,
+    )
+}
+
+#[cfg(windows)]
+fn platform_paths(home: PathBuf, dev_instance_id: Option<&str>) -> DaemonRuntimePaths {
+    let base = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData/Local"));
+    DaemonRuntimePaths::from_base(
+        base.clone(),
+        base.join("Cache"),
+        base.join("State"),
         dev_instance_id,
     )
 }

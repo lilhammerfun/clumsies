@@ -818,42 +818,9 @@ mod platform {
     }
 }
 
-/// Windows needs a named pipe here. It is a small, self-contained module with
-/// the same three entry points, and it is the one platform piece this work
-/// could not verify: there is no Windows machine in the loop yet.
-#[cfg(not(unix))]
-mod platform {
-    use super::*;
-
-    pub fn call(
-        service_name: &str,
-        _request: DaemonIpcRequest,
-        _timeout: Duration,
-    ) -> Result<DaemonIpcResponse, DaemonError> {
-        Err(DaemonError::Ipc(format!(
-            "local daemon IPC is not implemented on this platform yet; requested endpoint {service_name}"
-        )))
-    }
-
-    pub struct DaemonIpcServerInner {
-        service_name: String,
-    }
-
-    impl DaemonIpcServerInner {
-        pub fn start(
-            service_name: String,
-            _service: DaemonIpcService,
-        ) -> Result<Self, DaemonError> {
-            Err(DaemonError::Ipc(format!(
-                "local daemon IPC is not implemented on this platform yet; requested endpoint {service_name}"
-            )))
-        }
-
-        pub fn service_name(&self) -> &str {
-            &self.service_name
-        }
-    }
-}
+#[cfg(windows)]
+#[path = "ipc/windows.rs"]
+mod platform;
 
 #[cfg(target_os = "macos")]
 mod platform {

@@ -1,6 +1,6 @@
 [package]
 name = "clumsiesd"
-version = "0.20.2"
+version = "0.20.5"
 edition = "2024"
 
 [[bin]]
@@ -40,3 +40,6 @@ server = { path = "../server" }
 tempfile = "3.27.0"
 testcontainers = "0.27.3"
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_System_Threading", "Win32_System_Memory"] }

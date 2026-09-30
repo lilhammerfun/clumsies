@@ -1,10 +1,7 @@
-// The draft screen and the review screen are its callers and neither exists
-// yet, so nothing constructs it today. That is a state, not an oversight: the
-// model mirrors the macOS client and the rendering is proven, so the screens
-// consume it rather than reinventing it.
-#![allow(dead_code)]
-
 //! The diff view for a pending draft or a review.
+//!
+//! The document pane's Diff mode draws it, and the review screen will draw the
+//! same thing for a proposal.
 //!
 //! Line-level differences come from `similar`; this module owns the model and
 //! the rendering. The model mirrors the macOS client's `UnifiedDiffLine` so the
@@ -16,6 +13,7 @@ use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::Theme;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::*;
 use similar::{ChangeTag, TextDiff};
 
@@ -84,9 +82,21 @@ pub fn diff_view(
     rows: Vec<DiffRow>,
     mono_font: SharedString,
     palette: DiffPalette,
+    window: &Window,
 ) -> impl IntoElement {
     let rows = Rc::new(rows);
     let count = rows.len();
+    // A patch line is long or short, and a line a reader cannot see the end of
+    // is a line they cannot read: the view scrolls sideways to the width of its
+    // longest line, measured from the font rather than guessed.
+    let longest = rows
+        .iter()
+        .map(|row| row.text.chars().count())
+        .max()
+        .unwrap_or(0);
+    let width = advance(window, &mono_font) * longest as f32
+        + px(ui::SPACE_2XL + ui::SPACE_MD) * 2.
+        + px(ui::SPACE_LG);
     let render = move |range: std::ops::Range<usize>, _window: &mut Window, _cx: &mut App| {
         range
             .map(|index| {
@@ -113,7 +123,24 @@ pub fn diff_view(
             })
             .collect::<Vec<_>>()
     };
-    uniform_list("draft-diff", count, render).size_full()
+    div().size_full().overflow_x_scrollbar().child(
+        div()
+            .h_full()
+            .w(width)
+            .child(uniform_list("draft-diff", count, render).size_full()),
+    )
+}
+
+/// How wide one monospaced character is at the size a row is drawn in. The
+/// rows carry the window's own text size, so that is what this measures.
+fn advance(window: &Window, family: &SharedString) -> Pixels {
+    let size = window.text_style().font_size.to_pixels(window.rem_size());
+    let font = Font {
+        family: family.clone(),
+        ..Default::default()
+    };
+    let font_id = window.text_system().resolve_font(&font);
+    window.text_system().layout_width(font_id, size, '0')
 }
 
 /// A changed line shows its own number in the color of the change, which is
