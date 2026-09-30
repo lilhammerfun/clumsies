@@ -21,7 +21,7 @@ stops only its own resident engine and preserves `%LOCALAPPDATA%\ai.clumsies`.
 Packaging uses Inno Setup 6 and the Visual Studio x64 CRT redistributables,
 included on the Windows CI runner. Runtime DLLs are deployed beside the programs
 so users do not need a separate VC++ runtime installation. Windows 10 version
-1903 or later is required by the DirectML system dependency. CI exercises
+2004 or later is required by the DirectML system dependency. CI exercises
 installation, shortcuts, installed daemon IPC, reinstall, the running-client
 guard and uninstall with isolated daemon state. `windows-installer.yml` can
 attach an installer to an already published stable release using its verified
