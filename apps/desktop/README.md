@@ -8,10 +8,21 @@ The Windows and Linux client. macOS keeps its own native Swift app in `apps/maco
 
 ## Shipping
 
-A release ships three packages from one tag: the macOS DMG (its own workflow),
+A release ships packages from one tag: the macOS DMG (its own workflow),
 `Clumsies-<version>-linux-x86_64.tar.gz`, and
-`Clumsies-<version>-windows-x86_64.zip`. The last two are built by `release.yml`
+`Clumsies-<version>-windows-x86_64-Setup.exe` (recommended), and the portable
+`Clumsies-<version>-windows-x86_64.zip`. Desktop packages are built by `release.yml`
 on `v*` tags and attached to the same GitHub release, each with a SHA-256 file.
+
+The Windows installer adds Start menu and optional desktop shortcuts, installs
+to `%LOCALAPPDATA%\Programs\Clumsies` without elevation, and registers an
+uninstaller. Close the client before reinstalling or uninstalling; the installer
+stops only its own resident engine and preserves `%LOCALAPPDATA%\ai.clumsies`.
+Packaging uses Inno Setup 6, included on the Windows CI runner. CI exercises
+installation, shortcuts, installed daemon IPC, reinstall, the running-client
+guard and uninstall with isolated daemon state. `windows-installer.yml` can
+attach an installer to an already published stable release using its verified
+ZIP, without rebuilding or replacing the released binaries.
 
 Each package contains the two programs — `clumsies-desktop` and the engine it
 starts, `clumsiesd` — plus the launcher entry and icons on Linux, a README, and

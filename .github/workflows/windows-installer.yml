@@ -1,0 +1,74 @@
+name: Windows installer
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['apps/desktop/packaging/**', '.github/workflows/windows-installer.yml']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable release whose Windows ZIP should receive an installer
+        required: true
+        default: v0.20.5
+      publish:
+        description: Attach the tested installer to that release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack the published Windows package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || 'v0.20.5' }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected a stable release tag' }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $package = "Clumsies-$version-windows-x86_64"
+          gh release download $env:RELEASE_TAG --pattern "$package.zip" --pattern "$package.zip.sha256" --dir source
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+          $expected = (Get-Content "source/$package.zip.sha256").Split()[0]
+          $release = gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" | ConvertFrom-Json
+          $asset = $release.assets | Where-Object name -eq "$package.zip"
+          $actual = (Get-FileHash "source/$package.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected -or $asset.digest -ne "sha256:$actual") { throw 'Release checksum mismatch' }
+          Expand-Archive "source/$package.zip" source/unpacked
+          pwsh -File apps/desktop/packaging/assemble-windows.ps1 $version "source/unpacked/$package" dist
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+      - name: Exercise installer lifecycle
+        shell: pwsh
+        run: pwsh -File apps/desktop/packaging/test-windows-installer.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clumsies-windows-installer
+          path: |
+            dist/*-Setup.exe
+            dist/*-Setup.exe.sha256
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: installer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: clumsies-windows-installer
+          path: dist
+      - name: Attach installer without replacing existing release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release upload "$RELEASE_TAG" dist/*
