@@ -51,7 +51,9 @@ begin
       'SELECT * FROM Win32_Process WHERE Name = ''clumsies-desktop.exe'' OR Name = ''clumsiesd.exe''');
     for I := 0 to Processes.Count - 1 do begin
       Process := Processes.ItemIndex(I);
-      if CompareText(VarToStr(Process.ExecutablePath), ExpandConstant('{app}\clumsies-desktop.exe')) = 0 then begin
+      if VarIsNull(Process.ExecutablePath) then
+        Continue;
+      if CompareText(Process.ExecutablePath, ExpandConstant('{app}\clumsies-desktop.exe')) = 0 then begin
         Result := 'Please save your work and close Clumsies, then try again.';
         Exit;
       end;
@@ -62,7 +64,9 @@ begin
     // engine; never another user's, a portable copy's, or a development daemon.
     for I := 0 to Processes.Count - 1 do begin
       Process := Processes.ItemIndex(I);
-      if CompareText(VarToStr(Process.ExecutablePath), ExpandConstant('{app}\clumsiesd.exe')) = 0 then
+      if VarIsNull(Process.ExecutablePath) then
+        Continue;
+      if CompareText(Process.ExecutablePath, ExpandConstant('{app}\clumsiesd.exe')) = 0 then
         if Process.Terminate(0) <> 0 then
           Result := 'Could not stop the Clumsies engine. Close its Agent sessions and try again.';
     end;
