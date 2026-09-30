@@ -38,7 +38,7 @@ Name: "{autodesktop}\Clumsies"; Filename: "{app}\clumsies-desktop.exe"; IconFile
 Filename: "{app}\clumsies-desktop.exe"; Description: "Launch Clumsies"; Flags: nowait postinstall skipifsilent
 
 [Code]
-function PrepareInstalledApp: String;
+function PrepareInstalledApp(StopEngine: Boolean): String;
 var
   Processes, Process: Variant;
   I: Integer;
@@ -54,6 +54,8 @@ begin
         Exit;
       end;
     end;
+    if not StopEngine then
+      Exit;
     // The resident engine survives closing the UI. Stop only this installation's
     // engine; never another user's, a portable copy's, or a development daemon.
     for I := 0 to Processes.Count - 1 do begin
@@ -69,15 +71,26 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  Result := PrepareInstalledApp;
+  Result := PrepareInstalledApp(True);
 end;
 
 function InitializeUninstall: Boolean;
 var
   Error: String;
 begin
-  Error := PrepareInstalledApp;
+  Error := PrepareInstalledApp(False);
   Result := Error = '';
   if not Result then
-    MsgBox(Error, mbError, MB_OK);
+    SuppressibleMsgBox(Error, mbError, MB_OK, IDOK);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Error: String;
+begin
+  if CurUninstallStep = usUninstall then begin
+    Error := PrepareInstalledApp(True);
+    if Error <> '' then
+      RaiseException(Error);
+  end;
 end;

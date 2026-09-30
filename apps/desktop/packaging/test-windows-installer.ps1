@@ -48,7 +48,7 @@ try {
     Set-Content (Join-Path $install 'README.txt') 'old installation'
     Run-Setup
     Check-Installed
-    if ((Get-Content (Join-Path $install 'README.txt') -Raw) -eq "old installation`r`n") {
+    if ((Get-Content (Join-Path $install 'README.txt') -Raw).Trim() -eq 'old installation') {
         throw 'Reinstall did not replace existing files'
     }
     # A long-running stand-in for the GUI checks that Setup never kills it.
@@ -59,6 +59,8 @@ try {
         Start-Sleep -Milliseconds 500
         $blocked = Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
         if ($blocked.ExitCode -ne 7 -or $runningClient.HasExited) { throw 'Setup must refuse to replace a running client' }
+        $blockedUninstall = Start-Process (Join-Path $install 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+        if ($blockedUninstall.ExitCode -eq 0 -or $runningClient.HasExited) { throw 'Uninstall must refuse to remove a running client' }
     } finally {
         if (-not $runningClient.HasExited) { $runningClient.Kill(); $runningClient.WaitForExit() }
     }
