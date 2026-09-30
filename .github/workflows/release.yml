@@ -195,10 +195,15 @@ jobs:
           $version = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME.TrimStart('v') } else { (Select-String -Path apps/macos/project.yml -Pattern 'MARKETING_VERSION: "([^"]+)"').Matches[0].Groups[1].Value }
           pwsh -File apps/desktop/packaging/assemble-windows.ps1 $version target/release dist
 
+      - name: Exercise installer, reinstall and uninstall
+        shell: pwsh
+        run: pwsh -File apps/desktop/packaging/test-windows-installer.ps1
+
       - uses: actions/upload-artifact@v4
         with:
           name: clumsies-desktop-windows
           path: |
+            dist/*-Setup.exe
             dist/*.zip
             dist/*.sha256
           if-no-files-found: error

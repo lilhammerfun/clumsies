@@ -31,9 +31,19 @@ Linux:
   ~/.local/share/icons/hicolor. `install.sh --prefix DIR` installs under DIR
   (for example /usr/local) instead.
 
-Windows:
+Windows (recommended):
 
-  clumsies-desktop.exe
+  Run Clumsies-<version>-windows-x86_64-Setup.exe and follow the installer.
+  Windows 10 version 2004 or later, x86-64. The VC++ runtime is bundled.
+  Open Clumsies from the Start menu. No administrator permission is required.
+  An optional desktop shortcut is available. To update, close the Clumsies
+  window and run the newer installer. Uninstall through Windows Settings → Apps;
+  your account, Memory, settings and logs are kept. Close active Agent sessions
+  before updating or uninstalling, as the installed engine will stop.
+
+Windows portable ZIP:
+
+  Unpack the ZIP and run clumsies-desktop.exe. Keep clumsiesd.exe beside it.
 
   The package is not signed, so Windows may show a SmartScreen warning the
   first time: "More info" → "Run anyway".
@@ -59,4 +69,4 @@ Each package ships with a `.sha256` file:
 
   sha256sum -c Clumsies-<version>-linux-x86_64.tar.gz.sha256
 
-  certutil -hashfile Clumsies-<version>-windows-x86_64.zip SHA256
+  certutil -hashfile Clumsies-<version>-windows-x86_64-Setup.exe SHA256

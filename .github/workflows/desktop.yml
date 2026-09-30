@@ -94,10 +94,15 @@ jobs:
           $version = (Select-String -Path apps/macos/project.yml -Pattern 'MARKETING_VERSION: "([^"]+)"').Matches[0].Groups[1].Value
           pwsh -File apps/desktop/packaging/assemble-windows.ps1 $version target/release dist
 
+      - name: Exercise installer, reinstall and uninstall
+        shell: pwsh
+        run: pwsh -File apps/desktop/packaging/test-windows-installer.ps1
+
       - uses: actions/upload-artifact@v4
         with:
           name: clumsies-windows-x86_64
           path: |
+            dist/*-Setup.exe
             dist/*.zip
             dist/*.sha256
             target/release/clumsies-desktop.exe
