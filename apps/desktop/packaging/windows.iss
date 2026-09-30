@@ -9,7 +9,7 @@ DefaultDirName={localappdata}\Programs\Clumsies
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0
+MinVersion=10.0.18362
 DisableProgramGroupPage=yes
 OutputBaseFilename=Clumsies-{#AppVersion}-windows-x86_64-Setup
 SetupIconFile={#PackageDir}\icons\clumsies.ico
@@ -27,6 +27,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 [Files]
 Source: "{#PackageDir}\clumsies-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\clumsiesd.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PackageDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\icons\*"; DestDir: "{app}\icons"; Flags: ignoreversion
 

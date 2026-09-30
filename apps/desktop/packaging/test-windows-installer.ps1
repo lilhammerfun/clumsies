@@ -40,6 +40,13 @@ function Check-Installed {
     }
     & (Join-Path $install 'clumsies-desktop.exe') --smoke-test
     if ($LASTEXITCODE -ne 0) { throw 'Installed daemon startup and IPC failed' }
+    $daemon = Get-Process clumsiesd | Where-Object Path -eq (Join-Path $install 'clumsiesd.exe')
+    foreach ($library in @('msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+        $loaded = $daemon.Modules | Where-Object ModuleName -eq $library
+        if (-not $loaded -or $loaded.FileName -ne (Join-Path $install $library)) {
+            throw "The installed engine must load its bundled $library, not a developer machine's runtime"
+        }
+    }
 }
 try {
     Run-Setup

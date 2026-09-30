@@ -34,6 +34,7 @@ Linux:
 Windows (recommended):
 
   Run Clumsies-<version>-windows-x86_64-Setup.exe and follow the installer.
+  Windows 10 version 1903 or later, x86-64. The VC++ runtime is bundled.
   Open Clumsies from the Start menu. No administrator permission is required.
   An optional desktop shortcut is available. To update, close the Clumsies
   window and run the newer installer. Uninstall through Windows Settings → Apps;
