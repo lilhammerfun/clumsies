@@ -12,8 +12,8 @@ What is in this package
   install.sh         Linux only: puts the above where the desktop finds them
 
 The client starts the engine itself: `clumsiesd` is expected beside
-`clumsies-desktop`, and it is launched, kept running and stopped with the
-client. Nothing else has to be installed.
+`clumsies-desktop`, and remains running for Agent sessions after the client
+closes. Nothing else has to be installed.
 
 Running it
 ----------

@@ -40,11 +40,11 @@ impl NewMemorySpaceDialog {
         modal::open(
             window,
             cx,
-            "New memory space",
+            "New Project",
             modal::NARROW,
             move |dialog, _window, cx| {
                 let ready = footer_view.read(cx).ready(cx);
-                let create = modal::primary("new-memory-space-create", "Create", ready)
+                let create = modal::primary("new-memory-space-create", "Create Project", ready)
                     .on_click({
                         let view = footer_view.clone();
                         move |_event, window, cx| {

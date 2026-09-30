@@ -5,6 +5,8 @@
 //! WorkspaceView composes the shell, and the models behind each section hold the
 //! work.
 
+use std::collections::BTreeSet;
+
 use clumsiesd::{DaemonDraftOperationResponse, DaemonDraftSummary};
 use gpui_kit::base::Disableable;
 use gpui_kit::base::StyledExt;
@@ -70,6 +72,7 @@ pub struct DesktopApp {
     /// Which debounced store owns the editor. A store that a later keystroke
     /// has superseded must not report its result as the editor's state.
     save_generation: u64,
+    saves_in_flight: BTreeSet<u64>,
     memory_busy: bool,
     /// Dropping it stops watching the system's light or dark preference.
     _appearance: Subscription,
@@ -135,6 +138,7 @@ impl DesktopApp {
             sign_in,
             signed_in,
             save_generation: 0,
+            saves_in_flight: BTreeSet::new(),
             memory_busy: false,
             _appearance: appearance,
         };
@@ -160,8 +164,7 @@ impl DesktopApp {
         // drawing.
         let flushing = cx.entity();
         window.on_window_should_close(cx, move |_window, cx| {
-            flushing.update(cx, |app, cx| app.flush_pending_saves(cx));
-            true
+            flushing.update(cx, |app, cx| app.flush_pending_saves(cx))
         });
         app
     }
@@ -265,7 +268,9 @@ impl DesktopApp {
     /// then told to revoke the session and the daemon forgets it, which leaves
     /// the window with nothing to show and the form to sign in again.
     pub fn sign_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.flush_pending_saves(cx);
+        if !self.flush_pending_saves(cx) {
+            return;
+        }
         let server_url = self
             .account
             .as_ref()
@@ -777,8 +782,17 @@ impl DesktopApp {
     /// seen, and the pause will not come: the window is closing. macOS asks about
     /// that text; this client's model is a store after a pause, so the same edit
     /// goes now instead of being asked about.
-    pub fn flush_pending_saves(&mut self, cx: &mut Context<Self>) {
-        for resource_id in self.memory.pending_saves() {
+    pub fn flush_pending_saves(&mut self, cx: &mut Context<Self>) -> bool {
+        let pending = self.memory.pending_saves();
+        // An older store must finish before a synchronous flush writes newer text.
+        if !self.saves_in_flight.is_empty() {
+            self.memory
+                .set_error("A save is still running. Please try again when it finishes.".into());
+            self.shell.set_section(Section::Memory);
+            cx.notify();
+            return false;
+        }
+        for resource_id in pending {
             let Some(edit) = self.document_edit(&resource_id, cx) else {
                 continue;
             };
@@ -800,12 +814,22 @@ impl DesktopApp {
                 )),
             }
             if let Some(pane) = self.memory.pane_for_resource_mut(&resource_id) {
+                if result.is_ok() {
+                    pane.accept_text(edit.content.clone());
+                }
                 pane.set_save_state(match &result {
                     Ok(_) => SaveState::Saved,
                     Err(error) => SaveState::Failed(error.clone()),
                 });
             }
         }
+        let saved = self.memory.pending_saves().is_empty();
+        if !saved {
+            self.memory.set_error("Could not save your edits. They are still open; retry before closing or leaving this project.".into());
+            self.shell.set_section(Section::Memory);
+        }
+        cx.notify();
+        saved
     }
 
     /// Opens several documents at once, which is what the menu on a set of rows
@@ -1228,11 +1252,13 @@ impl DesktopApp {
 
     /// A Project was picked from the list header's panel.
     pub fn choose_project(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
-        if self.memory_busy || !self.memory.pending_saves().is_empty() {
-            self.memory.set_error(
-                "Wait for pending saves and operations before switching projects.".into(),
-            );
+        if self.memory_busy {
+            self.memory
+                .set_error("Wait for pending operations before switching projects.".into());
             cx.notify();
+            return;
+        }
+        if !self.flush_pending_saves(cx) {
             return;
         }
         let Some(index) = index else {
@@ -1252,6 +1278,9 @@ impl DesktopApp {
     /// Selecting a Project reads its Memory. That read is a socket call to the
     /// daemon, which is why it happens on the click rather than every frame.
     fn select_project(&mut self, index: usize, cx: &mut Context<Self>) {
+        if !self.flush_pending_saves(cx) {
+            return;
+        }
         self.selected_project = Some(index);
         if let Some(project) = self.projects.get(index) {
             let (checkout, error) = read_checkout(&project.project_id);
@@ -1391,13 +1420,13 @@ impl DesktopApp {
     /// active tab with Command-W, so the same act takes this platform's
     /// Command key.
     pub fn close_tab(&mut self, resource_id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shell.section() == Section::Memory {
+        if self.shell.section() == Section::Memory && self.flush_pending_saves(cx) {
             self.memory.close_tab(resource_id, window, cx);
         }
     }
 
     pub fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shell.section() == Section::Memory {
+        if self.shell.section() == Section::Memory && self.flush_pending_saves(cx) {
             self.memory.close_active_tab(window, cx);
         }
     }
@@ -1515,6 +1544,7 @@ impl DesktopApp {
             pane.set_save_state(SaveState::Saving);
             cx.notify();
         }
+        self.saves_in_flight.insert(generation);
         let content = edit.content.clone();
         let resource_id = edit.resource_id.clone();
         let work = cx
@@ -1523,6 +1553,7 @@ impl DesktopApp {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |app, cx| {
+                app.saves_in_flight.remove(&generation);
                 app.document_stored(generation, &resource_id, &content, result, cx)
             })
             .ok();
@@ -1530,10 +1561,7 @@ impl DesktopApp {
         .detach();
     }
 
-    /// What one store produced. The text is recorded as stored even when a later
-    /// keystroke has already asked for another store, because that is what
-    /// "unsaved" is measured against; only the newest store of the open document
-    /// decides what the window reports.
+    /// Only a successful store for this editor generation can acknowledge its text.
     fn document_stored(
         &mut self,
         generation: u64,
@@ -1568,7 +1596,9 @@ impl DesktopApp {
         let Some(pane) = self.memory.pane_for_resource_mut(resource_id) else {
             return;
         };
-        pane.accept_text(content.to_owned());
+        if result.is_ok() && pane.generation() == generation {
+            pane.accept_text(content.to_owned());
+        }
         if pane.generation() == generation {
             match result {
                 Ok(_) => pane.set_save_state(SaveState::Saved),
@@ -1838,6 +1868,9 @@ impl DesktopApp {
     /// Opens the dialog that makes a memory space, which the Project filter
     /// offers and nothing else did.
     pub fn open_new_memory_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.flush_pending_saves(cx) {
+            return;
+        }
         let app = cx.entity().downgrade();
         crate::screens::new_memory_space::NewMemorySpaceDialog::open(app, window, cx);
     }

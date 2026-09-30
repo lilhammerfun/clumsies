@@ -58,7 +58,7 @@ pub fn project_filter(
                         }),
                 )
                 .separator()
-                .item(PopupMenuItem::new("New memory space…").on_click({
+                .item(PopupMenuItem::new("New Project…").on_click({
                     let on_create = on_create.clone();
                     move |_, window, cx| on_create(window, cx)
                 }));

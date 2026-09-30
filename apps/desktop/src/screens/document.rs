@@ -57,6 +57,12 @@ pub enum SaveState {
     Failed(String),
 }
 
+impl SaveState {
+    fn pending(&self) -> bool {
+        matches!(self, Self::Pending | Self::Saving | Self::Failed(_))
+    }
+}
+
 /// A line about something that already happened, such as the Review a request
 /// produced. A failure is not one of these: it belongs to the state it failed,
 /// which is why the pane has one failure channel and it is the save.
@@ -231,7 +237,7 @@ impl DocumentPane {
     /// Whether this pane holds text the engine has not accepted, whether the
     /// pause is still running or a store is on its way.
     pub fn pending_save(&self) -> bool {
-        matches!(self.save, SaveState::Pending | SaveState::Saving)
+        self.save.pending()
     }
 
     pub fn generation(&self) -> u64 {
@@ -708,4 +714,25 @@ fn label_line(label: &str, cx: &App) -> impl IntoElement {
         .text_style(&ui::CAPTION)
         .text_color(cx.theme().muted_foreground)
         .child(label.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SaveState;
+
+    #[test]
+    fn failed_saves_remain_pending_until_a_retry_succeeds() {
+        for state in [
+            SaveState::Pending,
+            SaveState::Saving,
+            SaveState::Failed("engine unavailable".into()),
+        ] {
+            assert!(
+                state.pending(),
+                "unsaved edits must block destructive transitions"
+            );
+        }
+        assert!(!SaveState::Saved.pending());
+        assert!(!SaveState::Clean.pending());
+    }
 }

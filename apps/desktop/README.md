@@ -153,8 +153,8 @@ Distributions place `clumsiesd` (`clumsiesd.exe` on Windows) beside the desktop
 executable. Developers may set `CLUMSIES_AGENT_RUNTIME_BINARY`; `just dev-linux`
 sets it automatically. Agent installation is disabled in isolated development
 instances; non-Codex Windows integrations are not yet supported.
-The client still requires a running daemon; installers and daemon auto-start
-are separate delivery work.
+The client starts the bundled daemon automatically when none is reachable.
+The daemon remains available for Agent sessions after the window closes.
 
 The explicit local connection test binds a temporary folder, rejects a
 conflicting rebind, invokes a real MCP process with the generated configuration,

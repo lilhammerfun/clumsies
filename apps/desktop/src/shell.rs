@@ -607,8 +607,9 @@ fn window_controls(cx: &mut Context<DesktopApp>) -> AnyElement {
             // What the reader typed in the last pause belongs to the engine
             // before the window goes, and this is the last moment it can.
             move |window, cx| {
-                app.update(cx, |app, cx| app.flush_pending_saves(cx));
-                window.remove_window();
+                if app.update(cx, |app, cx| app.flush_pending_saves(cx)) {
+                    window.remove_window();
+                }
             },
             cx,
         ))
