@@ -40,12 +40,14 @@ Filename: "{app}\clumsies-desktop.exe"; Description: "Launch Clumsies"; Flags: n
 [Code]
 function PrepareInstalledApp(StopEngine: Boolean): String;
 var
-  Processes, Process: Variant;
+  Locator, Services, Processes, Process: Variant;
   I: Integer;
 begin
   Result := '';
   try
-    Processes := CreateOleObject('WbemScripting.SWbemLocator').ConnectServer('', 'root\CIMV2').ExecQuery(
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Services := Locator.ConnectServer('', 'root\CIMV2');
+    Processes := Services.ExecQuery(
       'SELECT * FROM Win32_Process WHERE Name = ''clumsies-desktop.exe'' OR Name = ''clumsiesd.exe''');
     for I := 0 to Processes.Count - 1 do begin
       Process := Processes.ItemIndex(I);
