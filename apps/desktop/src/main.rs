@@ -12,6 +12,7 @@ mod components;
 mod engine;
 mod logging;
 mod memory_paths;
+mod project_refresh;
 mod screens;
 mod shell;
 mod sign_in;

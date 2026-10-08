@@ -176,6 +176,8 @@ impl ReviewsScreen {
         self.document = None;
         self.list_error = None;
         self.detail_error = None;
+        self.loading_list = false;
+        self.loading_detail = false;
         self.notice = None;
         self.published.clear();
         cx.notify();
