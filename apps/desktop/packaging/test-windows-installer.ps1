@@ -38,8 +38,13 @@ function Check-Installed {
             throw "Installed $program does not match the package"
         }
     }
-    & (Join-Path $install 'clumsies-desktop.exe') --smoke-test
-    if ($LASTEXITCODE -ne 0) { throw 'Installed daemon startup and IPC failed' }
+    $smoke = Start-Process (Join-Path $install 'clumsies-desktop.exe') -ArgumentList '--smoke-test' -PassThru -WindowStyle Hidden
+    # Start-Process -Wait also waits for the resident daemon, which must survive.
+    if (-not $smoke.WaitForExit(30000)) {
+        $smoke.Kill()
+        throw 'Installed daemon startup and IPC timed out'
+    }
+    if ($smoke.ExitCode -ne 0) { throw 'Installed daemon startup and IPC failed' }
     $daemon = Get-Process clumsiesd | Where-Object Path -eq (Join-Path $install 'clumsiesd.exe')
     foreach ($library in @('msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
         $loaded = $daemon.Modules | Where-Object ModuleName -eq $library

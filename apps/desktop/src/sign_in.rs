@@ -480,21 +480,26 @@ fn describe_failure(status: u16, body: &str) -> String {
 /// deployment and not ours to draw.
 fn open_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]);
-        command
-    };
-    #[cfg(target_os = "macos")]
-    let mut command = std::process::Command::new("open");
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let mut command = std::process::Command::new("xdg-open");
+    {
+        // cmd /C start interprets the authorization URL's ampersands as
+        // command separators, dropping the callback and PKCE parameters.
+        return open::that(url)
+            .map_err(|error| format!("could not open a browser for sign-in: {error}"));
+    }
 
-    command
-        .arg(url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("could not open a browser for sign-in: {error}"))
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let mut command = std::process::Command::new("open");
+        #[cfg(not(target_os = "macos"))]
+        let mut command = std::process::Command::new("xdg-open");
+
+        command
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("could not open a browser for sign-in: {error}"))
+    }
 }
 
 #[cfg(test)]

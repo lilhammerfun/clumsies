@@ -35,6 +35,10 @@ iana-time-zone = "0.1.65"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tempfile = "3.27.0"
 
+[target.'cfg(windows)'.dependencies]
+# Pass browser URLs as data and suppress launcher console windows.
+open = "5.4.4"
+
 # Explorer, the taskbar and every shortcut take a Windows program's icon from a
 # resource inside the executable, so the client needs a resource compiler on
 # Windows and nothing anywhere else.
