@@ -653,7 +653,10 @@ pub fn sign_out() -> Result<(), String> {
     // Account lookup may fail precisely when the user needs to sign out.
     // The daemon's configured origin does not depend on a valid session.
     let daemon = client();
-    let server_url = daemon.health().map_err(|error| error.to_string())?.server_url;
+    let server_url = daemon
+        .health()
+        .map_err(|error| error.to_string())?
+        .server_url;
     match server("DELETE", "/api/v1/auth/session", BTreeMap::new(), None) {
         Ok(response) if response.status == 204 || response.status == 200 => {}
         Ok(response) => crate::logging::error(&format!(

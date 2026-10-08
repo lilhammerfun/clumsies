@@ -275,7 +275,8 @@ impl DesktopApp {
             Ok(()) => crate::logging::info("signed out"),
             Err(error) => {
                 crate::logging::error(&format!("could not sign out: {error}"));
-                self.memory.set_error(format!("Could not sign out: {error}"));
+                self.memory
+                    .set_error(format!("Could not sign out: {error}"));
                 self.shell.set_section(Section::Memory);
                 cx.notify();
                 return;
