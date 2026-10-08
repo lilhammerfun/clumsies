@@ -1260,14 +1260,16 @@ impl MemoryScreen {
     }
 
     /// The project scope stays above the file list; content search is deferred.
-    pub fn list(&self, project: AnyElement, cx: &App) -> AnyElement {
-        let header = header::row().child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .overflow_hidden()
-                .child(project),
-        );
+    pub fn list(&self, project: AnyElement, settings: AnyElement, cx: &App) -> AnyElement {
+        let header = header::row()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .child(project),
+            )
+            .child(settings);
         // A filter that matches nothing says so where the tree was, which is
         // macOS's own empty state for a search with no results.
         let body = if self.visible_documents().is_empty() && !self.documents.is_empty() {
@@ -1346,10 +1348,6 @@ impl MemoryScreen {
         window: &Window,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
-        let can_project_settings = self
-            .project_id
-            .as_deref()
-            .is_some_and(|p| p != crate::engine::ORGANIZATION_MEMORY);
         let pane = self.active_pane();
         let tabs = self.tabs(cx);
         let toolbar = header::row()
@@ -1364,7 +1362,6 @@ impl MemoryScreen {
                 if let Some(pane) = pane {
                     pane.tools(
                         focus,
-                        can_project_settings,
                         self.selected_document().is_some_and(|doc| {
                             !busy && !doc.draft_deleted && self.can_mutate(&[doc.path.clone()])
                         }),
@@ -1372,7 +1369,7 @@ impl MemoryScreen {
                     )
                 } else {
                     header::group()
-                        .child(DocumentPane::more_tool(false, can_project_settings, cx))
+                        .child(DocumentPane::more_tool(false, cx))
                         .into_any_element()
                 },
             ));
