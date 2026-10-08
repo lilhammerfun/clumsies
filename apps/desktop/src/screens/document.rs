@@ -256,31 +256,18 @@ impl DocumentPane {
         self.save = save;
     }
 
-    pub fn more_tool(
-        can_review: bool,
-        can_project_settings: bool,
-        cx: &mut Context<DesktopApp>,
-    ) -> impl IntoElement + use<> {
+    pub fn more_tool(can_review: bool, cx: &mut Context<DesktopApp>) -> impl IntoElement + use<> {
         let app = cx.entity();
         header::button("document-more")
             .icon(Icon::default().path("icons/ellipsis.svg"))
             .tooltip("More")
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
                 let reviewing = app.clone();
-                let settings = app.clone();
                 menu.item(
                     PopupMenuItem::new("Request review…")
                         .disabled(!can_review)
                         .on_click(move |_, window, cx| {
                             reviewing.update(cx, |app, cx| app.request_review(window, cx));
-                        }),
-                )
-                .separator()
-                .item(
-                    PopupMenuItem::new("Project settings…")
-                        .disabled(!can_project_settings)
-                        .on_click(move |_, window, cx| {
-                            settings.update(cx, |app, cx| app.open_project_settings(window, cx));
                         }),
                 )
             })
@@ -296,7 +283,6 @@ impl DocumentPane {
     pub fn tools(
         &self,
         focus: &FocusHandle,
-        can_project_settings: bool,
         can_edit: bool,
         cx: &mut Context<DesktopApp>,
     ) -> AnyElement {
@@ -315,7 +301,7 @@ impl DocumentPane {
                     this.update(cx, action);
                 })
         };
-        let more = Self::more_tool(self.can_review(), can_project_settings, cx);
+        let more = Self::more_tool(self.can_review(), cx);
         header::group()
             .id("document-tools")
             .track_focus(focus)

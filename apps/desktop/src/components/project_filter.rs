@@ -24,10 +24,11 @@ pub fn project_filter(
     let on_select = Rc::new(on_select);
     let on_create = Rc::new(on_create);
     let button = header::button("project-filter")
+        .max_w_full()
         .icon(Icon::default().path("icons/list-filter.svg"))
         .accessibility_label(format!("Project Filter: {title}"))
         .tooltip(title.clone())
-        .child(div().max_w(px(150.)).truncate().child(title))
+        .child(div().min_w(px(0.)).max_w(px(150.)).truncate().child(title))
         .child(Icon::new(IconName::ChevronDown).with_size(px(12.)))
         .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
             if projects.is_empty() {
@@ -66,5 +67,8 @@ pub fn project_filter(
                 }));
             menu
         });
-    header::group().child(button).into_any_element()
+    header::group()
+        .max_w_full()
+        .child(button)
+        .into_any_element()
 }

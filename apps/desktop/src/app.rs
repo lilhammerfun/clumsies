@@ -13,7 +13,7 @@ use gpui_kit::base::Disableable;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::*;
-use gpui_kit::component::{Root, Theme, WindowExt as _};
+use gpui_kit::component::{Icon, Root, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::components::header;
@@ -2478,7 +2478,26 @@ impl DesktopApp {
     /// no explanation.
     fn section_list(&self, picker: AnyElement, cx: &mut Context<Self>) -> Option<AnyElement> {
         match self.shell.section() {
-            Section::Memory => Some(self.memory.list(picker, cx)),
+            Section::Memory => {
+                let settings = header::group()
+                    .flex_shrink_0()
+                    .child(
+                        header::button("project-settings")
+                            .icon(Icon::default().path("icons/settings.svg"))
+                            .tooltip("Project settings")
+                            .accessibility_label("Project settings")
+                            .disabled(
+                                self.selected_project
+                                    .and_then(|index| self.projects.get(index))
+                                    .is_none(),
+                            )
+                            .on_click(cx.listener(|app, _, window, cx| {
+                                app.open_project_settings(window, cx);
+                            })),
+                    )
+                    .into_any_element();
+                Some(self.memory.list(picker, settings, cx))
+            }
             Section::Reviews => Some(self.reviews.list(picker, cx)),
             // macOS's Dashboard is a sidebar beside one page: it has no
             // navigator, and the Project filter travels in the page's own
