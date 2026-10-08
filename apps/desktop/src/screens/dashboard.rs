@@ -233,6 +233,7 @@ impl DashboardScreen {
         if self.project_id == project_id {
             return;
         }
+        self.generation += 1;
         self.project_id = project_id;
         self.snapshot = None;
         self.error = None;

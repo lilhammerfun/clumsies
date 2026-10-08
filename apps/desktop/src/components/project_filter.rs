@@ -11,14 +11,15 @@ use std::rc::Rc;
 /// `selected` is `None` for the Organization's Memory, which is the entry the
 /// window already knew how to show — the menu simply never offered it.
 pub fn project_filter(
-    projects: Vec<String>,
-    selected: Option<usize>,
-    on_select: impl Fn(Option<usize>, &mut Window, &mut App) + 'static,
+    projects: Vec<(String, String)>,
+    selected: Option<String>,
+    on_select: impl Fn(Option<String>, &mut Window, &mut App) + 'static,
     on_create: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    let title = selected
-        .and_then(|index| projects.get(index))
-        .cloned()
+    let title = projects
+        .iter()
+        .find(|(id, _)| Some(id.as_str()) == selected.as_deref())
+        .map(|(_, name)| name.clone())
         .unwrap_or_else(|| "Organization Memory".into());
     let on_select = Rc::new(on_select);
     let on_create = Rc::new(on_create);
@@ -32,15 +33,16 @@ pub fn project_filter(
             if projects.is_empty() {
                 menu = menu.item(PopupMenuItem::new("No memory spaces yet").disabled(true));
             }
-            for (index, name) in projects.iter().enumerate() {
+            for (id, name) in &projects {
                 let on_select = on_select.clone();
+                let project_id = id.clone();
                 menu = menu.item(
                     PopupMenuItem::new(name.clone())
-                        .checked(selected == Some(index))
+                        .checked(selected.as_deref() == Some(id.as_str()))
                         .on_click(move |_, window, cx| {
-                            if selected != Some(index) {
-                                on_select(Some(index), window, cx);
-                            }
+                            // Background reads can reorder the list while this
+                            // menu is open; its entries must carry stable IDs.
+                            on_select(Some(project_id.clone()), window, cx);
                         }),
                 );
             }

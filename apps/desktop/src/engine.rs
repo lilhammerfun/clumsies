@@ -48,7 +48,7 @@ pub enum EngineStatus {
 }
 
 /// One Project as the Server describes it.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Project {
     pub project_id: String,
     pub name: String,
