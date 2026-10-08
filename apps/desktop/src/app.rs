@@ -18,9 +18,7 @@ use gpui_kit::*;
 
 use crate::components::header;
 use crate::components::modal;
-use crate::engine::{
-    self, Checkout, DocumentEdit, EngineStatus, Period, Project, Review, ReviewStatus,
-};
+use crate::engine::{self, DocumentEdit, EngineStatus, Period, Project, Review, ReviewStatus};
 use crate::project_refresh::{ProjectRefresh, retained_selection};
 use crate::screens::dashboard::{AboutDialog, DashboardScreen, Metric};
 use crate::screens::dialogs::{ConfirmDialog, DialogAction, RenameDialog, RenameFolderDialog};
@@ -54,6 +52,7 @@ pub struct DesktopApp {
     /// Why the Project list could not be read, when it could not be.
     projects_error: Option<String>,
     project_refresh: ProjectRefresh,
+    checkout_read: ProjectRefresh,
     window_active: bool,
     _project_poll: Task<()>,
     _project_activation: Subscription,
@@ -93,24 +92,9 @@ impl DesktopApp {
         // The account is read once at startup, and again whenever the session
         // changes: it names the rail's foot and fills the Settings screen.
         let account = read_account();
-        let (checkout, checkout_error) = match projects.first() {
-            Some(project) => read_checkout(&project.project_id),
-            None => (None, None),
-        };
-        let mut reviews = ReviewsScreen::new(cx);
-        reviews.set_project(
-            projects.first().map(|project| project.project_id.clone()),
-            cx,
-        );
-        if let Some(checkout) = &checkout {
-            reviews.set_published(checkout);
-        }
-        let mut dashboard = DashboardScreen::new(cx);
-        dashboard.set_project(
-            projects.first().map(|project| project.project_id.clone()),
-            cx,
-        );
-        let memory = MemoryScreen::new(window, cx, checkout, checkout_error);
+        let reviews = ReviewsScreen::new(cx);
+        let dashboard = DashboardScreen::new(cx);
+        let memory = MemoryScreen::new(window, cx, None, None);
         // Either authenticated read can discover an absent or expired session.
         let signed_in = session_available(
             projects_error.as_deref(),
@@ -154,10 +138,11 @@ impl DesktopApp {
         });
         let mut app = Self {
             engine,
-            selected_project: (signed_in && !projects.is_empty()).then_some(0),
+            selected_project: None,
             projects,
             projects_error,
             project_refresh: ProjectRefresh::default(),
+            checkout_read: ProjectRefresh::default(),
             window_active: window.is_window_active(),
             _project_poll: project_poll,
             _project_activation: project_activation,
@@ -176,13 +161,8 @@ impl DesktopApp {
             memory_busy: false,
             _appearance: appearance,
         };
-        // A Project that already holds a proposal must show it on the first
-        // frame: the tree marks it and the pane header offers to review it.
-        app.refresh_drafts(cx);
-        // A section is read when it is opened, which for the section the window
-        // opens on has already happened by the time the window exists.
-        if app.shell.section() == Section::Dashboard {
-            app.refresh_dashboard(cx);
+        if signed_in && !app.projects.is_empty() {
+            app.select_project(0, cx);
         }
         // The pane's tools are a region of the window (F6 walks it), so the
         // window owns the handle and the screen draws from it.
@@ -317,6 +297,7 @@ impl DesktopApp {
             }
         }
         self.project_refresh.invalidate();
+        self.checkout_read.invalidate();
         self.account = None;
         self.projects.clear();
         self.projects_error = None;
@@ -448,6 +429,9 @@ impl DesktopApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.memory_busy || !self.memory.ready() {
+            return;
+        }
         NewMemoryDialog::open(cx.entity().downgrade(), folder, "untitled.md", window, cx);
     }
 
@@ -457,6 +441,9 @@ impl DesktopApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.memory_busy || !self.memory.ready() {
+            return;
+        }
         NewMemoryDialog::open_kind(
             cx.entity().downgrade(),
             folder,
@@ -470,7 +457,7 @@ impl DesktopApp {
     /// Writes a new document as a draft. The file exists for the Project once
     /// the Review carrying it is merged.
     pub fn create_memory_entry(&mut self, path: &str, directory: bool, cx: &mut Context<Self>) {
-        if self.memory_busy || !crate::memory_paths::valid(path) {
+        if self.memory_busy || !self.memory.ready() || !crate::memory_paths::valid(path) {
             return;
         }
         if self
@@ -756,6 +743,9 @@ impl DesktopApp {
     /// proposed as a draft in one go, so the whole starting point is one Review,
     /// and the folder a Project already uses is left alone.
     pub fn set_up_guidelines(&mut self, cx: &mut Context<Self>) {
+        if self.memory_busy || !self.memory.ready() {
+            return;
+        }
         let Some(project_id) = self.memory.project_id().map(str::to_owned) else {
             return;
         };
@@ -1302,6 +1292,7 @@ impl DesktopApp {
             return;
         }
         let Some(index) = index else {
+            self.checkout_read.invalidate();
             self.selected_project = None;
             let result = engine::organization_memory();
             let (checkout, error) = match result {
@@ -1315,29 +1306,30 @@ impl DesktopApp {
         self.select_project(index, cx);
     }
 
-    /// Selecting a Project reads its Memory. That read is a socket call to the
-    /// daemon, which is why it happens on the click rather than every frame.
+    /// Selection is recorded locally before a background checkout read, so a
+    /// late read of another Project cannot change the daemon's active Project.
     fn select_project(&mut self, index: usize, cx: &mut Context<Self>) {
         if !self.flush_pending_saves(cx) {
             return;
         }
         self.selected_project = Some(index);
         if let Some(project) = self.projects.get(index) {
-            let (checkout, error) = read_checkout(&project.project_id);
+            let project_id = project.project_id.clone();
             // Another Project is another queue, so the Reviews screen is told
             // before its list is read — and before the new checkout replaces
             // the old Project's documents.
-            self.reviews
-                .set_project(Some(project.project_id.clone()), cx);
-            if let Some(checkout) = &checkout {
-                self.reviews.set_published(checkout);
-            }
+            self.reviews.set_project(Some(project_id.clone()), cx);
             // Another Project is another Dashboard, and the numbers of one say
             // nothing about the other.
-            self.dashboard
-                .set_project(Some(project.project_id.clone()), cx);
-            self.memory.set_checkout(checkout, error, cx);
-            self.refresh_drafts(cx);
+            self.dashboard.set_project(Some(project_id.clone()), cx);
+            self.checkout_read.invalidate();
+            if self.memory.project_id() != Some(project_id.as_str()) {
+                self.memory.set_checkout(None, None, cx);
+            }
+            match engine::select_project(&project_id) {
+                Ok(()) => self.load_project_memory(cx),
+                Err(error) => self.memory.load_failed(error),
+            }
             if self.shell.section() == Section::Reviews {
                 self.refresh_reviews(cx);
             }
@@ -1345,6 +1337,58 @@ impl DesktopApp {
                 self.refresh_dashboard(cx);
             }
         }
+        cx.notify();
+    }
+
+    pub fn retry_memory_load(&mut self, cx: &mut Context<Self>) {
+        self.choose_project(self.selected_project, cx);
+    }
+
+    fn load_project_memory(&mut self, cx: &mut Context<Self>) {
+        let Some(project_id) = self
+            .selected_project
+            .and_then(|index| self.projects.get(index))
+            .map(|project| project.project_id.clone())
+        else {
+            return;
+        };
+        self.checkout_read.invalidate();
+        let Some(generation) = self.checkout_read.begin(self.signed_in) else {
+            return;
+        };
+        self.memory.begin_loading();
+        let scope = project_id.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { engine::load_checkout(&project_id) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |app, cx| {
+                if !app.checkout_read.complete(generation)
+                    || !app.signed_in
+                    || app
+                        .selected_project
+                        .and_then(|index| app.projects.get(index))
+                        .is_none_or(|project| project.project_id != scope)
+                {
+                    return;
+                }
+                match result {
+                    Ok(checkout) => {
+                        app.reviews.set_published(&checkout);
+                        app.memory.set_checkout(Some(checkout), None, cx);
+                        app.refresh_drafts(cx);
+                    }
+                    Err(error) => {
+                        crate::logging::error(&format!("could not load project memory: {error}"));
+                        app.memory.load_failed(error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -1843,6 +1887,7 @@ impl DesktopApp {
             if self.memory_busy || !self.flush_pending_saves(cx) {
                 return;
             }
+            self.checkout_read.invalidate();
             self.memory.set_checkout(
                 None,
                 Some("This project is no longer available to your account.".into()),
@@ -1859,6 +1904,7 @@ impl DesktopApp {
     /// Re-reads everything a session unlocks.
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.project_refresh.invalidate();
+        self.checkout_read.invalidate();
         self.engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
         let account = read_account();
@@ -1875,23 +1921,16 @@ impl DesktopApp {
             .iter()
             .position(|project| Some(project.project_id.as_str()) == remembered.as_deref())
             .or((!projects.is_empty()).then_some(0));
-        let project = selected.and_then(|index| projects.get(index));
-        let (checkout, checkout_error) = match project {
-            Some(project) => read_checkout(&project.project_id),
-            None => (None, None),
-        };
-        self.selected_project = selected;
-        if let Some(checkout) = &checkout {
-            self.reviews.set_published(checkout);
-        }
-        self.reviews
-            .set_project(project.map(|project| project.project_id.clone()), cx);
+        self.selected_project = None;
+        self.reviews.set_project(None, cx);
+        self.dashboard.set_project(None, cx);
         self.projects = projects;
         self.projects_error = projects_error;
-        self.memory.set_checkout(checkout, checkout_error, cx);
-        self.refresh_drafts(cx);
-        if self.shell.section() == Section::Reviews {
-            self.refresh_reviews(cx);
+        self.memory.set_checkout(None, None, cx);
+        if self.signed_in
+            && let Some(index) = selected
+        {
+            self.select_project(index, cx);
         }
     }
 
@@ -2219,11 +2258,15 @@ impl DesktopApp {
         else {
             return;
         };
-        let (checkout, checkout_error) = read_checkout(&project.project_id);
-        if let Some(checkout) = &checkout {
-            self.reviews.set_published(checkout);
+        // This stays local and synchronous so it cannot race an editor save.
+        match engine::checkout(&project.project_id) {
+            Ok(checkout) => {
+                self.checkout_read.invalidate();
+                self.reviews.set_published(&checkout);
+                self.memory.set_checkout(Some(checkout), None, cx);
+            }
+            Err(error) => self.memory.load_failed(error),
         }
-        self.memory.set_checkout(checkout, checkout_error, cx);
     }
 
     /// The open screen's actions, for the end of its detail header. A screen
@@ -2567,14 +2610,6 @@ mod session_tests {
             Some("the Server answered HTTP 403: Forbidden"),
             None
         ));
-    }
-}
-
-/// Reads one Project's checkout, keeping the reason when it cannot.
-fn read_checkout(project_id: &str) -> (Option<Checkout>, Option<String>) {
-    match engine::checkout(project_id) {
-        Ok(checkout) => (Some(checkout), None),
-        Err(error) => (None, Some(error)),
     }
 }
 

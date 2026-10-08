@@ -138,6 +138,7 @@ pub struct MemoryScreen {
     drafts: Vec<DaemonDraftSummary>,
     /// Why the documents could not be read, when they could not be.
     error: Option<String>,
+    loading: bool,
     operation_error: Option<String>,
     /// Where the pane's tools take the keyboard. The tools belong to the pane
     /// but the region is the window's (F6 walks it), so the handle is handed
@@ -241,6 +242,7 @@ impl MemoryScreen {
             query: String::new(),
             drafts: Vec::new(),
             error: None,
+            loading: false,
             operation_error: None,
             tools_focus: cx.focus_handle(),
             list_focus: cx.focus_handle(),
@@ -263,6 +265,7 @@ impl MemoryScreen {
         error: Option<String>,
         cx: &mut Context<DesktopApp>,
     ) {
+        self.loading = false;
         let (project_id, commit_id, documents) = match checkout {
             Some(checkout) => (
                 Some(checkout.project_id),
@@ -290,6 +293,10 @@ impl MemoryScreen {
             self.active = None;
             self.back.clear();
             self.forward.clear();
+            self.pending_restore = None;
+            self.pending_open = None;
+            self.pending_path = None;
+            self.pending_mode = None;
         }
         self.pending_refresh = !another_project;
         if another_project {
@@ -367,6 +374,20 @@ impl MemoryScreen {
         self.operation_error = Some(message);
     }
 
+    pub fn begin_loading(&mut self) {
+        self.loading = true;
+        self.error = None;
+    }
+
+    pub fn load_failed(&mut self, error: String) {
+        self.loading = false;
+        self.error = Some(error);
+    }
+
+    pub fn ready(&self) -> bool {
+        !self.loading && self.error.is_none() && self.project_id.is_some()
+    }
+
     pub fn export_entries(&self, paths: &[String], cx: &App) -> Vec<(String, bool, String)> {
         let targets = if paths.is_empty() {
             self.paths()
@@ -417,9 +438,11 @@ impl MemoryScreen {
     }
 
     pub fn can_mutate(&self, paths: &[String]) -> bool {
-        self.project_id
-            .as_deref()
-            .is_some_and(|p| p != crate::engine::ORGANIZATION_MEMORY)
+        self.ready()
+            && self
+                .project_id
+                .as_deref()
+                .is_some_and(|p| p != crate::engine::ORGANIZATION_MEMORY)
             && self.targets(paths).iter().all(|path| {
                 let doc = self.documents.iter().find(|d| &d.path == path).unwrap();
                 self.draft_for(doc).is_none_or(|d| {
@@ -1356,6 +1379,7 @@ impl MemoryScreen {
         let body = if let Some(pane) = pane {
             pane.body(
                 !busy
+                    && self.ready()
                     && self.selected_document().is_some_and(|doc| {
                         !doc.draft_deleted
                             && self.project_id.as_deref()
@@ -1365,17 +1389,18 @@ impl MemoryScreen {
                 cx,
             )
         } else {
-            match (&self.error, self.documents.is_empty()) {
-                (None, true) => empty_memory_state(cx),
-                (error, _) => div()
+            match (self.loading, &self.error, self.documents.is_empty()) {
+                (false, None, true) => empty_memory_state(cx),
+                (false, None, false) => div()
                     .v_flex()
                     .flex_1()
                     .p_4()
-                    .child(match error {
-                        Some(error) => ui::message(error.clone(), cx.theme().danger),
-                        None => ui::message("Select a document.", cx.theme().muted_foreground),
-                    })
+                    .child(ui::message(
+                        "Select a document.",
+                        cx.theme().muted_foreground,
+                    ))
                     .into_any_element(),
+                _ => div().flex_1().into_any_element(),
             }
         };
         div()
@@ -1386,6 +1411,24 @@ impl MemoryScreen {
             .min_h(px(0.))
             .child(toolbar)
             .child(ui::rule(cx))
+            .children(self.loading.then(|| {
+                div().p_4().child(ui::message(
+                    "Loading project memory…",
+                    cx.theme().muted_foreground,
+                ))
+            }))
+            .children(self.error.as_ref().map(|error| {
+                div()
+                    .v_flex()
+                    .p_4()
+                    .gap_2()
+                    .child(ui::message(error.clone(), cx.theme().danger))
+                    .child(
+                        Button::new("retry-memory-load")
+                            .label("Try again")
+                            .on_click(cx.listener(|app, _, _, cx| app.retry_memory_load(cx))),
+                    )
+            }))
             .child(body)
             .into_any_element()
     }
@@ -1744,7 +1787,7 @@ fn tree_menu(path: &str, menu: PopupMenu, window: &mut Window, cx: &mut App) -> 
                 memory.org_resources(&rows),
                 app.manageable_projects(),
                 memory.project_id().map(str::to_owned),
-                app.memory_busy(),
+                app.memory_busy() || !app.memory_ref().ready(),
                 memory.can_mutate(&rows),
             )
         });

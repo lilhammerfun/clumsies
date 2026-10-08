@@ -22,11 +22,11 @@ use clumsiesd::{
     DaemonDraftOperation, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
     DaemonDraftOperationSource, DaemonDraftResourceKind, DaemonDraftScope, DaemonDraftSummary,
     DaemonHealth, DaemonIpcClient, DaemonIpcRequest, DaemonLocalDraftStatus,
-    DaemonProjectCacheClearRequest, DaemonProjectCheckoutRequest, DaemonProjectCheckoutResource,
-    DaemonProjectStorageAvailability, DaemonProjectStorageRequest,
-    DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest, DaemonRenameDraftOperation,
-    DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse, DaemonUpdateDraftOperation,
-    DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
+    DaemonProjectCacheClearRequest, DaemonProjectCheckout, DaemonProjectCheckoutRequest,
+    DaemonProjectCheckoutResource, DaemonProjectSelectionRequest, DaemonProjectStorageAvailability,
+    DaemonProjectStorageRequest, DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest,
+    DaemonRenameDraftOperation, DaemonRetryResponse, DaemonServerRequest, DaemonServerResponse,
+    DaemonUpdateDraftOperation, DraftOperationSyncStatus, ErrorEnvelope, SyncRetryChannel,
 };
 use serde::{Deserialize, Serialize};
 
@@ -515,15 +515,132 @@ pub fn update_project(
     serde_json::from_str(&response.body).map_err(|error| format!("unreadable Project: {error}"))
 }
 
-/// Every Memory document the Project currently resolves to, in path order.
-/// The daemon serves these from its own checkout; a Project that has not
-/// synced yet reports that instead of an empty list.
+fn read_ready_checkout(
+    mut read: impl FnMut() -> Result<DaemonProjectCheckout, String>,
+    sync: impl FnOnce() -> Result<(), String>,
+) -> Result<DaemonProjectCheckout, String> {
+    let checkout = read()?;
+    if checkout.ready {
+        return Ok(checkout);
+    }
+    sync()?;
+    let checkout = read()?;
+    if !checkout.ready {
+        return Err("Project memory is not ready after synchronization. Try again.".into());
+    }
+    Ok(checkout)
+}
+
+#[cfg(test)]
+mod checkout_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn snapshot(ready: bool) -> DaemonProjectCheckout {
+        DaemonProjectCheckout {
+            project_id: "project".into(),
+            commit_id: ready.then(|| "published-commit".into()),
+            ref_etag: None,
+            commit_created_at: None,
+            org_selection_revision: 0,
+            selected_org_resource_ids: Vec::new(),
+            resources: Vec::new(),
+            ready,
+        }
+    }
+
+    #[test]
+    fn missing_cache_is_downloaded_before_it_is_displayed() {
+        let downloaded = Cell::new(false);
+        let result = read_ready_checkout(
+            || Ok(snapshot(downloaded.get())),
+            || {
+                downloaded.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(downloaded.get());
+        assert!(result.ready);
+        assert_eq!(result.commit_id.as_deref(), Some("published-commit"));
+    }
+
+    #[test]
+    fn ready_empty_project_does_not_need_a_download() {
+        let result = read_ready_checkout(
+            || Ok(snapshot(true)),
+            || panic!("an existing ready checkout must remain available offline"),
+        )
+        .unwrap();
+        assert!(result.ready);
+        assert!(result.resources.is_empty());
+    }
+
+    #[test]
+    fn failed_download_is_an_error_instead_of_an_empty_project() {
+        let error = read_ready_checkout(|| Ok(snapshot(false)), || Err("download failed".into()))
+            .unwrap_err();
+        assert_eq!(error, "download failed");
+    }
+
+    #[test]
+    fn incomplete_download_is_never_displayed_as_an_empty_project() {
+        assert!(read_ready_checkout(|| Ok(snapshot(false)), || Ok(())).is_err());
+    }
+
+    #[test]
+    fn unreadable_cache_does_not_start_an_unrelated_retry() {
+        let error = read_ready_checkout(
+            || Err("daemon unavailable".into()),
+            || panic!("propagate the read failure"),
+        )
+        .unwrap_err();
+        assert_eq!(error, "daemon unavailable");
+    }
+}
+
+/// Keeps the selected Project in the daemon's regular synchronization set.
+/// This is a local configuration write; downloads run on the daemon's worker.
+pub fn select_project(project_id: &str) -> Result<(), String> {
+    client()
+        .select_project(DaemonProjectSelectionRequest {
+            project_id: project_id.to_owned(),
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Loads a Project on selection, downloading published content if needed.
+/// The first download may need the Server, so this runs off the UI thread.
+pub fn load_checkout(project_id: &str) -> Result<Checkout, String> {
+    let checkout = read_ready_checkout(
+        || read_project_checkout(project_id),
+        || sync_project_channel(&client(), project_id, SyncRetryChannel::Commits),
+    )?;
+    checkout_documents(project_id, checkout)
+}
+
+/// Re-reads local content after an edit, without starting a network download.
 pub fn checkout(project_id: &str) -> Result<Checkout, String> {
-    let checkout = client()
+    let checkout = read_project_checkout(project_id)?;
+    if !checkout.ready {
+        return Err("Project memory has not been downloaded. Try again to load it.".into());
+    }
+    checkout_documents(project_id, checkout)
+}
+
+fn read_project_checkout(project_id: &str) -> Result<DaemonProjectCheckout, String> {
+    client()
         .project_checkout(DaemonProjectCheckoutRequest {
             project_id: project_id.to_owned(),
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+fn checkout_documents(
+    project_id: &str,
+    checkout: DaemonProjectCheckout,
+) -> Result<Checkout, String> {
     let mut documents = memory_entries(checkout.resources);
     let drafts = drafts(project_id)?;
     // A document with a proposal is opened as the proposal has it, which is
@@ -1271,9 +1388,18 @@ pub fn wait_for_upload(draft_id: &str) -> Result<DaemonDraftSummary, String> {
 
 /// Asks the daemon to sync the drafts channel now instead of on its next tick.
 fn nudge_drafts(client: &DaemonIpcClient, project_id: &str) -> Result<(), String> {
+    sync_project_channel(client, project_id, SyncRetryChannel::Drafts)
+}
+
+/// Retries only the requested channel; loading a checkout must not retry uploads.
+fn sync_project_channel(
+    client: &DaemonIpcClient,
+    project_id: &str,
+    channel: SyncRetryChannel,
+) -> Result<(), String> {
     let payload = serde_json::to_value(DaemonProjectSyncRetryRequest {
         project_id: project_id.to_owned(),
-        channel: SyncRetryChannel::Drafts,
+        channel,
     })
     .map_err(|error| format!("unreadable retry request: {error}"))?;
     let response = client

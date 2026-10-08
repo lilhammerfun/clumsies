@@ -1,4 +1,4 @@
-//! Coordination for background project-list reads.
+//! Coordination for background project reads and their session lifetime.
 
 #[derive(Default)]
 pub(crate) struct ProjectRefresh {
