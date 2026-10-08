@@ -260,7 +260,9 @@ struct DaemonXPCClient: Sendable {
         let route = "daemon:" + method
         let token = await ClientServiceStatus.shared.begin(route)
         do {
-            let response: Response = try await ClientDiagnostics.operation(layer: "xpc", method: method) {
+            let response: Response = try await ClientDiagnostics.operation(layer: "xpc", method: method,
+                recordLifecycle: ["replace_project_binding", "remove_project_binding", "remove_project_agent_adapter",
+                                  "list_project_bindings", "list_project_agent_adapters"].contains(method)) {
                 try await performCall(method: method, payload: payload, timeout: timeout)
             }
             try Task.checkCancellation()

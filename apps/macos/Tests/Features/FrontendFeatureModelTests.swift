@@ -3,6 +3,85 @@ import XCTest
 
 @MainActor
 final class FrontendFeatureModelTests: XCTestCase {
+    func testRepositoryRemovalRunsDuringRefreshAndLogsItsResult() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "project"
+        let binding = DaemonProjectBinding(serverUrl: "https://example.com", workspaceRoot: "/SECRET_WORKSPACE",
+            projectId: "project", revision: 1, createdAt: "now", updatedAt: "now")
+        let started = expectation(description: "Repository refresh")
+        var pending: CheckedContinuation<[DaemonProjectBinding], Never>?
+        var delay = false, fail = false, removals = 0
+        let model = ProjectRepositoriesModel(context: workspace.context, projects: workspace.projects,
+            fetchBindings: { _ in
+                if delay { return await withCheckedContinuation { pending = $0; started.fulfill() } }
+                return []
+            },
+            removeRepository: { _ in
+                removals += 1
+                if fail { throw DaemonXPCError.daemon(.init(code: "project_binding_changed", message: "SECRET_ERROR", requestId: nil)) }
+            })
+        await ClientDiagnostics.$testLog.withValue(ClientLog(directory: directory)) {
+            await model.remove(binding)
+            fail = true
+            await model.remove(binding)
+            delay = true
+            let loading = Task { await model.load() }
+            await fulfillment(of: [started], timeout: 1)
+            delay = false
+            fail = false
+            await model.remove(binding)
+            workspace.context.activeProjectId = "other"
+            await model.remove(binding)
+            pending?.resume(returning: [binding])
+            await loading.value
+        }
+        XCTAssertEqual(removals, 3, "A list refresh must not discard a confirmed removal.")
+        XCTAssertTrue(model.bindings.isEmpty, "The old refresh must not restore the removed binding.")
+        let content = try String(contentsOf: directory.appending(path: "client.log"), encoding: .utf8)
+        let records = try content.split(separator: "\n").map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String])
+        }
+        for event in ["repository_mutation_requested", "repository_mutation_started", "repository_mutation_persisted",
+                      "repository_mutation_refresh_finished", "repository_mutation_failed", "repository_mutation_skipped"] {
+            XCTAssertTrue(records.contains { $0["event"] == event }, event)
+        }
+        XCTAssertEqual(records.filter { $0["event"] == "repository_mutation_skipped" }.compactMap { $0["reason"] }, ["project_changed"])
+        let firstID = try XCTUnwrap(records.first?["request_id"])
+        XCTAssertEqual(records.filter { $0["request_id"] == firstID }.compactMap { $0["event"] },
+            ["repository_mutation_requested", "repository_mutation_started", "repository_mutation_persisted", "repository_bindings_loaded", "repository_mutation_refresh_finished"])
+        XCTAssertFalse(content.contains("SECRET"))
+    }
+
+    func testRepositoryRefreshCannotHideAnInFlightRemovalFailure() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "project"
+        let binding = DaemonProjectBinding(serverUrl: "https://example.com", workspaceRoot: "/repository",
+            projectId: "project", revision: 1, createdAt: "now", updatedAt: "now")
+        let started = expectation(description: "Removal started")
+        var pending: CheckedContinuation<Void, Error>?
+        var removals = 0, reads = 0
+        let model = ProjectRepositoriesModel(context: workspace.context, projects: workspace.projects,
+            fetchBindings: { _ in reads += 1; return [binding] },
+            removeRepository: { _ in
+                removals += 1
+                try await withCheckedThrowingContinuation { pending = $0; started.fulfill() }
+            })
+        await model.load()
+        let removal = Task { await model.remove(binding) }
+        await fulfillment(of: [started], timeout: 1)
+        await model.load()
+        await model.remove(binding)
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(removals, 1)
+        pending?.resume(throwing: ActionFailure("Removal failed"))
+        await removal.value
+        XCTAssertEqual(model.errorMessage, "Removal failed")
+        XCTAssertEqual(model.bindings, [binding])
+        XCTAssertFalse(model.isLoading)
+    }
+
     func testRepositoryRefreshKeepsDataOnlyWithinTheSameAuthority() async {
         let workspace = WorkspaceCoordinator()
         workspace.context.activeProjectId = "project"
@@ -21,6 +100,29 @@ final class FrontendFeatureModelTests: XCTestCase {
         await model.load()
         XCTAssertTrue(model.bindings.isEmpty)
         XCTAssertEqual(model.errorMessage, ClientFailure.connection.message)
+    }
+
+    func testRepositoryAuthorityResetClearsDataDuringRemoval() async {
+        let workspace = WorkspaceCoordinator()
+        workspace.context.activeProjectId = "project"
+        let binding = DaemonProjectBinding(serverUrl: "https://example.com", workspaceRoot: "/repository",
+            projectId: "project", revision: 1, createdAt: "now", updatedAt: "now")
+        let started = expectation(description: "Removal started")
+        var pending: CheckedContinuation<Void, Error>?
+        let model = ProjectRepositoriesModel(context: workspace.context, projects: workspace.projects,
+            fetchBindings: { _ in [binding] }, removeRepository: { _ in
+                try await withCheckedThrowingContinuation { pending = $0; started.fulfill() }
+            })
+        await model.load()
+        let removal = Task { await model.remove(binding) }
+        await fulfillment(of: [started], timeout: 1)
+        workspace.context.authorityGeneration = UUID()
+        await model.load()
+        XCTAssertTrue(model.bindings.isEmpty)
+        pending?.resume(throwing: ActionFailure("Old account error"))
+        await removal.value
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isLoading)
     }
 
     func testProjectStorageIgnoresAnOldProjectResponse() async {
