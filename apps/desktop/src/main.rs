@@ -3,6 +3,8 @@
 //! The design rules this client follows live in DESIGN.md; the engine seam is
 //! `engine.rs`; see README.md for how to run it.
 
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod assets;
 mod bootstrap;

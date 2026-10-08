@@ -79,12 +79,22 @@ jobs:
       - name: Exercise packaged startup and IPC
         shell: pwsh
         run: |
+          $client = (Resolve-Path target/release/clumsies-desktop.exe).Path
+          $image = [System.IO.File]::ReadAllBytes($client)
+          $pe = [BitConverter]::ToInt32($image, 0x3c)
+          $subsystem = [BitConverter]::ToUInt16($image, $pe + 24 + 68)
+          if ($subsystem -ne 2) { throw "The desktop executable must use the Windows GUI subsystem" }
           $env:CLUMSIES_DAEMON_ROOT = Join-Path $env:RUNNER_TEMP "clumsies-smoke"
           try {
-            & target/release/clumsies-desktop.exe --smoke-test
-            if ($LASTEXITCODE -ne 0) { throw "Packaged startup failed" }
-            & target/release/clumsies-desktop.exe --smoke-test
-            if ($LASTEXITCODE -ne 0) { throw "Existing daemon reuse failed" }
+            foreach ($scenario in @('Packaged startup', 'Existing daemon reuse')) {
+              $process = Start-Process $client -ArgumentList '--smoke-test' -PassThru -WindowStyle Hidden
+              # Wait only for the client: the daemon deliberately stays alive.
+              if (-not $process.WaitForExit(30000)) {
+                $process.Kill()
+                throw "$scenario timed out"
+              }
+              if ($process.ExitCode -ne 0) { throw "$scenario failed: $($process.ExitCode)" }
+            }
           } finally {
             Get-Process clumsiesd -ErrorAction SilentlyContinue | Stop-Process
           }

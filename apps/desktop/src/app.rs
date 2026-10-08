@@ -103,11 +103,11 @@ impl DesktopApp {
             cx,
         );
         let memory = MemoryScreen::new(window, cx, checkout, checkout_error);
-        // A daemon with no session refuses every Server request, and that
-        // refusal is the only signed-out signal there is.
-        let signed_in = projects_error
-            .as_deref()
-            .is_none_or(|error| !engine::missing_session(error));
+        // Either authenticated read can discover an absent or expired session.
+        let signed_in = session_available(
+            projects_error.as_deref(),
+            account.as_ref().err().map(String::as_str),
+        );
         let server_url = engine::configured_server_url().unwrap_or_default();
         let sign_in = SignInScreen::new(window, cx, &server_url);
         // The window follows the system's light or dark preference, now and
@@ -128,7 +128,7 @@ impl DesktopApp {
             selected_project: signed_in.then_some(0),
             projects,
             projects_error,
-            account,
+            account: account.ok(),
             memory,
             reviews,
             dashboard,
@@ -271,15 +271,15 @@ impl DesktopApp {
         if !self.flush_pending_saves(cx) {
             return;
         }
-        let server_url = self
-            .account
-            .as_ref()
-            .map(|_| ())
-            .and(engine::configured_server_url())
-            .unwrap_or_default();
-        match engine::sign_out(&server_url) {
+        match engine::sign_out() {
             Ok(()) => crate::logging::info("signed out"),
-            Err(error) => crate::logging::error(&format!("could not sign out: {error}")),
+            Err(error) => {
+                crate::logging::error(&format!("could not sign out: {error}"));
+                self.memory.set_error(format!("Could not sign out: {error}"));
+                self.shell.set_section(Section::Memory);
+                cx.notify();
+                return;
+            }
         }
         self.account = None;
         self.projects.clear();
@@ -1750,7 +1750,12 @@ impl DesktopApp {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.engine = engine::engine_status();
         let (projects, projects_error) = read_projects();
-        self.account = read_account();
+        let account = read_account();
+        self.signed_in = session_available(
+            projects_error.as_deref(),
+            account.as_ref().err().map(String::as_str),
+        );
+        self.account = account.ok();
         // The Project the reader was in last time, when it is still there:
         // macOS reopens the workspace it left rather than the first Project in
         // the list.
@@ -1904,7 +1909,7 @@ impl DesktopApp {
     /// changes: a password change or a connected identity provider hands the
     /// window a new session, and the rail's foot names it.
     pub fn reload_account(&mut self, cx: &mut Context<Self>) {
-        self.account = read_account();
+        self.account = read_account().ok();
         cx.notify();
     }
 
@@ -2388,13 +2393,40 @@ fn read_projects() -> (Vec<Project>, Option<String>) {
 }
 
 /// Reads whose session the daemon holds, when it holds one.
-fn read_account() -> Option<engine::Account> {
-    match engine::account() {
-        Ok(account) => Some(account),
-        Err(error) => {
-            crate::logging::error(&format!("could not read the account: {error}"));
+fn read_account() -> Result<engine::Account, String> {
+    engine::account().inspect_err(|error| {
+        crate::logging::error(&format!("could not read the account: {error}"));
+    })
+}
+
+fn session_available(projects_error: Option<&str>, account_error: Option<&str>) -> bool {
+    !projects_error
+        .into_iter()
+        .chain(account_error)
+        .any(engine::missing_session)
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::session_available;
+
+    #[test]
+    fn either_authenticated_read_can_require_sign_in() {
+        let unauthorized = "the Server answered HTTP 401: Session expired";
+        assert!(!session_available(Some(unauthorized), None));
+        assert!(!session_available(None, Some(unauthorized)));
+        assert!(!session_available(Some(unauthorized), Some(unauthorized)));
+    }
+
+    #[test]
+    fn empty_projects_and_temporary_failures_do_not_require_sign_in() {
+        assert!(session_available(None, None));
+        assert!(session_available(Some("HTTP connection failed"), None));
+        assert!(session_available(None, Some("daemon IPC error")));
+        assert!(session_available(
+            Some("the Server answered HTTP 403: Forbidden"),
             None
-        }
+        ));
     }
 }
 

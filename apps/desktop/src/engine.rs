@@ -649,7 +649,11 @@ pub fn install_session(
 /// cannot revoke is still a session this machine stops using, and macOS forgets
 /// it either way. Then the daemon — the only party that ever held the tokens —
 /// is left with a Server address and nothing else.
-pub fn sign_out(server_url: &str) -> Result<(), String> {
+pub fn sign_out() -> Result<(), String> {
+    // Account lookup may fail precisely when the user needs to sign out.
+    // The daemon's configured origin does not depend on a valid session.
+    let daemon = client();
+    let server_url = daemon.health().map_err(|error| error.to_string())?.server_url;
     match server("DELETE", "/api/v1/auth/session", BTreeMap::new(), None) {
         Ok(response) if response.status == 204 || response.status == 200 => {}
         Ok(response) => crate::logging::error(&format!(
@@ -660,9 +664,9 @@ pub fn sign_out(server_url: &str) -> Result<(), String> {
             crate::logging::error(&format!("could not reach the Server to revoke: {error}"))
         }
     }
-    client()
+    daemon
         .replace_project_config(clumsiesd::DaemonProjectConfigUpdateRequest {
-            server_url: server_url.to_owned(),
+            server_url,
             project_id: None,
             memory_guidelines_path: None,
             access_token: None,
@@ -847,12 +851,16 @@ fn json_headers() -> BTreeMap<String, String> {
     BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())])
 }
 
-/// Whether a daemon refusal means the daemon holds no Server session.
+/// Whether the daemon or Server requires a new sign-in.
 ///
-/// There is no flag to ask for: the daemon refuses every Server request while
-/// it has no session, and that refusal is what the sign-in form is for.
+/// Missing credentials and a rejected/expired session both return 401. Keep
+/// the legacy missing-token message for older daemons; transport and permission
+/// failures must not be treated as sign-out.
 pub fn missing_session(error: &str) -> bool {
     error.contains("access_token is required")
+        || error.contains("Server request failed with status 401:")
+        || error == "the Server answered HTTP 401"
+        || error.starts_with("the Server answered HTTP 401:")
 }
 
 /// The Server the daemon is configured for, which is what the sign-in form
@@ -1900,7 +1908,12 @@ fn server(
 /// status when there is not.
 fn server_error(response: &DaemonServerResponse) -> String {
     serde_json::from_str::<ErrorEnvelope>(&response.body)
-        .map(|envelope| envelope.error.message)
+        .map(|envelope| {
+            format!(
+                "the Server answered HTTP {}: {} (request {})",
+                response.status, envelope.error.message, envelope.error.request_id
+            )
+        })
         .unwrap_or_else(|_| format!("the Server answered HTTP {}", response.status))
 }
 
@@ -1911,6 +1924,49 @@ fn client() -> DaemonIpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_and_expired_sessions_require_sign_in() {
+        for error in [
+            "invalid_config: access_token is required",
+            "server_request_failed: Server request failed with status 401: Server sign-in is required (request req_test)",
+            "server_request_failed: Server request failed with status 401: Session expired (request req_test)",
+        ] {
+            assert!(missing_session(error), "{error}");
+        }
+    }
+
+    #[test]
+    fn unauthorized_server_responses_require_sign_in_with_or_without_an_envelope() {
+        for (body, expected) in [
+            (
+                r#"{"error":{"code":"unauthorized","message":"Session expired","request_id":"req_test","details":{"private":"not displayed"}}}"#,
+                "the Server answered HTTP 401: Session expired (request req_test)",
+            ),
+            ("Unauthorized", "the Server answered HTTP 401"),
+        ] {
+            let response = DaemonServerResponse {
+                status: 401,
+                headers: BTreeMap::new(),
+                body: body.to_owned(),
+            };
+            let error = server_error(&response);
+            assert_eq!(error, expected);
+            assert!(missing_session(&error));
+        }
+    }
+
+    #[test]
+    fn transport_and_permission_failures_do_not_end_a_session() {
+        for error in [
+            "daemon IPC error: connection refused",
+            "server_request_failed: HTTP connection failed (request req_401)",
+            "server_request_failed: Server request failed with status 403: Forbidden",
+            "server_request_failed: Server request failed with status 500: Unavailable",
+        ] {
+            assert!(!missing_session(error), "{error}");
+        }
+    }
 
     #[test]
     fn memory_entries_preserve_explicit_directory_metadata() {
