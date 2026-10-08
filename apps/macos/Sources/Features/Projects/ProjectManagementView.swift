@@ -189,7 +189,6 @@ struct ProjectUnavailableView: View {
 }
 
 struct ProjectSettingsView: View {
-    @EnvironmentObject private var projectService: ProjectService
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var workspaceNavigation: WorkspaceNavigation
     @EnvironmentObject private var administration: AdministrationModel
@@ -207,10 +206,6 @@ struct ProjectSettingsView: View {
                     }
                 )
                 .id(project.id)
-                if self.projectId == self.workspaceContext.activeProjectId {
-                    ProjectLocalSetupSettings(model: ProjectRepositoriesModel(context: workspaceContext, projects: projectService))
-                    ProjectMemoryCacheSettings(model: ProjectStorageModel(context: workspaceContext))
-                }
             } else if let error = administration.projectDetailStates[projectId]?.errorMessage {
                 ContentUnavailableView("Project Unavailable", systemImage: "folder", description: Text(error))
                 Button("Try Again") {
@@ -272,6 +267,7 @@ struct OrganizationProjectsView: View {
 }
 
 private struct ProjectConfigurationSections: View {
+    @EnvironmentObject private var projectService: ProjectService
     @EnvironmentObject private var workspaceContext: WorkspaceContext
     @EnvironmentObject private var administration: AdministrationModel
     let project: AdminProjectRecord
@@ -282,6 +278,7 @@ private struct ProjectConfigurationSections: View {
     @State private var pendingMemberRemoval: ProjectMemberRecord?
     @State private var confirmsProjectDeletion = false
     @State private var errorMessage: String?
+    @State private var deletionErrorMessage: String?
 
     var body: some View {
         Group {
@@ -360,18 +357,24 @@ private struct ProjectConfigurationSections: View {
                     Button("Add Member…") { self.showsAddMember = true }
                         .disabled(!self.allowsMemberMutation)
                 }
+                FormErrorMessage(message: errorMessage ?? administration.projectDetailStates[project.id]?.errorMessage)
+                if administration.projectDetailStates[project.id]?.isStale == true {
+                    Text("These project details are cached. Changes will be available after a live update.")
+                        .foregroundStyle(.secondary)
+                    Button("Retry") { Task { await administration.loadProject(id: project.id, force: true) } }
+                }
+            }
+            if project.id == workspaceContext.activeProjectId {
+                ProjectLocalSetupSettings(model: ProjectRepositoriesModel(context: workspaceContext, projects: projectService))
+                ProjectMemoryCacheSettings(model: ProjectStorageModel(context: workspaceContext))
             }
             Section {
                 if self.workspaceContext.canManageProject(self.project.id) {
                     Button("Delete Project…", role: .destructive) { self.confirmsProjectDeletion = true }
                         .disabled(!self.allowsMutation)
                 }
+                FormErrorMessage(message: deletionErrorMessage)
             }
-        }
-        .pageFeedback(errorMessage ?? administration.projectDetailStates[project.id]?.errorMessage)
-        .pageFeedback(administration.projectDetailStates[project.id]?.isStale == true
-            ? String(localized: "These project details are cached. Changes will be available after a live update.") : nil, isStatus: true) {
-            Task { await administration.loadProject(id: project.id, force: true) }
         }
         .sheet(isPresented: $showsEdit) {
             ProjectDetailsSheet(project: self.project
@@ -382,7 +385,12 @@ private struct ProjectConfigurationSections: View {
         }
         .confirmationDialog("Delete project?", isPresented: $confirmsProjectDeletion) {
             Button("Delete \(self.project.name)", role: .destructive) {
-                self.mutate { try await self.administration.deleteAdminProject(self.project, onDeleted: self.onDeleted) }
+                guard allowsMutation else { return }
+                deletionErrorMessage = nil
+                Task {
+                    do { try await administration.deleteAdminProject(project, onDeleted: onDeleted) }
+                    catch { deletionErrorMessage = error.actionMessage }
+                }
             }
         } message: {
             Text("This permanently deletes the project and its project data.")
@@ -611,6 +619,10 @@ private struct ProjectLocalSetupSettings: View {
                             }
                             Divider()
                             Button("Remove Repository", role: .destructive) {
+                                ClientDiagnostics.record("repository_remove_prompted", [
+                                    "project_id": ClientDiagnostics.identifier(binding.projectId),
+                                    "workspace_id": ClientDiagnostics.workspaceID(binding.workspaceRoot)
+                                ])
                                 self.bindingToRemove = binding
                             }
                         } label: {
@@ -630,11 +642,11 @@ private struct ProjectLocalSetupSettings: View {
                 Label("Add Repositories…", systemImage: "plus")
             }
             .disabled(self.workspaceContext.activeProjectId == nil || self.model.isLoading)
+            FormErrorMessage(message: model.errorMessage)
 
         } header: {
             Text("Repositories on This Mac")
         }
-        .pageFeedback(model.errorMessage)
         .task(id: [workspaceContext.activeProjectId ?? "", projectService.projectBindingsGeneration.uuidString]) {
             await self.model.load()
         }
@@ -642,19 +654,31 @@ private struct ProjectLocalSetupSettings: View {
             "Remove Repository?",
             isPresented: Binding(
                 get: { self.bindingToRemove != nil },
-                set: { if !$0 { self.bindingToRemove = nil } }
+                set: {
+                    if !$0 {
+                        ClientDiagnostics.record("repository_remove_prompt_closed", [
+                            "had_binding": String(self.bindingToRemove != nil)
+                        ])
+                        self.bindingToRemove = nil
+                    }
+                }
             ),
-            titleVisibility: .visible
-        ) {
+            titleVisibility: .visible,
+            presenting: bindingToRemove
+        ) { binding in
             Button("Remove", role: .destructive) {
-                guard let binding = bindingToRemove else { return }
+                ClientDiagnostics.record("repository_remove_confirmed", [
+                    "project_id": ClientDiagnostics.identifier(binding.projectId),
+                    "workspace_id": ClientDiagnostics.workspaceID(binding.workspaceRoot)
+                ])
                 self.bindingToRemove = nil
                 Task { await self.model.remove(binding) }
             }
             Button("Cancel", role: .cancel) {
+                ClientDiagnostics.record("repository_remove_cancelled")
                 self.bindingToRemove = nil
             }
-        } message: {
+        } message: { _ in
             Text("Clumsies will remove the Agent integrations managed in Settings and stop resolving this repository to the Project.")
         }
     }

@@ -63,6 +63,7 @@ struct ProjectMemoryCacheSettings: View {
                         Button("Clear Cache...") { self.confirmation = .clear }
                     }
                     .disabled(self.model.isWorking || model.move?.state.isTerminal == false)
+                    FormErrorMessage(message: model.errorMessage)
                 } else if self.model.isWorking {
                     ProgressView()
                 } else {
@@ -75,7 +76,6 @@ struct ProjectMemoryCacheSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .pageFeedback(model.storage == nil ? nil : model.errorMessage)
         .task(id: workspaceContext.activeProjectId) {
             await self.model.loadStorage()
         }

@@ -3,6 +3,22 @@ import XCTest
 @testable import Clumsies
 
 final class ClientDiagnosticsTests: XCTestCase {
+    func testSuccessfulBindingRequestLeavesStartAndCompletionEvidence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await ClientDiagnostics.$testLog.withValue(ClientLog(directory: directory)) {
+            try await ClientDiagnostics.$requestID.withValue("req_binding") {
+                let result = try await ClientDiagnostics.operation(layer: "xpc", method: "remove_project_binding", recordLifecycle: true) { true }
+                XCTAssertTrue(result)
+            }
+        }
+        let content = try String(contentsOf: directory.appending(path: "client.log"), encoding: .utf8)
+        for event in ["request_started", "request_completed", "req_binding", "remove_project_binding"] {
+            XCTAssertTrue(content.contains(event))
+        }
+        XCTAssertEqual(ClientDiagnostics.workspaceID("/private/workspace/../workspace"), ClientDiagnostics.workspaceID("/private/workspace"))
+    }
+
     func testFailureEvidencePreservesRequestAndHidesErrorContents() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -13,7 +29,7 @@ final class ClientDiagnosticsTests: XCTestCase {
         await ClientDiagnostics.$testLog.withValue(log) {
             await ClientDiagnostics.$requestID.withValue("req_demo") {
                 do {
-                    let _: Void = try await ClientDiagnostics.operation(layer: "xpc", method: "server_request") {
+                    let _: Void = try await ClientDiagnostics.operation(layer: "xpc", method: "server_request", recordLifecycle: true) {
                         throw DaemonXPCError.daemon(payload)
                     }
                     XCTFail("Expected failure")
@@ -27,6 +43,8 @@ final class ClientDiagnosticsTests: XCTestCase {
         XCTAssertEqual(extended.requestId, "req_extended")
         let content = try String(contentsOf: directory.appending(path: "client.log"), encoding: .utf8)
         XCTAssertTrue(content.contains("request_failed"))
+        XCTAssertTrue(content.contains("request_started"))
+        XCTAssertFalse(content.contains("request_completed"))
         XCTAssertTrue(content.contains("req_demo"))
         XCTAssertTrue(content.contains("timeout"))
         XCTAssertFalse(content.contains("SECRET_BODY"))

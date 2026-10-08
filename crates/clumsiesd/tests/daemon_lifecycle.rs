@@ -3798,6 +3798,45 @@ async fn project_bindings_resolve_by_canonical_root_and_persist_across_restarts(
             ..
         }
     ));
+
+    let removed = restarted
+        .remove_project_binding(DaemonProjectBindingRemoveRequest {
+            workspace_root: first.workspace_root.clone(),
+            expected_revision: first.revision,
+        })
+        .await
+        .unwrap();
+    assert!(removed.removed);
+    assert!(
+        restarted
+            .list_project_bindings(DaemonProjectBindingListRequest {
+                project_id: "prj_first".to_owned(),
+            })
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let rebound = restarted
+        .replace_project_binding(DaemonProjectBindingReplaceRequest {
+            workspace_root: first.workspace_root.clone(),
+            project_id: "prj_other".to_owned(),
+            expected_revision: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(rebound.project_id, "prj_other");
+    assert_eq!(rebound.revision, 1);
+    assert_eq!(
+        restarted
+            .list_project_bindings(DaemonProjectBindingListRequest {
+                project_id: "prj_second".to_owned(),
+            })
+            .await
+            .unwrap()
+            .items,
+        vec![second]
+    );
 }
 
 #[cfg(unix)]

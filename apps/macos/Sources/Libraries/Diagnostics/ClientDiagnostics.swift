@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import CryptoKit
 
 enum ClientDiagnostics {
     @TaskLocal static var requestID: String?
@@ -13,14 +14,17 @@ enum ClientDiagnostics {
     }
 
     static func operation<T: Sendable>(
-        layer: String, method: String,
+        layer: String, method: String, recordLifecycle: Bool = false,
         _ action: @Sendable () async throws -> T
     ) async throws -> T {
         let id = requestID ?? "req_" + UUID().uuidString.lowercased()
         return try await $requestID.withValue(id) {
             let started = ContinuousClock.now
+            if recordLifecycle { record("request_started", ["request_id": id, "layer": layer, "method": identifier(method)]) }
             do {
-                return try await action()
+                let result = try await action()
+                if recordLifecycle { record("request_completed", ["request_id": id, "layer": layer, "method": identifier(method)]) }
+                return result
             } catch {
                 let elapsed = started.duration(to: .now).components
                 var fields = failureFields(error)
@@ -68,6 +72,11 @@ enum ClientDiagnostics {
         guard !value.isEmpty, value.utf8.count <= 128,
               value.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 || $0 == 46 }) else { return "unknown" }
         return value
+    }
+
+    static func workspaceID(_ path: String) -> String {
+        let normalized = URL(fileURLWithPath: path).standardized.path
+        return SHA256.hash(data: Data(normalized.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     static func route(_ path: String) -> String {
