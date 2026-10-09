@@ -8,13 +8,19 @@ description: Install the Windows/Linux CLI, connect an Agent, and review and pub
 
 ## Install
 
-The initial CLI packages target **Linux x86_64 (Ubuntu 24.04 or a compatible glibc system)** and **Windows x64**. The CLI workflow produces tested archives and a Windows user installer; subsequent tagged releases include these assets. Until that first release, download the artifacts from the repository's **CLI** workflow. Verify the archive or installer against its adjacent SHA-256 file before running it.
+The initial CLI packages target **Linux x86_64 (Ubuntu 24.04 or a compatible glibc system)** and **Windows x64**. Download released archives and the Windows user installer from [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases). For changes not yet released, the repository's **CLI** workflow provides tested build artifacts. Verify the archive or installer against its adjacent SHA-256 file before running it.
 
 On Linux, extract `clumsies-cli-VERSION-linux-x86_64.tar.gz`, enter its directory, and run:
 
 ```sh
 sha256sum --check SHA256SUMS
 ./install.sh
+```
+
+After installation, open a new terminal and run:
+
+```sh
+clumsies --version
 clumsies daemon start
 ```
 

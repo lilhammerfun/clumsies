@@ -8,13 +8,19 @@ description: 安装 Windows/Linux 命令行，接入 Agent，并在没有图形�
 
 ## 安装
 
-首批包面向 **Linux x86_64（Ubuntu 24.04 或兼容的 glibc 系统）** 和 **Windows x64**。仓库的 **CLI** 工作流生成并验证压缩包及 Windows 用户安装器，后续正式标签发布会包含这些资产。首个版本发布前，可从该工作流下载构建产物。执行前，用旁边的 SHA-256 文件验证压缩包或安装器。
+首批包面向 **Linux x86_64（Ubuntu 24.04 或兼容的 glibc 系统）** 和 **Windows x64**。已发布的压缩包和 Windows 用户安装器从 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) 下载。尚未发布的改动可从仓库的 **CLI** 工作流下载已验证的构建产物。执行前，用旁边的 SHA-256 文件验证压缩包或安装器。
 
 Linux 解压 `clumsies-cli-VERSION-linux-x86_64.tar.gz`，进入包目录执行：
 
 ```sh
 sha256sum --check SHA256SUMS
 ./install.sh
+```
+
+安装完成后重新打开终端，再执行：
+
+```sh
+clumsies --version
 clumsies daemon start
 ```
 
