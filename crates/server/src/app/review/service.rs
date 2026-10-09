@@ -323,9 +323,11 @@ pub async fn list_reviews(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: Option<&str>,
+    offset: i64,
+    limit: i64,
 ) -> Result<ReviewListResponse, ServerError> {
     let mut tx = pool.begin().await?;
-    let response = repository::list_reviews(&mut tx, principal, project_id).await?;
+    let response = repository::list_reviews(&mut tx, principal, project_id, offset, limit).await?;
     tx.commit().await?;
     Ok(response)
 }

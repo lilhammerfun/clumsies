@@ -7,15 +7,19 @@ use clap::Subcommand;
 use clumsiesd::*;
 use serde_json::{Value, json};
 
-use super::{identifier, print_json, read_json, server};
+use super::pagination::{self, PageArgs};
+use super::{identifier, print_json, read_json, resolve_project, server};
 
 /// Review workflow, with explicit concurrency inputs for human decisions.
 #[derive(Subcommand)]
 pub(super) enum ReviewCommand {
     /// List a project's Reviews.
     List {
-        /// Project identifier.
+        /// Project ID or unique name.
         project: String,
+        /// Page size and traversal controls.
+        #[command(flatten)]
+        page: PageArgs,
     },
     /// Inspect full proposals, ordered operations, coordination, and discussion.
     Show {
@@ -115,13 +119,13 @@ pub(super) fn run(
     action: ReviewCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
-        ReviewCommand::List { project } => print_json(&server(
-            client,
-            "GET",
-            &format!("/api/v1/reviews?project_id={}", identifier(&project)?),
-            None,
-            None,
-        )?),
+        ReviewCommand::List { project, page } => {
+            let project = resolve_project(client, &project)?;
+            let path = format!("/api/v1/reviews?project_id={}", identifier(&project)?);
+            print_json(&pagination::collect(&page, |cursor| {
+                server(client, "GET", &page.path(&path, cursor), None, None)
+            })?)
+        }
         ReviewCommand::Show { id } => print_json(&detail(client, &id)?),
         ReviewCommand::Diff { id } => diff(client, detail(client, &id)?),
         ReviewCommand::Create {

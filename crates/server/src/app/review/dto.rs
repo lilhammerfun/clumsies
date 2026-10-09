@@ -298,4 +298,7 @@ pub struct ReviewMergeResult {
 pub(crate) struct ListReviewsQuery {
     /// Project boundary containing the resource or proposal.
     pub(super) project_id: Option<String>,
+    /// Requested page size and continuation offset.
+    #[serde(flatten)]
+    pub(super) page: crate::pagination::AdminPageQuery,
 }

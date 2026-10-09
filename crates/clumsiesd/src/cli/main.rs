@@ -5,7 +5,10 @@
     clippy::missing_errors_doc
 )]
 
+mod pagination;
 mod review;
+
+use pagination::PageArgs;
 
 use std::collections::BTreeMap;
 use std::io::{self, Read};
@@ -116,10 +119,14 @@ enum DaemonCommand {
 #[derive(Subcommand)]
 enum ProjectCommand {
     /// List accessible projects, retaining server pagination metadata.
-    List,
+    List {
+        /// Page size and traversal controls.
+        #[command(flatten)]
+        page: PageArgs,
+    },
     /// Inspect a project you already have permission to access.
     Show {
-        /// Server project identifier.
+        /// Project ID or unique name (case-insensitive).
         id: String,
     },
     /// Create a project using your Server permissions.
@@ -127,16 +134,18 @@ enum ProjectCommand {
         /// Project name.
         name: String,
     },
-    /// Select an accessible project for client operations.
+    /// Select a project; this does not bind the working directory.
+    #[command(visible_alias = "select")]
     Join {
-        /// Project identifier; membership must already be granted by an administrator.
+        /// Project ID or unique name; membership must already be granted.
         id: String,
     },
     /// Bind an existing directory to an accessible project.
     Bind {
-        /// Project identifier.
+        /// Project ID or unique name.
         id: String,
-        /// Workspace directory.
+        /// Workspace directory; defaults to the current directory.
+        #[arg(default_value = ".")]
         path: PathBuf,
         /// Required prior binding revision when replacing a binding.
         #[arg(long)]
@@ -152,7 +161,7 @@ enum ProjectCommand {
     },
     /// List the project's local directory bindings.
     Bindings {
-        /// Project identifier.
+        /// Project ID or unique name.
         id: String,
     },
     /// Resolve the current directory's binding, including worktree inheritance.
@@ -192,9 +201,12 @@ enum DraftCommand {
     },
     /// List local drafts and continuation cursor.
     List {
-        /// Opaque cursor returned by an earlier page.
-        #[arg(long)]
-        cursor: Option<String>,
+        /// Page size and traversal controls.
+        #[command(flatten)]
+        page: PageArgs,
+        /// Filter local lifecycle state before pagination.
+        #[arg(long, value_parser = ["open", "submitted", "discarded", "merged"])]
+        status: Option<String>,
     },
     /// Inspect operations, synchronization errors, and remote identity.
     Show {
@@ -364,13 +376,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             print_json(&json!({"signed_out": true}))
         }
         Command::Project { action } => match action {
-            ProjectCommand::List => {
-                print_json(&server(&client, "GET", "/api/v1/projects", None, None)?)
-            }
+            ProjectCommand::List { page } => print_json(&list_projects(&client, &page)?),
             ProjectCommand::Show { id } => print_json(&server(
                 &client,
                 "GET",
-                &format!("/api/v1/projects/{}", identifier(&id)?),
+                &format!(
+                    "/api/v1/projects/{}",
+                    identifier(&resolve_project(&client, &id)?)?
+                ),
                 None,
                 None,
             )?),
@@ -382,6 +395,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 None,
             )?),
             ProjectCommand::Join { id } => {
+                let id = resolve_project(&client, &id)?;
                 server(
                     &client,
                     "GET",
@@ -395,7 +409,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             ProjectCommand::Bind { id, path, revision } => print_json(
                 &client.replace_project_binding(DaemonProjectBindingReplaceRequest {
-                    project_id: id,
+                    project_id: resolve_project(&client, &id)?,
                     workspace_root: directory(path)?,
                     expected_revision: revision,
                 })?,
@@ -406,10 +420,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     expected_revision: revision,
                 })?,
             ),
-            ProjectCommand::Bindings { id } => print_json(
-                &client
-                    .list_project_bindings(DaemonProjectBindingListRequest { project_id: id })?,
-            ),
+            ProjectCommand::Bindings { id } => print_json(&client.list_project_bindings(
+                DaemonProjectBindingListRequest {
+                    project_id: if id.starts_with("prj_") {
+                        id
+                    } else {
+                        resolve_project(&client, &id)?
+                    },
+                },
+            )?),
             ProjectCommand::Current => print_json(
                 &DaemonIpcClient::for_agent_runtime(
                     client.service_name(),
@@ -446,11 +465,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ))?
                     .into_payload::<DaemonRetryResponse>()?,
             ),
-            DraftCommand::List { cursor } => {
-                print_json(&client.list_drafts(DaemonDraftListQuery {
-                    cursor,
-                    limit: Some(100),
-                    ..Default::default()
+            DraftCommand::List { page, status } => {
+                print_json(&pagination::collect(&page, |cursor| {
+                    Ok(serde_json::to_value(client.list_drafts(
+                        DaemonDraftListQuery {
+                            cursor: cursor.map(str::to_owned),
+                            limit: Some(i64::from(page.limit)),
+                            status: status.clone(),
+                            ..Default::default()
+                        },
+                    )?)?)
                 })?)
             }
             DraftCommand::Show { id } => print_json(&client.get_draft(id)?),
@@ -576,6 +600,71 @@ fn configure_agent(
             ))?
             .into_payload::<Value>()?,
     )
+}
+
+/// Lists projects through explicit Server pagination.
+///
+/// # Errors
+/// Propagates request or pagination metadata failures.
+fn list_projects(
+    client: &DaemonIpcClient,
+    page: &PageArgs,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    pagination::collect(page, |cursor| {
+        server(
+            client,
+            "GET",
+            &page.path("/api/v1/projects", cursor),
+            None,
+            None,
+        )
+    })
+}
+
+/// Resolves an ID directly or an unambiguous name across all accessible pages.
+///
+/// # Errors
+/// Rejects missing or ambiguous names and never selects a partial-list match.
+fn resolve_project(
+    client: &DaemonIpcClient,
+    value: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if value.starts_with("prj_") {
+        return Ok(identifier(value)?.to_owned());
+    }
+    let page = list_projects(
+        client,
+        &PageArgs {
+            limit: 200,
+            cursor: None,
+            all: true,
+        },
+    )?;
+    project_named(&page, value)
+}
+
+/// Selects a unique case-insensitive project name from a complete collection.
+///
+/// # Errors
+/// Rejects zero or multiple matches and malformed project identifiers.
+fn project_named(page: &Value, name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let items = page["items"]
+        .as_array()
+        .ok_or("Project list requires items")?;
+    let name_lower = name.to_lowercase();
+    let matches: Vec<_> = items
+        .iter()
+        .filter(|item| {
+            item["name"]
+                .as_str()
+                .is_some_and(|value| value.to_lowercase() == name_lower)
+        })
+        .collect();
+    match matches.as_slice() {
+        [project] => Ok(identifier(project["project_id"].as_str().ok_or("Project requires project_id")?)?.to_owned()),
+        [] => Err(format!("Project name {name:?} was not found; run clumsies project list --all and use a project ID").into()),
+        _ => Err(format!("Project name {name:?} is ambiguous; run clumsies project list --all and use a project ID").into()),
+    }
 }
 
 /// Accepts only API identifiers, preventing path or query injection.
@@ -742,6 +831,25 @@ mod tests {
         assert_eq!(
             version.to_string(),
             format!("clumsies {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn project_names_require_unique_matches_and_page_parameters_are_validated() {
+        let page = json!({"items":[{"name":"AgentOS","project_id":"prj_agent"}]});
+        assert_eq!(project_named(&page, "agentos").unwrap(), "prj_agent");
+        assert!(project_named(&page, "missing").is_err());
+        let ambiguous = json!({"items":[{"name":"AgentOS","project_id":"prj_a"},{"name":"agentos","project_id":"prj_b"}]});
+        assert!(project_named(&ambiguous, "AgentOS").is_err());
+        for args in [
+            vec!["clumsies", "project", "list", "--limit", "0"],
+            vec!["clumsies", "review", "list", "prj_a", "--limit", "201"],
+            vec!["clumsies", "draft", "list", "--all", "--cursor", "x"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        assert!(
+            matches!(Cli::try_parse_from(["clumsies", "project", "bind", "AgentOS"]).unwrap().command, Command::Project { action: ProjectCommand::Bind { path, .. } } if path == PathBuf::from("."))
         );
     }
 

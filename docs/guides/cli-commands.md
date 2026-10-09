@@ -34,6 +34,32 @@ The portable ZIP has its files at the archive root. `install.ps1 -Uninstall` rem
 
 On macOS, the App embeds `Contents/Resources/clumsies`. Run that executable, or add its resource directory to PATH. It reuses the App's launch agent, Keychain, configuration, and cache. Standalone `daemon stop/restart` is unavailable on macOS; manage that runtime through the App. A source CLI build also discovers `/Applications/Clumsies.app` or `~/Applications/Clumsies.app`.
 
+## List pages and select projects
+
+`project list`, `review list PROJECT`, and `draft list` share `--limit` (1–200, default 100), `--cursor`, and `--all`. By default each command returns one page. Pass the returned opaque cursor unchanged to continue; `--all` starts at the beginning and combines all pages. It cannot be combined with `--cursor`. Any failed page or repeated cursor fails the command without printing a partial collection. JSON remains the output format.
+
+```sh
+clumsies project list --limit 20
+clumsies project list --limit 20 --cursor 'CURSOR_FROM_PAGE_INFO'
+clumsies project list --all
+clumsies review list AgentOS --all
+clumsies draft list --status open --limit 20
+clumsies draft list --cursor 'CURSOR_FROM_NEXT_CURSOR'
+```
+
+Server lists return `page_info.next_cursor` and `page_info.has_more`; local Drafts return top-level `next_cursor`. A null cursor marks the end. Project and Review paging requires a Server containing this change; older Servers ignore these parameters and can truncate results at 200. Server pages use offsets with stable ID tie-breaking; concurrent mutations can move records between pages, so restart the listing after changes rather than treating it as a snapshot. `--all` holds the combined result in memory.
+
+Project `show`, `join`, `bind`, `bindings`, and `review list` accept a Project ID or unique case-insensitive name. Names are resolved across all accessible pages; unknown or ambiguous names fail without changing state. IDs are preferred for automation. `join` (also available as `select`) only selects a project; it does not bind a directory.
+
+```sh
+cd /absolute/path/to/repository
+clumsies project join AgentOS
+clumsies project bind AgentOS
+clumsies project current
+```
+
+`bind` defaults its directory to `.`. If the directory belongs to a different project, the error identifies that project and its binding revision. Inspect it with `project bindings OLD_PROJECT_ID`, then deliberately replace it with `project bind AgentOS . --revision INSPECTED_REVISION`. Never guess a revision. Local lookup by ID still works after the old project was deleted. Draft status filters (`open`, `submitted`, `discarded`, `merged`) apply before pagination.
+
 ## Connect an account and repository
 
 Use your configured Server origin. Remote origins require HTTPS; loopback HTTP is allowed for local development. Tokens and passwords are never command-line arguments or CLI output.

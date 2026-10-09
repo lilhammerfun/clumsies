@@ -11,7 +11,7 @@ use crate::app::{audit_event, inbox, organization};
 use crate::dto::DeleteResult;
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
-use crate::pagination::{admin_page, page_info};
+use crate::pagination::admin_page;
 
 /// Hide projects outside the principal's organization or explicit project membership.
 ///
@@ -557,11 +557,14 @@ pub async fn create_project_from_request(
 pub async fn list_projects(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
+    offset: i64,
+    limit: i64,
 ) -> Result<ProjectListResponse, ServerError> {
-    Ok(ProjectListResponse {
-        items: repository::list_projects(pool, &principal.user_id, &principal.org_id).await?,
-        page_info: page_info(),
-    })
+    let items =
+        repository::list_projects(pool, &principal.user_id, &principal.org_id, offset, limit)
+            .await?;
+    let (items, page_info) = admin_page(items, offset, limit);
+    Ok(ProjectListResponse { items, page_info })
 }
 
 /// Return public project metadata after enforcing explicit membership.

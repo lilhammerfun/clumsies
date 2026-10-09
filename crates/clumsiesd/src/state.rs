@@ -645,7 +645,11 @@ impl DaemonState {
                 return Err(DaemonError::State {
                     code: "project_binding_changed",
                     message: format!(
-                        "Project binding for {workspace_root} changed from the expected revision"
+                        "Project binding for {workspace_root} is assigned to {} at revision {}. Inspect it with clumsies project bindings {}, then retry clumsies project bind with --revision {}",
+                        existing.project_id,
+                        existing.revision,
+                        existing.project_id,
+                        existing.revision
                     ),
                 });
             }

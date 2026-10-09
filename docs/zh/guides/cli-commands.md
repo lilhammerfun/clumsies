@@ -34,6 +34,32 @@ clumsies daemon start
 
 macOS App 内嵌 `Contents/Resources/clumsies`，可直接执行或将资源目录加入 PATH。CLI 复用 App 的 launch agent、Keychain、配置和缓存；macOS 不提供独立的 `daemon stop/restart`，由 App 管理运行时。从源码编译的 CLI 也会查找 `/Applications/Clumsies.app` 或 `~/Applications/Clumsies.app`。
 
+## 分页和项目选择
+
+`project list`、`review list PROJECT` 和 `draft list` 统一支持 `--limit`（1–200，默认 100）、`--cursor` 和 `--all`。默认只返回一页；将返回的游标原样传入即可继续。`--all` 从第一页开始获取完整列表，不能与 `--cursor` 同用。任一页失败或游标循环时，命令失败，不输出不完整的合并结果。输出继续使用 JSON。
+
+```sh
+clumsies project list --limit 20
+clumsies project list --limit 20 --cursor '返回的游标'
+clumsies project list --all
+clumsies review list AgentOS --all
+clumsies draft list --status open --limit 20
+clumsies draft list --cursor '返回的游标'
+```
+
+Server 列表返回 `page_info.next_cursor` 和 `page_info.has_more`，本地 Draft 返回顶层 `next_cursor`；游标为 null 表示结束。项目和 Review 分页需要包含本次改动的 Server；旧 Server 会忽略分页参数，最多返回 200 条。Server 采用 offset 分页，并以 ID 处理相同排序时间；并发修改可能移动记录，修改后应重新列出，不能把跨页结果视为固定快照。`--all` 会在内存中保存合并结果。
+
+项目 `show`、`join`、`bind`、`bindings` 和 `review list` 接受项目 ID 或唯一名称（忽略大小写）。名称查找会读取全部可访问页；未找到或存在歧义时直接失败，不修改状态。自动化建议使用 ID。`join`（也可写成 `select`）只选择项目，不会绑定目录。
+
+```sh
+cd /absolute/path/to/repository
+clumsies project join AgentOS
+clumsies project bind AgentOS
+clumsies project current
+```
+
+`bind` 的目录默认是 `.`。目录属于其他项目时，错误会提供旧项目 ID 和实际绑定版本。先用 `project bindings 旧项目ID` 查看，再明确执行 `project bind AgentOS . --revision 已查看的版本号`。不要猜版本号；旧项目已删除时，仍可按 ID 查询本地绑定。Draft 的 `--status` 支持 `open`、`submitted`、`discarded`、`merged`，过滤发生在分页之前。
+
 ## 登录与目录绑定
 
 使用已配置完成的 Server。远程地址必须为 HTTPS，本机开发允许 loopback HTTP。密码和 Token 不放在命令参数中，也不输出到 CLI 结果。

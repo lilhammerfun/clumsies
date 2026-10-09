@@ -1,6 +1,7 @@
 //! Isolated CLI/MCP processes using real daemon storage and a checked Server protocol fixture.
 #![cfg(not(target_os = "macos"))]
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -225,6 +226,11 @@ async fn api(
     State(state): State<Arc<Mutex<Protocol>>>,
     request: axum::extract::Request,
 ) -> Response {
+    let query: BTreeMap<_, _> = reqwest::Url::parse(&format!("http://fixture{}", request.uri()))
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect();
     let path = request.uri().path().to_owned();
     let method = request.method().clone();
     let authenticated = request
@@ -309,7 +315,17 @@ async fn api(
     let result = match (method.as_str(), path.as_str()) {
         ("GET", "/api/v1/me") => json!({"org":{"org_id":"org_fixture"},"projects":[project]}),
         ("GET", "/api/v1/projects") => {
-            json!({"items":[project],"page_info":{"has_more":false,"next_cursor":null}})
+            let other = json!({"project_id":"prj_other","name":"Other"});
+            if query.get("limit").map(String::as_str) == Some("1") {
+                if let Some(cursor) = query.get("cursor") {
+                    assert_eq!(cursor, "next+/&");
+                    json!({"items":[project],"page_info":{"has_more":false,"next_cursor":null}})
+                } else {
+                    json!({"items":[other],"page_info":{"has_more":true,"next_cursor":"next+/&"}})
+                }
+            } else {
+                json!({"items":[other,project],"page_info":{"has_more":false,"next_cursor":null}})
+            }
         }
         ("GET", "/api/v1/projects/prj_fixture") => project,
         ("GET", "/api/v1/org/commit-state" | "/api/v1/projects/prj_fixture/commit-state") => {
@@ -489,7 +505,23 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     );
     assert!(login["has_access_token"].as_bool().unwrap());
     assert!(!login.to_string().contains("fixture-access"));
-    fixture.json(&["project", "join", "prj_fixture"], None);
+    let first = fixture.json(&["project", "list", "--limit", "1"], None);
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    let second = fixture.json(
+        &[
+            "project",
+            "list",
+            "--limit",
+            "1",
+            "--cursor",
+            first["page_info"]["next_cursor"].as_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(second["items"][0]["project_id"], "prj_fixture");
+    let all = fixture.json(&["project", "list", "--limit", "1", "--all"], None);
+    assert_eq!(all["items"].as_array().unwrap().len(), 2);
+    fixture.json(&["project", "select", "fixture"], None);
     let workspace = fixture.root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
     let binding = fixture.json(
@@ -505,6 +537,11 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     assert_ne!(store["result"]["isError"], true, "{store}");
     let listed = fixture.json(&["draft", "list"], None);
     let draft = listed["items"][0]["draft_id"].as_str().unwrap();
+    let open = fixture.json(
+        &["draft", "list", "--status", "open", "--limit", "1", "--all"],
+        None,
+    );
+    assert_eq!(open["items"][0]["draft_id"], draft);
     fixture.json(&["draft", "sync", draft], None);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

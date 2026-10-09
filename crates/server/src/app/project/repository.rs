@@ -555,17 +555,21 @@ pub(crate) async fn list_projects(
     pool: &PgPool,
     user_id: &str,
     org_id: &str,
+    offset: i64,
+    limit: i64,
 ) -> Result<Vec<Project>, ServerError> {
     let rows = sqlx::query(
         "SELECT p.project_id, p.name, p.description, p.revision, p.created_at, p.updated_at
          FROM projects p
          JOIN project_members m ON m.project_id = p.project_id
          WHERE m.user_id = $1 AND p.org_id = $2
-         ORDER BY p.updated_at DESC
-         LIMIT 200",
+         ORDER BY p.updated_at DESC, p.project_id
+         LIMIT $3 OFFSET $4",
     )
     .bind(user_id)
     .bind(org_id)
+    .bind(limit + 1)
+    .bind(offset)
     .fetch_all(pool)
     .await?;
     rows.iter().map(project_from_row).collect()
