@@ -45,6 +45,10 @@ targets:
       - path: Sources
       - path: Resources/Assets.xcassets
         buildPhase: resources
+      - path: Scripts/install-cli.sh
+        buildPhase: resources
+      - path: ../../crates/clumsiesd/packaging/shell-path.sh
+        buildPhase: resources
       - path: Resources/CLUMSIES.md
         buildPhase: resources
       - path: Resources/Localizable.xcstrings

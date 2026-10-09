@@ -15,7 +15,6 @@ On Linux, extract `clumsies-cli-VERSION-linux-x86_64.tar.gz`, enter its director
 ```sh
 sha256sum --check SHA256SUMS
 ./install.sh
-export PATH="$HOME/.local/bin:$PATH"
 clumsies daemon start
 ```
 
@@ -32,34 +31,50 @@ clumsies daemon start
 
 The portable ZIP has its files at the archive root. `install.ps1 -Uninstall` removes an installed runtime and its PATH entry while retaining daemon data. Windows Settings → Apps can uninstall the user installer.
 
-On macOS, the App embeds `Contents/Resources/clumsies`. Run that executable, or add its resource directory to PATH. It reuses the App's launch agent, Keychain, configuration, and cache. Standalone `daemon stop/restart` is unavailable on macOS; manage that runtime through the App. A source CLI build also discovers `/Applications/Clumsies.app` or `~/Applications/Clumsies.app`.
-
-## List pages and select projects
-
-`project list`, `review list PROJECT`, `review comments REVIEW_ID`, and `draft list` share `--limit` (1–200, default 100), `--cursor`, and `--all`. By default each command returns one page. Pass the returned opaque cursor unchanged to continue; `--all` starts at the beginning and combines all pages. It cannot be combined with `--cursor`. Any failed page or repeated cursor fails the command without printing a partial collection. JSON remains the output format.
+After installing the macOS App, double-click **Install CLI.command** in the DMG. With more than one installed App, specify which App to use:
 
 ```sh
-clumsies project list --limit 20
-clumsies project list --limit 20 --cursor 'CURSOR_FROM_PAGE_INFO'
-clumsies project list --all
-clumsies review list AgentOS --all
-clumsies review comments REVIEW_ID --all
-clumsies draft list --status open --limit 20
-clumsies draft list --cursor 'CURSOR_FROM_NEXT_CURSOR'
+sh /Volumes/Clumsies/Install\ CLI.command "$HOME/Applications/Clumsies.app"
+# The installed App also carries the installer:
+sh "$HOME/Applications/Clumsies.app/Contents/Resources/install-cli.sh"
 ```
 
-Server lists return `page_info.next_cursor` and `page_info.has_more`; local Drafts return top-level `next_cursor`. A null cursor marks the end. Project, Review, and discussion paging requires a Server containing this change; older Servers ignore these parameters and can truncate results at 200. Server pages use offsets with stable ID tie-breaking; concurrent mutations can move records between pages, so restart the listing after changes rather than treating it as a snapshot. `--all` holds the combined result in memory.
+The installer creates `~/.local/bin/clumsies` and appends PATH setup to bash/zsh user startup files without replacing their contents. Open a new terminal and run `clumsies --version`; no manual export is needed. Linux `install.sh` also sets up bash/zsh PATH. Other shells currently report an explicit setup error. Unrelated commands are never replaced. The macOS link uses the embedded App runtime and survives App upgrades at the same location. Moving the App requires updating the command entry. Credentials, bindings and Drafts are retained; the App continues to own the macOS daemon lifecycle.
 
-Project `show`, `join`, `bind`, `bindings`, and `review list` accept a Project ID or unique case-insensitive name. Names are resolved across all accessible pages; unknown or ambiguous names fail without changing state. IDs are preferred for automation. `join` (also available as `select`) only selects a project; it does not bind a directory.
+## Output and terminal reading
+
+Commands default to readable text. Lists show names, IDs, lifecycle and sync information; details retain Review versions, references, authority scopes and semantic changes. `status` summarizes readiness and required attention; `--verbose` includes diagnostic fields. Long output automatically uses a terminal pager; short output displays directly. Configure `CLUMSIES_PAGER` or `PAGER`, or pass `--no-pager`. The default detects `less`, then falls back to available `more` (the system reader on Windows), or direct output if no reader exists. Reader key bindings depend on the installed pager. JSON, pipes and redirected output never launch a pager or emit animations or colors.
 
 ```sh
-cd /absolute/path/to/repository
-clumsies project join AgentOS
-clumsies project bind AgentOS
-clumsies project current
+clumsies project list
+clumsies draft list --status open
+clumsies review diff REVIEW_ID
+clumsies --no-pager review show REVIEW_ID
 ```
 
-`bind` defaults its directory to `.`. If the directory belongs to a different project, the error identifies that project and its binding revision. Inspect it with `project bindings OLD_PROJECT_ID`, then deliberately replace it with `project bind AgentOS . --revision INSPECTED_REVISION`. Never guess a revision. Local lookup by ID still works after the old project was deleted. Draft status filters (`open`, `submitted`, `discarded`, `merged`) apply before pagination.
+**Script migration: JSON is no longer the default. Add `--json` explicitly.** JSON keeps existing response envelopes without human messages. Export editable reconciliation plans in JSON:
+
+```sh
+clumsies --json status
+clumsies project list --json
+clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
+```
+
+## Automatic pagination and project selection
+
+Text lists automatically follow Server/local cursors and display each batch without collecting every page first. No manual cursor copying is needed. Closing the reader stops subsequent requests, with reader-dependent prefetch. An interrupted fetch reports incomplete results and exits nonzero; already displayed rows do not imply a complete collection. Concurrent updates can move records between pages, so traversal is not a fixed snapshot.
+
+JSON retains `--limit` (request size 1–200, default 100), `--cursor` and `--all`. By default it returns one page; `--all` starts from the first page and conflicts with `--cursor`. JSON all-pages output is emitted only after every request succeeds, and retains the collection in memory. Failures and cursor loops never produce a partial JSON document. In text mode, `--limit` remains a request batch size rather than a total result limit, and `--cursor` selects the traversal's starting point.
+
+```sh
+clumsies project list --json --limit 20
+clumsies project list --json --cursor 'returned cursor'
+clumsies review list AgentOS --json --all
+```
+
+Older Servers may ignore pagination and return at most 200 records; the CLI cannot recover records the Server does not expose. Server lists use `page_info.next_cursor`, local Drafts use top-level `next_cursor`.
+
+Project commands and Review lists accept an ID or unique case-insensitive name. Ambiguous names fail; scripts should use IDs. `project join` (alias `select`) selects a project without binding the directory or granting membership. `project bind PROJECT` defaults to the current directory. Inspect conflicting bindings before passing `--revision`; do not guess revisions. Draft `--status` filtering occurs before pagination and accepts `open`, `submitted`, `discarded`, or `merged`.
 
 ## Connect an account and repository
 
@@ -155,7 +170,7 @@ clumsies draft rebase LOCAL_DRAFT_ID --candidate CANDIDATE_ID --version DRAFT_VE
 For an existing Review, keep all proposals and one consistent revision together:
 
 ```sh
-clumsies review plan REVIEW_ID --version INSPECTED_VERSION > plan.json
+clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
 # Inspect plan.candidates and all plan.detail proposals.
 # Copy the top-level request object into update.json.
 # For conflicts, edit each candidate's merge_preview.state and assign it as resolved_state.

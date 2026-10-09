@@ -14,10 +14,11 @@ trap 'rm -rf -- "$stage"' EXIT
 mkdir "$stage/$package"
 for name in clumsies clumsiesd; do cp -- "$binaries/$name" "$stage/$package/$name"; done
 cp -- "$scripts/install.sh" "$stage/$package/install.sh"
+cp -- "$scripts/shell-path.sh" "$stage/$package/shell-path.sh"
 chmod 755 "$stage/$package/"{clumsies,clumsiesd,install.sh}
 echo "$version" > "$stage/$package/.clumsies-cli"
 [[ $("$stage/$package/clumsies" --version) == "clumsies $version" ]] || { echo 'CLI and package version differ' >&2; exit 1; }
 [[ $("$stage/$package/clumsiesd" --version) == "clumsiesd $version" ]] || { echo 'Daemon and package version differ' >&2; exit 1; }
-(cd "$stage/$package" && sha256sum clumsies clumsiesd install.sh .clumsies-cli > SHA256SUMS)
+(cd "$stage/$package" && sha256sum clumsies clumsiesd install.sh shell-path.sh .clumsies-cli > SHA256SUMS)
 tar -czf "$out/$package.tar.gz" -C "$stage" "$package"
 (cd "$out" && sha256sum "$package.tar.gz" > "$package.tar.gz.sha256")

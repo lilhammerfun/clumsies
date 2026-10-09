@@ -24,7 +24,7 @@ if [[ ${1:-} == --uninstall ]]; then
 fi
 [[ $# == 0 ]] || { echo 'Usage: install.sh [--uninstall]' >&2; exit 64; }
 (cd -- "$source_dir" && sha256sum --check --strict SHA256SUMS)
-(cd -- "$source_dir" && diff -u SHA256SUMS <(sha256sum clumsies clumsiesd install.sh .clumsies-cli))
+(cd -- "$source_dir" && diff -u SHA256SUMS <(sha256sum clumsies clumsiesd install.sh shell-path.sh .clumsies-cli))
 [[ -f "$source_dir/.clumsies-cli" ]] || { echo 'Missing CLI package marker' >&2; exit 1; }
 for name in clumsies clumsiesd; do
   [[ -x "$source_dir/$name" ]] || { echo "Missing executable $name" >&2; exit 1; }
@@ -45,7 +45,7 @@ cleanup() {
   exit "$result"
 }
 trap cleanup EXIT
-for name in clumsies clumsiesd install.sh .clumsies-cli SHA256SUMS; do cp -a -- "$source_dir/$name" "$stage/"; done
+for name in clumsies clumsiesd install.sh shell-path.sh .clumsies-cli SHA256SUMS; do cp -a -- "$source_dir/$name" "$stage/"; done
 "$stage/clumsies" --version
 [[ ! -d "$backup" ]] || { echo "Previous recovery directory exists: $backup; restore or remove it before upgrading" >&2; exit 1; }
 # Stop acknowledges through user-local IPC and waits for the resident lock.
@@ -56,4 +56,7 @@ mv -- "$stage" "$runtime"
 for name in clumsies clumsiesd; do ln -sfn -- "$runtime/$name" "$bin_root/$name"; done
 rm -rf -- "$backup"
 switched=false
-echo "Installed $runtime; add $bin_root to PATH. Agent integrations keep the same runtime path."
+# shellcheck source=crates/clumsiesd/packaging/shell-path.sh
+. "$runtime/shell-path.sh"
+clumsies_add_shell_path "$bin_root"
+echo "Installed $runtime. Open a new terminal and run clumsies --version. Agent integrations keep the same runtime path."

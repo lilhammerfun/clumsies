@@ -26,6 +26,15 @@ mkdir -p "$mountpoint"
 hdiutil attach -quiet -readonly -nobrowse -mountpoint "$mountpoint" "$image"
 mounted=1
 test "$(readlink "$mountpoint/Applications")" = /Applications
+test -x "$mountpoint/Install CLI.command"
+cmp "$app/Contents/Resources/install-cli.sh" "$mountpoint/Install CLI.command"
+cli_home="$test_root/home with spaces"
+installed_app="$cli_home/Applications/Clumsies.app"
+mkdir -p "$cli_home/Applications"
+ditto "$mountpoint/Clumsies.app" "$installed_app"
+HOME="$cli_home" SHELL=/bin/zsh ZDOTDIR="$cli_home" sh "$mountpoint/Install CLI.command" "$installed_app"
+HOME="$cli_home" SHELL=/bin/zsh ZDOTDIR="$cli_home" PATH=/usr/bin:/bin zsh -lic 'command -v clumsies; clumsies --version'
+codesign --verify --deep --strict "$installed_app"
 codesign --verify --deep --strict "$mountpoint/Clumsies.app"
 codesign --verify --strict "$mountpoint/Clumsies.app/Contents/Resources/clumsiesd"
 codesign --verify --strict "$mountpoint/Clumsies.app/Contents/Resources/clumsies"

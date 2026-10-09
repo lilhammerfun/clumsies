@@ -10,6 +10,7 @@ export CLUMSIES_DAEMON_LOG_DIR="$test_root/logs"
 export CLUMSIES_SYNC_ENABLED=false
 export CLUMSIES_INSTALL_ROOT="$test_root/programs"
 export CLUMSIES_BIN_DIR="$test_root/bin"
+export SHELL=/bin/bash
 unset CLUMSIES_DEV_INSTANCE_ID CLUMSIES_DAEMON_SOCKET CLUMSIES_AGENT_RUNTIME_TEST_MACH_SERVICE
 mkdir -p "$HOME" "$CLUMSIES_DAEMON_ROOT" "$test_root/package"
 cli="$CLUMSIES_INSTALL_ROOT/runtime/clumsies"
@@ -18,14 +19,15 @@ trap cleanup EXIT
 tar -xzf "$1" -C "$test_root/package"
 package=$(find "$test_root/package" -mindepth 1 -maxdepth 1 -type d)
 "$package/install.sh"
-"$cli" daemon start > "$test_root/started.json"
-"$cli" daemon start > "$test_root/reused.json"
+bash --noprofile --rcfile "$HOME/.bashrc" -ic 'command -v clumsies && clumsies --version'
+"$cli" --json daemon start > "$test_root/started.json"
+"$cli" --json daemon start > "$test_root/reused.json"
 cmp "$test_root/started.json" "$test_root/reused.json"
 printf 'retained draft and binding proof\n' > "$CLUMSIES_DAEMON_ROOT/retained-work"
 "$package/install.sh"
 [[ -s "$CLUMSIES_DAEMON_ROOT/local.db" ]]
 [[ $(cat "$CLUMSIES_DAEMON_ROOT/retained-work") == 'retained draft and binding proof' ]]
-"$cli" daemon start > "$test_root/upgraded.json"
+"$cli" --json daemon start > "$test_root/upgraded.json"
 cmp "$test_root/started.json" "$test_root/upgraded.json"
 "$cli" daemon stop
 # A corrupt package must leave both installed executables intact.

@@ -129,7 +129,7 @@ impl Fixture {
 
     /// Requires a successful JSON CLI result, retaining useful failure diagnostics.
     fn json(&self, args: &[&str], input: Option<&str>) -> Value {
-        let output = self.cli(args, input);
+        let output = self.cli(&[&["--json"], args].concat(), input);
         assert!(
             output.status.success(),
             "{args:?}: {}",
@@ -785,6 +785,38 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     fixture.json(&["logout"], None);
 }
 
+/// Human lists traverse pages automatically while explicit JSON retains one-page envelopes.
+#[test]
+fn text_output_traverses_without_a_pager_and_json_remains_explicit() {
+    let fixture = Fixture::start();
+    fixture.json(
+        &[
+            "login",
+            "--server",
+            &fixture.origin,
+            "--username",
+            "fixture",
+            "--password-stdin",
+        ],
+        Some("fixture-secret\n"),
+    );
+    let text = fixture.cli(&["project", "list", "--limit", "1"], None);
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("Fixture") && text.contains("Other"));
+    assert!(!text.contains("page_info") && !text.contains("next_cursor") && !text.contains("{\""));
+    let page = fixture.json(&["project", "list", "--limit", "1"], None);
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["page_info"]["has_more"], true);
+    let status = fixture.cli(&["status"], None);
+    assert!(status.status.success());
+    assert!(!String::from_utf8_lossy(&status.stdout).contains("has_access_token"));
+}
+
 /// A cold resident must not keep a parent shell's output pipe alive after the CLI exits.
 #[test]
 fn cold_start_closes_client_output_pipe_while_resident_stays_running() {
@@ -792,7 +824,7 @@ fn cold_start_closes_client_output_pipe_while_resident_stays_running() {
     let mut command = Command::new(env!("CARGO_BIN_EXE_clumsies"));
     isolate(&mut command, fixture.root.path());
     let mut child = command
-        .args(["daemon", "start"])
+        .args(["--json", "daemon", "start"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(std::fs::File::create(fixture.root.path().join("cold-start.stderr")).unwrap())

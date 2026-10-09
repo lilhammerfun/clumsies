@@ -76,6 +76,46 @@ pub(super) fn collect(
     }
 }
 
+/// Prints JSON using the existing page contract, or streams every page for human reading.
+///
+/// # Errors
+/// Propagates malformed or repeating cursors, incomplete reads, and reader cancellation.
+pub(super) fn print(
+    args: &PageArgs,
+    output: &mut super::output::Output,
+    mut fetch: impl FnMut(Option<&str>) -> Result<Value, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if output.json {
+        return output.value(&collect(args, fetch)?);
+    }
+    let mut cursor = args.cursor.clone();
+    let mut seen = BTreeSet::new();
+    let mut first = true;
+    let mut count = 0;
+    loop {
+        let page = fetch(cursor.as_deref())
+            .map_err(|error| format!("List incomplete after {count} results: {error}"))?;
+        let next = continuation(&page)?;
+        output.page(&page, first)?;
+        count += page["items"]
+            .as_array()
+            .ok_or("List response requires items")?
+            .len();
+        first = false;
+        let Some(next) = next else {
+            break;
+        };
+        if !seen.insert(next.clone()) || cursor.as_ref() == Some(&next) {
+            return Err("List incomplete: repeated continuation cursor".into());
+        }
+        cursor = Some(next);
+    }
+    if count == 0 {
+        output.text("No results.\n")?;
+    }
+    Ok(())
+}
+
 /// Decodes the two existing collection envelopes and checks continuation consistency.
 ///
 /// # Errors
