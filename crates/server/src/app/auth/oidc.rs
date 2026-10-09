@@ -51,6 +51,8 @@ pub trait OidcIdentityProvider: Send + Sync {
     /// # Errors
     /// Propagates token-endpoint failures and rejects invalid signatures, issuer, nonce, or
     /// identity claims.
+    // async_trait adds #[must_use] to the already must-use boxed future.
+    #[allow(clippy::double_must_use)]
     async fn exchange_code(
         &self,
         code: &str,
