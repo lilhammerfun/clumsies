@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 /// Human CLI; JSON output preserves server pagination and coordination evidence.
 #[derive(Parser)]
-#[command(version, about)]
+#[command(name = "clumsies", version, about)]
 struct Cli {
     /// Action to perform.
     #[command(subcommand)]
@@ -725,6 +725,17 @@ fn server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_identifies_the_human_client_in_distribution_packages() {
+        let version = Cli::try_parse_from(["clumsies", "--version"])
+            .err()
+            .unwrap();
+        assert_eq!(
+            version.to_string(),
+            format!("clumsies {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     #[test]
     fn origins_and_identifiers_reject_credential_and_path_injection() {
