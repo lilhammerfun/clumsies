@@ -13,8 +13,10 @@ $profile_dir/.zshrc" ;;
     */bash|*/sh)
       profiles="$HOME/.profile
 $HOME/.bashrc"
-      if [ -f "$HOME/.bash_profile" ]; then profiles="$profiles
-$HOME/.bash_profile"; fi
+      for login_profile in "$HOME/.bash_profile" "$HOME/.bash_login"; do
+        if [ -f "$login_profile" ]; then profiles="$profiles
+$login_profile"; fi
+      done
       ;;
     *) echo 'Automatic PATH setup supports bash and zsh; select one as your login shell.' >&2; return 1 ;;
   esac

@@ -36,11 +36,19 @@ test "$(cat "$HOME/.local/bin/clumsies")" = 'unrelated command'
 export HOME="$root/bash-home"
 export SHELL=/bin/bash
 mkdir -p "$HOME"
-printf 'export KEEP_ME=yes\n' > "$HOME/.bash_profile"
+printf 'export KEEP_ME=yes\n' > "$HOME/.bash_login"
 . "$repo_root/crates/clumsiesd/packaging/shell-path.sh"
 clumsies_add_shell_path "$root/command dir's"
 clumsies_add_shell_path "$root/command dir's"
+test "$(grep -c '^# Clumsies CLI command directory$' "$HOME/.bash_login")" = 1
+# shellcheck disable=SC2016
+env PATH=/usr/bin:/bin bash -lc 'case "$PATH" in *"command dir"*) exit 0 ;; *) exit 1 ;; esac'
+printf 'export KEEP_ME=yes\n' > "$HOME/.bash_profile"
+clumsies_add_shell_path "$root/command dir's"
+clumsies_add_shell_path "$root/command dir's"
 test "$(grep -c '^# Clumsies CLI command directory$' "$HOME/.bash_profile")" = 1
+# shellcheck disable=SC2016
+env PATH=/usr/bin:/bin bash -lc 'case "$PATH" in *"command dir"*) exit 0 ;; *) exit 1 ;; esac'
 # shellcheck disable=SC2016
 env PATH=/usr/bin:/bin bash --noprofile --rcfile "$HOME/.bashrc" -ic 'case "$PATH" in *"command dir"*) exit 0 ;; *) exit 1 ;; esac'
 echo 'CLI shell installation, idempotence, upgrade and command protection passed.'
