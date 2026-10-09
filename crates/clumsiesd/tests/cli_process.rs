@@ -1,7 +1,7 @@
 //! Isolated CLI/MCP processes using real daemon storage and a checked Server protocol fixture.
 #![cfg(not(target_os = "macos"))]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
@@ -746,6 +746,55 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
         None,
     );
     fixture.json(&["logout"], None);
+}
+
+/// A cold resident must not keep a parent shell's output pipe alive after the CLI exits.
+#[test]
+fn cold_start_closes_client_output_pipe_while_resident_stays_running() {
+    let fixture = Fixture::start();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_clumsies"));
+    isolate(&mut command, fixture.root.path());
+    let mut child = command
+        .args(["daemon", "start"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(std::fs::File::create(fixture.root.path().join("cold-start.stderr")).unwrap())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("Cold startup timed out");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        status.success(),
+        "{}",
+        std::fs::read_to_string(fixture.root.path().join("cold-start.stderr")).unwrap()
+    );
+    let bytes = receiver
+        .recv_timeout(Duration::from_secs(3))
+        .expect("Resident inherited the CLI output pipe")
+        .unwrap();
+    reader.join().unwrap();
+    let health: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        fixture.json(&["daemon", "start"], None)["daemon_installation_id"],
+        health["daemon_installation_id"]
+    );
 }
 
 /// Exercises account admission, adapter ownership, and rejection through shipped processes.

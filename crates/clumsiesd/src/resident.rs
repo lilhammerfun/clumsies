@@ -1,7 +1,7 @@
 //! Standalone runtime discovery and bounded startup, shared by CLI and MCP.
 
 use std::path::PathBuf;
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -88,19 +88,15 @@ pub fn ensure_running() -> Result<DaemonIpcClient, DaemonError> {
         let agent = crate::LaunchAgentConfig::from_daemon_config(&config, binary()?)?;
         crate::LaunchAgentController::for_current_user(agent)?.reconcile()?;
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    spawn_windows_resident(&binary()?)?;
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         let mut command = Command::new(binary()?);
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // No console window and no inherited parent console lifetime.
-            command.creation_flags(0x08000000 | 0x00000008);
-        }
         let mut child = command.spawn()?;
         // Reap a losing concurrent starter without tying resident lifetime to the CLI.
         std::thread::spawn(move || {
@@ -121,6 +117,57 @@ pub fn ensure_running() -> Result<DaemonIpcClient, DaemonError> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// Starts the resident without inheriting the CLI's handles or console.
+///
+/// # Errors
+/// Returns a Windows process-creation error; readiness is checked separately through IPC.
+#[cfg(windows)]
+fn spawn_windows_resident(executable: &std::path::Path) -> Result<(), DaemonError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        CREATE_NO_WINDOW, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
+    };
+
+    let application: Vec<u16> = executable
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let mut command_line: Vec<u16> = std::iter::once(u16::from(b'"'))
+        .chain(executable.as_os_str().encode_wide())
+        .chain([u16::from(b'"'), 0])
+        .collect();
+    let startup = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        ..Default::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    // An inherited shell pipe can keep command substitution waiting after the CLI has exited.
+    if unsafe {
+        CreateProcessW(
+            application.as_ptr(),
+            command_line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup,
+            &mut process,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    unsafe {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    Ok(())
 }
 
 /// Stops the standalone resident and waits until its root lock is released.
