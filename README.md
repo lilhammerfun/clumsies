@@ -59,6 +59,8 @@ create a Project, and connect my agent.
 
 For **Windows/Linux**, use the [CLI installation and Review workflow](docs/guides/cli-commands.md). The CLI workflow produces a Linux user package, Windows user installer, and portable ZIP; upcoming tagged releases include them. The native macOS App also embeds the human CLI.
 
+Windows/Linux desktop development is paused. Contributions for these platforms must target the CLI, `clumsiesd`, Agent/MCP integration, or their installation and distribution. Desktop fixes and features resume only when a maintainer takes responsibility for ongoing platform testing, packaging, releases, and compatibility.
+
 ## Agent support and limits
 
 Clumsies includes integrations for the macOS Codex App, Claude Code, opencode, DeepSeek Harness (`dsh`), and Google Antigravity. Install the agent host separately. Adapters are configured once per Mac user for all projects; Codex is selected by default during first-time setup. Repository bindings determine which Project's Memory an agent can use.

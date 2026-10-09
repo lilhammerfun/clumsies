@@ -57,6 +57,7 @@ jobs:
         run: |
           cargo test --locked -p clumsiesd --bin clumsies
           cargo test --locked -p clumsiesd --lib sign_in::
+          cargo test --locked -p clumsiesd --lib agent_adapter::codex_plugin::
           cargo test --locked -p clumsiesd --doc
       - name: Test native IPC and credential boundaries
         run: |

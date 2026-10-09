@@ -57,6 +57,8 @@ macOS 首次打开授权和登录需要我操作时，告诉我具体步骤。
 
 **Windows/Linux** 使用 [CLI 安装与 Review 工作流](docs/zh/guides/cli-commands.md)。CLI 工作流生成 Linux 用户安装包、Windows 用户安装器和便携 ZIP，后续标签发布会包含这些产物；macOS 原生 App 也内嵌人工操作 CLI。
 
+Windows/Linux 图形客户端暂停维护。这两个平台只接收围绕 CLI、`clumsiesd`、Agent/MCP 集成及其安装分发的修复和功能 PR。桌面端修复和功能需等维护者承担持续的平台测试、打包、发布和兼容性维护后再恢复接收。
+
 ## Agent 支持与使用条件
 
 当前实现包含 macOS Codex App、Claude Code、opencode、DeepSeek Harness（`dsh`）和 Google Antigravity 的集成。Agent 宿主需要自行安装。适配器按本机用户安装一次，供所有项目使用；首次设置默认勾选 Codex。仓库绑定决定 Agent 使用哪个 Project 的 Memory。

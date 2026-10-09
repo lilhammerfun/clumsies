@@ -1,18 +1,19 @@
 # Clumsies Desktop
 
+**Maintenance paused.** Windows/Linux contributions currently target the CLI, `clumsiesd`, Agent/MCP integration and distribution. Desktop fixes and features require a maintainer responsible for ongoing testing, packaging, releases and platform compatibility. The build instructions below describe the retained implementation; current tagged releases distribute the CLI instead.
+
 The Windows and Linux client. macOS keeps its own native Swift app in `apps/macos`.
 
 - UI toolkit: [GPUI Kit](https://gpui-kit.com) (`gpui-kit`), the same stack Zed is built on.
 - Engine: the local `clumsiesd` engine, shared with the macOS client.
 - Design rules: [DESIGN.md](DESIGN.md).
 
-## Shipping
+## Retained packaging implementation
 
-A release ships packages from one tag: the macOS DMG (its own workflow),
-`Clumsies-<version>-linux-x86_64.tar.gz`, and
-`Clumsies-<version>-windows-x86_64-Setup.exe` (recommended), and the portable
-`Clumsies-<version>-windows-x86_64.zip`. Desktop packages are built by `release.yml`
-on `v*` tags and attached to the same GitHub release, each with a SHA-256 file.
+Current tagged releases distribute the macOS App and Windows/Linux CLI packages.
+The desktop assembly and installation tools below remain in the repository for
+local builds and CI; desktop packages are not attached by the current tagged
+release workflow.
 
 The Windows installer adds Start menu and optional desktop shortcuts, installs
 to `%LOCALAPPDATA%\Programs\Clumsies` without elevation, and registers an
