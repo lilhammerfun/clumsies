@@ -235,7 +235,7 @@ fn executable(name: &str) -> Option<std::path::PathBuf> {
         return explicit.is_file().then(|| explicit.to_owned());
     }
     let suffixes: &[&str] = if cfg!(windows) {
-        &[".exe", ".com", ".cmd", ".bat"]
+        &["", ".exe", ".com", ".cmd", ".bat"]
     } else {
         &[""]
     };
@@ -258,15 +258,15 @@ fn shell_reader(value: &str) -> Command {
 
 /// Renders terminal controls visibly so server text cannot issue terminal commands.
 pub(super) fn safe_text(text: &str) -> String {
-    text.chars()
-        .flat_map(|c| {
-            if c.is_control() && c != '\n' && c != '\t' {
-                format!("\\u{{{:x}}}", c as u32).chars().collect::<Vec<_>>()
-            } else {
-                vec![c]
-            }
-        })
-        .collect()
+    let mut safe = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() && c != '\n' && c != '\t' {
+            safe.push_str(&format!("\\u{{{:x}}}", c as u32));
+        } else {
+            safe.push(c);
+        }
+    }
+    safe
 }
 
 /// Human title of the command's list result.
@@ -377,6 +377,27 @@ fn evidence(text: &mut String, value: &Value, indent: usize) {
     }
 }
 
+/// Describes ordered mutations and non-text metadata without repeating the diff's text body.
+fn operation_summary(text: &mut String, operations: &Value) {
+    if let Some(operations) = operations.as_array() {
+        for (index, operation) in operations.iter().enumerate() {
+            text.push_str(&format!("Operation {}:\n", index + 1));
+            fields_text(text, operation, &["action", "new_path"]);
+            evidence(text, &operation["resource"], 2);
+            if let Some(metadata) = operation["content"].as_object() {
+                let metadata = Value::Object(
+                    metadata
+                        .iter()
+                        .filter(|(key, _)| key.as_str() != "content")
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                );
+                evidence(text, &metadata, 2);
+            }
+        }
+    }
+}
+
 /// Command-specific summaries retain decision evidence while hiding transport internals.
 fn render(kind: &str, value: &Value, verbose: bool) -> String {
     let mut text = String::new();
@@ -475,14 +496,42 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
             }
             if let Some(drafts) = value["drafts"].as_array() {
                 text.push_str(&format!("Proposals: {}\n", drafts.len()));
-                for draft in drafts {
-                    evidence(&mut text, draft, 2);
+                for entry in drafts {
+                    fields_text(
+                        &mut text,
+                        &entry["draft"],
+                        &[
+                            "draft_id",
+                            "title",
+                            "version",
+                            "status",
+                            "project_id",
+                            "base_commit_id",
+                        ],
+                    );
+                    evidence(&mut text, &entry["draft"]["resource"], 2);
+                    operation_summary(&mut text, &entry["operations"]);
+                }
+                if let Some(id) = review["review_id"].as_str() {
+                    text.push_str(&format!("Read content: clumsies review diff {id}\n"));
                 }
             }
-            for field in ["decisions", "comments", "changes"] {
+            for field in ["decisions", "comments"] {
                 if let Some(data) = value.get(field) {
                     text.push_str(&format!("{field}:\n"));
                     evidence(&mut text, data, 2);
+                }
+            }
+            if let Some(changes) = value["changes"].as_array() {
+                for change in changes {
+                    fields_text(&mut text, change, &["before_path", "after_path"]);
+                    text.push_str("Base resource metadata:\n");
+                    evidence(&mut text, &change["base_resource"], 2);
+                    operation_summary(&mut text, &change["operations"]);
+                    if let Some(diff) = change["unified_diff"].as_str() {
+                        text.push_str(diff);
+                        text.push('\n');
+                    }
                 }
             }
             fields_text(&mut text, value, &["commit_id", "applied_operation_count"]);
@@ -699,7 +748,7 @@ mod tests {
 
     #[test]
     fn decision_evidence_and_terminal_controls_remain_visible() {
-        let value = json!({"review":{"review_id":"r","version":4,"scope":"org","coordination":{"current_commit_id":"c","freshness":"behind"}},"drafts":[],"changes":[{"description":"changed","source":"new"}]});
+        let value = json!({"review":{"review_id":"r","version":4,"scope":"org","coordination":{"current_commit_id":"c","freshness":"behind"}},"drafts":[],"changes":[{"operations":[{"action":"update","content":{"description":"changed","org_source":"new","content":"not repeated"}}],"unified_diff":"+changed body"}]});
         let text = render("review", &value, false);
         for expected in [
             "version: 4",
@@ -707,10 +756,11 @@ mod tests {
             "current commit id: c",
             "freshness: behind",
             "description: changed",
-            "source: new",
+            "org source: new",
         ] {
             assert!(text.contains(expected));
         }
+        assert!(!text.contains("not repeated"));
         assert_eq!(
             safe_text("a\u{1b}]52;secret\u{7}\n中"),
             "a\\u{1b}]52;secret\\u{7}\n中"

@@ -271,12 +271,24 @@ fn main() {
             return;
         }
         eprintln!("clumsies: {}", output::safe_text(&error.to_string()));
-        if matches!(error.downcast_ref::<DaemonError>(), Some(DaemonError::Remote(error)) if error.code == "missing_session" || error.details["status"] == 401)
-        {
+        if authentication_failure(error.as_ref()) {
             eprintln!("Run clumsies login again; local drafts and bindings are retained.");
         }
         std::process::exit(1);
     }
+}
+
+/// Finds authentication failures through contextual wrappers without parsing error text.
+fn authentication_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if matches!(error.downcast_ref::<DaemonError>(), Some(DaemonError::Remote(remote)) if remote.code == "missing_session" || remote.details["status"] == 401)
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
 }
 
 /// Selects the public presentation and whether the command supports interactive reading.
@@ -885,6 +897,32 @@ fn server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_pagination_retains_authentication_recovery_through_context() {
+        let mut output = output::Output::new(false, true, false, "projects", true);
+        let args = PageArgs {
+            limit: 100,
+            cursor: None,
+            all: false,
+        };
+        let error = pagination::print(&args, &mut output, |_| {
+            Err(DaemonError::Remote(ApiError {
+                code: "server_request_failed".to_owned(),
+                message: "refresh revoked".to_owned(),
+                request_id: "req_test".to_owned(),
+                details: json!({"status":401}),
+            })
+            .into())
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("List incomplete after 0 results")
+        );
+        assert!(authentication_failure(error.as_ref()));
+    }
 
     #[test]
     fn version_identifies_the_human_client_in_distribution_packages() {

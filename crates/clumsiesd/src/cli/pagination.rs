@@ -76,6 +76,31 @@ pub(super) fn collect(
     }
 }
 
+/// Adds traversal context while retaining the original typed error for recovery hints.
+#[derive(Debug)]
+struct IncompleteList {
+    /// Number of records already displayed before this failure.
+    count: usize,
+    /// Original transport, protocol, or authentication failure.
+    source: Box<dyn std::error::Error>,
+}
+
+impl std::fmt::Display for IncompleteList {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "List incomplete after {} results: {}",
+            self.count, self.source
+        )
+    }
+}
+
+impl std::error::Error for IncompleteList {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 /// Prints JSON using the existing page contract, or streams every page for human reading.
 ///
 /// # Errors
@@ -93,8 +118,7 @@ pub(super) fn print(
     let mut first = true;
     let mut count = 0;
     loop {
-        let page = fetch(cursor.as_deref())
-            .map_err(|error| format!("List incomplete after {count} results: {error}"))?;
+        let page = fetch(cursor.as_deref()).map_err(|source| IncompleteList { count, source })?;
         let next = continuation(&page)?;
         output.page(&page, first)?;
         count += page["items"]

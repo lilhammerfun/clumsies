@@ -16,7 +16,10 @@ if [ -z "$app" ]; then
       done ;;
   esac
 fi
-[ -n "$app" ] && [ -d "$app" ] || { echo 'Install Clumsies.app into Applications first, then run this installer.' >&2; exit 1; }
+if [ -z "$app" ] || [ ! -d "$app" ]; then
+  echo 'Install Clumsies.app into Applications first, then run this installer.' >&2
+  exit 1
+fi
 app=$(cd "$app" && pwd -P)
 case "$app" in /Volumes/*|*/AppTranslocation/*) echo 'Install the App on your Mac before installing its command entry.' >&2; exit 1 ;; esac
 cli="$app/Contents/Resources/clumsies"
@@ -26,7 +29,10 @@ mkdir -p "$bin_dir"
 bin_dir=$(cd "$bin_dir" && pwd -P)
 entry="$bin_dir/clumsies"
 if [ -e "$entry" ] || [ -L "$entry" ]; then
-  [ -L "$entry" ] && [ "$(readlink "$entry")" = "$cli" ] || { echo "Refusing to replace unrelated command: $entry" >&2; exit 1; }
+  if [ ! -L "$entry" ] || [ "$(readlink "$entry")" != "$cli" ]; then
+    echo "Refusing to replace unrelated command: $entry" >&2
+    exit 1
+  fi
 fi
 # shellcheck source=crates/clumsiesd/packaging/shell-path.sh
 . "$script_dir/shell-path.sh"
