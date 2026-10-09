@@ -3539,7 +3539,7 @@ impl ManagedPathGuard {
         validate_managed_leaf(&self.path)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, windows))]
     fn create_parent_directories(&self) -> Result<(), DaemonError> {
         self.revalidate()?;
         let relative = self.path.strip_prefix(&self.anchor).map_err(|_| {
