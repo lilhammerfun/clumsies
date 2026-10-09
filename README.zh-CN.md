@@ -55,6 +55,8 @@ macOS 首次打开授权和登录需要我操作时，告诉我具体步骤。
 安装后引导我按 Clumsies 的快速开始连接组织、创建项目并接入 Agent。
 ```
 
+**Windows/Linux** 使用 [CLI 安装与 Review 工作流](docs/zh/guides/cli-commands.md)。CLI 工作流生成 Linux 用户安装包、Windows 用户安装器和便携 ZIP，后续标签发布会包含这些产物；macOS 原生 App 也内嵌人工操作 CLI。
+
 ## Agent 支持与使用条件
 
 当前实现包含 macOS Codex App、Claude Code、opencode、DeepSeek Harness（`dsh`）和 Google Antigravity 的集成。Agent 宿主需要自行安装。适配器按本机用户安装一次，供所有项目使用；首次设置默认勾选 Codex。仓库绑定决定 Agent 使用哪个 Project 的 Memory。

@@ -1,5 +1,7 @@
 # 接入编码 Agent
 
+Windows/Linux 请用 [CLI 接入指南](/zh/guides/cli-commands)：通过 `clumsies agent enable` 启用宿主、绑定工作目录，再重连宿主。以下 App 操作适用于 macOS。
+
 本篇介绍怎样在 Mac 上启用或修复 Agent 集成。想跟着实例走完整流程，请读[在 Codex 中使用项目记忆](/zh/quickstart/use-with-agent)。
 
 集成让 Agent 能调用 Clumsies 工具，仓库绑定决定这些工具可以访问哪个 Project。两项都完成后，Agent 才能使用项目知识。

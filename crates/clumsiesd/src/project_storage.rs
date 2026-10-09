@@ -1,7 +1,9 @@
+#[cfg(unix)]
 use std::ffi::CString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
 use base64::Engine;
@@ -51,6 +53,7 @@ enum BookmarkFailure {
     Fatal(DaemonError),
     /// The bookmark references a file identity that no longer exists; the
     /// persisted selected path may still be reachable and re-authorizable.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Stale(DaemonError),
 }
 
@@ -1980,6 +1983,35 @@ fn paths_equivalent(left: &Path, right: &Path) -> bool {
 }
 
 fn ensure_available_space(path: &Path, required_bytes: u64) -> Result<(), DaemonError> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let path = path
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let mut available = 0;
+        if unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+                path.as_ptr(),
+                &mut available,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if available < required_bytes {
+            return Err(storage_error(
+                "insufficient_space",
+                format!(
+                    "Project storage needs {required_bytes} bytes but only {available} bytes are available"
+                ),
+            ));
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -1992,7 +2024,11 @@ fn ensure_available_space(path: &Path, required_bytes: u64) -> Result<(), Daemon
             return Err(std::io::Error::last_os_error().into());
         }
         let stats = unsafe { stats.assume_init() };
-        let available = (stats.f_bavail as u64).saturating_mul(stats.f_frsize);
+        #[cfg(target_os = "macos")]
+        let blocks = u64::from(stats.f_bavail);
+        #[cfg(not(target_os = "macos"))]
+        let blocks = stats.f_bavail;
+        let available = blocks.saturating_mul(stats.f_frsize);
         if available < required_bytes {
             return Err(storage_error(
                 "insufficient_space",
@@ -2335,5 +2371,18 @@ fn storage_error_parts(error: &DaemonError) -> (String, String) {
         DaemonError::State { code, message } => ((*code).to_owned(), message.clone()),
         DaemonError::Io(error) => (io_storage_code(error).to_owned(), error.to_string()),
         _ => ("storage_verification_failed".to_owned(), error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod available_space_tests {
+    use super::*;
+
+    #[test]
+    fn available_space_checks_native_volume_and_required_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_available_space(root.path(), 0).unwrap();
+        assert!(ensure_available_space(root.path(), u64::MAX).is_err());
+        assert!(ensure_available_space(&root.path().join("missing"), 0).is_err());
     }
 }

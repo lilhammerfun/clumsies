@@ -1,3 +1,5 @@
+//! Resident daemon state, authenticated IPC contracts, and shared client support.
+
 use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
@@ -10,6 +12,8 @@ mod credentials;
 mod dashboard;
 pub mod diagnostics;
 mod draft;
+pub mod resident;
+pub mod sign_in;
 pub use dashboard::{DashboardRetrievalRequest, DashboardRetrievalStatistics};
 mod ipc;
 mod migration;

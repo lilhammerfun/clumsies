@@ -694,7 +694,6 @@ mod platform {
 
     pub struct DaemonIpcServerInner {
         service_name: String,
-        socket: PathBuf,
     }
 
     impl DaemonIpcServerInner {
@@ -762,7 +761,6 @@ mod platform {
             });
             Ok(Self {
                 service_name: socket.to_string_lossy().into_owned(),
-                socket,
             })
         }
 

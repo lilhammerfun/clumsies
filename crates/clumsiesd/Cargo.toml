@@ -7,6 +7,10 @@ edition = "2024"
 name = "clumsiesd"
 path = "src/main.rs"
 
+[[bin]]
+name = "clumsies"
+path = "src/cli/main.rs"
+
 [dependencies]
 base64 = "0.22.1"
 fastembed = { version = "5.17.3", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries"] }
@@ -14,7 +18,7 @@ hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "rus
 hex = "0.4.3"
 libc = "0.2.177"
 pulldown-cmark = "0.13.4"
-reqwest = { version = "0.13.4", features = ["gzip", "json", "rustls", "system-proxy"], default-features = false }
+reqwest = { version = "0.13.4", features = ["blocking", "gzip", "json", "rustls", "system-proxy"], default-features = false }
 ruzstd = { version = "0.8", default-features = false, features = ["std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
@@ -26,6 +30,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "net", "process", "signal", "sync", "time"] }
 toml_edit = "0.25.13"
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
+clap = { version = "4.6.7", features = ["derive"] }
+rpassword = "7.5.4"
+similar = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
@@ -42,4 +49,4 @@ testcontainers = "0.27.3"
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_System_Threading", "Win32_System_Memory"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_System_Threading", "Win32_System_Memory", "Win32_Storage_FileSystem"] }

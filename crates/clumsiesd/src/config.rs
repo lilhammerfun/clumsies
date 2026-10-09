@@ -364,7 +364,7 @@ impl DaemonRuntimePaths {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn xdg_dir(variable: &str, home: &Path, fallback: &str) -> PathBuf {
     match env::var_os(variable) {
         Some(value) if !value.is_empty() => PathBuf::from(value),

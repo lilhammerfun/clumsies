@@ -6,11 +6,15 @@ use clumsiesd::{
     DaemonDraftOperationRecordSource, DaemonDraftOperationRequest, DaemonDraftOperationSource,
     DaemonDraftResourceKind, DaemonDraftScope, DaemonIpcService, DaemonLocalDraftStatus,
     DaemonMemoryCacheRequest, DaemonMemoryCacheState, DaemonProjectCheckoutRequest,
-    DaemonProjectSelectionRequest, DaemonProjectStorageMoveState,
-    DaemonProjectStorageReplaceRequest, DaemonProjectStorageRequest, DaemonRenameDraftOperation,
-    DaemonServerRequest, DaemonSyncRetryRequest, DaemonUpdateDraftOperation,
-    DraftOperationSyncStatus, LoadMemoryRequest, SyncRetryChannel, SyncState,
+    DaemonProjectSelectionRequest, DaemonRenameDraftOperation, DaemonServerRequest,
+    DaemonSyncRetryRequest, DaemonUpdateDraftOperation, DraftOperationSyncStatus,
+    LoadMemoryRequest, SyncRetryChannel, SyncState,
 };
+#[cfg(target_os = "macos")]
+use clumsiesd::{
+    DaemonProjectStorageMoveState, DaemonProjectStorageReplaceRequest, DaemonProjectStorageRequest,
+};
+
 use server::app::draft::dto::{
     CreateDraftRebaseRequest, CreateDraftRequest, DraftOperationAction, DraftOperationInput,
     DraftResourceContent, DraftResourceRef, ReconciliationCandidateStatus,

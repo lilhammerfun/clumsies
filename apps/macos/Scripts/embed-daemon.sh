@@ -14,37 +14,29 @@ daemon_identifier="ai.clumsies.daemon"
 mkdir -p "$(dirname "$destination")"
 
 if [ "$CONFIGURATION" = "Release" ] && [ "${CLUMSIES_UNIVERSAL_BUILD:-0}" = "1" ]; then
-  cargo build -p clumsiesd --bin clumsiesd --release --target aarch64-apple-darwin
-  cargo build -p clumsiesd --bin clumsiesd --release --target x86_64-apple-darwin
-  lipo -create \
-    "$repo_root/target/aarch64-apple-darwin/release/clumsiesd" \
-    "$repo_root/target/x86_64-apple-darwin/release/clumsiesd" \
-    -output "$destination"
+  cargo build -p clumsiesd --bins --release --target aarch64-apple-darwin
+  cargo build -p clumsiesd --bins --release --target x86_64-apple-darwin
+  for binary in clumsiesd clumsies; do
+    lipo -create "$repo_root/target/aarch64-apple-darwin/release/$binary" "$repo_root/target/x86_64-apple-darwin/release/$binary" -output "$(dirname "$destination")/$binary"
+  done
 elif [ "$CONFIGURATION" = "Release" ]; then
-  cargo build -p clumsiesd --bin clumsiesd --release
-  cp "$repo_root/target/release/clumsiesd" "$destination"
+  cargo build -p clumsiesd --bins --release
+  for binary in clumsiesd clumsies; do cp "$repo_root/target/release/$binary" "$(dirname "$destination")/$binary"; done
 else
-  cargo build -p clumsiesd --bin clumsiesd
-  cp "$repo_root/target/debug/clumsiesd" "$destination"
+  cargo build -p clumsiesd --bins
+  for binary in clumsiesd clumsies; do cp "$repo_root/target/debug/$binary" "$(dirname "$destination")/$binary"; done
 fi
 
 printf '%s\n' "$CLUMSIES_AGENT_RUNTIME_BUILD_ID" > "$(dirname "$destination")/clumsiesd-build-id"
-
-chmod 755 "$destination"
-
-if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ] && [ "$EXPANDED_CODE_SIGN_IDENTITY" != "-" ]; then
-  codesign \
-    --force \
-    --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
-    --identifier "$daemon_identifier" \
-    --options runtime \
-    "$destination"
-else
-  # Keep the file-keychain ACL stable across unsigned local rebuilds.
-  codesign \
-    --force \
-    --sign - \
-    --identifier "$daemon_identifier" \
-    --requirements "=designated => identifier \"$daemon_identifier\"" \
-    "$destination"
-fi
+for binary in clumsiesd clumsies; do
+  program="$(dirname "$destination")/$binary"
+  identifier="$daemon_identifier"
+  if [ "$binary" = clumsies ]; then identifier=ai.clumsies.cli; fi
+  chmod 755 "$program"
+  if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ] && [ "$EXPANDED_CODE_SIGN_IDENTITY" != "-" ]; then
+    codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --identifier "$identifier" --options runtime "$program"
+  else
+    # Keep the file-keychain ACL stable across unsigned local rebuilds.
+    codesign --force --sign - --identifier "$identifier" --requirements "=designated => identifier \"$identifier\"" "$program"
+  fi
+done

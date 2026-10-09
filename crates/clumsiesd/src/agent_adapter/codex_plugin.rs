@@ -510,6 +510,7 @@ async fn verify_codex_cli(_path: &Path) -> Result<(), DaemonError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::super::shell_single_quote;
     use super::*;
 

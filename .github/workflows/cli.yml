@@ -1,0 +1,103 @@
+name: CLI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CLUMSIES_AGENT_RUNTIME_BUILD_ID: cli-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+      - name: Configure isolated model cache
+        shell: bash
+        run: echo "CLUMSIES_MODEL_TEST_CACHE=$RUNNER_TEMP/clumsies-cli-models" >> "$GITHUB_ENV"
+      - name: Verify tagged distribution version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/clumsiesd/Cargo.toml | head -1)
+          test "v$VERSION" = "$GITHUB_REF_NAME"
+      - name: Check format and client/runtime lint
+        run: |
+          cargo fmt -p clumsiesd --check
+          cargo clippy --locked -p clumsiesd --all-targets -- -D warnings
+      - name: Check documented private client contracts
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked -p clumsiesd --no-deps --document-private-items
+      - name: Test client commands and shared authentication
+        run: |
+          cargo test --locked -p clumsiesd --bin clumsies
+          cargo test --locked -p clumsiesd --lib sign_in::
+          cargo test --locked -p clumsiesd --doc
+      - name: Test native IPC and credential boundaries
+        run: |
+          cargo test --locked -p clumsiesd --lib ipc::
+          cargo test --locked -p clumsiesd --lib credentials::
+          cargo test --locked -p clumsiesd --lib database_paths_are_literal_for_local_and_search_storage
+          cargo test --locked -p clumsiesd --lib available_space_tests::
+          cargo test --locked -p clumsiesd --lib windows_leaf::tests::
+          cargo test --locked -p clumsiesd --lib global_files_recover_and_remove_without_a_project_binding
+      - name: Test real CLI, daemon, MCP, and checked Review protocol processes
+        run: cargo test --locked -p clumsiesd --test cli_process -- --nocapture
+      - name: Cache verified pinned model artifacts
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/clumsies-cli-models
+          key: cli-models-${{ runner.os }}-${{ hashFiles('crates/clumsiesd/src/search/models.rs') }}
+      - name: Test native model preparation and successful MCP retrieval
+        env:
+          CLUMSIES_CLI_REAL_MODELS: '1'
+        run: cargo test --locked -p clumsiesd --test cli_process cli_and_mcp_complete_review_and_preserve_work_across_auth_failure -- --exact --nocapture
+      - name: Build matching distribution binaries
+        run: cargo build --locked --release -p clumsiesd --bins
+      - name: Assemble and test Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ldd target/release/clumsies | tee /tmp/cli-dependencies
+          ldd target/release/clumsiesd | tee /tmp/daemon-dependencies
+          if grep 'not found' /tmp/cli-dependencies /tmp/daemon-dependencies; then exit 1; fi
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/clumsiesd/Cargo.toml | head -1)
+          crates/clumsiesd/packaging/assemble-linux.sh "$VERSION" target/release dist
+          crates/clumsiesd/packaging/test-linux-package.sh "dist/clumsies-cli-$VERSION-linux-x86_64.tar.gz"
+      - name: Assemble and test Windows portable package and installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path crates/clumsiesd/Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          & crates/clumsiesd/packaging/assemble-windows.ps1 $version target/release dist
+          & crates/clumsiesd/packaging/test-windows-package.ps1 -Package "dist/clumsies-cli-$version-windows-x86_64.zip" -Installer (Resolve-Path "dist/clumsies-cli-$version-windows-x86_64-Setup.exe").Path
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clumsies-cli-${{ runner.os }}-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*-Setup.exe
+            dist/*.sha256
+          if-no-files-found: error

@@ -10,6 +10,8 @@ next:
 ---
 # 安装 Clumsies
 
+Windows/Linux 请按 [CLI 安装与 Review 流程](/zh/guides/cli-commands)操作，无需桌面 App 即可使用共享 daemon。以下介绍 macOS 安装。
+
 ## 下载并安装
 
 支持 **macOS 14 及以上版本、Apple Silicon Mac（M1 及更新机型）**，无需安装编译工具。

@@ -24,14 +24,19 @@ use clumsiesd::{
     DaemonProjectBindingReplaceRequest, DaemonProjectBindingResolveRequest,
     DaemonProjectCacheClearRequest, DaemonProjectCheckout, DaemonProjectCheckoutRequest,
     DaemonProjectConfigUpdateRequest, DaemonProjectSelectionRequest, DaemonProjectStorage,
-    DaemonProjectStorageMode, DaemonProjectStorageMoveState, DaemonProjectStorageReplaceRequest,
-    DaemonProjectStorageRequest, DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest,
+    DaemonProjectStorageMode, DaemonProjectStorageRequest, DaemonProjectSyncRetryRequest,
     DaemonProjectSyncStatusRequest, DaemonServerRequest, DaemonState, DaemonSyncRetryRequest,
     DaemonUpdateDraftOperation, DraftOperationSyncStatus, IDENTIFIER_NAMESPACE, LaunchAgentConfig,
     LaunchAgentController, LaunchAgentRuntimeStatus, ProjectAgentAdapterDelivery,
     ProjectAgentAdapterKind, ProjectAgentAdapterRuntimeRequirement, ServerCredentials,
     SyncRetryChannel, SyncState,
 };
+#[cfg(target_os = "macos")]
+use clumsiesd::{
+    DaemonProjectStorageMoveState, DaemonProjectStorageReplaceRequest,
+    DaemonProjectStorageResetRequest,
+};
+
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -99,6 +104,7 @@ fn directory_security_bookmark(path: &Path) -> String {
     STANDARD.encode(bookmark.to_vec())
 }
 
+#[cfg(target_os = "macos")]
 async fn wait_for_storage_move(
     state: &DaemonState,
     move_id: &str,
@@ -150,7 +156,7 @@ fn signed_runtime_binary(root: &Path) -> PathBuf {
         assert!(status.success());
         path
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         use std::os::unix::fs::PermissionsExt;
 
@@ -158,6 +164,13 @@ fn signed_runtime_binary(root: &Path) -> PathBuf {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+    #[cfg(windows)]
+    {
+        let path = root.join("bin/clumsiesd.exe");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::copy(env!("CARGO_BIN_EXE_clumsiesd"), &path).unwrap();
         path
     }
 }
