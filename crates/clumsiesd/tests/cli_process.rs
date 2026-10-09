@@ -29,6 +29,8 @@ struct Protocol {
     recover_refresh: bool,
     /// Inject a non-retryable upload error until the operator explicitly retries.
     fail_upload: bool,
+    /// Make Review reads fail after the daemon has cached an authoritative response.
+    fail_review_read: bool,
 }
 
 /// One fixture process and its independent home, daemon database, and IPC endpoint.
@@ -72,25 +74,56 @@ impl Fixture {
         }
     }
 
+    /// Runs a bounded process with file capture so inherited Windows pipes cannot hide an exit.
+    fn output(&self, command: &mut Command, input: Option<&str>) -> Output {
+        let name = uuid::Uuid::new_v4().to_string();
+        let stdout = self.root.path().join(format!("{name}.stdout"));
+        let stderr = self.root.path().join(format!("{name}.stderr"));
+        command
+            .stdin(Stdio::piped())
+            .stdout(std::fs::File::create(&stdout).unwrap())
+            .stderr(std::fs::File::create(&stderr).unwrap());
+        let mut child = command.spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        if let Some(input) = input {
+            stdin.write_all(input.as_bytes()).unwrap();
+        }
+        drop(stdin);
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut timed_out = false;
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                timed_out = true;
+                child.kill().unwrap();
+                break child.wait().unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut stderr = std::fs::read(stderr).unwrap();
+        if timed_out {
+            stderr.extend_from_slice(
+                format!(
+                    "\nProcess {:?} exceeded 90 seconds",
+                    command.get_args().collect::<Vec<_>>()
+                )
+                .as_bytes(),
+            );
+        }
+        Output {
+            status,
+            stdout: std::fs::read(stdout).unwrap(),
+            stderr,
+        }
+    }
+
     /// Runs the shipped CLI with an isolated stdin and home.
     fn cli(&self, args: &[&str], input: Option<&str>) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_clumsies"));
         isolate(&mut command, self.root.path());
-        command
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        if let Some(input) = input {
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(input.as_bytes())
-                .unwrap();
-        }
-        child.wait_with_output().unwrap()
+        self.output(command.args(args), input)
     }
 
     /// Requires a successful JSON CLI result, retaining useful failure diagnostics.
@@ -108,23 +141,17 @@ impl Fixture {
     fn mcp(&self, workspace: &Path, arguments: Value) -> Value {
         let mut command = Command::new(env!("CARGO_BIN_EXE_clumsiesd"));
         isolate(&mut command, self.root.path());
-        command
-            .current_dir(workspace)
-            .args(["mcp", "serve"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        let mut stdin = child.stdin.take().unwrap();
+        command.current_dir(workspace).args(["mcp", "serve"]);
+        let mut input = String::new();
         for message in [
             json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{"protocolVersion":"2024-11-05", "capabilities":{}, "clientInfo":{"name":"fixture","version":"1"}}}),
             json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
             json!({"jsonrpc":"2.0", "id":2, "method":"tools/call", "params":{"name":"memory", "arguments":arguments}}),
         ] {
-            writeln!(stdin, "{message}").unwrap();
+            input.push_str(&message.to_string());
+            input.push('\n');
         }
-        drop(stdin);
-        let output = child.wait_with_output().unwrap();
+        let output = self.output(&mut command, Some(&input));
         assert!(
             output.status.success(),
             "MCP failed: {}",
@@ -261,6 +288,13 @@ async fn api(
     if path == "/fixture/upload-failure" {
         protocol.fail_upload = body["enabled"] == true;
         return Json(json!({})).into_response();
+    }
+    if path == "/fixture/review-read-failure" {
+        protocol.fail_review_read = body["enabled"] == true;
+        return Json(json!({})).into_response();
+    }
+    if protocol.fail_review_read && method == "GET" && path == "/api/v1/reviews/rev_fixture" {
+        return failure(StatusCode::SERVICE_UNAVAILABLE, "review_unavailable");
     }
     if !authenticated {
         return failure(StatusCode::UNAUTHORIZED, "missing_session");
@@ -532,6 +566,33 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
         String::from_utf8_lossy(&diff.stderr)
     );
     assert!(String::from_utf8_lossy(&diff.stdout).contains("+# CLI fixture"));
+    reqwest::blocking::Client::new()
+        .post(format!("{}/fixture/review-read-failure", fixture.origin))
+        .json(&json!({"enabled": true}))
+        .send()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let stale = fixture.cli(&["review", "diff", "rev_fixture"], None);
+        assert!(
+            !stale.status.success(),
+            "An unavailable Server produced a successful diff"
+        );
+        if String::from_utf8_lossy(&stale.stderr).contains("cached response is stale") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Cached Review read did not report staleness: {}",
+            String::from_utf8_lossy(&stale.stderr)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    reqwest::blocking::Client::new()
+        .post(format!("{}/fixture/review-read-failure", fixture.origin))
+        .json(&json!({"enabled": false}))
+        .send()
+        .unwrap();
     let plan = fixture.json(&["review", "plan", "rev_fixture", "--version", "1"], None);
     let request_path = fixture.root.path().join("update.json");
     std::fs::write(&request_path, plan["request"].to_string()).unwrap();

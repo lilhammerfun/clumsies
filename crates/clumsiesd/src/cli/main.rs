@@ -703,6 +703,14 @@ fn server(
         headers,
         body: body.map(|body| body.to_string()),
     })?;
+    if response.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("x-clumsies-cache") && value.eq_ignore_ascii_case("stale")
+    }) {
+        return Err(
+            "Server unavailable; cached response is stale. Retry when the Server is reachable"
+                .into(),
+        );
+    }
     if !(200..300).contains(&response.status) {
         let envelope: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
         let code = envelope["error"]["code"].as_str().unwrap_or("server_error");
