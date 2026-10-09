@@ -55,6 +55,11 @@ try {
     if ($started.daemon_installation_id -ne $installed.daemon_installation_id) { throw 'Installer lost retained data' }
     RunCli -Arguments @('daemon', 'stop') | Out-Null
     $uninstaller = Get-ChildItem "$programs\unins*.exe" | Select-Object -First 1
+    $held = [IO.File]::Open("$runtime\clumsiesd.exe", 'Open', 'Read', 'Read')
+    try {
+        $blocked = Start-Process $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
+        if ($blocked.ExitCode -eq 0 -or -not (Test-Path "$runtime\clumsies.exe") -or -not (Test-Path "$programs\install.ps1")) { throw 'Installer uninstall partially removed programs while MCP was active' }
+    } finally { $held.Dispose() }
     $process = Start-Process $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw 'Uninstall failed' }
     if (Test-Path "$runtime\clumsies.exe") { throw 'Uninstall retained the program' }

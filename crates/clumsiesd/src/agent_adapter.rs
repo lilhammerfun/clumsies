@@ -1316,6 +1316,7 @@ fn create_staged_file_at(
     directory: &ManagedLeafDirectory,
     name: &std::ffi::CStr,
     stage_name: &std::ffi::CStr,
+    _original_name: &std::ffi::CStr,
     content: &[u8],
     mode: u32,
 ) -> Result<(), DaemonError> {
@@ -1529,6 +1530,7 @@ fn apply_journal_change_cas(
             &directory,
             &new_name,
             &stage_name,
+            &old_name,
             content,
             change.after_mode.ok_or_else(|| {
                 DaemonError::InvalidConfig("journaled file has no target mode".to_owned())
@@ -4089,11 +4091,19 @@ fn is_executable(_path: &Path) -> Result<bool, DaemonError> {
 
 #[cfg(not(unix))]
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, DaemonError> {
-    match fs::read(path) {
-        Ok(content) => Ok(Some(content)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+    use std::io::Read;
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut content = Vec::new();
+    file.take((MAX_ADAPTER_FS_CONTENT_BYTES + 1) as u64)
+        .read_to_end(&mut content)?;
+    if content.len() > MAX_ADAPTER_FS_CONTENT_BYTES {
+        return Err(adapter_conflict("Adapter leaf exceeded its content limit"));
     }
+    Ok(Some(content))
 }
 
 fn sha256_file(path: &Path) -> Result<String, DaemonError> {

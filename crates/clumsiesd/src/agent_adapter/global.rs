@@ -476,7 +476,12 @@ mod tests {
             .await
             .unwrap();
         migrate(&pool).await.unwrap();
-        let runtime = Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd");
+        let runtime_path = home.join(if cfg!(windows) {
+            "clumsiesd.exe"
+        } else {
+            "clumsiesd"
+        });
+        let runtime = runtime_path.as_path();
         fs::write(
             home.join(".claude.json"),
             br#"{"theme":"dark","mcpServers":{"other":{"command":"other"}}}"#,

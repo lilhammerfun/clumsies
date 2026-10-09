@@ -4,10 +4,20 @@ use std::ffi::CStr;
 use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
+
+use windows_sys::Win32::Foundation::{GENERIC_WRITE, LocalFree};
+use windows_sys::Win32::Security::Authorization::{
+    GetSecurityInfo, SE_FILE_OBJECT, SetSecurityInfo,
+};
+use windows_sys::Win32::Security::{
+    DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl, PROTECTED_DACL_SECURITY_INFORMATION,
+    SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
+};
 
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, WRITE_DAC,
 };
 
 use super::*;
@@ -187,6 +197,7 @@ pub(super) fn create_staged_file_at(
     directory: &ManagedLeafDirectory,
     name: &CStr,
     stage: &CStr,
+    original: &CStr,
     content: &[u8],
     mode: u32,
 ) -> Result<(), DaemonError> {
@@ -206,9 +217,24 @@ pub(super) fn create_staged_file_at(
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
+        .access_mode(GENERIC_WRITE | WRITE_DAC)
         .share_mode(0)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(directory.path(stage)?)?;
+    // Preserve a user's restrictive ACL before any existing configuration bytes reach staging.
+    let source = if file_snapshot_at(directory, original)?.content.is_some() {
+        original
+    } else {
+        &directory.target
+    };
+    if file_snapshot_at(directory, source)?.content.is_some() {
+        let source = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(directory.path(source)?)?;
+        copy_access_control(&source, &file)?;
+    }
     file.write_all(content)?;
     file.sync_all()?;
     drop(file);
@@ -227,9 +253,144 @@ pub(super) fn create_staged_file_at(
     }
 }
 
+/// Copies the original DACL and its inheritance protection onto an unpublished file.
+///
+/// # Errors
+/// Rejects inaccessible security descriptors or any failure to preserve access restrictions.
+fn copy_access_control(source: &fs::File, destination: &fs::File) -> std::io::Result<()> {
+    let mut descriptor = std::ptr::null_mut();
+    let mut acl = std::ptr::null_mut();
+    let result = unsafe {
+        GetSecurityInfo(
+            source.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut acl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::from_raw_os_error(result as i32));
+    }
+    let result = (|| {
+        let mut control = 0;
+        let mut revision = 0;
+        if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let inheritance = if control & SE_DACL_PROTECTED != 0 {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+        let result = unsafe {
+            SetSecurityInfo(
+                destination.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | inheritance,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null(),
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result as i32));
+        }
+        Ok(())
+    })();
+    unsafe {
+        LocalFree(descriptor);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads DACL bytes and optionally protects existing permissions against inheritance.
+    fn access_control(path: &Path, protect: bool) -> (Vec<u8>, bool) {
+        use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+        let file = fs::OpenOptions::new()
+            .access_mode(READ_CONTROL | WRITE_DAC)
+            .open(path)
+            .unwrap();
+        let mut descriptor = std::ptr::null_mut();
+        let mut acl = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                GetSecurityInfo(
+                    file.as_raw_handle(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut acl,
+                    std::ptr::null_mut(),
+                    &mut descriptor,
+                )
+            },
+            0
+        );
+        assert!(!acl.is_null());
+        let bytes =
+            unsafe { std::slice::from_raw_parts(acl.cast::<u8>(), (*acl).AclSize as usize) }
+                .to_vec();
+        let mut control = 0;
+        let mut revision = 0;
+        assert_ne!(
+            unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) },
+            0
+        );
+        if protect {
+            assert_eq!(
+                unsafe {
+                    SetSecurityInfo(
+                        file.as_raw_handle(),
+                        SE_FILE_OBJECT,
+                        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        acl,
+                        std::ptr::null(),
+                    )
+                },
+                0
+            );
+        }
+        unsafe {
+            LocalFree(descriptor);
+        }
+        (bytes, protect || control & SE_DACL_PROTECTED != 0)
+    }
+
+    #[test]
+    fn staged_replacement_preserves_protected_acl_after_capture_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("opencode.json");
+        fs::write(&path, b"private configuration").unwrap();
+        access_control(&path, true);
+        let expected = access_control(&path, false);
+        let directory = ManagedLeafDirectory::open(&path).unwrap();
+        let old = c"private.old";
+        rename_noreplace_at(&directory, &directory.target, old).unwrap();
+        create_staged_file_at(
+            &directory,
+            c"private.new",
+            c"private.stage",
+            old,
+            b"updated",
+            0o644,
+        )
+        .unwrap();
+        rename_noreplace_at(&directory, c"private.new", &directory.target).unwrap();
+        assert_eq!(access_control(&path, false), expected);
+        assert_eq!(fs::read(&path).unwrap(), b"updated");
+    }
 
     #[test]
     fn no_replace_publication_preserves_foreign_file_and_rebuilds_partial_stage() {
@@ -239,7 +400,7 @@ mod tests {
         let source = c"private.new";
         let stage = c"private.stage";
         fs::write(directory.path(stage).unwrap(), b"partial").unwrap();
-        create_staged_file_at(&directory, source, stage, b"owned", 0o644).unwrap();
+        create_staged_file_at(&directory, source, stage, c"private.old", b"owned", 0o644).unwrap();
         fs::write(&path, b"foreign").unwrap();
         assert!(rename_noreplace_at(&directory, source, &directory.target).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"foreign");
