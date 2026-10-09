@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -56,7 +55,8 @@ pub(crate) async fn connect_project_index(path: &Path) -> Result<SqlitePool, Dae
     if let Some(parent) = path.parent() {
         crate::project_storage::ensure_private_directory(parent)?;
     }
-    let options = SqliteConnectOptions::from_str(&path.display().to_string())?
+    let options = SqliteConnectOptions::new()
+        .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
@@ -2142,8 +2142,8 @@ mod tests {
             let legacy = SqlitePoolOptions::new()
                 .max_connections(1)
                 .connect_with(
-                    SqliteConnectOptions::from_str(&path.display().to_string())
-                        .unwrap()
+                    SqliteConnectOptions::new()
+                        .filename(&path)
                         .create_if_missing(true),
                 )
                 .await

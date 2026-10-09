@@ -58,6 +58,7 @@ jobs:
         run: |
           cargo test --locked -p clumsiesd --lib ipc::
           cargo test --locked -p clumsiesd --lib credentials::
+          cargo test --locked -p clumsiesd --lib database_paths_are_literal_for_local_and_search_storage
           cargo test --locked -p clumsiesd --lib available_space_tests::
           cargo test --locked -p clumsiesd --lib windows_leaf::tests::
           cargo test --locked -p clumsiesd --lib global_files_recover_and_remove_without_a_project_binding

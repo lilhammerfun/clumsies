@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +23,8 @@ pub(crate) fn prepare_directories(config: &DaemonConfig) -> Result<(), DaemonErr
 }
 
 pub(crate) async fn connect_local_db(path: &Path) -> Result<SqlitePool, DaemonError> {
-    let options = SqliteConnectOptions::from_str(&path.display().to_string())?
+    let options = SqliteConnectOptions::new()
+        .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
@@ -1927,6 +1927,23 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn database_paths_are_literal_for_local_and_search_storage() {
+        let root = tempfile::tempdir().unwrap();
+        // Canonical Windows paths include the extended-length prefix; percent bytes stay literal.
+        let root_path = std::fs::canonicalize(root.path()).unwrap();
+        let local_path = root_path.join("local%20data.sqlite");
+        let local = super::connect_local_db(&local_path).await.unwrap();
+        assert!(local_path.is_file());
+        local.close().await;
+        let index_path = root_path.join("index%20data.sqlite");
+        let index = crate::search::index::connect_project_index(&index_path)
+            .await
+            .unwrap();
+        assert!(index_path.is_file());
+        index.close().await;
+    }
 
     #[tokio::test]
     async fn agent_run_retirement_preserves_history_and_foreign_keys() {
