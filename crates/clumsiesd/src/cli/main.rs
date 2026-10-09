@@ -851,6 +851,9 @@ mod tests {
         assert!(
             matches!(Cli::try_parse_from(["clumsies", "project", "bind", "AgentOS"]).unwrap().command, Command::Project { action: ProjectCommand::Bind { path, .. } } if path == PathBuf::from("."))
         );
+        assert!(
+            matches!(Cli::try_parse_from(["clumsies", "project", "select", "AgentOS"]).unwrap().command, Command::Project { action: ProjectCommand::Join { id } } if id == "AgentOS")
+        );
     }
 
     #[test]
