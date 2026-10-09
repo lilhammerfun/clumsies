@@ -68,10 +68,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
-      - name: Test Windows IPC and credential vault
+      - name: Test Windows IPC, credential vault and Codex plugin
         run: |
           cargo test --locked -p clumsiesd --lib credentials::windows:: -- --nocapture
           cargo test --locked -p clumsiesd --lib ipc::platform::tests::pipe_is_exclusive_local_and_transfers_bounded_frames -- --exact --nocapture
+          cargo test --locked -p clumsiesd --lib agent_adapter::codex_plugin::
       - name: Test desktop
         run: cargo test --locked -p desktop
       - name: Build bundled client and daemon

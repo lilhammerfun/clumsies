@@ -478,12 +478,14 @@ impl SettingsDialog {
             return;
         }
         self.agents_busy = true;
-        self.agents_mutating = change.is_some();
+        // Refresh can finish a previously requested Codex installation.
+        self.agents_mutating = true;
         self.agents_error = None;
         let work = cx.background_executor().spawn(async move {
-            let changed = change
-                .map(|(adapter, enabled)| engine::configure_agent(adapter, enabled))
-                .transpose();
+            let changed = match change {
+                Some((adapter, enabled)) => engine::configure_agent(adapter, enabled),
+                None => engine::reconcile_codex_agent(),
+            };
             (
                 changed,
                 engine::agent_settings(),

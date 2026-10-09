@@ -410,6 +410,8 @@ async fn command_output(
     timeout_code: &'static str,
     timeout_message: &'static str,
 ) -> Result<std::process::Output, DaemonError> {
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     command.kill_on_drop(true);
     Ok(tokio::time::timeout(timeout, command.output())
         .await
@@ -510,8 +512,35 @@ async fn verify_codex_cli(_path: &Path) -> Result<(), DaemonError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::super::shell_single_quote;
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn cli_commands_do_not_attach_a_console() {
+        const CHILD: &str = "CLUMSIES_TEST_CODEX_NO_CONSOLE";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() }.is_null());
+            return;
+        }
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "agent_adapter::codex_plugin::tests::cli_commands_do_not_attach_a_console",
+            ])
+            .env(CHILD, "1");
+        let output = command_output(command, CLI_TIMEOUT, "test_timeout", "child timed out")
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

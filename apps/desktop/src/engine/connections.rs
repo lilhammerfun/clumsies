@@ -1,4 +1,5 @@
 //! Local setup uses the same daemon-owned bindings and host adapters as macOS.
+use super::codex_host::codex_binary;
 use super::*;
 use clumsiesd::{
     DaemonAgentAdapterSettings, DaemonProjectAgentAdapterListRequest,
@@ -94,16 +95,6 @@ pub fn agent_runtime() -> Result<PathBuf, String> {
     std::fs::canonicalize(path).map_err(|e| e.to_string())
 }
 
-fn codex_binary() -> Option<String> {
-    let name = if cfg!(windows) { "codex.exe" } else { "codex" };
-    std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .map(|path| path.join(name))
-        .find(|path| path.is_file())
-        .map(|path| path.to_string_lossy().into_owned())
-}
-
 pub fn isolated_connections() -> bool {
     std::env::var_os("CLUMSIES_DAEMON_ROOT").is_some_and(|root| {
         Path::new(&root)
@@ -165,6 +156,37 @@ pub fn codex_plugin_status() -> Result<clumsiesd::DaemonCodexPluginStatus, Strin
         .map_err(|e| e.to_string())
 }
 
+/// Finish a previously requested installation when Settings is opened or retried.
+pub fn reconcile_codex_agent() -> Result<(), String> {
+    if isolated_connections() {
+        return Ok(());
+    }
+    let settings = agent_settings()?;
+    reconcile_codex(
+        settings
+            .items
+            .iter()
+            .find(|setting| setting.adapter == ProjectAgentAdapterKind::Codex),
+        codex_plugin_status,
+        || configure_agent(ProjectAgentAdapterKind::Codex, true),
+    )
+}
+
+fn reconcile_codex(
+    setting: Option<&clumsiesd::DaemonAgentAdapterSetting>,
+    inspect: impl FnOnce() -> Result<clumsiesd::DaemonCodexPluginStatus, String>,
+    install: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    // Codex is selected by default; that alone is not an installation request.
+    if setting.is_some_and(|setting| setting.configured && setting.enabled) {
+        let status = inspect()?;
+        if status.host_installed && !status.ready {
+            install()?;
+        }
+    }
+    Ok(())
+}
+
 /// Portable stdio configuration for clients without a managed adapter.
 #[cfg(test)]
 fn mcp_configuration() -> Result<String, String> {
@@ -180,6 +202,89 @@ fn mcp_configuration() -> Result<String, String> {
 mod tests {
     use super::*;
     use clumsiesd::DaemonProjectBindingResolveRequest;
+
+    fn codex_setting() -> clumsiesd::DaemonAgentAdapterSetting {
+        clumsiesd::DaemonAgentAdapterSetting {
+            adapter: ProjectAgentAdapterKind::Codex,
+            configured: true,
+            enabled: true,
+            installed: false,
+            legacy_repositories: 0,
+        }
+    }
+
+    fn pending_codex() -> clumsiesd::DaemonCodexPluginStatus {
+        clumsiesd::DaemonCodexPluginStatus {
+            host_installed: true,
+            marketplace_installed: false,
+            marketplace_conflict: false,
+            plugin_installed: false,
+            plugin_enabled: false,
+            installed_version: None,
+            expected_version: "test-version".into(),
+            ready: false,
+        }
+    }
+
+    #[test]
+    fn enabled_codex_finishes_installation_when_the_host_becomes_available() {
+        let mut installed = false;
+        reconcile_codex(
+            Some(&codex_setting()),
+            || Ok(pending_codex()),
+            || {
+                installed = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(
+            installed,
+            "a saved preference must not stay pending forever"
+        );
+    }
+
+    #[test]
+    fn reconciliation_preserves_opt_out_and_does_not_treat_the_default_as_consent() {
+        let mut disabled = codex_setting();
+        disabled.enabled = false;
+        let mut unconfigured = codex_setting();
+        unconfigured.configured = false;
+        for setting in [None, Some(&disabled), Some(&unconfigured)] {
+            reconcile_codex(
+                setting,
+                || panic!("must not launch Codex"),
+                || panic!("must not install"),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn reconciliation_waits_for_codex_and_leaves_a_ready_plugin_alone() {
+        let mut absent = pending_codex();
+        absent.host_installed = false;
+        let mut ready = pending_codex();
+        ready.ready = true;
+        for status in [absent, ready] {
+            reconcile_codex(
+                Some(&codex_setting()),
+                || Ok(status),
+                || panic!("must not reinstall"),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn reconciliation_returns_installation_errors_for_retry() {
+        let result = reconcile_codex(
+            Some(&codex_setting()),
+            || Ok(pending_codex()),
+            || Err("installation failed".into()),
+        );
+        assert_eq!(result, Err("installation failed".into()));
+    }
 
     #[test]
     #[ignore]

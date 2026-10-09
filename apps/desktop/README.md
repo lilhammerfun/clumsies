@@ -157,7 +157,10 @@ Permission-denied accounts and native Windows interaction still need platform te
 3. Open the account menu → **Settings → Agents**, enable your tool, then
    start a new AI session in the linked folder. Connections are shared across
    the machine's linked projects. Codex uses the existing managed plugin
-   installer and requires its CLI on PATH; other Linux adapters use their
+   installer. Windows locates the registered Codex desktop app and its bundled
+   CLI, falling back to PATH; Linux requires the CLI on PATH. Opening Settings
+   or retrying a failed refresh completes a pending Codex installation only
+   when the integration was explicitly enabled. Other Linux adapters use their
    existing daemon-managed configuration.
 4. **Unlink** in project settings removes the folder routing. Disabling the agent in **Settings → Agents** removes the managed
    tool integration. The daemon preserves unrelated user configuration and

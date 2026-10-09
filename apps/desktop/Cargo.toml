@@ -38,6 +38,8 @@ tempfile = "3.27.0"
 [target.'cfg(windows)'.dependencies]
 # Pass browser URLs as data and suppress launcher console windows.
 open = "5.4.4"
+# Find the Codex desktop app even when its bundled CLI is not on PATH.
+windows = { version = "0.62.2", features = ["ApplicationModel", "Management_Deployment", "Storage"] }
 
 # Explorer, the taskbar and every shortcut take a Windows program's icon from a
 # resource inside the executable, so the client needs a resource compiler on

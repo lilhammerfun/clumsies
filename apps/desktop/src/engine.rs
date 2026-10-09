@@ -9,6 +9,7 @@ mod diagnostics;
 pub use diagnostics::*;
 mod connections;
 pub use connections::*;
+mod codex_host;
 mod memory;
 pub use memory::*;
 
