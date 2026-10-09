@@ -16,8 +16,21 @@ $switched = $false
 function AssertRuntimeUnused {
     if (Test-Path $runtime) {
         foreach ($name in @('clumsies.exe', 'clumsiesd.exe')) {
-            try { $probe = [IO.File]::Open((Join-Path $runtime $name), 'Open', 'ReadWrite', 'None'); $probe.Dispose() }
-            catch { throw "Close active CLI/MCP processes before changing programs; $name is still in use" }
+            # Root-lock release precedes final Windows image/antivirus handle teardown.
+            $deadline = [DateTime]::UtcNow.AddSeconds(15)
+            while ($true) {
+                try {
+                    $probe = [IO.File]::Open((Join-Path $runtime $name), 'Open', 'ReadWrite', 'None')
+                    $probe.Dispose()
+                    break
+                } catch {
+                    $cause = $_.Exception
+                    while ($cause.InnerException) { $cause = $cause.InnerException }
+                    if (($cause.HResult -band 0xffff) -notin @(32, 33)) { throw }
+                    if ([DateTime]::UtcNow -ge $deadline) { throw "Close active CLI/MCP processes before changing programs; $name is still in use" }
+                    Start-Sleep -Milliseconds 100
+                }
+            }
         }
     }
 }

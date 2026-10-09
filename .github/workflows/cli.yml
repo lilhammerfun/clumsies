@@ -32,6 +32,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+      - name: Test Windows executable release barrier
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& crates/clumsiesd/packaging/test-windows-runtime-unused.ps1'
       - name: Configure isolated model cache
         shell: bash
         run: echo "CLUMSIES_MODEL_TEST_CACHE=$RUNNER_TEMP/clumsies-cli-models" >> "$GITHUB_ENV"
