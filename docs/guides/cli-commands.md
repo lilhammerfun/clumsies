@@ -63,14 +63,37 @@ clumsies project current
 
 ## Connect an account and repository
 
-Use your configured Server origin. Remote origins require HTTPS; loopback HTTP is allowed for local development. Tokens and passwords are never command-line arguments or CLI output.
+Use your configured Server origin. **An administrator must invite new users first; the CLI does not offer open registration.** Choose the path matching your invitation. Remote origins require HTTPS; loopback HTTP is allowed for local development. Tokens and passwords are never command-line arguments or CLI output.
+
+### Invited through your Google email
 
 ```sh
-# Browser OIDC login; print the URL with --no-browser when automatic opening is unavailable.
 clumsies login --server https://app.clumsies.ai
-# Deployment-enabled local password login prompts without echo.
-clumsies login --server https://app.clumsies.ai --username owner
-# Automation may use --password-stdin instead of a terminal prompt.
+```
+
+In the browser, choose **the Google account whose email was invited** (other deployments use their configured identity provider). The Server checks membership and completes first-time activation and sign-in. An uninvited email does not automatically join the organization. Use `--no-browser` when automatic browser opening is unavailable.
+
+### No Google account: accept an invitation code
+
+After an administrator gives you a one-time invitation code, run this for first-time activation:
+
+```sh
+clumsies redeem --server https://app.clumsies.ai --username myname
+```
+
+Replace `myname` with your chosen username. Enter **the invitation code and a new password** at the hidden prompts. Success activates the account and **also signs the CLI in; do not run `login` again**.
+
+For subsequent sign-ins with an existing password account, use:
+
+```sh
+clumsies login --server https://app.clumsies.ai --username myname
+```
+
+Enter your password at the prompt; automation may use `--password-stdin`. Password login does not register an account with an unredeemed invitation.
+
+### After either path succeeds: select a Project and bind its directory
+
+```sh
 clumsies project list
 clumsies project join prj_example
 clumsies project bind prj_example /absolute/path/to/repository
@@ -84,7 +107,7 @@ On Windows, `agent enable codex` discovers the registered Codex App before PATH;
 
 `project join` selects a Project **after the Server confirms membership**. It does not grant membership: an administrator must first admit the account to that Project. `project create NAME` uses existing Server permissions. Directory bindings are separate from selection; Agent requests resolve their working directory and never fall back to an unrelated selected Project. Worktrees inherit the repository binding according to the existing daemon rules.
 
-For password invitations, use `clumsies redeem --server ORIGIN --username NAME`; for password resets, use `clumsies redeem --server ORIGIN --reset-password`. Both prompt for the one-time token and new password. `--stdin` instead accepts a JSON object containing `token` and `password`; keep that input private.
+For password resets, use `clumsies redeem --server ORIGIN --reset-password`. It prompts for the one-time token and new password. Invitation acceptance and password reset also support `--stdin` with a JSON object containing `token` and `password`; keep that input private.
 
 Browser login uses the existing loopback PKCE callback and a five-minute callback wait. On a remote/headless host, use password login when the deployment enables it, or `--no-browser` with the printed callback port forwarded to the machine running the browser. There is no new device-code authentication endpoint. The Server must already be configured.
 

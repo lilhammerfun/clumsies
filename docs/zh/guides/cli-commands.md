@@ -63,14 +63,37 @@ clumsies project current
 
 ## 登录与目录绑定
 
-使用已配置完成的 Server。远程地址必须为 HTTPS，本机开发允许 loopback HTTP。密码和 Token 不放在命令参数中，也不输出到 CLI 结果。
+使用已配置完成的 Server。**新用户必须先由管理员邀请；CLI 不提供开放注册。** 根据邀请方式选择下面一条路径。远程地址必须为 HTTPS，本机开发允许 loopback HTTP。密码和 Token 不放在命令参数中，也不输出到 CLI 结果。
+
+### 已通过 Google 邮箱被邀请
 
 ```sh
-# 浏览器 OIDC 登录；无法自动打开浏览器时加 --no-browser。
 clumsies login --server https://app.clumsies.ai
-# 部署启用密码登录时，隐藏输入密码。
-clumsies login --server https://app.clumsies.ai --username owner
-# 自动化可用 --password-stdin 从标准输入读取密码。
+```
+
+在浏览器中选择**被邀请的那个 Google 账号**（其他部署使用其配置的单点登录服务）。服务器确认成员资格后，完成首次激活和登录；未被邀请的邮箱不能自动加入组织。无法自动打开浏览器时加 `--no-browser`。
+
+### 没有 Google 账号，使用邀请码
+
+管理员提供一次性邀请码后，首次执行：
+
+```sh
+clumsies redeem --server https://app.clumsies.ai --username myname
+```
+
+将 `myname` 换成你要设置的用户名，按提示输入**邀请码和新密码**。成功后账号已激活，CLI **也已登录，无需再执行 `login`**。
+
+以后登录已有的密码账号时执行：
+
+```sh
+clumsies login --server https://app.clumsies.ai --username myname
+```
+
+按提示输入密码；自动化可用 `--password-stdin` 从标准输入读取密码。未兑换的邀请不能直接通过密码登录完成注册。
+
+### 两条路径登录成功后：选择项目并绑定目录
+
+```sh
 clumsies project list
 clumsies project join prj_example
 clumsies project bind prj_example /absolute/path/to/repository
@@ -83,7 +106,7 @@ Windows 上，`agent enable codex` 优先发现已注册的 Codex App，再查�
 
 `project join` 在服务器确认成员权限后选择项目，不会授予成员权限；管理员需要先将账号加入该项目。`project create NAME` 按现有服务器权限创建项目。选择项目与绑定目录是两件事：Agent 根据工作目录解析绑定，不会回退到无关的当前项目。Git worktree 按 daemon 现有规则继承仓库绑定。
 
-密码邀请使用 `clumsies redeem --server ORIGIN --username NAME`；密码重置使用 `clumsies redeem --server ORIGIN --reset-password`。命令隐藏输入一次性 Token 和新密码；`--stdin` 可读取含 `token`、`password` 的 JSON 对象，请保护这份输入。
+密码重置使用 `clumsies redeem --server ORIGIN --reset-password`。命令隐藏输入一次性 Token 和新密码；邀请兑换或密码重置也可用 `--stdin` 读取含 `token`、`password` 的 JSON 对象，请保护这份输入。
 
 浏览器登录复用现有 PKCE 与 loopback 回调，回调等待上限为五分钟。远程或无浏览器主机可使用部署已启用的密码登录，或通过 `--no-browser` 显示 URL，并将回调端口转发到浏览器所在机器。没有新增 device-code 登录协议。
 
