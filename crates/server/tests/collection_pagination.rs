@@ -84,6 +84,7 @@ async fn collections_continue_with_tied_timestamps_and_validate_page_inputs() {
     .await;
     let (app, _) = common::authenticated_router(pg.pool.clone()).await;
     let mut project = String::new();
+    let mut review = Value::Null;
     for n in 0..3 {
         let p = post(
             &app,
@@ -98,8 +99,33 @@ async fn collections_continue_with_tied_timestamps_and_validate_page_inputs() {
             "resource":{"scope":"org","path":format!("page-{n}.md")},
             "operations":[{"action":"create","resource":{"scope":"org","path":format!("page-{n}.md")},"content":{"content":"pagination"}}]
         })).await;
-        post(&app, "/api/v1/reviews", json!({"drafts":[{"draft_id":draft["draft"]["draft_id"],"expected_draft_version":draft["draft"]["version"]}]})).await;
+        review = post(&app, "/api/v1/reviews", json!({"drafts":[{"draft_id":draft["draft"]["draft_id"],"expected_draft_version":draft["draft"]["version"]}]})).await;
     }
+    let review_id = review["review"]["review_id"].as_str().unwrap();
+    for n in 0..3 {
+        post(&app, &format!("/api/v1/reviews/{review_id}/comments"), json!({"body":format!("Comment {n}"), "expected_review_version":review["review"]["version"]})).await;
+    }
+    // Seed a discussion beyond the old 200-row cap without repeating the authoring scenario.
+    sqlx::query("INSERT INTO review_comments (comment_id, review_id, author_user_id, body, review_version, created_at) SELECT 'pagination-comment-' || n, c.review_id, c.author_user_id, 'Seeded comment', c.review_version, c.created_at FROM (SELECT * FROM review_comments LIMIT 1) c CROSS JOIN generate_series(1, 201) n").execute(&pg.pool).await.unwrap();
+    sqlx::query("UPDATE review_comments SET created_at = '2026-01-01T00:00:00Z'")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    pages(
+        &app,
+        &format!("/api/v1/reviews/{review_id}/comments"),
+        "comment_id",
+        204,
+    )
+    .await;
+    let (_, detail) = request(
+        &app,
+        "GET",
+        &format!("/api/v1/reviews/{review_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(detail["comments"].as_array().unwrap().len(), 204);
     for table in ["projects", "reviews"] {
         sqlx::query(&format!(
             "UPDATE {table} SET updated_at = '2026-01-01T00:00:00Z'"

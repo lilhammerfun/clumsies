@@ -26,6 +26,14 @@ pub(super) enum ReviewCommand {
         /// Review identifier.
         id: String,
     },
+    /// List review discussion with explicit pagination.
+    Comments {
+        /// Review identifier.
+        id: String,
+        /// Page size and traversal controls.
+        #[command(flatten)]
+        page: PageArgs,
+    },
     /// Print unified differences against each proposal's immutable base snapshot.
     Diff {
         /// Review identifier.
@@ -127,6 +135,12 @@ pub(super) fn run(
             })?)
         }
         ReviewCommand::Show { id } => print_json(&detail(client, &id)?),
+        ReviewCommand::Comments { id, page } => {
+            let path = format!("/api/v1/reviews/{}/comments", identifier(&id)?);
+            print_json(&pagination::collect(&page, |cursor| {
+                server(client, "GET", &page.path(&path, cursor), None, None)
+            })?)
+        }
         ReviewCommand::Diff { id } => diff(client, detail(client, &id)?),
         ReviewCommand::Create {
             drafts,

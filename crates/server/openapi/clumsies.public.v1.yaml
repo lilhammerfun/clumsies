@@ -989,7 +989,13 @@ paths:
       operationId: listReviewComments
       summary: List review comments.
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 200
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":

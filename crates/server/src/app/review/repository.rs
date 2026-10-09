@@ -335,6 +335,8 @@ pub(crate) fn review_from_row(
 pub(crate) async fn load_review_comments(
     tx: &mut Transaction<'_, Postgres>,
     review_id: &str,
+    offset: i64,
+    limit: Option<i64>,
 ) -> Result<Vec<ReviewComment>, ServerError> {
     let rows = sqlx::query(
         "SELECT
@@ -345,9 +347,11 @@ pub(crate) async fn load_review_comments(
          JOIN users u ON u.user_id = c.author_user_id
          WHERE c.review_id = $1
          ORDER BY c.created_at, c.comment_id
-         LIMIT 200",
+         LIMIT $2 OFFSET $3",
     )
     .bind(review_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&mut **tx)
     .await?;
 

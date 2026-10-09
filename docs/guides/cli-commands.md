@@ -36,18 +36,19 @@ On macOS, the App embeds `Contents/Resources/clumsies`. Run that executable, or 
 
 ## List pages and select projects
 
-`project list`, `review list PROJECT`, and `draft list` share `--limit` (1–200, default 100), `--cursor`, and `--all`. By default each command returns one page. Pass the returned opaque cursor unchanged to continue; `--all` starts at the beginning and combines all pages. It cannot be combined with `--cursor`. Any failed page or repeated cursor fails the command without printing a partial collection. JSON remains the output format.
+`project list`, `review list PROJECT`, `review comments REVIEW_ID`, and `draft list` share `--limit` (1–200, default 100), `--cursor`, and `--all`. By default each command returns one page. Pass the returned opaque cursor unchanged to continue; `--all` starts at the beginning and combines all pages. It cannot be combined with `--cursor`. Any failed page or repeated cursor fails the command without printing a partial collection. JSON remains the output format.
 
 ```sh
 clumsies project list --limit 20
 clumsies project list --limit 20 --cursor 'CURSOR_FROM_PAGE_INFO'
 clumsies project list --all
 clumsies review list AgentOS --all
+clumsies review comments REVIEW_ID --all
 clumsies draft list --status open --limit 20
 clumsies draft list --cursor 'CURSOR_FROM_NEXT_CURSOR'
 ```
 
-Server lists return `page_info.next_cursor` and `page_info.has_more`; local Drafts return top-level `next_cursor`. A null cursor marks the end. Project and Review paging requires a Server containing this change; older Servers ignore these parameters and can truncate results at 200. Server pages use offsets with stable ID tie-breaking; concurrent mutations can move records between pages, so restart the listing after changes rather than treating it as a snapshot. `--all` holds the combined result in memory.
+Server lists return `page_info.next_cursor` and `page_info.has_more`; local Drafts return top-level `next_cursor`. A null cursor marks the end. Project, Review, and discussion paging requires a Server containing this change; older Servers ignore these parameters and can truncate results at 200. Server pages use offsets with stable ID tie-breaking; concurrent mutations can move records between pages, so restart the listing after changes rather than treating it as a snapshot. `--all` holds the combined result in memory.
 
 Project `show`, `join`, `bind`, `bindings`, and `review list` accept a Project ID or unique case-insensitive name. Names are resolved across all accessible pages; unknown or ambiguous names fail without changing state. IDs are preferred for automation. `join` (also available as `select`) only selects a project; it does not bind a directory.
 
