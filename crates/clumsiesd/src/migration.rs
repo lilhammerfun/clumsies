@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +23,8 @@ pub(crate) fn prepare_directories(config: &DaemonConfig) -> Result<(), DaemonErr
 }
 
 pub(crate) async fn connect_local_db(path: &Path) -> Result<SqlitePool, DaemonError> {
-    let options = SqliteConnectOptions::from_str(&path.display().to_string())?
+    let options = SqliteConnectOptions::new()
+        .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
@@ -1927,6 +1927,35 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn sqlite_file_paths_open_the_requested_local_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        #[cfg(windows)]
+        assert!(root.to_str().unwrap().starts_with(r"\\?\"));
+        for name in ["local.db", "local %25 +# 记忆.db"] {
+            let path = root.join(name);
+            let pool = connect_local_db(&path).await.unwrap();
+            sqlx::query("CREATE TABLE path_probe (value TEXT NOT NULL)")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO path_probe VALUES ('preserved')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+            assert!(path.is_file(), "database was not created at {path:?}");
+            let reopened = connect_local_db(&path).await.unwrap();
+            let value: String = sqlx::query_scalar("SELECT value FROM path_probe")
+                .fetch_one(&reopened)
+                .await
+                .unwrap();
+            assert_eq!(value, "preserved");
+            reopened.close().await;
+        }
+    }
 
     #[tokio::test]
     async fn agent_run_retirement_preserves_history_and_foreign_keys() {

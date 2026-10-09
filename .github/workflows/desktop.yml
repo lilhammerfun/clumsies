@@ -73,6 +73,11 @@ jobs:
           cargo test --locked -p clumsiesd --lib credentials::windows:: -- --nocapture
           cargo test --locked -p clumsiesd --lib ipc::platform::tests::pipe_is_exclusive_local_and_transfers_bounded_frames -- --exact --nocapture
           cargo test --locked -p clumsiesd --lib agent_adapter::codex_plugin::
+      - name: Test Windows database paths and memory retrieval
+        run: |
+          cargo test --locked -p clumsiesd --lib sqlite_file_paths_
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p clumsiesd --lib search::tests::commit_activate_load_and_draft_delta_form_one_effective_memory_loop -- --exact
       - name: Test desktop
         run: cargo test --locked -p desktop
       - name: Build bundled client and daemon

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -56,7 +55,9 @@ pub(crate) async fn connect_project_index(path: &Path) -> Result<SqlitePool, Dae
     if let Some(parent) = path.parent() {
         crate::project_storage::ensure_private_directory(parent)?;
     }
-    let options = SqliteConnectOptions::from_str(&path.display().to_string())?
+    // Canonical Windows paths contain `?`; they are filenames, not SQLite URLs.
+    let options = SqliteConnectOptions::new()
+        .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
@@ -1326,6 +1327,32 @@ mod tests {
     use super::*;
     use crate::{CredentialStore, CredentialStoreError, DaemonState, ServerCredentials};
 
+    #[tokio::test]
+    async fn sqlite_file_paths_open_the_requested_project_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        #[cfg(windows)]
+        assert!(root.to_str().unwrap().starts_with(r"\\?\"));
+        for name in ["index.sqlite", "index %25 +# 记忆.sqlite"] {
+            let path = root.join(name);
+            let pool = connect_project_index(&path).await.unwrap();
+            sqlx::query("INSERT INTO search_meta (key, value) VALUES ('path_probe', 'preserved')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+            assert!(path.is_file(), "index was not created at {path:?}");
+            let reopened = connect_project_index(&path).await.unwrap();
+            let value: String =
+                sqlx::query_scalar("SELECT value FROM search_meta WHERE key = 'path_probe'")
+                    .fetch_one(&reopened)
+                    .await
+                    .unwrap();
+            assert_eq!(value, "preserved");
+            reopened.close().await;
+        }
+    }
+
     struct NoCredentials;
 
     impl CredentialStore for NoCredentials {
@@ -2142,8 +2169,8 @@ mod tests {
             let legacy = SqlitePoolOptions::new()
                 .max_connections(1)
                 .connect_with(
-                    SqliteConnectOptions::from_str(&path.display().to_string())
-                        .unwrap()
+                    SqliteConnectOptions::new()
+                        .filename(&path)
                         .create_if_missing(true),
                 )
                 .await
