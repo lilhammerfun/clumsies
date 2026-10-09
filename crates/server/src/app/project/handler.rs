@@ -275,8 +275,13 @@ pub(super) async fn create_project(
 pub(super) async fn list_projects(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
+    Query(mut query): Query<AdminPageQuery>,
 ) -> Result<Json<dto::ProjectListResponse>, HttpError> {
-    Ok(Json(service::list_projects(&state.pool, &principal).await?))
+    query.limit.get_or_insert_with(|| "200".to_owned());
+    let page = parse_admin_page(query)?;
+    Ok(Json(
+        service::list_projects(&state.pool, &principal, page.offset, page.limit).await?,
+    ))
 }
 
 /// Return public project metadata after enforcing explicit membership.

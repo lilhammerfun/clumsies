@@ -7,7 +7,7 @@ use crate::app::draft::model::aggregate_draft_coordination;
 use crate::app::organization::dto::UserRef;
 use crate::app::review::dto::{Review, ReviewComment, ReviewDraftDetail, ReviewListResponse};
 use crate::error::ServerError;
-use crate::pagination::page_info;
+use crate::pagination::admin_page;
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
 use std::collections::BTreeMap;
 
@@ -335,6 +335,8 @@ pub(crate) fn review_from_row(
 pub(crate) async fn load_review_comments(
     tx: &mut Transaction<'_, Postgres>,
     review_id: &str,
+    offset: i64,
+    limit: Option<i64>,
 ) -> Result<Vec<ReviewComment>, ServerError> {
     let rows = sqlx::query(
         "SELECT
@@ -345,9 +347,11 @@ pub(crate) async fn load_review_comments(
          JOIN users u ON u.user_id = c.author_user_id
          WHERE c.review_id = $1
          ORDER BY c.created_at, c.comment_id
-         LIMIT 200",
+         LIMIT $2 OFFSET $3",
     )
     .bind(review_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&mut **tx)
     .await?;
 
@@ -421,6 +425,8 @@ pub(crate) async fn list_reviews(
     tx: &mut Transaction<'_, Postgres>,
     principal: &AuthPrincipal,
     project_id: Option<&str>,
+    offset: i64,
+    limit: i64,
 ) -> Result<ReviewListResponse, ServerError> {
     let rows = if let Some(project_id) = project_id {
         sqlx::query(
@@ -443,11 +449,13 @@ pub(crate) async fn list_reviews(
              JOIN project_members m ON m.project_id = p.project_id
              WHERE r.project_id = $1 AND p.org_id = $2 AND m.user_id = $3
              ORDER BY r.updated_at DESC, r.review_id
-             LIMIT 200",
+             LIMIT $4 OFFSET $5",
         )
         .bind(project_id)
         .bind(&principal.org_id)
         .bind(&principal.user_id)
+        .bind(limit + 1)
+        .bind(offset)
         .fetch_all(&mut **tx)
         .await?
     } else {
@@ -471,10 +479,12 @@ pub(crate) async fn list_reviews(
              JOIN project_members m ON m.project_id = p.project_id
              WHERE p.org_id = $1 AND m.user_id = $2
              ORDER BY r.updated_at DESC, r.review_id
-             LIMIT 200",
+             LIMIT $3 OFFSET $4",
         )
         .bind(&principal.org_id)
         .bind(&principal.user_id)
+        .bind(limit + 1)
+        .bind(offset)
         .fetch_all(&mut **tx)
         .await?
     };
@@ -495,10 +505,8 @@ pub(crate) async fn list_reviews(
             aggregate_draft_coordination(&coordinations),
         )?);
     }
-    Ok(ReviewListResponse {
-        items,
-        page_info: page_info(),
-    })
+    let (items, page_info) = admin_page(items, offset, limit);
+    Ok(ReviewListResponse { items, page_info })
 }
 
 /// Lock the current approved content fingerprint, distinguishing no approval from an absent hash.

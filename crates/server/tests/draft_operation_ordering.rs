@@ -177,7 +177,7 @@ async fn multi_draft_review_merges_every_file_in_one_commit() {
     .await;
     let reviews = tokio::time::timeout(
         Duration::from_secs(3),
-        server::app::review::list_reviews(&pool, &principal, Some(&bootstrap.project_id)),
+        server::app::review::list_reviews(&pool, &principal, Some(&bootstrap.project_id), 0, 200),
     )
     .await;
     blob_lock.rollback().await.unwrap();

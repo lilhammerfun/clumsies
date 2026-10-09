@@ -93,10 +93,19 @@ pub(super) async fn create_review(
 pub(super) async fn list_reviews(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
-    Query(query): Query<ListReviewsQuery>,
+    Query(mut query): Query<ListReviewsQuery>,
 ) -> Result<Json<dto::ReviewListResponse>, HttpError> {
+    query.page.limit.get_or_insert_with(|| "200".to_owned());
+    let page = crate::pagination::parse_admin_page(query.page)?;
     Ok(Json(
-        service::list_reviews(&state.pool, &principal, query.project_id.as_deref()).await?,
+        service::list_reviews(
+            &state.pool,
+            &principal,
+            query.project_id.as_deref(),
+            page.offset,
+            page.limit,
+        )
+        .await?,
     ))
 }
 
@@ -124,9 +133,13 @@ pub(super) async fn list_review_comments(
     State(state): State<AppState>,
     Extension(principal): Extension<AuthPrincipal>,
     Path(review_id): Path<String>,
+    Query(mut query): Query<crate::pagination::AdminPageQuery>,
 ) -> Result<Json<dto::ReviewCommentListResponse>, HttpError> {
+    query.limit.get_or_insert_with(|| "200".to_owned());
+    let page = crate::pagination::parse_admin_page(query)?;
     Ok(Json(
-        service::list_review_comments(&state.pool, &principal, &review_id).await?,
+        service::list_review_comments(&state.pool, &principal, &review_id, page.offset, page.limit)
+            .await?,
     ))
 }
 

@@ -323,9 +323,11 @@ pub async fn list_reviews(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     project_id: Option<&str>,
+    offset: i64,
+    limit: i64,
 ) -> Result<ReviewListResponse, ServerError> {
     let mut tx = pool.begin().await?;
-    let response = repository::list_reviews(&mut tx, principal, project_id).await?;
+    let response = repository::list_reviews(&mut tx, principal, project_id, offset, limit).await?;
     tx.commit().await?;
     Ok(response)
 }
@@ -375,17 +377,17 @@ pub async fn list_review_comments(
     pool: &sqlx::PgPool,
     principal: &AuthPrincipal,
     review_id: &str,
+    offset: i64,
+    limit: i64,
 ) -> Result<ReviewCommentListResponse, ServerError> {
     ensure_review_member(pool, principal, review_id).await?;
 
     let mut tx = pool.begin().await?;
     repository::ensure_review_exists(&mut tx, review_id).await?;
-    let comments = load_review_comments(&mut tx, review_id).await?;
+    let comments = load_review_comments(&mut tx, review_id, offset, Some(limit + 1)).await?;
     tx.commit().await?;
-    Ok(ReviewCommentListResponse {
-        items: comments,
-        page_info: crate::pagination::page_info(),
-    })
+    let (items, page_info) = crate::pagination::admin_page(comments, offset, limit);
+    Ok(ReviewCommentListResponse { items, page_info })
 }
 
 /// Validate access, expected revision, and final-content anchors before persisting discussion.
@@ -584,7 +586,7 @@ pub(crate) async fn load_review_detail(
         .first()
         .cloned()
         .ok_or_else(|| ServerError::InvalidRequest("a review must contain a draft".to_owned()))?;
-    let comments = load_review_comments(tx, review_id).await?;
+    let comments = load_review_comments(tx, review_id, 0, None).await?;
     Ok(ReviewDetail {
         review,
         draft: primary.draft,
@@ -822,7 +824,7 @@ pub(crate) async fn create_review_comment_in_tx(
         },
     )
     .await?;
-    let comments = load_review_comments(tx, review_id).await?;
+    let comments = load_review_comments(tx, review_id, 0, None).await?;
     let comment = comments
         .into_iter()
         .find(|comment| comment.comment_id == comment_id)
