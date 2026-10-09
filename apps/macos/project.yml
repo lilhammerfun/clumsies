@@ -108,11 +108,12 @@ targets:
       - package: MarkdownUI
       - package: Sparkle
     postBuildScripts:
-      - name: Embed clumsiesd
+      - name: Embed Clumsies runtime and CLI
         path: Scripts/embed-daemon.sh
         basedOnDependencyAnalysis: false
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/clumsiesd
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/clumsies
   ClumsiesTests:
     type: bundle.unit-test
     platform: macOS

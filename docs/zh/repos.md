@@ -23,7 +23,7 @@ Rust workspace 有两个成员：`crates/server` 和 `crates/clumsiesd`。Swift 
 | `dev/`、`apps/macos/Scripts/` | 本地开发与构建工具 | 想运行隔离开发环境 |
 | `docs/`、`docs/zh/` | 英文与中文文档 | 想改进文档站 |
 
-当前没有活跃的 `src/client/` 独立客户端目录。历史 CLI 内容见[归档页](/zh/guides/cli-commands)。
+当前没有活跃的 `src/client/` 独立客户端目录。新的 Rust CLI 与 daemon 共用 `crates/clumsiesd`，见 [CLI 命令](/zh/guides/cli-commands)。历史 Zig CLI 仍然归档。
 
 ## 沿一条操作读，不必通读所有文件
 

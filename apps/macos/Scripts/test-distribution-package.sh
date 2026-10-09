@@ -28,11 +28,15 @@ mounted=1
 test "$(readlink "$mountpoint/Applications")" = /Applications
 codesign --verify --deep --strict "$mountpoint/Clumsies.app"
 codesign --verify --strict "$mountpoint/Clumsies.app/Contents/Resources/clumsiesd"
+codesign --verify --strict "$mountpoint/Clumsies.app/Contents/Resources/clumsies"
 test "$(codesign -dvv "$mountpoint/Clumsies.app/Contents/Resources/clumsiesd" 2>&1 | sed -n 's/^Identifier=//p')" = ai.clumsies.daemon
+test "$(codesign -dvv "$mountpoint/Clumsies.app/Contents/Resources/clumsies" 2>&1 | sed -n 's/^Identifier=//p')" = ai.clumsies.cli
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$mountpoint/Clumsies.app/Contents/Info.plist")" = ai.clumsies.desktop
 test -z "$(/usr/libexec/PlistBuddy -c 'Print :CLUMSIES_DEV_INSTANCE_ID' "$mountpoint/Clumsies.app/Contents/Info.plist")"
 cmp "$app/Contents/MacOS/Clumsies" "$mountpoint/Clumsies.app/Contents/MacOS/Clumsies"
 cmp "$app/Contents/Resources/clumsiesd" "$mountpoint/Clumsies.app/Contents/Resources/clumsiesd"
+cmp "$app/Contents/Resources/clumsies" "$mountpoint/Clumsies.app/Contents/Resources/clumsies"
+"$mountpoint/Clumsies.app/Contents/Resources/clumsies" --version
 hdiutil detach -quiet "$mountpoint"
 mounted=0
 

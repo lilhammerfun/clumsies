@@ -52,6 +52,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Con
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = "$CLUMSIES_BUILD_NUMBER"
 lipo "$app/Contents/MacOS/Clumsies" -verify_arch arm64
 lipo "$app/Contents/Resources/clumsiesd" -verify_arch arm64
+lipo "$app/Contents/Resources/clumsies" -verify_arch arm64
 sh apps/macos/Scripts/create-dmg.sh "$app" "$output_dir/$image_name"
 sh apps/macos/Scripts/test-distribution-package.sh "$app" "$output_dir/$image_name"
 (cd "$output_dir" && shasum -a 256 "$image_name" > "$image_name.sha256")

@@ -94,13 +94,27 @@ impl CredentialStore for IsolatedTestCredentialStore {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--version"] {
+        println!("clumsiesd {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     match process_mode(&args)? {
         ProcessMode::McpServe(required_adapter) => run_mcp_proxy(required_adapter),
         ProcessMode::Daemon => {
+            #[cfg(not(target_os = "macos"))]
+            let _instance_lock = if args.is_empty() {
+                Some(acquire_instance_lock()?)
+            } else {
+                None
+            };
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            match runtime.block_on(run_daemon(args)) {
+            let result = runtime.block_on(run_daemon(args));
+            // Model preparation uses blocking network work. A requested stop must not
+            // hold the resident root and prevent upgrades until a download completes.
+            runtime.shutdown_timeout(Duration::from_secs(5));
+            match result {
                 Ok(()) => Ok(()),
                 Err(error) => {
                     // Trace when logging is ready; returning Err also reports pre-logging
@@ -114,6 +128,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+}
+
+/// Exclusively owns the standalone root until the resident process has shut down.
+///
+/// # Errors
+/// Returns a directory, file, or existing-resident lock failure.
+#[cfg(not(target_os = "macos"))]
+fn acquire_instance_lock() -> Result<std::fs::File, Box<dyn std::error::Error>> {
+    let config = DaemonConfig::from_env()?;
+    std::fs::create_dir_all(&config.root_dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(config.root_dir.join("daemon.lock"))?;
+    file.try_lock()
+        .map_err(|error| format!("Another daemon owns this root: {error}"))?;
+    Ok(file)
 }
 
 fn process_mode(args: &[String]) -> Result<ProcessMode, Box<dyn std::error::Error>> {
@@ -156,6 +189,10 @@ fn run_mcp_proxy(
     required_adapter: Option<ProjectAgentAdapterRuntimeRequirement>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let runtime_mode = daemon_runtime_mode_from_env()?;
+    #[cfg(not(target_os = "macos"))]
+    if !runtime_mode.isolated_test {
+        clumsiesd::resident::ensure_running()?;
+    }
     let client = agent_runtime_client(AGENT_RUNTIME_STARTUP_IPC_TIMEOUT, &runtime_mode);
     verify_agent_runtime(&client)?;
     let workspace_path = std::env::current_dir()?.to_string_lossy().into_owned();
@@ -357,22 +394,6 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // One resident process owns each root. Keep the lock until shutdown;
-    // concurrent GUI launches must not replace an active Unix socket.
-    #[cfg(not(target_os = "macos"))]
-    let _instance_lock = {
-        std::fs::create_dir_all(&config.root_dir)?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(config.root_dir.join("daemon.lock"))?;
-        file.try_lock()
-            .map_err(|e| format!("Another daemon owns this root: {e}"))?;
-        file
-    };
-
     let writer: Box<dyn std::io::Write + Send> = match open_daemon_log(&config.log_dir) {
         Ok(log) => Box::new(log),
         Err(error) => {
@@ -456,7 +477,8 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     } else {
         DaemonState::initialize(config).await?
     };
-    let service = DaemonIpcService::new(state.clone());
+    let (shutdown, mut shutdown_requested) = tokio::sync::watch::channel(false);
+    let service = DaemonIpcService::new(state.clone()).with_shutdown(shutdown);
     let ipc_server = DaemonIpcServer::start(mach_service_name.clone(), service.clone())?;
     // The unique test service exercises the real process/transport boundary
     // while deliberately avoiding network sync and model downloads in user
@@ -478,7 +500,13 @@ async fn run_daemon(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         health.daemon_installation_id
     );
 
-    shutdown_signal().await;
+    tokio::select! {
+        _ = shutdown_signal() => {},
+        _ = shutdown_requested.changed() => {
+            // Let the local transport finish the acknowledgement before dropping its listener.
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        },
+    }
     Ok(())
 }
 

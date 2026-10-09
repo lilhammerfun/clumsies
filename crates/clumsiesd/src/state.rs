@@ -2095,6 +2095,8 @@ macro_rules! dispatch_value {
 #[derive(Clone)]
 pub struct DaemonIpcService {
     state: DaemonState,
+    /// Present only in resident processes that own standalone lifecycle.
+    shutdown: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl std::ops::Deref for DaemonIpcService {
@@ -2107,7 +2109,16 @@ impl std::ops::Deref for DaemonIpcService {
 
 impl DaemonIpcService {
     pub fn new(state: DaemonState) -> Self {
-        Self { state }
+        Self {
+            state,
+            shutdown: None,
+        }
+    }
+
+    /// Allows the resident process to accept a user-local graceful shutdown.
+    pub fn with_shutdown(mut self, shutdown: tokio::sync::watch::Sender<bool>) -> Self {
+        self.shutdown = Some(shutdown);
+        self
     }
 
     pub fn project_config(&self) -> DaemonProjectConfig {
@@ -2135,6 +2146,20 @@ impl DaemonIpcService {
 
     async fn dispatch_request(&self, request: DaemonIpcRequest) -> DaemonIpcResponse {
         let result = match request.method.as_str() {
+            "daemon_shutdown" => {
+                if cfg!(target_os = "macos") || request.agent_runtime.is_some() {
+                    Err(DaemonError::InvalidRequest(
+                        "This runtime is managed by the macOS App or is an Agent proxy".to_owned(),
+                    ))
+                } else if let Some(shutdown) = &self.shutdown {
+                    shutdown.send_replace(true);
+                    Ok(serde_json::json!({"stopping": true}))
+                } else {
+                    Err(DaemonError::InvalidRequest(
+                        "Resident shutdown is unavailable".to_owned(),
+                    ))
+                }
+            }
             "health" => dispatch_value!(self, health, async),
             "project_config" => dispatch_value!(self, project_config),
             "replace_project_config" => {

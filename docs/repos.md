@@ -23,7 +23,7 @@ The two Rust workspace members are `crates/server` and `crates/clumsiesd`. Swift
 | `dev/`, `apps/macos/Scripts/` | Local development and build utilities | Run an isolated development environment |
 | `docs/`, `docs/zh/` | English and Chinese documentation | Improve this site |
 
-There is no active `src/client/` standalone client tree. Historical CLI material is [archived](/guides/cli-commands).
+There is no active `src/client/` standalone client tree. The active Rust CLI shares `crates/clumsiesd` with the daemon; see [CLI commands](/guides/cli-commands). The historical Zig CLI remains archived.
 
 ## Trace one operation instead of reading every file
 

@@ -1,16 +1,126 @@
-# Archived Zig CLI
+---
+title: Clumsies CLI
+description: Install the Windows/Linux CLI, connect an Agent, and review and publish Memory without a graphical client.
+---
+# Clumsies CLI
 
-The standalone `clumsies` CLI is not an active product or runtime surface. Its
-last active source remains recoverable from Git commit
-`4b18f7947a977dbc6b62f560b698dc992597f19d` and is not built, tested, packaged,
-installed, or released.
+`clumsies` is the human client. `clumsiesd` owns credentials, local drafts, caches, directory bindings, synchronization, and the existing `clumsiesd mcp serve` Agent entry. Both executables come from one Rust package and must be upgraded together. Windows/Linux GUI development is paused; the native macOS App remains supported.
 
-Current human workflows use the macOS Desktop. Supported Agent hosts are wired
-from **Settings → Agent** to the App-bundled Rust runtime:
+## Install
 
-```text
-clumsiesd mcp serve
+The initial CLI packages target **Linux x86_64 (Ubuntu 24.04 or a compatible glibc system)** and **Windows x64**. The CLI workflow produces tested archives and a Windows user installer; subsequent tagged releases include these assets. Until that first release, download the artifacts from the repository's **CLI** workflow. Verify the archive or installer against its adjacent SHA-256 file before running it.
+
+On Linux, extract `clumsies-cli-VERSION-linux-x86_64.tar.gz`, enter its directory, and run:
+
+```sh
+sha256sum --check SHA256SUMS
+./install.sh
+export PATH="$HOME/.local/bin:$PATH"
+clumsies daemon start
 ```
 
-These are adapter-managed proxy modes, not a replacement general-purpose CLI.
-See [Agent runtime](/guides/agent-runtime) and [Adapter](/adapter).
+The default program location is `~/.local/lib/clumsies/runtime`; entry links go in `~/.local/bin`. `CLUMSIES_INSTALL_ROOT` and `CLUMSIES_BIN_DIR` select other user-owned locations. `install.sh --uninstall` removes the programs and managed links while retaining daemon data. The archive includes no desktop or system service dependency. Linux needs its system C/C++ runtime libraries and `flock` (util-linux); CI checks both binaries for missing shared libraries.
+
+On Windows, run `clumsies-cli-VERSION-windows-x86_64-Setup.exe`. It installs for the current user under `%LOCALAPPDATA%\Programs\ClumsiesCLI`, adds its `runtime` directory to the user PATH, and needs no administrator account. Reopen terminals after installation. The package includes the required MSVC runtime DLLs. The installer is currently unsigned; only run an artifact you verified from this repository.
+
+For a portable installation, extract the ZIP to a writable directory and invoke `clumsies.exe` there, or install that extracted package with:
+
+```powershell
+.\install.ps1 -AddToPath
+clumsies daemon start
+```
+
+The portable ZIP has its files at the archive root. `install.ps1 -Uninstall` removes an installed runtime and its PATH entry while retaining daemon data. Windows Settings → Apps can uninstall the user installer.
+
+On macOS, the App embeds `Contents/Resources/clumsies`. Run that executable, or add its resource directory to PATH. It reuses the App's launch agent, Keychain, configuration, and cache. Standalone `daemon stop/restart` is unavailable on macOS; manage that runtime through the App. A source CLI build also discovers `/Applications/Clumsies.app` or `~/Applications/Clumsies.app`.
+
+## Connect an account and repository
+
+Use your configured Server origin. Remote origins require HTTPS; loopback HTTP is allowed for local development. Tokens and passwords are never command-line arguments or CLI output.
+
+```sh
+# Browser OIDC login; print the URL with --no-browser when automatic opening is unavailable.
+clumsies login --server https://app.clumsies.ai
+# Deployment-enabled local password login prompts without echo.
+clumsies login --server https://app.clumsies.ai --username owner
+# Automation may use --password-stdin instead of a terminal prompt.
+clumsies project list
+clumsies project join prj_example
+clumsies project bind prj_example /absolute/path/to/repository
+clumsies project current
+clumsies agent enable claude-code
+# Codex must expose the plugin-capable executable; use --host-binary if absent from PATH.
+clumsies agent enable codex --host-binary /absolute/path/to/codex
+```
+
+`project join` selects a Project **after the Server confirms membership**. It does not grant membership: an administrator must first admit the account to that Project. `project create NAME` uses existing Server permissions. Directory bindings are separate from selection; Agent requests resolve their working directory and never fall back to an unrelated selected Project. Worktrees inherit the repository binding according to the existing daemon rules.
+
+For password invitations, use `clumsies redeem --server ORIGIN --username NAME`; for password resets, use `clumsies redeem --server ORIGIN --reset-password`. Both prompt for the one-time token and new password. `--stdin` instead accepts a JSON object containing `token` and `password`; keep that input private.
+
+Browser login uses the existing loopback PKCE callback and a five-minute callback wait. On a remote/headless host, use password login when the deployment enables it, or `--no-browser` with the printed callback port forwarded to the machine running the browser. There is no new device-code authentication endpoint. The Server must already be configured.
+
+Supported adapter names are `codex`, `claude-code`, `opencode`, `dsh`, and `antigravity`; install the Agent host separately. `agent list` inspects settings, and `agent disable HOST` removes daemon-managed configuration while preserving user modifications. Reconnect the integration or start a new Agent task after binding or adapter changes.
+
+Inspect `project bindings PROJECT_ID` before replacing or removing a binding. `project bind ... --revision N` replaces the exact inspected revision; `project unbind PATH --revision N` removes it without deleting local drafts or repository files.
+
+## Propose, review, and publish
+
+The Agent uses the existing MCP `memory` tool with `activate`, `load`, and `store`. `store` saves a durable local Draft, not a publication. Human Review commands call the existing Server APIs through the daemon's authenticated proxy.
+
+```sh
+clumsies draft list
+clumsies draft show LOCAL_DRAFT_ID
+clumsies draft sync LOCAL_DRAFT_ID
+clumsies review create LOCAL_DRAFT_ID --title 'Clarify the release procedure'
+# Multiple local draft IDs create one ordered Review.
+clumsies review list prj_example
+clumsies review show REVIEW_ID
+clumsies review diff REVIEW_ID
+clumsies review comment REVIEW_ID --version 1 'Checked the procedure'
+clumsies review approve REVIEW_ID --version 1 --note 'Ready to publish'
+# Inspect the new version and coordination reference after approval.
+clumsies review show REVIEW_ID
+clumsies review merge REVIEW_ID --version 2 --reference CURRENT_COMMIT_ID
+# An empty reference is spelled ref-none.
+# Or reject an open Review at its inspected version:
+clumsies review reject REVIEW_ID --version 1 --note 'Please revise this proposal'
+```
+
+Versions above are examples, not defaults. Use the version and reference you actually inspected. Server policy may publish during approval; if the response is already `merged`, no separate merge is needed. Permissions, expected versions, reference validators, approval fingerprints, and lifecycle rules remain Server-owned. A stale mutation fails without being retried against unseen content. Rejected drafts may be edited and submitted in a new Review.
+
+`review show` includes full ordered operations and comments. `review diff` uses each draft's immutable base snapshot, not the latest local cache. A Server read failure stops the command; it does not substitute an empty ancestor.
+
+### Reconcile upstream changes
+
+Before initial submission, `draft plan LOCAL_DRAFT_ID` returns a candidate containing the ancestor, upstream, proposal, conflicts, and optional merge preview. To apply it separately:
+
+```sh
+clumsies draft rebase LOCAL_DRAFT_ID --candidate CANDIDATE_ID --version DRAFT_VERSION --reference CURRENT_COMMIT_ID --resolved resolved-state.json
+```
+
+`resolved-state.json` contains the complete `ReconciliationResourceState` (`exists`, `resource`, and `content`) after your edits. Omit `--resolved` for a clean candidate. Alternatively, `review create ... --reconciliations choices.json` accepts an array of the inspected `ReviewDraftRequest` values (`draft_id`, `expected_draft_version`, `candidate_id`, `resolved_state`). Choose all drafts from one Project and scope.
+
+For an existing Review, keep all proposals and one consistent revision together:
+
+```sh
+clumsies review plan REVIEW_ID --version INSPECTED_VERSION > plan.json
+# Inspect plan.candidates and all plan.detail proposals.
+# Copy the top-level request object into update.json.
+# For conflicts, edit each candidate's merge_preview.state and assign it as resolved_state.
+clumsies review update REVIEW_ID --file update.json --reference CURRENT_COMMIT_ID
+clumsies review diff REVIEW_ID
+```
+
+The template deliberately leaves conflict resolutions null. Inspect and edit them before applying; it never silently chooses the ancestor, upstream, or proposal. The Server rejects stale candidates, missing proposals, stale Review versions, and moved references. Approval may be invalidated after updates; inspect and review again.
+
+## Diagnose and upgrade
+
+`status` does not start a daemon. `daemon start` reuses a compatible resident; ordinary commands and MCP cold starts start it on demand on Windows/Linux. `status --project PROJECT_ID` includes retrieval model download bytes, readiness, index progress, and errors. Initial use prepares the pinned models (about 412 MiB); a preparing model is actionable status, not a successful empty search.
+
+`draft sync` waits up to a minute for upload without dropping local work. `draft retry PROJECT_ID` retries failed operations; inspect `draft show` for the error first. Expired access tokens are refreshed by the daemon. If refresh is revoked, run `login` again; local drafts and bindings remain. `logout` attempts Server revocation and clears local credentials even if revocation fails.
+
+Re-run the verified Linux script, Windows script, or Windows installer to upgrade. Installation coordinates startup with a program-directory lock, stops the resident, stages the whole binary pair, and rolls back a failed switch. The executable paths stay stable so adapters keep working. Close active CLI/MCP processes when Windows reports a file in use. Reconnect Agent hosts after upgrading.
+
+Program uninstall retains credentials, directory bindings, local drafts, and caches. Use `logout` first when you want to remove credentials. Do not roll back to a daemon that cannot read a newer local database schema; stop the runtime and back up the complete daemon data root before a downgrade. The installers do not promise automatic schema downgrades or overwrite unrelated program directories.
+
+Build from source with `cargo build --locked --release -p clumsiesd --bins`. The CLI has no separate credentials file, cache, or business-rule implementation. The historical Zig CLI remains archived in Git commit `4b18f7947a977dbc6b62f560b698dc992597f19d`; this Rust CLI does not restore it.
