@@ -251,11 +251,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let config = DaemonConfig::from_env()?;
         let client = DaemonIpcClient::new(config.mach_service_name)
             .with_timeout(std::time::Duration::from_secs(2));
+        let sync = if let Some(project_id) = &project {
+            client
+                .call(DaemonIpcRequest::new(
+                    "project_sync_status",
+                    json!({"project_id": identifier(project_id)?}),
+                ))?
+                .into_payload::<DaemonSyncStatus>()?
+        } else {
+            client.sync_status()?
+        };
         let retrieval = project
             .map(|project_id| client.search_index_status(SearchIndexProjectRequest { project_id }))
             .transpose()?;
         print_json(
-            &json!({"health": client.health()?, "session": client.project_config()?, "sync": client.sync_status()?, "retrieval": retrieval}),
+            &json!({"health": client.health()?, "session": client.project_config()?, "sync": sync, "retrieval": retrieval}),
         )?;
         return Ok(());
     }

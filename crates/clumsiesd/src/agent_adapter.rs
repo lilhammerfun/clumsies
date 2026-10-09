@@ -1,7 +1,12 @@
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
+#[cfg(any(unix, test))]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::Read;
+#[cfg(any(unix, test))]
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use serde::ser::SerializeStruct;
@@ -23,8 +28,15 @@ use crate::config::DAEMON_AGENT_LABEL;
 mod codex_plugin;
 pub(crate) mod global;
 mod legacy;
+#[cfg(windows)]
+mod windows_leaf;
 pub use global::{
     DaemonAgentAdapterSetting, DaemonAgentAdapterSettings, DaemonSetAgentAdapterRequest,
+};
+#[cfg(windows)]
+use windows_leaf::{
+    ManagedLeafDirectory, create_staged_file_at, file_snapshot_at, remove_file_at,
+    rename_noreplace_at,
 };
 
 const MAX_ADAPTER_FS_OPS: usize = 128;
@@ -386,7 +398,11 @@ fn journal_changes_from_plan(
                     .as_ref()
                     .map(|_| format!(".clumsies-adapter-stage-{}.tmp", Uuid::new_v4().simple())),
                 before_content: change.expected.content.clone(),
-                before_mode: change.expected.mode,
+                before_mode: change
+                    .expected
+                    .content
+                    .as_ref()
+                    .map(|_| change.expected.mode.unwrap_or(0o644)),
                 after_content: change.desired.clone(),
                 after_mode,
             })
@@ -428,9 +444,12 @@ fn validate_adapter_journal_path(
     // The retired thin-skill paths stay accepted so that pending journal ops
     // written before the thin-skills retirement (ISSUE-064) remain
     // recoverable. New plans never produce them.
+    let normalized = relative
+        .to_str()
+        .map(|path| path.replace(std::path::MAIN_SEPARATOR, "/"));
     let allowed = match adapter {
         ProjectAgentAdapterKind::Codex => matches!(
-            (relative.to_str(), kind),
+            (normalized.as_deref(), kind),
             (Some(".codex/config.toml"), ManagedFileKind::CodexConfig)
                 | (Some(".codex/hooks.json"), ManagedFileKind::CodexHooks)
                 | (
@@ -445,7 +464,7 @@ fn validate_adapter_journal_path(
                 )
         ),
         ProjectAgentAdapterKind::ClaudeCode => matches!(
-            (relative.to_str(), kind),
+            (normalized.as_deref(), kind),
             (Some(".mcp.json"), ManagedFileKind::ClaudeMcp)
                 | (
                     Some(".claude/settings.json"),
@@ -463,7 +482,7 @@ fn validate_adapter_journal_path(
                 )
         ),
         ProjectAgentAdapterKind::Opencode => matches!(
-            (relative.to_str(), kind),
+            (normalized.as_deref(), kind),
             (Some("opencode.json"), ManagedFileKind::OpencodeConfig)
                 | (
                     Some(".opencode/plugins/clumsies.ts"),
@@ -471,11 +490,11 @@ fn validate_adapter_journal_path(
                 )
         ),
         ProjectAgentAdapterKind::Dsh => matches!(
-            (relative.to_str(), kind),
+            (normalized.as_deref(), kind),
             (Some(".dsh/clumsies.json"), ManagedFileKind::DshConfig)
         ),
         ProjectAgentAdapterKind::Antigravity => matches!(
-            (relative.to_str(), kind),
+            (normalized.as_deref(), kind),
             (Some(".mcp.json"), ManagedFileKind::ClaudeMcp)
                 | (
                     Some(".agents/hooks.json"),
@@ -1450,7 +1469,7 @@ fn remove_file_at(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn rename_noreplace_or_conflict(
     directory: &ManagedLeafDirectory,
     source: &std::ffi::CStr,
@@ -1484,7 +1503,7 @@ fn rename_noreplace_or_conflict(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn apply_journal_change_cas(
     operation: &PreparedAdapterFsOp,
     index: usize,
@@ -1602,7 +1621,7 @@ fn apply_journal_change_cas(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn apply_journal_change_cas(
     _operation: &PreparedAdapterFsOp,
     _index: usize,
@@ -1614,7 +1633,7 @@ fn apply_journal_change_cas(
     ))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn cleanup_journal_change_cas(
     operation: &PreparedAdapterFsOp,
     index: usize,
@@ -1660,7 +1679,7 @@ fn cleanup_journal_change_cas(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn cleanup_journal_change_cas(
     _operation: &PreparedAdapterFsOp,
     _index: usize,
@@ -1875,7 +1894,7 @@ pub(crate) async fn recover_pending_fs_ops_for_workspace(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) async fn has_pending_fs_ops(pool: &SqlitePool) -> Result<bool, DaemonError> {
     let pending: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM adapter_fs_ops LIMIT 1)")
         .fetch_one(pool)
@@ -2615,15 +2634,15 @@ fn validate_manifest_managed_path(
                 || relative == Path::new(".gemini/config/mcp_config.json")
         }
         ManagedFileKind::ClaudeSettings => relative == Path::new(".claude/settings.json"),
-        ManagedFileKind::OpencodeConfig => matches!(
-            relative.to_str(),
-            Some("opencode.json" | ".config/opencode/opencode.json")
-        ),
+        ManagedFileKind::OpencodeConfig => {
+            relative == Path::new("opencode.json")
+                || relative == Path::new(".config/opencode/opencode.json")
+        }
         ManagedFileKind::DshConfig => relative == Path::new(".dsh/clumsies.json"),
-        ManagedFileKind::AntigravityHooks => matches!(
-            relative.to_str(),
-            Some(".agents/hooks.json" | ".gemini/config/hooks.json")
-        ),
+        ManagedFileKind::AntigravityHooks => {
+            relative == Path::new(".agents/hooks.json")
+                || relative == Path::new(".gemini/config/hooks.json")
+        }
         // The retired thin-skill paths stay accepted so that manifests and
         // pending journal ops written before the thin-skills retirement
         // (ISSUE-064) remain removable and recoverable. New plans never
@@ -3559,14 +3578,14 @@ impl ManagedPathGuard {
 }
 
 impl DirectoryIdentity {
-    fn new(path: PathBuf, metadata: &fs::Metadata) -> Result<Self, DaemonError> {
+    fn new(path: PathBuf, _metadata: &fs::Metadata) -> Result<Self, DaemonError> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
             Ok(Self {
                 path,
-                device: metadata.dev(),
-                inode: metadata.ino(),
+                device: _metadata.dev(),
+                inode: _metadata.ino(),
             })
         }
         #[cfg(not(unix))]
@@ -3672,7 +3691,7 @@ fn capture_directory_identity(
 }
 
 fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), DaemonError> {
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata_is_link(metadata) || !metadata.is_dir() {
         return Err(adapter_conflict(&format!(
             "Managed directory {} must be a real directory, not a symlink or another file type.",
             path.display()
@@ -3683,7 +3702,7 @@ fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(
 
 fn validate_managed_leaf(path: &Path) -> Result<(), DaemonError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if metadata_is_link(&metadata) || !metadata.is_file() => {
             Err(adapter_conflict(&format!(
                 "Managed file {} must be a regular file, not a symlink or another file type.",
                 path.display()
@@ -3692,6 +3711,21 @@ fn validate_managed_leaf(path: &Path) -> Result<(), DaemonError> {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
+    }
+}
+
+/// Includes Windows junctions and other reparse points in the existing no-link boundary.
+fn metadata_is_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
     }
 }
 
@@ -3793,16 +3827,9 @@ fn capture_file_snapshot(path: &Path) -> Result<FileSnapshot, DaemonError> {
         },
     };
     #[cfg(not(unix))]
-    let snapshot = {
-        let metadata = match fs::symlink_metadata(path) {
-            Ok(metadata) => Some(metadata),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
-        FileSnapshot {
-            content: read_optional(path)?,
-            mode: file_mode(path)?,
-        }
+    let snapshot = FileSnapshot {
+        content: read_optional(path)?,
+        mode: file_mode(path)?,
     };
     guard.revalidate()?;
     Ok(snapshot)
@@ -3819,7 +3846,8 @@ fn change_is_needed(change: &PendingChange) -> Result<bool, DaemonError> {
             ),
         ));
     }
-    Ok(current.content != change.desired || current.mode != desired_file_mode(change))
+    Ok(current.content != change.desired
+        || (cfg!(unix) && current.mode != desired_file_mode(change)))
 }
 
 fn desired_file_mode(change: &PendingChange) -> Option<u32> {
@@ -3832,7 +3860,7 @@ fn desired_file_mode(change: &PendingChange) -> Option<u32> {
 }
 
 fn snapshots_match(current: &FileSnapshot, expected: &FileSnapshot) -> bool {
-    current.content == expected.content && current.mode == expected.mode && {
+    current.content == expected.content && (!cfg!(unix) || current.mode == expected.mode) && {
         #[cfg(unix)]
         {
             expected.identity.is_none() || current.identity == expected.identity

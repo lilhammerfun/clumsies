@@ -53,7 +53,9 @@ try {
     }
     if (Test-Path $backup) { throw "Recovery directory already exists: $backup" }
     New-Item -ItemType Directory $stage | Out-Null
-    Copy-Item "$Source\*" $stage -Recurse
+    # Extra files must not introduce an unverified app-local DLL.
+    foreach ($name in $verified) { Copy-Item (Join-Path $Source $name) $stage }
+    Copy-Item (Join-Path $Source 'SHA256SUMS') $stage
     & "$stage\clumsies.exe" --version
     if ($LASTEXITCODE -ne 0) { throw 'Staged executable does not run; check runtime dependencies' }
     $stopper = if (Test-Path "$runtime\clumsies.exe") { "$runtime\clumsies.exe" } else { "$stage\clumsies.exe" }

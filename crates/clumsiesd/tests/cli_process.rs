@@ -289,7 +289,7 @@ async fn api(
             } else {
                 json!("prj_fixture")
             };
-            return ([("etag", "\"ref-none\"")], Json(json!({"update_available":false,"ref":{"name":"main","scope":scope,"org_id":"org_fixture","project_id":project,"commit_id":null,"updated_at":"2026-10-09T00:00:00Z"},"latest":null,"download_url":null,"incremental_supported":false}))).into_response();
+            return ([("etag", "\"ref-none\"")], Json(json!({"update_available":false,"ref":{"name":"refs/heads/main","scope":scope,"org_id":"org_fixture","project_id":project,"commit_id":null,"updated_at":"2026-10-09T00:00:00Z"},"latest":null,"download_url":null,"incremental_supported":false}))).into_response();
         }
         ("GET", "/api/v1/draft-events") => json!({"events":[],"next_cursor":null,"has_more":false}),
         ("POST", "/api/v1/drafts") => {
@@ -472,6 +472,18 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     let listed = fixture.json(&["draft", "list"], None);
     let draft = listed["items"][0]["draft_id"].as_str().unwrap();
     fixture.json(&["draft", "sync", draft], None);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = fixture.json(&["status", "--project", "prj_fixture"], None);
+        if !status["sync"]["commit_sync"]["last_success_at"].is_null() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Project reference did not synchronize: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let load = fixture.mcp(&workspace, json!({"op":{"load":{"ids":["guide.md"]}}}));
     assert_ne!(load["result"]["isError"], true, "{load}");
     assert!(load.to_string().contains("CLI fixture"));

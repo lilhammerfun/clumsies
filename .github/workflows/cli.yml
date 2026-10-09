@@ -58,6 +58,8 @@ jobs:
         run: |
           cargo test --locked -p clumsiesd --lib ipc::
           cargo test --locked -p clumsiesd --lib credentials::
+          cargo test --locked -p clumsiesd --lib available_space_tests::
+          cargo test --locked -p clumsiesd --lib windows_leaf::tests::
       - name: Test real CLI, daemon, MCP, and checked Review protocol processes
         run: cargo test --locked -p clumsiesd --test cli_process -- --nocapture
       - name: Cache verified pinned model artifacts

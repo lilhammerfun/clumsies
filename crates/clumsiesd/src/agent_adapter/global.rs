@@ -406,9 +406,12 @@ pub(super) fn validate_path(
     path: &Path,
     kind: ManagedFileKind,
 ) -> Result<(), DaemonError> {
+    let normalized = path
+        .to_str()
+        .map(|path| path.replace(std::path::MAIN_SEPARATOR, "/"));
     let allowed = match adapter {
         ProjectAgentAdapterKind::ClaudeCode => matches!(
-            (path.to_str(), kind),
+            (normalized.as_deref(), kind),
             (Some(".claude.json"), ManagedFileKind::ClaudeMcp)
                 | (
                     Some(".claude/settings.json"),
@@ -420,7 +423,7 @@ pub(super) fn validate_path(
                 )
         ),
         ProjectAgentAdapterKind::Opencode => matches!(
-            (path.to_str(), kind),
+            (normalized.as_deref(), kind),
             (
                 Some(".config/opencode/opencode.json"),
                 ManagedFileKind::OpencodeConfig
@@ -430,7 +433,7 @@ pub(super) fn validate_path(
             )
         ),
         ProjectAgentAdapterKind::Antigravity => matches!(
-            (path.to_str(), kind),
+            (normalized.as_deref(), kind),
             (
                 Some(".gemini/config/mcp_config.json"),
                 ManagedFileKind::ClaudeMcp

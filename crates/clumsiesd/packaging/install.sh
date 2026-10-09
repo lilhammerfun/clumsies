@@ -45,7 +45,7 @@ cleanup() {
   exit "$result"
 }
 trap cleanup EXIT
-cp -a -- "$source_dir/." "$stage/"
+for name in clumsies clumsiesd install.sh .clumsies-cli SHA256SUMS; do cp -a -- "$source_dir/$name" "$stage/"; done
 "$stage/clumsies" --version
 [[ ! -d "$backup" ]] || { echo "Previous recovery directory exists: $backup; restore or remove it before upgrading" >&2; exit 1; }
 # Stop acknowledges through user-local IPC and waits for the resident lock.
