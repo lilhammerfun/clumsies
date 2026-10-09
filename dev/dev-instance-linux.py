@@ -12,7 +12,7 @@ script is macOS mechanics end to end -- launchd, Keychain, a signed .app,
 Xcode. The two share the layout and dev/dev-server.sh, and differ only in what
 supervises the processes, which is the part that cannot be shared.
 
-    dev/dev-instance-linux.py up [--seed-memory] [--no-client]
+    dev/dev-instance-linux.py up [--seed-memory]
     dev/dev-instance-linux.py sign-in [--server-url URL] [--setup-code CODE]
     dev/dev-instance-linux.py status | logs | down | reset
 
@@ -78,16 +78,14 @@ kind: knowledge
 
 # Client architecture
 
-Each platform has its own native client, and they share one local engine
-instead of one user interface: **macOS keeps its Swift app, Windows and Linux
-share the Rust client.**
+macOS provides the native Swift App. Windows and Linux use the Rust CLI.
+All supported interfaces share the portable Rust daemon.
 
 ## Why
 
 The engine - drafts, synchronization, retrieval - is where the product's
-complexity lives, and it is already portable Rust. A user interface is the part
-that must feel native, and a single cross-platform toolkit gives that up on
-every platform at once.
+complexity lives, and it is already portable Rust. The CLI provides the
+Windows/Linux workflow without maintaining another graphical client.
 
 ## The seam
 
@@ -146,16 +144,6 @@ class Instance:
         self.compose_project = f"clumsies-dev-{self.instance_id}"
         self.server_binary = os.path.join(self.bin, "clumsies-server")
         self.daemon_binary = os.path.join(REPO_ROOT, "target", "debug", "clumsiesd")
-        # The client is built for release even in a dev instance: it paints,
-        # shapes text and lays out on every frame, and an unoptimized GPUI
-        # cannot hold a 60Hz window. Measured on a 1181x1296 window: 49ms of CPU
-        # per frame in the dev profile against 5ms in release, where the frame
-        # budget is 16.7ms. The daemon and the Server stay in debug, where a
-        # rebuild matters more than a frame.
-        self.client_binary = os.path.join(
-            REPO_ROOT, "target", "release", "clumsies-desktop"
-        )
-        self.client_pid = os.path.join(self.root, "client.pid")
 
     # -- files
 
@@ -271,7 +259,7 @@ class Instance:
         raise SystemExit(f"\nthe Server never became ready; see {self.logs}/server.log")
 
     def build_daemon(self):
-        run(["cargo", "build", "-p", "clumsiesd", "--bin", "clumsiesd"], cwd=REPO_ROOT)
+        run(["cargo", "build", "-p", "clumsiesd", "--bins"], cwd=REPO_ROOT)
 
     def start_daemon(self):
         if running(self.daemon_pid):
@@ -294,21 +282,6 @@ class Instance:
             print(".", end="", flush=True)
             time.sleep(1)
         raise SystemExit(f"\nthe daemon never opened its socket; see {self.logs}/daemon.log")
-
-    def start_client(self):
-        """The macOS instance opens the App as part of "up"; this is the same
-        promise, so a developer sees the product rather than a description of
-        it."""
-        if running(self.client_pid):
-            return
-        run(["cargo", "build", "-p", "desktop", "--release"], cwd=REPO_ROOT)
-        spawn(
-            [self.client_binary],
-            log=os.path.join(self.logs, "client.log"),
-            pid_file=self.client_pid,
-            environment={"CLUMSIES_DAEMON_ROOT": self.daemon_root,
-                         "CLUMSIES_AGENT_RUNTIME_BINARY": self.daemon_binary},
-        )
 
     # -- the session
 
@@ -336,7 +309,7 @@ class Instance:
             return json.load(handle)["server_url"]
 
     def seed_memory(self):
-        """A client needs something to show, and publishing is not a write:
+        """CLI/MCP tests need published Memory, and publishing is not a write:
         a proposal becomes a Draft, a Draft becomes a Review, and only an
         authorized merge changes the published Ref."""
         project_id = self.project_id()
@@ -444,7 +417,7 @@ class Instance:
 
     # -- lifecycle
 
-    def up(self, seed, with_client=True):
+    def up(self, seed):
         self.create()
         values = self.env()
         self.write_env(values)
@@ -463,10 +436,6 @@ class Instance:
         )
         if seed:
             self.seed_memory()
-        if with_client:
-            print("starting the client", end="", flush=True)
-            self.start_client()
-            print()
         print()
         print(f"instance {self.instance_id} is up")
         print(f"  server: http://127.0.0.1:{server_port}")
@@ -503,7 +472,7 @@ class Instance:
         the volume holds the password the instance generated, so a reset that
         kept the volume and generated another password could no longer connect.
         """
-        for pid_file in (self.client_pid, self.daemon_pid, self.server_pid):
+        for pid_file in (self.daemon_pid, self.server_pid):
             stop(pid_file)
         if docker_available():
             command = [
@@ -786,9 +755,8 @@ def authorize(server_url, setup_code=None, redirect_port=49199):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    up = commands.add_parser("up", help="start containers, Server, daemon, client; sign in")
+    up = commands.add_parser("up", help="start containers, Server, daemon and CLI; sign in")
     up.add_argument("--seed-memory", action="store_true", help="also publish starter Memory")
-    up.add_argument("--no-client", action="store_true", help="leave the client alone")
     sign_in = commands.add_parser("sign-in", help="sign the daemon in to a Server")
     sign_in.add_argument("--server-url", default=None)
     sign_in.add_argument("--setup-code", default=None)
@@ -798,7 +766,7 @@ def main():
 
     instance = Instance()
     if arguments.command == "up":
-        instance.up(seed=arguments.seed_memory, with_client=not arguments.no_client)
+        instance.up(seed=arguments.seed_memory)
     elif arguments.command == "sign-in":
         instance.sign_in(arguments.server_url, arguments.setup_code)
     elif arguments.command == "status":

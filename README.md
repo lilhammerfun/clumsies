@@ -59,7 +59,7 @@ create a Project, and connect my agent.
 
 For **Windows/Linux**, use the [CLI installation and Review workflow](docs/guides/cli-commands.md). The CLI workflow produces a Linux user package, Windows user installer, and portable ZIP; upcoming tagged releases include them. The native macOS App also embeds the human CLI.
 
-Windows/Linux desktop development is paused. Contributions for these platforms must target the CLI, `clumsiesd`, Agent/MCP integration, or their installation and distribution. Desktop fixes and features resume only when a maintainer takes responsibility for ongoing platform testing, packaging, releases, and compatibility.
+Windows/Linux desktop development is paused; its source, GUI packages, and dedicated workflows have been removed from the active tree. Earlier implementations remain available in Git history. Contributions for these platforms must target the CLI, `clumsiesd`, Agent/MCP integration, or their installation and distribution. Desktop fixes and features resume only when a maintainer takes responsibility for ongoing platform testing, packaging, releases, and compatibility.
 
 ## Agent support and limits
 

@@ -4,7 +4,7 @@ description: 安装 Windows/Linux 命令行，接入 Agent，并在没有图形�
 ---
 # Clumsies CLI
 
-`clumsies` 是人工操作入口；`clumsiesd` 继续管理凭据、本地 Draft、缓存、目录绑定、同步和现有的 `clumsiesd mcp serve` Agent 入口。两个程序来自同一个 Rust 包，必须一起升级。Windows/Linux 图形客户端开发暂时搁置，macOS 原生 App 继续维护。
+`clumsies` 是人工操作入口；`clumsiesd` 继续管理凭据、本地 Draft、缓存、目录绑定、同步和现有的 `clumsiesd mcp serve` Agent 入口。两个程序来自同一个 Rust 包，必须一起升级。Windows/Linux 图形客户端开发暂时搁置，相关实现和打包配置已从当前代码树移除；macOS 原生 App 继续维护。
 
 ## 安装
 
