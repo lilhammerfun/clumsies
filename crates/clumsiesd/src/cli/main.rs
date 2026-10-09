@@ -5,6 +5,7 @@
     clippy::missing_errors_doc
 )]
 
+mod codex_host;
 mod pagination;
 mod review;
 
@@ -572,7 +573,9 @@ fn configure_agent(
     };
     let runtime = resident::binary()?;
     let host_binary = if adapter == ProjectAgentAdapterKind::Codex {
-        let candidate = host_binary.or_else(|| std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|directory| directory.join(if cfg!(windows) { "codex.exe" } else { "codex" })).find(|path| path.is_file()))).ok_or("Codex executable was not found; pass --host-binary with its installed executable path")?;
+        let candidate = host_binary.or_else(codex_host::codex_binary).ok_or(
+            "Codex executable was not found; pass --host-binary with its installed executable path",
+        )?;
         Some(
             candidate
                 .canonicalize()?

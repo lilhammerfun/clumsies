@@ -76,9 +76,12 @@ clumsies project join prj_example
 clumsies project bind prj_example /absolute/path/to/repository
 clumsies project current
 clumsies agent enable claude-code
-# Codex must expose the plugin-capable executable; use --host-binary if absent from PATH.
+# Codex must expose its plugin-capable executable; --host-binary overrides discovery.
 clumsies agent enable codex --host-binary /absolute/path/to/codex
 ```
+
+On Windows, `agent enable codex` discovers the registered Codex App before PATH; `--host-binary` still overrides discovery. Its MCP executable and adjacent DLLs are staged under `%USERPROFILE%\.clumsies\agent-runtimes\codex\<bundle-hash>` so Store-hosted Codex can access them outside virtualized AppData. After upgrading, run `agent enable codex` again and reconnect Codex. Older staged bundles remain available for active sessions and consume disk space.
+
 
 `project join` selects a Project **after the Server confirms membership**. It does not grant membership: an administrator must first admit the account to that Project. `project create NAME` uses existing Server permissions. Directory bindings are separate from selection; Agent requests resolve their working directory and never fall back to an unrelated selected Project. Worktrees inherit the repository binding according to the existing daemon rules.
 

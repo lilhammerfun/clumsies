@@ -1,5 +1,7 @@
 # Clumsies Desktop
 
+**Maintenance paused.** Windows/Linux contributions currently target the CLI, `clumsiesd`, Agent/MCP integration and distribution. Desktop fixes and features require a maintainer responsible for ongoing testing, packaging, releases and platform compatibility. The build instructions below describe the retained implementation; current tagged releases distribute the CLI instead.
+
 The Windows and Linux client. macOS keeps its own native Swift app in `apps/macos`.
 
 - UI toolkit: [GPUI Kit](https://gpui-kit.com) (`gpui-kit`), the same stack Zed is built on.

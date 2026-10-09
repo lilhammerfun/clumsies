@@ -79,6 +79,9 @@ clumsies agent enable claude-code
 clumsies agent enable codex --host-binary /absolute/path/to/codex
 ```
 
+Windows 上，`agent enable codex` 优先发现已注册的 Codex App，再查找 PATH；`--host-binary` 仍可指定宿主。MCP 程序及相邻 DLL 暂存到 `%USERPROFILE%\.clumsies\agent-runtimes\codex\<bundle-hash>`，让 Store 版 Codex 在被虚拟化的 AppData 之外访问它们。升级后重新执行 `agent enable codex` 并重连 Codex。旧暂存版本为正在运行的任务保留，会占用磁盘空间。
+
+
 `project join` 在服务器确认成员权限后选择项目，不会授予成员权限；管理员需要先将账号加入该项目。`project create NAME` 按现有服务器权限创建项目。选择项目与绑定目录是两件事：Agent 根据工作目录解析绑定，不会回退到无关的当前项目。Git worktree 按 daemon 现有规则继承仓库绑定。
 
 密码邀请使用 `clumsies redeem --server ORIGIN --username NAME`；密码重置使用 `clumsies redeem --server ORIGIN --reset-password`。命令隐藏输入一次性 Token 和新密码；`--stdin` 可读取含 `token`、`password` 的 JSON 对象，请保护这份输入。
