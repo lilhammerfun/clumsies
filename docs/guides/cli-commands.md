@@ -82,7 +82,6 @@ clumsies agent enable codex --host-binary /absolute/path/to/codex
 
 On Windows, `agent enable codex` discovers the registered Codex App before PATH; `--host-binary` still overrides discovery. Its MCP executable and adjacent DLLs are staged under `%USERPROFILE%\.clumsies\agent-runtimes\codex\<bundle-hash>` so Store-hosted Codex can access them outside virtualized AppData. After upgrading, run `agent enable codex` again and reconnect Codex. Older staged bundles remain available for active sessions and consume disk space.
 
-
 `project join` selects a Project **after the Server confirms membership**. It does not grant membership: an administrator must first admit the account to that Project. `project create NAME` uses existing Server permissions. Directory bindings are separate from selection; Agent requests resolve their working directory and never fall back to an unrelated selected Project. Worktrees inherit the repository binding according to the existing daemon rules.
 
 For password invitations, use `clumsies redeem --server ORIGIN --username NAME`; for password resets, use `clumsies redeem --server ORIGIN --reset-password`. Both prompt for the one-time token and new password. `--stdin` instead accepts a JSON object containing `token` and `password`; keep that input private.

@@ -8,13 +8,12 @@ The Windows and Linux client. macOS keeps its own native Swift app in `apps/maco
 - Engine: the local `clumsiesd` engine, shared with the macOS client.
 - Design rules: [DESIGN.md](DESIGN.md).
 
-## Shipping
+## Retained packaging implementation
 
-A release ships packages from one tag: the macOS DMG (its own workflow),
-`Clumsies-<version>-linux-x86_64.tar.gz`, and
-`Clumsies-<version>-windows-x86_64-Setup.exe` (recommended), and the portable
-`Clumsies-<version>-windows-x86_64.zip`. Desktop packages are built by `release.yml`
-on `v*` tags and attached to the same GitHub release, each with a SHA-256 file.
+Current tagged releases distribute the macOS App and Windows/Linux CLI packages.
+The desktop assembly and installation tools below remain in the repository for
+local builds and CI; desktop packages are not attached by the current tagged
+release workflow.
 
 The Windows installer adds Start menu and optional desktop shortcuts, installs
 to `%LOCALAPPDATA%\Programs\Clumsies` without elevation, and registers an
