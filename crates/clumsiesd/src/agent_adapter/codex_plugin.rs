@@ -87,6 +87,9 @@ pub(super) async fn ensure_installed(
     })?;
     let codex = canonical_codex_cli(host_binary_path)?;
     verify_codex_cli(&codex).await?;
+    #[cfg(windows)]
+    let runtime_binary =
+        &stage_windows_runtime(&crate::util::home_dir()?, runtime_binary, runtime_hash)?;
     let plugin = materialize(daemon_root, runtime_binary, runtime_hash, dev_instance_id)?;
     ensure_marketplace(&codex, &plugin.marketplace_root).await?;
     ensure_plugin(&codex, &plugin.version).await
@@ -113,6 +116,11 @@ pub(super) async fn inspect(
     host_binary_path: Option<&str>,
     dev_instance_id: Option<&str>,
 ) -> Result<DaemonCodexPluginStatus, DaemonError> {
+    #[cfg(windows)]
+    let runtime_binary = &windows_runtime_path(
+        &crate::util::home_dir()?,
+        &load_windows_runtime(runtime_binary, runtime_hash)?.hash,
+    )?;
     let expected_version = plugin_version(
         runtime_binary.to_str().ok_or_else(|| {
             DaemonError::InvalidRequest("Codex plugin runtime path is not UTF-8".to_owned())
@@ -135,7 +143,13 @@ pub(super) async fn inspect(
     let codex = canonical_codex_cli(host_binary_path)?;
     verify_codex_cli(&codex).await?;
     let marketplace_root = daemon_root.join("agent-plugins/codex-marketplace");
-    inspect_verified(&codex, &marketplace_root, expected_version).await
+    let status = inspect_verified(&codex, &marketplace_root, expected_version).await?;
+    #[cfg(windows)]
+    let status = DaemonCodexPluginStatus {
+        ready: status.ready && runtime_binary.is_file(),
+        ..status
+    };
+    Ok(status)
 }
 
 async fn inspect_verified(
@@ -510,11 +524,226 @@ async fn verify_codex_cli(_path: &Path) -> Result<(), DaemonError> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
+fn windows_runtime_path(profile: &Path, runtime_hash: &str) -> Result<PathBuf, DaemonError> {
+    if runtime_hash.len() != 64 || !runtime_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DaemonError::InvalidConfig(
+            "Codex plugin runtime identity is invalid".to_owned(),
+        ));
+    }
+    Ok(profile
+        .join(".clumsies")
+        .join("agent-runtimes")
+        .join("codex")
+        .join(runtime_hash)
+        .join("clumsiesd.exe"))
+}
+
+#[cfg(any(windows, test))]
+struct WindowsRuntime {
+    hash: String,
+    files: std::collections::BTreeMap<std::ffi::OsString, Vec<u8>>,
+}
+
+#[cfg(any(windows, test))]
+fn load_windows_runtime(
+    runtime_binary: &Path,
+    runtime_hash: &str,
+) -> Result<WindowsRuntime, DaemonError> {
+    let runtime = fs::read(runtime_binary)?;
+    if super::sha256(&runtime) != runtime_hash {
+        return Err(state_error(
+            "codex_plugin_runtime_changed",
+            "The bundled Clumsies runtime changed during installation. Retry the integration.",
+        ));
+    }
+    let source_dir = runtime_binary.parent().ok_or_else(|| {
+        DaemonError::InvalidRequest("Codex runtime must have an installation directory".to_owned())
+    })?;
+    let mut files = std::collections::BTreeMap::from([("clumsiesd.exe".into(), runtime)]);
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
+        {
+            ManagedPathGuard::capture_under(source_dir, &entry.path())?;
+            files.insert(entry.file_name(), fs::read(entry.path())?);
+        }
+    }
+    // Installer-only releases can update the CRT without rebuilding the EXE.
+    let mut digest = Sha256::new();
+    for (name, contents) in &files {
+        let name = name.as_encoded_bytes();
+        digest.update((name.len() as u64).to_be_bytes());
+        digest.update(name);
+        digest.update(Sha256::digest(contents));
+    }
+    Ok(WindowsRuntime {
+        hash: hex::encode(digest.finalize()),
+        files,
+    })
+}
+
+#[cfg(any(windows, test))]
+fn stage_windows_runtime(
+    profile: &Path,
+    runtime_binary: &Path,
+    runtime_hash: &str,
+) -> Result<PathBuf, DaemonError> {
+    // Store-installed hosts can redirect AppData to a different filesystem view.
+    let bundle = load_windows_runtime(runtime_binary, runtime_hash)?;
+    let staged = windows_runtime_path(profile, &bundle.hash)?;
+    for (name, contents) in bundle.files {
+        let path = staged.with_file_name(name);
+        let guard = ManagedPathGuard::capture_under(profile, &path)?;
+        // Existing Codex sessions may still hold this version's executable open.
+        if fs::read(&path).ok().as_deref() != Some(contents.as_slice()) {
+            guard.revalidate()?;
+            write_private_file(&path, &contents)?;
+        }
+    }
+    Ok(staged)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
     use super::super::shell_single_quote;
     use super::*;
+
+    #[test]
+    fn windows_runtime_remains_available_outside_the_appdata_installation() {
+        let profile = tempfile::tempdir().unwrap();
+        let installed = profile.path().join("AppData/Local/Programs/Clumsies");
+        fs::create_dir_all(&installed).unwrap();
+        let runtime = installed.join("clumsiesd.exe");
+        fs::write(&runtime, b"bundled runtime").unwrap();
+        fs::write(installed.join("vcruntime140.dll"), b"bundled CRT").unwrap();
+        fs::write(installed.join("README.txt"), b"not a runtime dependency").unwrap();
+        let hash = super::super::sha256(b"bundled runtime");
+
+        let staged = stage_windows_runtime(profile.path(), &runtime, &hash).unwrap();
+        assert!(!staged.starts_with(profile.path().join("AppData")));
+        let original_modified = fs::metadata(&staged).unwrap().modified().unwrap();
+        stage_windows_runtime(profile.path(), &runtime, &hash).unwrap();
+        assert_eq!(
+            fs::metadata(&staged).unwrap().modified().unwrap(),
+            original_modified
+        );
+        fs::rename(
+            &installed,
+            profile.path().join("installation-not-visible-to-codex"),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&staged).unwrap(), b"bundled runtime");
+        assert_eq!(
+            fs::read(staged.with_file_name("vcruntime140.dll")).unwrap(),
+            b"bundled CRT"
+        );
+        assert!(!staged.with_file_name("README.txt").exists());
+    }
+
+    #[test]
+    fn windows_runtime_rejects_changed_source_and_preserves_previous_versions() {
+        let profile = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        let runtime = bundle.path().join("clumsiesd.exe");
+        fs::write(&runtime, b"first runtime").unwrap();
+        let first_hash = super::super::sha256(b"first runtime");
+        let first = stage_windows_runtime(profile.path(), &runtime, &first_hash).unwrap();
+        fs::write(&runtime, b"second runtime").unwrap();
+        assert!(stage_windows_runtime(profile.path(), &runtime, &first_hash).is_err());
+        let second = stage_windows_runtime(
+            profile.path(),
+            &runtime,
+            &super::super::sha256(b"second runtime"),
+        )
+        .unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&first).unwrap(), b"first runtime");
+        assert_eq!(fs::read(&second).unwrap(), b"second runtime");
+        assert!(stage_windows_runtime(profile.path(), &runtime, "../../escape").is_err());
+    }
+
+    #[test]
+    fn windows_runtime_versions_dependencies_even_when_the_executable_is_unchanged() {
+        let profile = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        let runtime = bundle.path().join("clumsiesd.exe");
+        let dll = bundle.path().join("vcruntime140.dll");
+        fs::write(&runtime, b"runtime").unwrap();
+        fs::write(&dll, b"first CRT").unwrap();
+        let hash = super::super::sha256(b"runtime");
+        let first = stage_windows_runtime(profile.path(), &runtime, &hash).unwrap();
+        fs::write(&dll, b"second CRT").unwrap();
+        let second = stage_windows_runtime(profile.path(), &runtime, &hash).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            fs::read(first.with_file_name("vcruntime140.dll")).unwrap(),
+            b"first CRT"
+        );
+        assert_eq!(
+            fs::read(second.with_file_name("vcruntime140.dll")).unwrap(),
+            b"second CRT"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn windows_runtime_refuses_redirected_managed_directories() {
+        let profile = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        let runtime = bundle.path().join("clumsiesd.exe");
+        fs::write(&runtime, b"runtime").unwrap();
+        std::os::unix::fs::symlink(outside.path(), profile.path().join(".clumsies")).unwrap();
+        assert!(
+            stage_windows_runtime(profile.path(), &runtime, &super::super::sha256(b"runtime"))
+                .is_err()
+        );
+        assert!(outside.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn staged_windows_runtime_launches_without_the_original_installation() {
+        const CHILD: &str = "CLUMSIES_TEST_STAGED_CODEX_RUNTIME";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() }.is_null());
+            return;
+        }
+        let profile = tempfile::tempdir().unwrap();
+        let installed = profile.path().join("AppData/Local/Programs/Clumsies");
+        fs::create_dir_all(&installed).unwrap();
+        let runtime = installed.join("clumsiesd.exe");
+        fs::copy(std::env::current_exe().unwrap(), &runtime).unwrap();
+        let hash = super::super::sha256_file(&runtime).unwrap();
+        let staged = stage_windows_runtime(profile.path(), &runtime, &hash).unwrap();
+        fs::rename(
+            &installed,
+            profile.path().join("installation-not-visible-to-codex"),
+        )
+        .unwrap();
+        let mut command = tokio::process::Command::new(&staged);
+        command
+            .args([
+                "--exact",
+                "agent_adapter::codex_plugin::tests::staged_windows_runtime_launches_without_the_original_installation",
+            ])
+            .env(CHILD, "1");
+        let output = command_output(command, CLI_TIMEOUT, "test_timeout", "child timed out")
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[cfg(windows)]
     #[tokio::test]
@@ -680,10 +909,13 @@ mod tests {
     #[tokio::test]
     async fn inspection_without_codex_is_read_only() {
         let root = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        let runtime = bundle.path().join("clumsiesd.exe");
+        fs::write(&runtime, b"runtime").unwrap();
         let status = inspect(
             root.path(),
-            Path::new("/Applications/Clumsies.app/Contents/Resources/clumsiesd"),
-            &"a".repeat(64),
+            &runtime,
+            &super::super::sha256(b"runtime"),
             None,
             None,
         )
