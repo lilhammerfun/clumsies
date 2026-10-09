@@ -1862,7 +1862,20 @@ impl DesktopApp {
                 if self.projects_error.as_ref() != Some(&error) {
                     crate::logging::error(&format!("could not refresh the projects: {error}"));
                 }
+                // Store edits under the old session before a new sign-in can replace it.
+                if reauthentication_ready(&error, || {
+                    !self.memory_busy && self.flush_pending_saves(cx)
+                }) {
+                    self.project_refresh.invalidate();
+                    self.checkout_read.invalidate();
+                    self.signed_in = false;
+                    self.account = None;
+                    self.reviews.set_project(None, cx);
+                    self.dashboard.set_project(None, cx);
+                    self.sign_in.error = Some("Your session has expired. Sign in again.".into());
+                }
                 self.projects_error = Some(error);
+                cx.notify();
                 return;
             }
         };
@@ -2608,9 +2621,39 @@ fn session_available(projects_error: Option<&str>, account_error: Option<&str>) 
         .any(engine::missing_session)
 }
 
+fn reauthentication_ready(error: &str, preserve_edits: impl FnOnce() -> bool) -> bool {
+    engine::missing_session(error) && preserve_edits()
+}
+
 #[cfg(test)]
 mod session_tests {
-    use super::session_available;
+    use super::{reauthentication_ready, session_available};
+
+    #[test]
+    fn expired_refresh_preserves_edits_before_reauthentication() {
+        let unauthorized = "the Server answered HTTP 401: Session expired";
+        let mut saved = false;
+        assert!(reauthentication_ready(unauthorized, || {
+            saved = true;
+            true
+        }));
+        assert!(saved);
+        assert!(!reauthentication_ready(unauthorized, || false));
+    }
+
+    #[test]
+    fn transient_refresh_errors_do_not_interrupt_editing() {
+        for error in [
+            "HTTP connection failed",
+            "daemon IPC error",
+            "the Server answered HTTP 403: Forbidden",
+            "the Server answered HTTP 500: Unavailable",
+        ] {
+            assert!(!reauthentication_ready(error, || {
+                panic!("a transient failure must not flush or replace editors")
+            }));
+        }
+    }
 
     #[test]
     fn either_authenticated_read_can_require_sign_in() {
