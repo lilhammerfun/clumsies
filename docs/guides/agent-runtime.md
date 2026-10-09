@@ -1,5 +1,7 @@
 # Connect a coding agent
 
+For Windows/Linux, use [CLI Agent setup](/guides/cli-commands): enable the host with `clumsies agent enable`, bind the working directory, and reconnect the host. The App steps below apply to macOS.
+
 Use this guide to enable or repair an agent integration on your Mac. To try the complete workflow with Codex, follow [Use project Memory in Codex](/quickstart/use-with-agent).
 
 An integration makes the Clumsies tools available to the agent. A repository binding determines which Project those tools can access. You need both.

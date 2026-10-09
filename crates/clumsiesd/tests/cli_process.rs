@@ -27,6 +27,8 @@ struct Protocol {
     refreshes: usize,
     /// Allow one real daemon refresh retry before testing revoked credentials.
     recover_refresh: bool,
+    /// Inject a non-retryable upload error until the operator explicitly retries.
+    fail_upload: bool,
 }
 
 /// One fixture process and its independent home, daemon database, and IPC endpoint.
@@ -166,6 +168,9 @@ fn isolate(command: &mut Command, root: &Path) {
         .env("CLUMSIES_SYNC_ENABLED", "true")
         .env("CLUMSIES_SYNC_INTERVAL_MS", "200")
         .env_remove("CLUMSIES_DEV_INSTANCE_ID")
+        .env_remove("CLUMSIES_SERVER_URL")
+        .env_remove("CLUMSIES_PROJECT_ID")
+        .env_remove("CLUMSIES_MEMORY_GUIDELINES_PATH")
         .env_remove("CLUMSIES_DAEMON_SOCKET")
         .env_remove("CLUMSIES_AGENT_RUNTIME_TEST_MACH_SERVICE");
 }
@@ -195,6 +200,15 @@ async fn api(
 ) -> Response {
     let path = request.uri().path().to_owned();
     let method = request.method().clone();
+    let authenticated = request
+        .headers()
+        .get("authorization")
+        .is_some_and(|header| {
+            matches!(
+                header.to_str(),
+                Ok("Bearer fixture-access" | "Bearer fixture-renewed")
+            )
+        });
     let reference = request
         .headers()
         .get("if-match")
@@ -209,8 +223,16 @@ async fn api(
         return Json(json!({"password_enabled":true,"oidc_enabled":false,"google":false}))
             .into_response();
     }
-    if path == "/api/v1/auth/password/sessions" {
+    if matches!(
+        path.as_str(),
+        "/api/v1/auth/password/sessions"
+            | "/api/v1/auth/invitations/accept"
+            | "/api/v1/auth/password/reset"
+    ) {
         assert_eq!(body["password"], "fixture-secret");
+        if path != "/api/v1/auth/password/sessions" {
+            assert_eq!(body["token"], "fixture-invitation");
+        }
         protocol.expired = false;
         return Json(json!({"access_token":"fixture-access","refresh_token":"fixture-refresh"}))
             .into_response();
@@ -235,6 +257,13 @@ async fn api(
     if path == "/fixture/expire" {
         protocol.expired = true;
         return Json(json!({})).into_response();
+    }
+    if path == "/fixture/upload-failure" {
+        protocol.fail_upload = body["enabled"] == true;
+        return Json(json!({})).into_response();
+    }
+    if !authenticated {
+        return failure(StatusCode::UNAUTHORIZED, "missing_session");
     }
     if protocol.expired {
         return failure(StatusCode::UNAUTHORIZED, "missing_session");
@@ -264,6 +293,12 @@ async fn api(
         }
         ("GET", "/api/v1/draft-events") => json!({"events":[],"next_cursor":null,"has_more":false}),
         ("POST", "/api/v1/drafts") => {
+            if protocol.fail_upload {
+                return failure(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "content_validation_failed",
+                );
+            }
             let operations: Vec<_> = body["operations"]
                 .as_array()
                 .unwrap()
@@ -463,17 +498,15 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     if real_models {
         assert_ne!(activate["result"]["isError"], true, "{activate}");
         assert!(activate.to_string().contains("guide.md"), "{activate}");
+    } else if activate["result"]["isError"] == true {
+        assert!(
+            activate.to_string().contains("search_model_preparing")
+                || activate.to_string().contains("search_index_preparing")
+                || activate.to_string().contains("search_index_not_ready"),
+            "{activate}"
+        );
     } else {
-        if activate["result"]["isError"] == true {
-            assert!(
-                activate.to_string().contains("search_model_preparing")
-                    || activate.to_string().contains("search_index_preparing")
-                    || activate.to_string().contains("search_index_not_ready"),
-                "{activate}"
-            );
-        } else {
-            assert!(activate.to_string().contains("guide.md"), "{activate}");
-        }
+        assert!(activate.to_string().contains("guide.md"), "{activate}");
     }
     let created = fixture.json(
         &["review", "create", draft, "--title", "CLI proposal"],
@@ -636,4 +669,103 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
         None,
     );
     fixture.json(&["logout"], None);
+}
+
+/// Exercises account admission, adapter ownership, and rejection through shipped processes.
+#[test]
+fn cli_redeems_installs_host_and_rejects_review() {
+    let fixture = Fixture::start();
+    fixture.json(
+        &[
+            "redeem",
+            "--server",
+            &fixture.origin,
+            "--username",
+            "owner",
+            "--stdin",
+        ],
+        Some(r#"{"token":"fixture-invitation","password":"fixture-secret"}"#),
+    );
+    fixture.json(&["project", "join", "prj_fixture"], None);
+    let workspace = fixture.root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    fixture.json(
+        &[
+            "project",
+            "bind",
+            "prj_fixture",
+            workspace.to_str().unwrap(),
+        ],
+        None,
+    );
+    let host_config = fixture.root.path().join(".config/opencode/opencode.json");
+    std::fs::create_dir_all(host_config.parent().unwrap()).unwrap();
+    std::fs::write(&host_config, r#"{"theme":"retained"}"#).unwrap();
+    fixture.json(&["agent", "enable", "opencode"], None);
+    let installed = std::fs::read_to_string(&host_config).unwrap();
+    assert!(installed.contains("clumsiesd") && installed.contains("retained"));
+    fixture.json(&["agent", "disable", "opencode"], None);
+    let removed = std::fs::read_to_string(&host_config).unwrap();
+    assert!(!removed.contains("clumsiesd") && removed.contains("retained"));
+    let service = reqwest::blocking::Client::new();
+    service
+        .post(format!("{}/fixture/upload-failure", fixture.origin))
+        .json(&json!({"enabled":true}))
+        .send()
+        .unwrap();
+    let store = fixture.mcp(&workspace, json!({"op":{"store":{"resource":"memory","create":{"path":"reject.md","body":"# Proposed\n"}}}}));
+    assert_ne!(store["result"]["isError"], true, "{store}");
+    let listed = fixture.json(&["draft", "list"], None);
+    let draft = listed["items"][0]["draft_id"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fixture.json(&["draft", "show", draft], None)["draft"]["failed_operation_count"] == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "Injected upload failure did not reach the durable queue"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        !fixture
+            .cli(
+                &["review", "create", draft, "--title", "Failed upload"],
+                None
+            )
+            .status
+            .success()
+    );
+    service
+        .post(format!("{}/fixture/upload-failure", fixture.origin))
+        .json(&json!({"enabled":false}))
+        .send()
+        .unwrap();
+    fixture.json(&["draft", "retry", "prj_fixture"], None);
+    fixture.json(
+        &["review", "create", draft, "--title", "Reject proposal"],
+        None,
+    );
+    let rejected = fixture.json(
+        &[
+            "review",
+            "reject",
+            "rev_fixture",
+            "--version",
+            "1",
+            "--note",
+            "Needs revision",
+        ],
+        None,
+    );
+    assert_eq!(rejected["status"], "rejected");
+    fixture.json(&["logout"], None);
+    fixture.json(
+        &[
+            "redeem",
+            "--server",
+            &fixture.origin,
+            "--reset-password",
+            "--stdin",
+        ],
+        Some(r#"{"token":"fixture-invitation","password":"fixture-secret"}"#),
+    );
 }

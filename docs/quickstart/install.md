@@ -10,6 +10,8 @@ next:
 ---
 # Install Clumsies
 
+On Windows/Linux, use the [CLI installation and Review workflow](/guides/cli-commands). It runs the shared daemon without a desktop App. The instructions below cover macOS.
+
 ## Download and install
 
 Supports **macOS 14 or later on Apple Silicon Macs (M1 or newer)**, without build tools.
