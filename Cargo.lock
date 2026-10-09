@@ -1270,7 +1270,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clumsiesd"
-version = "0.20.5"
+version = "0.20.6"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2044,7 +2044,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.20.5"
+version = "0.20.6"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7994,7 +7994,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.20.5"
+version = "0.20.6"
 dependencies = [
  "argon2",
  "async-trait",
