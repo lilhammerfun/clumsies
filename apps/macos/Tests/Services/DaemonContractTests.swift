@@ -1170,7 +1170,7 @@ final class DaemonContractTests: XCTestCase {
         ))
     }
 
-    func testMacAppBuildEmbedsDaemonWithoutTheArchivedZigClient() throws {
+    func testMacAppBuildEmbedsRustRuntimePairWithoutTheArchivedZigClient() throws {
         let macOSRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1184,13 +1184,17 @@ final class DaemonContractTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(projectYAML.contains("name: Embed clumsiesd"))
+        XCTAssertTrue(projectYAML.contains("name: Embed Clumsies runtime and CLI"))
+        XCTAssertTrue(projectYAML.contains("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/clumsies"))
         XCTAssertFalse(projectYAML.contains("Scripts/embed-client.sh"))
         XCTAssertFalse(projectYAML.contains("name: Embed clumsies\n"))
-        XCTAssertTrue(xcodeProject.contains("/* Embed clumsiesd */"))
+        XCTAssertTrue(xcodeProject.contains("/* Embed Clumsies runtime and CLI */"))
         XCTAssertFalse(xcodeProject.contains("embed-client.sh"))
         XCTAssertFalse(xcodeProject.contains("/* Embed clumsies */"))
         XCTAssertFalse(xcodeProject.contains("zig build"))
+        let embedScript = try String(contentsOf: macOSRoot.appending(path: "Scripts/embed-daemon.sh"), encoding: .utf8)
+        XCTAssertTrue(embedScript.contains("cargo build -p clumsiesd --bins"))
+        XCTAssertFalse(embedScript.contains("zig build"))
     }
 
     func testBootstrapControllerDecodesCanonicalDaemonStatus() throws {

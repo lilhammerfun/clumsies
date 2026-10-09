@@ -11,7 +11,8 @@ CLUMSIES_MACOS_DERIVED_DATA="$derived_data" sh apps/macos/Scripts/build.sh
 
 test -d "$app"
 test -x "$runtime"
-test ! -e "$app/Contents/Resources/clumsies"
+test -x "$app/Contents/Resources/clumsies"
+"$app/Contents/Resources/clumsies" --version
 
 # The local Release build deliberately disables an outer signing identity and
 # leaves Swift-package frameworks unsigned. Ad-hoc seal the complete test copy,
@@ -19,10 +20,12 @@ test ! -e "$app/Contents/Resources/clumsies"
 # runtime identifier check below ensures this does not obscure its contract.
 codesign --force --deep --sign - "$app"
 codesign --verify --strict "$runtime"
+codesign --verify --strict "$app/Contents/Resources/clumsies"
 codesign --verify --deep --strict "$app"
 
 runtime_identifier="$(codesign -dvv "$runtime" 2>&1 | sed -n 's/^Identifier=//p')"
 test "$runtime_identifier" = "ai.clumsies.daemon"
+test "$(codesign -dvv "$app/Contents/Resources/clumsies" 2>&1 | sed -n 's/^Identifier=//p')" = ai.clumsies.cli
 codesign --display --verbose=4 "$app" 2>&1 | grep -q '^Signature=adhoc$'
 codesign --display --verbose=4 "$runtime" 2>&1 | grep -q '^Signature=adhoc$'
 

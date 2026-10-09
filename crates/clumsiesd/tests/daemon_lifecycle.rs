@@ -24,14 +24,16 @@ use clumsiesd::{
     DaemonProjectBindingReplaceRequest, DaemonProjectBindingResolveRequest,
     DaemonProjectCacheClearRequest, DaemonProjectCheckout, DaemonProjectCheckoutRequest,
     DaemonProjectConfigUpdateRequest, DaemonProjectSelectionRequest, DaemonProjectStorage,
-    DaemonProjectStorageMode, DaemonProjectStorageMoveState, DaemonProjectStorageReplaceRequest,
-    DaemonProjectStorageRequest, DaemonProjectStorageResetRequest, DaemonProjectSyncRetryRequest,
-    DaemonProjectSyncStatusRequest, DaemonServerRequest, DaemonState, DaemonSyncRetryRequest,
-    DaemonUpdateDraftOperation, DraftOperationSyncStatus, IDENTIFIER_NAMESPACE, LaunchAgentConfig,
-    LaunchAgentController, LaunchAgentRuntimeStatus, ProjectAgentAdapterDelivery,
-    ProjectAgentAdapterKind, ProjectAgentAdapterRuntimeRequirement, ServerCredentials,
-    SyncRetryChannel, SyncState,
+    DaemonProjectStorageMode, DaemonProjectStorageMoveState, DaemonProjectStorageRequest,
+    DaemonProjectSyncRetryRequest, DaemonProjectSyncStatusRequest, DaemonServerRequest,
+    DaemonState, DaemonSyncRetryRequest, DaemonUpdateDraftOperation, DraftOperationSyncStatus,
+    IDENTIFIER_NAMESPACE, LaunchAgentConfig, LaunchAgentController, LaunchAgentRuntimeStatus,
+    ProjectAgentAdapterDelivery, ProjectAgentAdapterKind, ProjectAgentAdapterRuntimeRequirement,
+    ServerCredentials, SyncRetryChannel, SyncState,
 };
+#[cfg(target_os = "macos")]
+use clumsiesd::{DaemonProjectStorageReplaceRequest, DaemonProjectStorageResetRequest};
+
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -99,6 +101,7 @@ fn directory_security_bookmark(path: &Path) -> String {
     STANDARD.encode(bookmark.to_vec())
 }
 
+#[cfg(target_os = "macos")]
 async fn wait_for_storage_move(
     state: &DaemonState,
     move_id: &str,

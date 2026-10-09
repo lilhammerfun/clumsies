@@ -234,7 +234,7 @@ enum DraftCommand {
 fn main() {
     if let Err(error) = run(Cli::parse()) {
         eprintln!("clumsies: {error}");
-        if matches!(error.downcast_ref::<DaemonError>(), Some(DaemonError::Remote(error)) if error.code == "missing_session")
+        if matches!(error.downcast_ref::<DaemonError>(), Some(DaemonError::Remote(error)) if error.code == "missing_session" || error.details["status"] == 401)
         {
             eprintln!("Run clumsies login again; local drafts and bindings are retained.");
         }

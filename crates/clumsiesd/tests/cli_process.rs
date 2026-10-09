@@ -643,7 +643,11 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
         .unwrap();
     let expired = fixture.cli(&["project", "list"], None);
     assert!(!expired.status.success());
-    assert!(String::from_utf8_lossy(&expired.stderr).contains("login"));
+    assert!(
+        String::from_utf8_lossy(&expired.stderr).contains("login"),
+        "{}",
+        String::from_utf8_lossy(&expired.stderr)
+    );
     assert!(
         !fixture.json(&["draft", "list"], None)["items"]
             .as_array()
