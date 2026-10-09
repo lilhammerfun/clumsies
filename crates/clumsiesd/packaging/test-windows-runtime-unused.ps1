@@ -44,7 +44,9 @@ try {
     }
     AssertRuntimeUnused
     if ($script:waits -eq 0) { throw 'Transient-lock path was not exercised' }
-    if (-not $child.WaitForExit(5000) -or $child.ExitCode -ne 0) { throw 'Holder failed to exit' }
+    if (-not $child.WaitForExit(5000)) { throw 'Holder did not exit' }
+    $child.Refresh()
+    if ($child.ExitCode -ne 0) { throw 'Holder failed to exit' }
     $script:releaseOnWait = $false
     $held = [IO.File]::Open("$runtime\clumsiesd.exe", 'Open', 'Read', 'Read')
     $failed = $false
