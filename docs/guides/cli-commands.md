@@ -4,7 +4,7 @@ description: Install the Windows/Linux CLI, connect an Agent, and review and pub
 ---
 # Clumsies CLI
 
-`clumsies` is the human client. `clumsiesd` owns credentials, local drafts, caches, directory bindings, synchronization, and the existing `clumsiesd mcp serve` Agent entry. Both executables come from one Rust package and must be upgraded together. Windows/Linux GUI development is paused; the native macOS App remains supported.
+`clumsies` is the human client. `clumsiesd` owns credentials, local drafts, caches, directory bindings, synchronization, and the existing `clumsiesd mcp serve` Agent entry. Both executables come from one Rust package and must be upgraded together. Windows/Linux GUI development is paused and its implementation and packaging have been removed from the active tree; the native macOS App remains supported.
 
 ## Install
 

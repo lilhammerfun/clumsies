@@ -64,10 +64,6 @@ test-dev-macos:
 
 # Manage the Linux Dev Instance. The argument is the script's command, so
 # "up" (default) | sign-in | status | logs | down | reset all fit here, and
-# "up --seed-memory" publishes starter Memory for the client to show.
+# "up --seed-memory" publishes starter Memory for CLI/MCP testing.
 dev-linux command="up":
     python3 dev/dev-instance-linux.py {{command}}
-
-# Add isolated Memory UI fixtures to the running Linux Dev Instance.
-seed-memory-ui:
-    python3 dev/seed-memory-ui-linux.py

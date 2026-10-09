@@ -57,7 +57,7 @@ macOS 首次打开授权和登录需要我操作时，告诉我具体步骤。
 
 **Windows/Linux** 使用 [CLI 安装与 Review 工作流](docs/zh/guides/cli-commands.md)。CLI 工作流生成 Linux 用户安装包、Windows 用户安装器和便携 ZIP，后续标签发布会包含这些产物；macOS 原生 App 也内嵌人工操作 CLI。
 
-Windows/Linux 图形客户端暂停维护。这两个平台只接收围绕 CLI、`clumsiesd`、Agent/MCP 集成及其安装分发的修复和功能 PR。桌面端修复和功能需等维护者承担持续的平台测试、打包、发布和兼容性维护后再恢复接收。
+Windows/Linux 图形客户端暂停维护，其源码、GUI 安装包配置和专用工作流已从当前代码树移除；旧实现保留在 Git 历史中。这两个平台只接收围绕 CLI、`clumsiesd`、Agent/MCP 集成及其安装分发的修复和功能 PR。桌面端修复和功能需等维护者承担持续的平台测试、打包、发布和兼容性维护后再恢复接收。
 
 ## Agent 支持与使用条件
 
