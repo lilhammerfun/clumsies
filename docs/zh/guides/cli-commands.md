@@ -200,6 +200,47 @@ clumsies review reject REVIEW_ID --version 1 --note '请修改提案'
 
 ### 协调上游变化
 
+先用 `draft sync LOCAL_DRAFT_ID` 确认全部操作已上传，再用 `draft diff LOCAL_DRAFT_ID` 查看对不可变祖先的差异。尚未上传或上传失败时，diff 会明确拒绝，而不是展示不完整内容。
+
+`draft plan` 和 `review plan` 默认显示冲突文件、祖先／上游／提案差异，以及版本、候选和引用。计划只生成证据，不会应用变更。
+
+普通文本冲突无需编辑 JSON：
+
+```sh
+clumsies draft plan LOCAL_DRAFT_ID
+clumsies draft rebase LOCAL_DRAFT_ID --candidate CANDIDATE_ID --version DRAFT_VERSION --reference CURRENT_COMMIT_ID --edit
+
+clumsies review show REVIEW_ID
+clumsies review plan REVIEW_ID --version INSPECTED_VERSION
+clumsies review update REVIEW_ID --resolve --version INSPECTED_VERSION --reference CURRENT_COMMIT_ID
+clumsies review diff REVIEW_ID
+```
+
+编辑器只显示候选合并预览的正文，保留周围已经自动合并的内容。删除生成的所有冲突标记，留下最终正文，再保存退出。CLI 保留候选的资源身份、作用域和内容元数据；Review 更新保留全部提案和各自版本。不会自动批准或合并。
+
+路径与删除必须明确选择：
+
+| 冲突 | 单个 Draft 的 rebase 参数 | Review update --resolve 参数 |
+| --- | --- | --- |
+| 路径冲突／目标路径被占用 | `--path FINAL_PATH` | `--path SERVER_DRAFT_ID=FINAL_PATH` |
+| 删除冲突，保留仍存在的资源 | `--keep` | `--keep SERVER_DRAFT_ID` |
+| 明确删除资源 | `--delete`（不加 `--edit`） | `--delete SERVER_DRAFT_ID` |
+
+Review 参数可重复，使用 plan 显示的服务器 Draft ID；`draft rebase` 的位置参数仍是本地 Draft ID。删除不能同时重命名或提供正文。仅路径冲突与明确的保留／删除选择不要求打开编辑器。非内容、路径或存在性冲突仍使用下面的完整 JSON 方式。
+
+也可直接提供最终正文文件，适用于无交互终端或恢复失败的编辑：
+
+```sh
+clumsies draft rebase LOCAL_DRAFT_ID --candidate CANDIDATE_ID --version DRAFT_VERSION --reference CURRENT_COMMIT_ID --content resolved.txt
+clumsies review update REVIEW_ID --resolve --version INSPECTED_VERSION --reference CURRENT_COMMIT_ID --content SERVER_DRAFT_ID=resolved.txt
+# stdin：单个 Draft 使用 --content -；Review 使用 --content SERVER_DRAFT_ID=-。
+```
+
+多提案编辑按计划的候选顺序进行。只在全部编辑和校验完成后提交一次更新。取消、残留冲突标记或服务器拒绝时，保留这一批全部编辑文件并输出位置（多文件依次为 `input-1.txt`、`input-2.txt`）。恢复时通过对应的 `--content` 文件参数提交；文件路径有空格时请引用整个参数。版本或引用过期时，先重新 show/diff/plan，结合新证据检查已保存的正文，再决定是否重用；不能只替换版本号盲目重试。更新可能撤销批准，必须重新审阅。
+
+以下 JSON 输入继续用于脚本和完整状态编辑。
+
+
 初次提交前，`draft plan LOCAL_DRAFT_ID` 返回候选，其中含祖先、上游、提案、冲突和可编辑的合并预览。单独应用候选：
 
 ```sh

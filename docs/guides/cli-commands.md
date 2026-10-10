@@ -193,6 +193,47 @@ Versions above are examples, not defaults. Use the version and reference you act
 
 ### Reconcile upstream changes
 
+Run `draft sync LOCAL_DRAFT_ID` before `draft diff LOCAL_DRAFT_ID` to compare the complete synchronized proposal with its immutable ancestor. Diff rejects pending or failed uploads rather than showing incomplete content.
+
+`draft plan` and `review plan` show conflict paths, ancestor/upstream/proposal differences, and the exact candidate, version, and reference guards. Computing a plan applies no changes.
+
+Resolve ordinary text conflicts without editing JSON:
+
+```sh
+clumsies draft plan LOCAL_DRAFT_ID
+clumsies draft rebase LOCAL_DRAFT_ID --candidate CANDIDATE_ID --version DRAFT_VERSION --reference CURRENT_COMMIT_ID --edit
+
+clumsies review show REVIEW_ID
+clumsies review plan REVIEW_ID --version INSPECTED_VERSION
+clumsies review update REVIEW_ID --resolve --version INSPECTED_VERSION --reference CURRENT_COMMIT_ID
+clumsies review diff REVIEW_ID
+```
+
+The editor contains only the partial merge's text, including automatically merged surrounding content. Remove all generated conflict markers, leave the final text, and save/exit. Resource identity, authority scope, and content metadata remain intact; Review updates retain every proposal and its revision. No decision or publication is automatic.
+
+Path and deletion choices must be explicit:
+
+| Conflict | Single Draft rebase option | Review update --resolve option |
+| --- | --- | --- |
+| Path conflict or occupied path | `--path FINAL_PATH` | `--path SERVER_DRAFT_ID=FINAL_PATH` |
+| Deletion conflict: keep the surviving resource | `--keep` | `--keep SERVER_DRAFT_ID` |
+| Explicitly delete the resource | `--delete` (omit `--edit`) | `--delete SERVER_DRAFT_ID` |
+
+Review options may repeat and use the Server Draft IDs shown by the plan; the positional `draft rebase` ID remains local. Deletion cannot also rename or supply content. Path-only conflicts and explicit keep/delete choices do not require an editor. Unsupported conflict dimensions use the full JSON workflow below.
+
+Supply final text files for noninteractive use or to recover an interrupted edit:
+
+```sh
+clumsies draft rebase LOCAL_DRAFT_ID --candidate CANDIDATE_ID --version DRAFT_VERSION --reference CURRENT_COMMIT_ID --content resolved.txt
+clumsies review update REVIEW_ID --resolve --version INSPECTED_VERSION --reference CURRENT_COMMIT_ID --content SERVER_DRAFT_ID=resolved.txt
+# For stdin use --content - on Drafts or --content SERVER_DRAFT_ID=- on Reviews.
+```
+
+Multiple proposals are edited in candidate order. The CLI submits once, after all choices and edits validate. Cancellation, remaining markers, or Server rejection retains every editor file and reports its location (`input-1.txt`, `input-2.txt`, etc. for a batch). Recover with the matching `--content` file options; quote the entire argument when its path contains spaces. If the version/reference changed, inspect show/diff/plan again and reconcile saved text with the new evidence before reusing it. Do not blindly replace version numbers. Updates can invalidate approval and require another review.
+
+The following JSON inputs remain available for scripts and full-state editing.
+
+
 Before initial submission, `draft plan LOCAL_DRAFT_ID` returns a candidate containing the ancestor, upstream, proposal, conflicts, and optional merge preview. To apply it separately:
 
 ```sh

@@ -398,6 +398,122 @@ fn operation_summary(text: &mut String, operations: &Value) {
     }
 }
 
+/// Quotes a displayed command argument without allowing shell expansion.
+fn command_arg(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// Shows field-level conflicts and the exact guards needed for a later mutation.
+fn plan_summary(text: &mut String, value: &Value) {
+    let plan = value.get("plan").unwrap_or(value);
+    let review = &plan["detail"]["review"];
+    if let Some(id) = review["review_id"].as_str() {
+        fields_text(text, review, &["review_id", "version", "status"]);
+        let reference = plan["candidates"]
+            .as_array()
+            .and_then(|cs| cs.first())
+            .and_then(|c| c["current_commit_id"].as_str())
+            .unwrap_or("ref-none");
+        text.push_str(&format!("Resolve after inspection: clumsies review update {} --resolve --version {} --reference {}\n", command_arg(id), review["version"], command_arg(reference)));
+    }
+    let candidates: Vec<&Value> = match plan["candidates"].as_array() {
+        Some(candidates) => candidates.iter().collect(),
+        None if plan.get("candidate_id").is_some() => vec![plan],
+        _ => Vec::new(),
+    };
+    if candidates.is_empty() {
+        text.push_str("No reconciliation candidates. Use --json for the complete plan.\n");
+    }
+    for candidate in candidates {
+        text.push_str("\nProposal:\n");
+        fields_text(
+            text,
+            candidate,
+            &[
+                "draft_id",
+                "candidate_id",
+                "draft_version",
+                "status",
+                "valid",
+                "base_commit_id",
+                "current_commit_id",
+            ],
+        );
+        for (label, field) in [
+            ("Ancestor", "base_state"),
+            ("Upstream", "current_state"),
+            ("Proposal", "draft_state"),
+        ] {
+            let state = &candidate[field];
+            text.push_str(&format!(
+                "{label}: exists={} path={}\n",
+                state["exists"],
+                state["resource"]["path"].as_str().unwrap_or("(none)")
+            ));
+        }
+        let id = candidate["draft_id"].as_str().unwrap_or("DRAFT_ID");
+        fields_text(
+            text,
+            &candidate["draft_state"]["resource"],
+            &["id", "scope"],
+        );
+        let existence_target = if value.get("local_draft_id").is_some() {
+            String::new()
+        } else {
+            command_arg(id)
+        };
+        if let Some(conflicts) = candidate["conflicts"].as_array() {
+            for conflict in conflicts {
+                let field = conflict["field"].as_str().unwrap_or("unknown");
+                text.push_str(&format!(
+                    "Conflict: {} / {field}\n",
+                    conflict["kind"].as_str().unwrap_or("unknown")
+                ));
+                if conflict["kind"] == "content" && field == "content" {
+                    for (label, side) in [("upstream", "current"), ("proposal", "draft")] {
+                        text.push_str(
+                            &similar::TextDiff::from_lines(
+                                conflict["base"].as_str().unwrap_or(""),
+                                conflict[side].as_str().unwrap_or(""),
+                            )
+                            .unified_diff()
+                            .header("ancestor", label)
+                            .to_string(),
+                        );
+                        text.push('\n');
+                    }
+                    text.push_str("Remove every generated conflict marker before saving.\n");
+                } else {
+                    fields_text(text, conflict, &["base", "current", "draft"]);
+                    if conflict["kind"] == "existence" {
+                        text.push_str(&format!(
+                            "Explicit choice: --keep {} or --delete {}\n",
+                            existence_target, existence_target
+                        ));
+                    } else if conflict["kind"] == "path" || conflict["kind"] == "path_occupied" {
+                        text.push_str(&format!(
+                            "Explicit choice: --path {}\n",
+                            command_arg(&if value.get("local_draft_id").is_some() {
+                                "FINAL_PATH".to_owned()
+                            } else {
+                                format!("{id}=FINAL_PATH")
+                            })
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(local) = value["local_draft_id"].as_str() {
+            let reference = candidate["current_commit_id"]
+                .as_str()
+                .unwrap_or("ref-none");
+            text.push_str(&format!("Apply after inspection: clumsies draft rebase {} --candidate {} --version {} --reference {}{}\n", command_arg(local), command_arg(candidate["candidate_id"].as_str().unwrap_or("CANDIDATE")), candidate["draft_version"], command_arg(reference), if candidate["status"] == "conflicts" { " --edit" } else { "" }));
+        }
+    }
+    text.push_str("For deletion choices, omit draft rebase --edit and supply --keep or --delete; use --path for path conflicts.\n");
+    text.push_str("Use --json to export full candidate evidence; --verbose shows all fields.\n");
+}
+
 /// Command-specific summaries retain decision evidence while hiding transport internals.
 fn render(kind: &str, value: &Value, verbose: bool) -> String {
     let mut text = String::new();
@@ -470,12 +586,16 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
             }
         }
         "review" | "diff" => {
-            let review = value.get("review").unwrap_or(value);
+            let review = value
+                .get("review")
+                .or_else(|| value.get("draft"))
+                .unwrap_or(value);
             fields_text(
                 &mut text,
                 review,
                 &[
                     "review_id",
+                    "draft_id",
                     "title",
                     "description",
                     "project_id",
@@ -563,8 +683,7 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
         }
         "plan" => {
             text.push_str("Reconciliation plan (no changes applied):\n");
-            evidence(&mut text, value, 0);
-            text.push_str("Use --json to export an editable machine-readable plan.\n");
+            plan_summary(&mut text, value);
         }
         "agent" => {
             text.push_str("Agent integrations:\n");
@@ -633,6 +752,36 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconciliation_summary_exposes_guards_and_each_conflict_dimension() {
+        let candidate = json!({"draft_id":"d", "candidate_id":"c", "draft_version":3, "status":"conflicts", "valid":true, "current_commit_id":"head", "base_state":{"exists":true,"resource":{"path":"old.md"}}, "current_state":{"exists":true,"resource":{"path":"upstream.md"}}, "draft_state":{"exists":true,"resource":{"path":"local.md"}}, "conflicts":[{"kind":"content","field":"content","base":"old\n","current":"upstream\n","draft":"local\n"},{"kind":"path","field":"path","base":"old.md","current":"upstream.md","draft":"local.md"},{"kind":"existence","field":"exists","base":"true","current":"false","draft":"true"}]});
+        let text = render(
+            "plan",
+            &json!({"plan":{"detail":{"review":{"review_id":"r","version":7}}, "candidates":[candidate.clone()]}}),
+            false,
+        );
+        for expected in [
+            "--resolve --version 7",
+            "candidate id: c",
+            "draft version: 3",
+            "+upstream",
+            "+local",
+            "d=FINAL_PATH",
+            "--keep 'd'",
+            "--delete 'd'",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        let mut local = candidate;
+        local["local_draft_id"] = json!("local");
+        let text = render("plan", &local, false);
+        assert!(
+            text.contains("draft rebase 'local' --candidate 'c' --version 3 --reference 'head'")
+        );
+        assert!(!text.contains("d=FINAL_PATH"));
+        assert_eq!(command_arg("a'$b"), "'a'\"'\"'$b'");
+    }
     use serde_json::json;
 
     /// Runs the real output producer in a subprocess with isolated pager configuration.

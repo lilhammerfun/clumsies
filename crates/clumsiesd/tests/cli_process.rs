@@ -166,7 +166,11 @@ impl Fixture {
                 "review",
                 "update",
                 "rev_fixture",
-                "--edit",
+                if mode == "content" || mode == "markers" {
+                    "--resolve"
+                } else {
+                    "--edit"
+                },
                 "--version",
                 "1",
                 "--reference",
@@ -299,6 +303,15 @@ fn remote_draft(request: &Value) -> Value {
 /// Returns current Review detail in the same proposal order used for submission.
 fn review_detail(protocol: &Protocol) -> Value {
     json!({"review":protocol.review, "draft":protocol.draft["draft"], "operations":protocol.draft["operations"], "drafts":[protocol.draft], "comments":[]})
+}
+
+/// Supplies complete three-way evidence with real generated content markers.
+fn conflict_candidate(protocol: &Protocol) -> Value {
+    let state = |text: &str| json!({"exists":true,"resource":protocol.draft["draft"]["resource"],"content":{"content":text,"is_directory":false}});
+    json!({"candidate_id":"candidate_fixture","draft_id":"drf_fixture","draft_version":protocol.draft["draft"]["version"],"current_commit_id":null,"base_commit_id":null,"status":"conflicts","valid":true,
+        "base_state":state("# Ancestor\n"), "current_state":state("# Upstream\n"), "draft_state":state("# Proposal\n"),
+        "conflicts":[{"kind":"content","field":"content","base":"# Ancestor\n","current":"# Upstream\n","draft":"# Proposal\n"}],
+        "merge_preview":{"marker_length":7,"state":state("<<<<<<< ours\n# Upstream\n||||||| ancestor\n# Ancestor\n=======\n# Proposal\n>>>>>>> theirs\n")}})
 }
 
 /// Responds with the public API error envelope rather than leaking request credentials.
@@ -457,11 +470,40 @@ async fn api(
             protocol.draft.clone()
         }
         ("GET", "/api/v1/drafts/drf_fixture") => protocol.draft.clone(),
+        ("POST", "/api/v1/drafts/drf_fixture/reconciliation-candidates") => {
+            if body["expected_draft_version"] != protocol.draft["draft"]["version"] {
+                return failure(StatusCode::CONFLICT, "version_conflict");
+            }
+            conflict_candidate(&protocol)
+        }
+        ("GET", "/api/v1/drafts/drf_fixture/reconciliation-candidates/candidate_fixture") => {
+            conflict_candidate(&protocol)
+        }
+        ("POST", "/api/v1/drafts/drf_fixture/rebases") => {
+            if body["expected_draft_version"] != protocol.draft["draft"]["version"]
+                || body["candidate_id"] != "candidate_fixture"
+            {
+                return failure(StatusCode::CONFLICT, "candidate_stale");
+            }
+            if reference.as_deref() != Some("\"ref-none\"") {
+                return failure(StatusCode::PRECONDITION_FAILED, "ref_conflict");
+            }
+            if body["resolved_state"].is_null() {
+                return failure(StatusCode::UNPROCESSABLE_ENTITY, "resolution_required");
+            }
+            protocol.draft["operations"][0]["content"] = body["resolved_state"]["content"].clone();
+            protocol.draft["draft"]["version"] =
+                json!(protocol.draft["draft"]["version"].as_i64().unwrap() + 1);
+            json!({"draft":protocol.draft,"approval_invalidated":false})
+        }
         ("POST", "/api/v1/reviews") => {
             if reference.as_deref() != Some("\"ref-none\"") {
                 return failure(StatusCode::PRECONDITION_FAILED, "ref_conflict");
             }
-            assert_eq!(body["drafts"][0]["expected_draft_version"], 1);
+            assert_eq!(
+                body["drafts"][0]["expected_draft_version"],
+                protocol.draft["draft"]["version"]
+            );
             protocol.review = json!({"review_id":"rev_fixture","project_id":"prj_fixture","draft_ids":["drf_fixture"],"version":1,"status":"open","title":body["title"],"description":body["description"],"coordination":protocol.draft["draft"]["coordination"]});
             review_detail(&protocol)
         }
@@ -477,7 +519,7 @@ async fn api(
             if body["expected_review_version"] != protocol.review["version"] {
                 return failure(StatusCode::CONFLICT, "version_conflict");
             }
-            json!({"detail":review_detail(&protocol), "candidates":[{"candidate_id":"candidate_fixture","draft_id":"drf_fixture","draft_version":protocol.draft["draft"]["version"],"current_commit_id":null,"status":"conflicts","valid":true,"merge_preview":{"state":{"exists":true,"resource":protocol.draft["draft"]["resource"],"content":{"content":"# Resolved CLI fixture\n"}}}}]})
+            json!({"detail":review_detail(&protocol), "candidates":[conflict_candidate(&protocol)]})
         }
         ("POST", "/api/v1/reviews/rev_fixture/updates") => {
             if reference.as_deref() != Some("\"ref-none\"") {
@@ -639,6 +681,21 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     );
     assert_eq!(open["items"][0]["draft_id"], draft);
     fixture.json(&["draft", "sync", draft], None);
+    let diff = fixture.json(&["draft", "diff", draft], None);
+    assert!(
+        diff["changes"][0]["unified_diff"]
+            .as_str()
+            .unwrap()
+            .contains("+# CLI fixture")
+    );
+    let draft_plan = fixture.cli(&["draft", "plan", draft, "--no-pager"], None);
+    assert!(draft_plan.status.success());
+    let readable = String::from_utf8_lossy(&draft_plan.stdout);
+    assert!(
+        readable.contains("Conflict: content")
+            && readable.contains("clumsies draft rebase")
+            && readable.contains("# Upstream")
+    );
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let status = fixture.json(&["status", "--project", "prj_fixture"], None);
@@ -783,6 +840,68 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
         .send()
         .unwrap();
     let plan = fixture.json(&["review", "plan", "rev_fixture", "--version", "1"], None);
+    let readable = fixture.cli(
+        &[
+            "review",
+            "plan",
+            "rev_fixture",
+            "--version",
+            "1",
+            "--no-pager",
+        ],
+        None,
+    );
+    assert!(readable.status.success());
+    let readable = String::from_utf8_lossy(&readable.stdout);
+    assert!(
+        readable.contains("--resolve --version 1")
+            && readable.contains("# Upstream")
+            && readable.contains("# Proposal")
+    );
+    let content_path = fixture.root.path().join("resolved content.txt");
+    std::fs::write(&content_path, "<<<<<<< unresolved\n").unwrap();
+    let content_arg = format!("drf_fixture={}", content_path.display());
+    let rejected = fixture.cli(
+        &[
+            "review",
+            "update",
+            "rev_fixture",
+            "--resolve",
+            "--version",
+            "1",
+            "--reference",
+            "ref-none",
+            "--content",
+            &content_arg,
+        ],
+        None,
+    );
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("Unresolved conflict markers"));
+    assert!(content_path.is_file());
+    for (version, reference) in [("99", "ref-none"), ("1", "other-reference")] {
+        assert!(
+            !fixture
+                .cli(
+                    &[
+                        "review",
+                        "update",
+                        "rev_fixture",
+                        "--resolve",
+                        "--version",
+                        version,
+                        "--reference",
+                        reference,
+                        "--content",
+                        &content_arg
+                    ],
+                    None
+                )
+                .status
+                .success()
+        );
+    }
+    std::fs::write(&content_path, "# Resolved CLI fixture\n").unwrap();
     let request_path = fixture.root.path().join("update.json");
     std::fs::write(&request_path, plan["request"].to_string()).unwrap();
     assert!(
@@ -820,7 +939,10 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
             fixture.json(&["review", "show", "rev_fixture"], None)["review"]["version"],
             1
         );
-        let edited = fixture.edit_review("resolve");
+        let markers = fixture.edit_review("markers");
+        assert!(!markers.status.success());
+        assert!(String::from_utf8_lossy(&markers.stderr).contains("Edited input retained at"));
+        let edited = fixture.edit_review("content");
         assert!(
             edited.status.success(),
             "{}",
@@ -834,10 +956,13 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
             "review",
             "update",
             "rev_fixture",
-            "--file",
-            request_path.to_str().unwrap(),
+            "--resolve",
+            "--version",
+            "1",
             "--reference",
             "ref-none",
+            "--content",
+            &content_arg,
         ],
         None,
     );
@@ -1019,10 +1144,22 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
 #[ignore = "invoked as an editor by the isolated CLI process"]
 fn fixture_review_editor() {
     let file = std::env::var_os("CLUMSIES_EDITOR_FILE").unwrap();
+    let mode = std::env::var("CLUMSIES_REVIEW_EDIT_TEST").unwrap();
+    if mode == "markers" {
+        return;
+    }
+    if mode == "content" {
+        let original = std::fs::read_to_string(&file).unwrap();
+        assert!(original.contains("<<<<<<< ours") && !original.contains("candidate_id"));
+        std::fs::write(file, "# Resolved CLI fixture\n").unwrap();
+        return;
+    }
     let mut buffer: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     buffer["request"]["drafts"][0]["resolved_state"] =
         buffer["plan"]["candidates"][0]["merge_preview"]["state"].clone();
-    if std::env::var("CLUMSIES_REVIEW_EDIT_TEST").unwrap() == "changed-version" {
+    buffer["request"]["drafts"][0]["resolved_state"]["content"]["content"] =
+        json!("# Resolved CLI fixture\n");
+    if mode == "changed-version" {
         buffer["request"]["expected_review_version"] = json!(2);
     }
     std::fs::write(file, buffer.to_string()).unwrap();
@@ -1196,6 +1333,31 @@ fn cli_redeems_installs_host_and_rejects_review() {
         .send()
         .unwrap();
     fixture.json(&["draft", "retry", "prj_fixture"], None);
+    fixture.json(&["draft", "sync", draft], None);
+    let saved = fixture.root.path().join("rebased.txt");
+    std::fs::write(&saved, "# Rebased proposal\n").unwrap();
+    let plan = fixture.json(&["draft", "plan", draft], None);
+    let version = plan["draft_version"].to_string();
+    let rebased = fixture.json(
+        &[
+            "draft",
+            "rebase",
+            draft,
+            "--candidate",
+            "candidate_fixture",
+            "--version",
+            &version,
+            "--reference",
+            "ref-none",
+            "--content",
+            saved.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(
+        rebased["draft"]["operations"][0]["content"]["content"],
+        "# Rebased proposal\n"
+    );
     fixture.json(
         &["review", "create", draft, "--title", "Reject proposal"],
         None,
