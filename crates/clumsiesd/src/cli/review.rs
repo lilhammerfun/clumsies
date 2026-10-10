@@ -3,20 +3,34 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use clumsiesd::*;
 use serde_json::{Value, json};
 
 use super::pagination::{self, PageArgs};
-use super::{identifier, read_json, resolve_project, server};
+use super::{current_binding, identifier, input, read_json, resolve_project, server};
+
+/// Shared decision explanation sources.
+#[derive(Args)]
+pub(super) struct DecisionNote {
+    /// Optional decision explanation.
+    #[arg(long, conflicts_with_all = ["note_file", "editor"])]
+    note: Option<String>,
+    /// Read the decision explanation from a file; '-' selects stdin.
+    #[arg(long, conflicts_with = "editor")]
+    note_file: Option<PathBuf>,
+    /// Compose the decision explanation using VISUAL or EDITOR.
+    #[arg(long)]
+    editor: bool,
+}
 
 /// Review workflow, with explicit concurrency inputs for human decisions.
 #[derive(Subcommand)]
 pub(super) enum ReviewCommand {
     /// List a project's Reviews.
     List {
-        /// Project ID or unique name.
-        project: String,
+        /// Project ID or unique name; omitted uses the current directory binding.
+        project: Option<String>,
         /// Page size and traversal controls.
         #[command(flatten)]
         page: PageArgs,
@@ -50,6 +64,12 @@ pub(super) enum ReviewCommand {
         /// Explanation of the proposal.
         #[arg(long, default_value = "")]
         description: String,
+        /// Read the proposal explanation from a UTF-8 file; '-' selects stdin.
+        #[arg(long, conflicts_with_all = ["description", "editor"])]
+        description_file: Option<PathBuf>,
+        /// Compose the proposal explanation using VISUAL or EDITOR.
+        #[arg(long, conflicts_with = "description")]
+        editor: bool,
         /// Candidate choices as an array of ReviewDraftRequest; inspect draft plan first.
         #[arg(long)]
         reconciliations: Option<PathBuf>,
@@ -61,9 +81,9 @@ pub(super) enum ReviewCommand {
         /// Revision from show or diff.
         #[arg(long)]
         version: i64,
-        /// Optional decision explanation.
-        #[arg(long)]
-        note: Option<String>,
+        /// Decision explanation and input source.
+        #[command(flatten)]
+        note: DecisionNote,
     },
     /// Reject an inspected proposal and return its drafts to the author.
     Reject {
@@ -72,9 +92,9 @@ pub(super) enum ReviewCommand {
         /// Revision from show or diff.
         #[arg(long)]
         version: i64,
-        /// Optional explanation.
-        #[arg(long)]
-        note: Option<String>,
+        /// Decision explanation and input source.
+        #[command(flatten)]
+        note: DecisionNote,
     },
     /// Publish an approved Review against the inspected upstream reference.
     Merge {
@@ -95,7 +115,14 @@ pub(super) enum ReviewCommand {
         #[arg(long)]
         version: i64,
         /// Comment text.
-        body: String,
+        #[arg(required_unless_present_any = ["file", "editor"], conflicts_with_all = ["file", "editor"])]
+        body: Option<String>,
+        /// Read the comment from a UTF-8 file; '-' selects stdin.
+        #[arg(long, conflicts_with = "editor")]
+        file: Option<PathBuf>,
+        /// Compose the comment using VISUAL or EDITOR.
+        #[arg(long)]
+        editor: bool,
     },
     /// Obtain a consistent update plan and an editable request template.
     Plan {
@@ -111,7 +138,14 @@ pub(super) enum ReviewCommand {
         id: String,
         /// JSON CreateReviewUpdateRequest containing all ordered proposals and inspected version.
         #[arg(long)]
-        file: PathBuf,
+        #[arg(required_unless_present = "edit", conflicts_with = "edit")]
+        file: Option<PathBuf>,
+        /// Edit the inspected plan's request with conflict evidence in VISUAL or EDITOR.
+        #[arg(long, requires = "version")]
+        edit: bool,
+        /// Inspected Review revision required for --edit.
+        #[arg(long, requires = "edit", conflicts_with = "file")]
+        version: Option<i64>,
         /// Upstream reference inspected in the plan; ref-none for an empty reference.
         #[arg(long)]
         reference: String,
@@ -129,7 +163,10 @@ pub(super) fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         ReviewCommand::List { project, page } => {
-            let project = resolve_project(client, &project)?;
+            let project = match project {
+                Some(project) => resolve_project(client, &project)?,
+                None => current_binding(client)?.project_id,
+            };
             let path = format!("/api/v1/reviews?project_id={}", identifier(&project)?);
             pagination::print(&page, output, |cursor| {
                 server(client, "GET", &page.path(&path, cursor), None, None)
@@ -147,6 +184,8 @@ pub(super) fn run(
             drafts,
             title,
             description,
+            description_file,
+            editor,
             reconciliations,
         } => {
             let choices = reconciliations
@@ -209,13 +248,22 @@ pub(super) fn run(
             }) {
                 return Err("Reconciliation choices include an unselected draft".into());
             }
-            output.value(&server(
-                client,
-                "POST",
-                "/api/v1/reviews",
-                Some(json!({"drafts": named, "title": title, "description": description})),
-                reference.as_deref(),
-            )?)
+            let result = input::submit(
+                Some(description),
+                description_file,
+                editor,
+                "",
+                |description| {
+                    server(
+                        client,
+                        "POST",
+                        "/api/v1/reviews",
+                        Some(json!({"drafts": named, "title": title, "description": description})),
+                        reference.as_deref(),
+                    )
+                },
+            )?;
+            output.value(&result)
         }
         ReviewCommand::Approve { id, version, note } => {
             decision(client, &id, version, "approved", note, output)
@@ -223,6 +271,7 @@ pub(super) fn run(
         ReviewCommand::Reject { id, version, note } => {
             decision(client, &id, version, "rejected", note, output)
         }
+
         ReviewCommand::Merge {
             id,
             version,
@@ -234,13 +283,28 @@ pub(super) fn run(
             Some(json!({"expected_review_version": version})),
             Some(&reference),
         )?),
-        ReviewCommand::Comment { id, version, body } => output.value(&server(
-            client,
-            "POST",
-            &format!("/api/v1/reviews/{}/comments", identifier(&id)?),
-            Some(json!({"expected_review_version": version, "body": body})),
-            None,
-        )?),
+        ReviewCommand::Comment {
+            id,
+            version,
+            body,
+            file,
+            editor,
+        } => {
+            let result = input::submit(body, file, editor, "", |body| {
+                if body.trim().is_empty() {
+                    return Err("Comment must not be empty; nothing submitted".into());
+                }
+                server(
+                    client,
+                    "POST",
+                    &format!("/api/v1/reviews/{}/comments", identifier(&id)?),
+                    Some(json!({"expected_review_version": version, "body": body})),
+                    None,
+                )
+            })?;
+            output.value(&result)
+        }
+
         ReviewCommand::Plan { id, version } => {
             let plan = server(
                 client,
@@ -254,21 +318,58 @@ pub(super) fn run(
         ReviewCommand::Update {
             id,
             file,
+            edit,
+            version,
             reference,
         } => {
-            let request = read_json(file)?;
-            if !request["expected_review_version"].is_i64() || !request["drafts"].is_array() {
-                return Err("Use the plan's request object, including expected_review_version and all drafts".into());
-            }
-            output.value(&server(
-                client,
-                "POST",
-                &format!("/api/v1/reviews/{}/updates", identifier(&id)?),
-                Some(request),
-                Some(&reference),
-            )?)
+            let initial = if edit {
+                let plan = server(
+                    client,
+                    "POST",
+                    &format!("/api/v1/reviews/{}/update-plans", identifier(&id)?),
+                    Some(json!({"expected_review_version": version})),
+                    None,
+                )?;
+                serde_json::to_string_pretty(&update_template(plan)?)?
+            } else {
+                String::new()
+            };
+            let result = input::submit(None, file, edit, &initial, |text| {
+                let request = update_request(&text, version)?;
+                server(
+                    client,
+                    "POST",
+                    &format!("/api/v1/reviews/{}/updates", identifier(&id)?),
+                    Some(request),
+                    Some(&reference),
+                )
+            })?;
+            output.value(&result)
         }
     }
+}
+
+/// Parses a request without allowing editor input to substitute an uninspected revision.
+///
+/// # Errors
+/// Rejects malformed requests or changed inspection guards before any mutation.
+fn update_request(text: &str, version: Option<i64>) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut request: Value = serde_json::from_str(text)?;
+    if version.is_some() {
+        request = request["request"].take();
+    }
+    if !request["expected_review_version"].is_i64() || !request["drafts"].is_array() {
+        return Err(
+            "Use the plan's request object, including expected_review_version and all drafts"
+                .into(),
+        );
+    }
+    if version.is_some_and(|version| request["expected_review_version"] != version) {
+        return Err(
+            "Edited request changed the inspected Review version; nothing submitted".into(),
+        );
+    }
+    Ok(request)
 }
 
 /// Builds an editable resolution template without applying any suggested conflict choices.
@@ -312,16 +413,22 @@ fn decision(
     id: &str,
     version: i64,
     decision: &str,
-    note: Option<String>,
+    note: DecisionNote,
     output: &mut super::output::Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    output.value(&server(
-        client,
-        "POST",
-        &format!("/api/v1/reviews/{}/decisions", identifier(id)?),
-        Some(json!({"expected_review_version": version, "decision": decision, "body": note})),
-        None,
-    )?)
+    let has_note = note.note.is_some() || note.note_file.is_some() || note.editor;
+    let result = input::submit(note.note, note.note_file, note.editor, "", |note| {
+        server(
+            client,
+            "POST",
+            &format!("/api/v1/reviews/{}/decisions", identifier(id)?),
+            Some(
+                json!({"expected_review_version": version, "decision": decision, "body": has_note.then_some(note)}),
+            ),
+            None,
+        )
+    })?;
+    output.value(&result)
 }
 
 /// Gets one authoritative Review with its ordered proposals and discussion.
@@ -557,6 +664,17 @@ mod tests {
         for action in ["update", "rename", "delete"] {
             assert!(proposal_text(&draft, &json!([{"action": action, "content": {"content": "new"}, "new_path": "new.md"}]), &base).is_err());
         }
+    }
+
+    #[test]
+    fn edited_update_cannot_change_inspected_revision() {
+        let request = json!({"expected_review_version": 7, "drafts": [{"draft_id": "d", "candidate_id": "c", "expected_draft_version": 3, "resolved_state": {"content": "edited"}}]});
+        let buffer = json!({"request": request, "plan": {"evidence": "retained"}}).to_string();
+        assert_eq!(update_request(&buffer, Some(7)).unwrap(), request);
+        assert!(update_request(&buffer, Some(8)).is_err());
+        assert!(update_request("{}", Some(7)).is_err());
+        assert!(update_request("broken JSON", Some(7)).is_err());
+        assert_eq!(update_request(&request.to_string(), None).unwrap(), request);
     }
 
     #[test]

@@ -124,9 +124,92 @@ impl Fixture {
 
     /// Runs the shipped CLI with an isolated stdin and home.
     fn cli(&self, args: &[&str], input: Option<&str>) -> Output {
+        self.cli_at(args, input, self.root.path())
+    }
+
+    /// Exercises directory context without sharing the developer's workspace.
+    fn cli_at(&self, args: &[&str], input: Option<&str>, workspace: &Path) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_clumsies"));
         isolate(&mut command, self.root.path());
+        command.current_dir(workspace);
         self.output(command.args(args), input)
+    }
+
+    /// Runs the real editor command in an isolated Unix terminal.
+    #[cfg(unix)]
+    fn edit_review(&self, mode: &str) -> Output {
+        use std::os::fd::FromRawFd;
+        let (mut master, mut slave) = (-1, -1);
+        // Successful openpty returns two distinct owned descriptors.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        let mut master = unsafe { std::fs::File::from_raw_fd(master) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+        let stderr = self
+            .root
+            .path()
+            .join(format!("{}.editor-stderr", uuid::Uuid::new_v4()));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_clumsies"));
+        isolate(&mut command, self.root.path());
+        command
+            .args([
+                "review",
+                "update",
+                "rev_fixture",
+                "--edit",
+                "--version",
+                "1",
+                "--reference",
+                "ref-none",
+            ])
+            .env(
+                "VISUAL",
+                format!(
+                    "\"{}\" --exact fixture_review_editor --ignored --nocapture --skip",
+                    std::env::current_exe().unwrap().display()
+                ),
+            )
+            .env("CLUMSIES_REVIEW_EDIT_TEST", mode)
+            .env("TMPDIR", self.root.path())
+            .stdin(slave.try_clone().unwrap())
+            .stdout(slave.try_clone().unwrap())
+            .stderr(std::fs::File::create(&stderr).unwrap());
+        let mut child = command.spawn().unwrap();
+        drop(command);
+        drop(slave);
+        let reader = std::thread::spawn(move || {
+            let mut output = Vec::new();
+            // Linux terminal EOF is EIO after the last slave closes.
+            let _ = master.read_to_end(&mut output);
+            output
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("Editor command timed out");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        Output {
+            status,
+            stdout: reader.join().unwrap(),
+            stderr: std::fs::read(stderr).unwrap(),
+        }
     }
 
     /// Requires a successful JSON CLI result, retaining useful failure diagnostics.
@@ -379,10 +462,14 @@ async fn api(
                 return failure(StatusCode::PRECONDITION_FAILED, "ref_conflict");
             }
             assert_eq!(body["drafts"][0]["expected_draft_version"], 1);
-            protocol.review = json!({"review_id":"rev_fixture","project_id":"prj_fixture","draft_ids":["drf_fixture"],"version":1,"status":"open","title":body["title"],"coordination":protocol.draft["draft"]["coordination"]});
+            protocol.review = json!({"review_id":"rev_fixture","project_id":"prj_fixture","draft_ids":["drf_fixture"],"version":1,"status":"open","title":body["title"],"description":body["description"],"coordination":protocol.draft["draft"]["coordination"]});
             review_detail(&protocol)
         }
         ("GET", "/api/v1/reviews") => {
+            assert_eq!(
+                query.get("project_id").map(String::as_str),
+                Some("prj_fixture")
+            );
             json!({"items":[protocol.review],"page_info":{"has_more":false,"next_cursor":null}})
         }
         ("GET", "/api/v1/reviews/rev_fixture") => review_detail(&protocol),
@@ -600,10 +687,66 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     } else {
         assert!(activate.to_string().contains("guide.md"), "{activate}");
     }
-    let created = fixture.json(
-        &["review", "create", draft, "--title", "CLI proposal"],
+    let unbound = fixture.cli(&["draft", "list"], None);
+    assert!(
+        !unbound.status.success(),
+        "Global selection must not substitute a missing directory binding"
+    );
+    let scoped = fixture.cli_at(
+        &["draft", "list", "--scope", "project", "--limit", "1"],
+        None,
+        &workspace,
+    );
+    assert!(
+        scoped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&scoped.stderr)
+    );
+    assert!(String::from_utf8_lossy(&scoped.stdout).contains(draft));
+    assert!(
+        fixture
+            .cli(&["draft", "list", "--global"], None)
+            .status
+            .success()
+    );
+    let scoped_json = fixture.json(
+        &[
+            "draft",
+            "list",
+            "--project",
+            "fixture",
+            "--scope",
+            "project",
+        ],
         None,
     );
+    assert_eq!(scoped_json["items"][0]["draft_id"], draft);
+    let description = fixture.root.path().join("description.txt");
+    std::fs::write(&description, "Multiline explanation\n第二行\n").unwrap();
+    let created = fixture.json(
+        &[
+            "review",
+            "create",
+            draft,
+            "--title",
+            "CLI proposal",
+            "--description-file",
+            description.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(
+        created["review"]["description"],
+        "Multiline explanation\n第二行\n"
+    );
+    let current_reviews = fixture.cli_at(&["review", "list"], None, &workspace);
+    assert!(
+        current_reviews.status.success(),
+        "{}",
+        String::from_utf8_lossy(&current_reviews.stderr)
+    );
+    assert!(String::from_utf8_lossy(&current_reviews.stdout).contains("rev_fixture"));
+    assert!(!fixture.cli(&["review", "list"], None).status.success());
     assert_eq!(created["review"]["version"], 1);
     let diff = fixture.cli(&["review", "diff", "rev_fixture"], None);
     assert!(
@@ -663,6 +806,29 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     request["drafts"][0]["resolved_state"] =
         plan["plan"]["candidates"][0]["merge_preview"]["state"].clone();
     std::fs::write(&request_path, request.to_string()).unwrap();
+    #[cfg(unix)]
+    let updated = {
+        let rejected = fixture.edit_review("changed-version");
+        assert!(!rejected.status.success());
+        let error = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            error.contains("changed the inspected Review version"),
+            "{error}"
+        );
+        assert!(error.contains("Edited input retained at"), "{error}");
+        assert_eq!(
+            fixture.json(&["review", "show", "rev_fixture"], None)["review"]["version"],
+            1
+        );
+        let edited = fixture.edit_review("resolve");
+        assert!(
+            edited.status.success(),
+            "{}",
+            String::from_utf8_lossy(&edited.stderr)
+        );
+        fixture.json(&["review", "show", "rev_fixture"], None)
+    };
+    #[cfg(windows)]
     let updated = fixture.json(
         &[
             "review",
@@ -705,9 +871,63 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
         ],
         None,
     );
+    let comment = fixture.json(
+        &[
+            "review",
+            "comment",
+            "rev_fixture",
+            "--version",
+            "2",
+            "--file",
+            "-",
+        ],
+        Some("Multiline comment\n第二行\n"),
+    );
+    assert_eq!(comment["body"], "Multiline comment\n第二行\n");
+    assert!(
+        !fixture
+            .cli(
+                &[
+                    "review",
+                    "comment",
+                    "rev_fixture",
+                    "--version",
+                    "2",
+                    "--file",
+                    "-"
+                ],
+                Some("  \n")
+            )
+            .status
+            .success()
+    );
+    assert!(
+        !fixture
+            .cli(
+                &[
+                    "review",
+                    "comment",
+                    "rev_fixture",
+                    "--version",
+                    "2",
+                    "--editor"
+                ],
+                None
+            )
+            .status
+            .success()
+    );
     fixture.json(
-        &["review", "approve", "rev_fixture", "--version", "2"],
-        None,
+        &[
+            "review",
+            "approve",
+            "rev_fixture",
+            "--version",
+            "2",
+            "--note-file",
+            "-",
+        ],
+        Some("Approved after inspection\n"),
     );
     assert!(
         !fixture
@@ -792,6 +1012,20 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
         None,
     );
     fixture.json(&["logout"], None);
+}
+
+/// Fake external editor for the Unix real-terminal Review workflow.
+#[test]
+#[ignore = "invoked as an editor by the isolated CLI process"]
+fn fixture_review_editor() {
+    let file = std::env::var_os("CLUMSIES_EDITOR_FILE").unwrap();
+    let mut buffer: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    buffer["request"]["drafts"][0]["resolved_state"] =
+        buffer["plan"]["candidates"][0]["merge_preview"]["state"].clone();
+    if std::env::var("CLUMSIES_REVIEW_EDIT_TEST").unwrap() == "changed-version" {
+        buffer["request"]["expected_review_version"] = json!(2);
+    }
+    std::fs::write(file, buffer.to_string()).unwrap();
 }
 
 /// Human lists traverse pages automatically while explicit JSON retains one-page envelopes.

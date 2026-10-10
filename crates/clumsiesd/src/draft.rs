@@ -312,17 +312,21 @@ pub(crate) async fn list_local_drafts(
          FROM local_drafts d
          WHERE ($1 IS NULL OR d.resource_kind = $1)
            AND ($2 IS NULL OR d.status = $2)
+           AND ($3 IS NULL OR d.project_id = $3)
+           AND ($4 IS NULL OR d.resource_scope = $4)
            AND (
-                $3 IS NULL
-                OR d.updated_at < $3
-                OR (d.updated_at = $3 AND d.created_at < $4)
-                OR (d.updated_at = $3 AND d.created_at = $4 AND d.draft_id > $5)
+                $5 IS NULL
+                OR d.updated_at < $5
+                OR (d.updated_at = $5 AND d.created_at < $6)
+                OR (d.updated_at = $5 AND d.created_at = $6 AND d.draft_id > $7)
            )
          ORDER BY d.updated_at DESC, d.created_at DESC, d.draft_id ASC
-         LIMIT $6",
+         LIMIT $8",
     )
     .bind(resource_kind.as_deref())
     .bind(status.as_deref())
+    .bind(query.project_id.as_deref())
+    .bind(query.scope.map(|scope| scope.as_str()))
     .bind(cursor.as_ref().map(|cursor| cursor.updated_at.as_str()))
     .bind(cursor.as_ref().map(|cursor| cursor.created_at.as_str()))
     .bind(cursor.as_ref().map(|cursor| cursor.draft_id.as_str()))

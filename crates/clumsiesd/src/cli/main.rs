@@ -6,6 +6,7 @@
 )]
 
 mod codex_host;
+mod input;
 mod output;
 mod pagination;
 mod review;
@@ -217,6 +218,15 @@ enum DraftCommand {
     },
     /// List local drafts and continuation cursor.
     List {
+        /// Project ID or unique name; text defaults to the current directory binding.
+        #[arg(long, conflicts_with = "global")]
+        project: Option<String>,
+        /// Include all accessible local projects, independent of the current directory.
+        #[arg(long)]
+        global: bool,
+        /// Filter resource authority before pagination.
+        #[arg(long, value_parser = parse_scope)]
+        scope: Option<DaemonDraftScope>,
         /// Page size and traversal controls.
         #[command(flatten)]
         page: PageArgs,
@@ -511,16 +521,7 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                     },
                 },
             )?),
-            ProjectCommand::Current => output.value(
-                &DaemonIpcClient::for_agent_runtime(
-                    client.service_name(),
-                    agent_runtime::current_identity(),
-                )
-                .resolve_project_binding(DaemonProjectBindingResolveRequest {
-                    workspace_path: directory(std::env::current_dir()?)?,
-                    required_adapter: None,
-                })?,
-            ),
+            ProjectCommand::Current => output.value(&current_binding(&client)?),
         },
         Command::Agent { action } => match action {
             AgentCommand::List => output.value(
@@ -547,16 +548,38 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                     ))?
                     .into_payload::<DaemonRetryResponse>()?,
             ),
-            DraftCommand::List { page, status } => pagination::print(&page, output, |cursor| {
-                Ok(serde_json::to_value(client.list_drafts(
-                    DaemonDraftListQuery {
+            DraftCommand::List {
+                page,
+                status,
+                project,
+                global,
+                scope,
+            } => {
+                let project_id = match project {
+                    Some(project) => Some(resolve_project(&client, &project)?),
+                    None if global || output.json => None,
+                    None => Some(current_binding(&client)?.project_id),
+                };
+                pagination::print(&page, output, |cursor| {
+                    let response = client.list_drafts(DaemonDraftListQuery {
+                        project_id: project_id.clone(),
+                        scope,
                         cursor: cursor.map(str::to_owned),
                         limit: Some(i64::from(page.limit)),
                         status: status.clone(),
                         ..Default::default()
-                    },
-                )?)?)
-            }),
+                    })?;
+                    if response.items.iter().any(|draft| {
+                        project_id
+                            .as_ref()
+                            .is_some_and(|project| &draft.project_id != project)
+                            || scope.is_some_and(|scope| draft.scope != scope)
+                    }) {
+                        return Err("Daemon did not apply requested Draft filters; upgrade CLI and daemon together".into());
+                    }
+                    Ok(serde_json::to_value(response)?)
+                })
+            }
             DraftCommand::Show { id } => output.value(&client.get_draft(id)?),
             DraftCommand::Sync { id } => output.value(&review::uploaded(&client, &id)?),
             DraftCommand::Plan { id } => {
@@ -606,6 +629,34 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
         },
         Command::Review { action } => review::run(&client, action, output),
     }
+}
+
+/// Parses the two authority scopes without accepting an unknown filter.
+fn parse_scope(value: &str) -> Result<DaemonDraftScope, String> {
+    match value {
+        "org" => Ok(DaemonDraftScope::Org),
+        "project" => Ok(DaemonDraftScope::Project),
+        _ => Err("Scope must be org or project".to_owned()),
+    }
+}
+
+/// Resolves only the current directory binding, never the globally selected project.
+///
+/// # Errors
+/// Preserves missing/inaccessible binding and authentication errors.
+fn current_binding(
+    client: &DaemonIpcClient,
+) -> Result<DaemonProjectBinding, Box<dyn std::error::Error>> {
+    Ok(
+        DaemonIpcClient::for_agent_runtime(
+            client.service_name(),
+            agent_runtime::current_identity(),
+        )
+        .resolve_project_binding(DaemonProjectBindingResolveRequest {
+            workspace_path: directory(std::env::current_dir()?)?,
+            required_adapter: None,
+        })?,
+    )
 }
 
 /// Transfers a login result to the existing credential owner, retaining same-Server client context.
@@ -826,18 +877,7 @@ fn read_stdin() -> Result<String, Box<dyn std::error::Error>> {
 /// # Errors
 /// Rejects unreadable, oversized, or malformed input.
 fn read_json(path: PathBuf) -> Result<Value, Box<dyn std::error::Error>> {
-    let text = if path.as_os_str() == "-" {
-        read_stdin()?
-    } else {
-        let file = std::fs::File::open(path)?;
-        let mut text = String::new();
-        file.take(4 * 1024 * 1024 + 1).read_to_string(&mut text)?;
-        if text.len() > 4 * 1024 * 1024 {
-            return Err("Input exceeds 4 MiB".into());
-        }
-        text
-    };
-    Ok(serde_json::from_str(&text)?)
+    Ok(serde_json::from_str(&input::read(&path)?)?)
 }
 
 /// Executes one authenticated request through the resident's refresh and permission boundary.
@@ -899,6 +939,111 @@ mod tests {
     use super::*;
 
     #[test]
+    fn text_sources_and_inspection_flags_are_explicit() {
+        for args in [
+            vec![
+                "clumsies",
+                "review",
+                "comment",
+                "rev_1",
+                "--version",
+                "2",
+                "--file",
+                "-",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "comment",
+                "rev_1",
+                "--version",
+                "2",
+                "--editor",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "update",
+                "rev_1",
+                "--edit",
+                "--version",
+                "2",
+                "--reference",
+                "ref-none",
+            ],
+            vec!["clumsies", "review", "list"],
+            vec!["clumsies", "draft", "list", "--global", "--scope", "org"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        for args in [
+            vec!["clumsies", "review", "comment", "rev_1", "--version", "2"],
+            vec![
+                "clumsies",
+                "review",
+                "comment",
+                "rev_1",
+                "--version",
+                "2",
+                "text",
+                "--file",
+                "-",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "comment",
+                "rev_1",
+                "--version",
+                "2",
+                "--editor",
+                "--file",
+                "-",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "update",
+                "rev_1",
+                "--edit",
+                "--reference",
+                "ref-none",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "update",
+                "rev_1",
+                "--file",
+                "-",
+                "--version",
+                "2",
+                "--reference",
+                "ref-none",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "approve",
+                "rev_1",
+                "--version",
+                "2",
+                "--note",
+                "text",
+                "--note-file",
+                "-",
+            ],
+            vec!["clumsies", "draft", "list", "--project", "p", "--global"],
+            vec!["clumsies", "draft", "list", "--scope", "unknown"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args.clone()).is_err(),
+                "Accepted invalid args: {args:?}"
+            );
+        }
+    }
+
+    #[test]
     fn text_pagination_retains_authentication_recovery_through_context() {
         let mut output = output::Output::new(false, true, false, "projects", true);
         let args = PageArgs {
@@ -947,7 +1092,10 @@ mod tests {
             vec!["clumsies", "review", "list", "prj_a", "--limit", "201"],
             vec!["clumsies", "draft", "list", "--all", "--cursor", "x"],
         ] {
-            assert!(Cli::try_parse_from(args).is_err());
+            assert!(
+                Cli::try_parse_from(args.clone()).is_err(),
+                "Accepted invalid args: {args:?}"
+            );
         }
         assert!(
             matches!(Cli::try_parse_from(["clumsies", "project", "bind", "AgentOS"]).unwrap().command, Command::Project { action: ProjectCommand::Bind { path, .. } } if path.as_path() == std::path::Path::new("."))

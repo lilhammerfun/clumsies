@@ -382,6 +382,8 @@ pub struct DaemonRetryResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default, PartialEq, Eq)]
 pub struct DaemonDraftListQuery {
+    pub project_id: Option<String>,
+    pub scope: Option<DaemonDraftScope>,
     pub resource: Option<String>,
     pub status: Option<String>,
     pub cursor: Option<String>,
