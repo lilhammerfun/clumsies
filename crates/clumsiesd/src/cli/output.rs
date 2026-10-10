@@ -510,7 +510,9 @@ fn plan_summary(text: &mut String, value: &Value) {
             text.push_str(&format!("Apply after inspection: clumsies draft rebase {} --candidate {} --version {} --reference {}{}\n", command_arg(local), command_arg(candidate["candidate_id"].as_str().unwrap_or("CANDIDATE")), candidate["draft_version"], command_arg(reference), if candidate["status"] == "conflicts" { " --edit" } else { "" }));
         }
     }
-    text.push_str("For deletion choices, omit draft rebase --edit and supply --keep or --delete; use --path for path conflicts.\n");
+    if value.get("local_draft_id").is_some() {
+        text.push_str("For deletion choices, omit --edit and supply --keep or --delete; use --path for path conflicts.\n");
+    }
     text.push_str("Use --json to export full candidate evidence; --verbose shows all fields.\n");
 }
 
@@ -657,7 +659,8 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
             fields_text(&mut text, value, &["commit_id", "applied_operation_count"]);
         }
         "draft" => {
-            let draft = value.get("draft").unwrap_or(value);
+            let detail = value.get("draft").unwrap_or(value);
+            let draft = detail.get("draft").unwrap_or(detail);
             fields_text(
                 &mut text,
                 draft,
@@ -669,6 +672,7 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
                     "path",
                     "status",
                     "server_version",
+                    "version",
                     "freshness",
                     "reconciliation",
                     "current_commit_id",
@@ -676,9 +680,24 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
                     "failed_operation_count",
                 ],
             );
-            if let Some(operations) = value.get("operations") {
+            fields_text(&mut text, &draft["resource"], &["id", "path", "scope"]);
+            fields_text(
+                &mut text,
+                &draft["coordination"],
+                &["current_commit_id", "freshness", "reconciliation"],
+            );
+            fields_text(
+                &mut text,
+                value,
+                &["rebase_id", "previous_revision_id", "approval_invalidated"],
+            );
+            if let Some(operations) = value.get("operations").or_else(|| detail.get("operations")) {
                 text.push_str("Operations:\n");
-                evidence(&mut text, operations, 2);
+                if detail.get("draft").is_some() {
+                    operation_summary(&mut text, operations);
+                } else {
+                    evidence(&mut text, operations, 2);
+                }
             }
         }
         "plan" => {
@@ -752,6 +771,31 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rebase_receipt_unwraps_server_detail_without_losing_approval_state() {
+        let value = json!({"rebase_id":"reb", "previous_revision_id":"previous", "approval_invalidated":true, "draft":{"draft":{"draft_id":"remote", "version":3, "resource":{"path":"final.md", "scope":"org"}}, "operations":[{"action":"update", "content":{"content":"private body", "is_directory":false}}]}});
+        let text = render("draft", &value, false);
+        for expected in [
+            "draft id: remote",
+            "version: 3",
+            "path: final.md",
+            "scope: org",
+            "approval invalidated: true",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert!(!text.contains("private body"));
+        assert!(
+            render(
+                "draft",
+                &json!({"draft":{"draft_id":"local","server_version":2},"operations":[{"last_error":"upload denied"}]}),
+                false
+            )
+            .contains("server version: 2")
+        );
+        assert!(render("draft", &json!({"draft":{"draft_id":"local"},"operations":[{"last_error":"upload denied"}]}), false).contains("upload denied"));
+    }
 
     #[test]
     fn reconciliation_summary_exposes_guards_and_each_conflict_dimension() {
