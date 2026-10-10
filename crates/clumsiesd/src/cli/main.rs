@@ -6,6 +6,7 @@
 )]
 
 mod codex_host;
+mod conflict;
 mod input;
 mod output;
 mod pagination;
@@ -239,6 +240,11 @@ enum DraftCommand {
         /// Local draft identifier.
         id: String,
     },
+    /// Compare a synchronized draft against its immutable base; run sync first if needed.
+    Diff {
+        /// Local draft identifier.
+        id: String,
+    },
     /// Wait for all pending operations of a draft to reach the Server.
     Sync {
         /// Local draft identifier.
@@ -264,7 +270,23 @@ enum DraftCommand {
         reference: String,
         /// JSON ReconciliationResourceState for a conflicting candidate.
         #[arg(long)]
+        #[arg(conflicts_with_all = ["edit", "content", "path", "delete", "keep"])]
         resolved: Option<PathBuf>,
+        /// Resolve content in VISUAL or EDITOR without editing JSON.
+        #[arg(long, conflicts_with = "content")]
+        edit: bool,
+        /// Final content file; '-' reads stdin.
+        #[arg(long)]
+        content: Option<PathBuf>,
+        /// Explicit final path for a path conflict.
+        #[arg(long, conflicts_with = "delete")]
+        path: Option<String>,
+        /// Explicitly delete the resource.
+        #[arg(long, conflicts_with_all = ["keep", "edit", "content"])]
+        delete: bool,
+        /// Explicitly keep the surviving resource in a deletion conflict.
+        #[arg(long)]
+        keep: bool,
     },
 }
 
@@ -273,6 +295,10 @@ fn main() {
     let cli = Cli::parse();
     let (kind, readable) = presentation(&cli.command);
     let mut output = output::Output::new(cli.json, cli.no_pager, cli.verbose, kind, readable);
+    let binding_context = matches!(
+        &cli.command,
+        Command::Project { .. } | Command::Draft { .. } | Command::Review { .. }
+    );
     let result = run(cli, &mut output);
     let finish = output.finish();
     if let Err(error) = result.and_then(|()| finish.map_err(Into::into)) {
@@ -281,6 +307,13 @@ fn main() {
             return;
         }
         eprintln!("clumsies: {}", output::safe_text(&error.to_string()));
+        if binding_context
+            && matches!(error.downcast_ref::<DaemonError>(), Some(DaemonError::Remote(remote)) if remote.code == "project_binding_changed" || remote.code == "project_binding_unresolved")
+        {
+            eprintln!(
+                "Inspect clumsies project bindings and clumsies project list, then run clumsies project bind PROJECT from the intended directory; local drafts are retained."
+            );
+        }
         if authentication_failure(error.as_ref()) {
             eprintln!("Run clumsies login again; local drafts and bindings are retained.");
         }
@@ -322,6 +355,7 @@ fn presentation(command: &Command) -> (&'static str, bool) {
         Command::Draft { action } => match action {
             DraftCommand::List { .. } => ("drafts", true),
             DraftCommand::Plan { .. } => ("plan", true),
+            DraftCommand::Diff { .. } => ("diff", true),
             _ => ("draft", matches!(action, DraftCommand::Show { .. })),
         },
         Command::Review { action } => match action {
@@ -581,10 +615,28 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                 })
             }
             DraftCommand::Show { id } => output.value(&client.get_draft(id)?),
+            DraftCommand::Diff { id } => {
+                let local = client.get_draft(&id)?.draft;
+                if local.pending_operation_count != 0 || local.failed_operation_count != 0 {
+                    return Err(format!("Draft has unsynchronized operations; run clumsies draft sync {id} before reading its complete diff").into());
+                }
+                let remote_id = local
+                    .server_draft_id
+                    .as_deref()
+                    .ok_or("Draft has no server identity; run draft sync first")?;
+                let detail = server(
+                    &client,
+                    "GET",
+                    &format!("/api/v1/drafts/{}", identifier(remote_id)?),
+                    None,
+                    None,
+                )?;
+                output.value(&json!({"draft":detail["draft"], "changes":[review::proposal_change(&client, &detail["draft"], &detail["operations"])?]}))
+            }
             DraftCommand::Sync { id } => output.value(&review::uploaded(&client, &id)?),
             DraftCommand::Plan { id } => {
                 let draft = review::uploaded(&client, &id)?;
-                output.value(&server(
+                let mut plan = server(
                     &client,
                     "POST",
                     &format!(
@@ -598,7 +650,11 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                     ),
                     Some(json!({"expected_draft_version": draft.server_version})),
                     None,
-                )?)
+                )?;
+                if !output.json {
+                    plan["local_draft_id"] = json!(id);
+                }
+                output.value(&plan)
             }
             DraftCommand::Rebase {
                 id,
@@ -606,25 +662,64 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                 version,
                 reference,
                 resolved,
+                edit,
+                content,
+                path,
+                delete,
+                keep,
             } => {
                 let draft = review::uploaded(&client, &id)?;
-                output.value(&server(
-                    &client,
-                    "POST",
-                    &format!(
-                        "/api/v1/drafts/{}/rebases",
-                        identifier(
-                            draft
-                                .server_draft_id
-                                .as_deref()
-                                .ok_or("Draft has no server identity")?
-                        )?
-                    ),
-                    Some(
-                        json!({"candidate_id": candidate, "expected_draft_version": version, "resolved_state": resolved.map(read_json).transpose()?}),
-                    ),
-                    Some(&reference),
-                )?)
+                let remote_id = draft
+                    .server_draft_id
+                    .as_deref()
+                    .ok_or("Draft has no server identity")?;
+                let endpoint = format!("/api/v1/drafts/{}", identifier(remote_id)?);
+                let send = |state: Value| {
+                    server(
+                        &client,
+                        "POST",
+                        &format!("{endpoint}/rebases"),
+                        Some(
+                            json!({"candidate_id":candidate,"expected_draft_version":version,"resolved_state":state}),
+                        ),
+                        Some(&reference),
+                    )
+                };
+                let result = if edit || content.is_some() || path.is_some() || delete || keep {
+                    let evidence = server(
+                        &client,
+                        "GET",
+                        &format!(
+                            "{endpoint}/reconciliation-candidates/{}",
+                            identifier(&candidate)?
+                        ),
+                        None,
+                        None,
+                    )?;
+                    if evidence["candidate_id"] != candidate
+                        || evidence["draft_id"] != remote_id
+                        || evidence["draft_version"] != version
+                        || evidence["current_commit_id"].as_str().unwrap_or("ref-none") != reference
+                    {
+                        return Err(format!("Candidate differs from inspected version or reference; run clumsies draft plan {id} before retrying").into());
+                    }
+                    let choices = conflict::Choices {
+                        content: content
+                            .map(|file| format!("{remote_id}={}", file.display()))
+                            .into_iter()
+                            .collect(),
+                        path: path
+                            .map(|path| format!("{remote_id}={path}"))
+                            .into_iter()
+                            .collect(),
+                        delete: delete.then(|| remote_id.to_owned()).into_iter().collect(),
+                        keep: keep.then(|| remote_id.to_owned()).into_iter().collect(),
+                    };
+                    conflict::resolve(&[evidence], &choices, |mut states| send(states.remove(0)))?
+                } else {
+                    send(resolved.map(read_json).transpose()?.unwrap_or(Value::Null))?
+                };
+                output.value(&result)
             }
         },
         Command::Review { action } => review::run(&client, action, output),
@@ -921,11 +1016,7 @@ fn server(
         let message = envelope["error"]["message"]
             .as_str()
             .unwrap_or("Server request failed");
-        let recovery = if response.status == 401 {
-            "; run clumsies login again; local drafts are retained"
-        } else {
-            ""
-        };
+        let recovery = server_recovery(path, response.status, code);
         return Err(format!("HTTP {} {code}: {message}{recovery}", response.status).into());
     }
     if response.body.trim().is_empty() {
@@ -934,9 +1025,147 @@ fn server(
     Ok(serde_json::from_str(&response.body)?)
 }
 
+/// Suggests fresh inspection after failed coordination without retrying a mutation.
+fn server_recovery(path: &str, status: u16, code: &str) -> String {
+    if status == 401 {
+        return "; run clumsies login again; local drafts are retained".to_owned();
+    }
+    if status == 409
+        || status == 412
+        || code == "reconciliation_candidate_invalid"
+        || code == "candidate_stale"
+    {
+        let parts: Vec<_> = path.split('/').collect();
+        if parts.get(3) == Some(&"reviews")
+            && let Some(id) = parts.get(4).filter(|id| identifier(id).is_ok())
+        {
+            return format!(
+                "; run clumsies review show {id} and clumsies review diff {id}, then clumsies review plan {id} --version INSPECTED_VERSION. Reinspect before choosing new version/reference values; nothing was automatically retried"
+            );
+        }
+        if parts.get(3) == Some(&"drafts") {
+            return "; run clumsies draft list, then clumsies draft plan LOCAL_DRAFT_ID. Reinspect the new candidate and reference before retrying; local work is retained".to_owned();
+        }
+    }
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_resolution_requires_inspection_and_explicit_choices() {
+        assert!(
+            Cli::try_parse_from([
+                "clumsies",
+                "review",
+                "update",
+                "r",
+                "--resolve",
+                "--version",
+                "3",
+                "--reference",
+                "c",
+                "--content",
+                "d=file with spaces.txt",
+                "--path",
+                "d=new.md"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "clumsies",
+                "draft",
+                "rebase",
+                "d",
+                "--candidate",
+                "c",
+                "--version",
+                "3",
+                "--reference",
+                "ref-none",
+                "--delete"
+            ])
+            .is_ok()
+        );
+        for args in [
+            vec![
+                "clumsies",
+                "review",
+                "update",
+                "r",
+                "--resolve",
+                "--reference",
+                "c",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "update",
+                "r",
+                "--resolve",
+                "--edit",
+                "--version",
+                "3",
+                "--reference",
+                "c",
+            ],
+            vec![
+                "clumsies",
+                "review",
+                "update",
+                "r",
+                "--file",
+                "-",
+                "--content",
+                "d=f",
+                "--reference",
+                "c",
+            ],
+            vec![
+                "clumsies",
+                "draft",
+                "rebase",
+                "d",
+                "--candidate",
+                "c",
+                "--version",
+                "3",
+                "--reference",
+                "c",
+                "--delete",
+                "--edit",
+            ],
+            vec![
+                "clumsies",
+                "draft",
+                "rebase",
+                "d",
+                "--candidate",
+                "c",
+                "--version",
+                "3",
+                "--reference",
+                "c",
+                "--delete",
+                "--keep",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(args.clone()).is_err(),
+                "Accepted {args:?}"
+            );
+        }
+        let recovery = server_recovery("/api/v1/reviews/r/updates", 409, "version_conflict");
+        assert!(
+            recovery.contains("review show r")
+                && recovery.contains("review diff r")
+                && recovery.contains("nothing was automatically retried")
+        );
+        assert!(server_recovery("/api/v1/reviews/r/updates", 200, "").is_empty());
+    }
 
     #[test]
     fn text_sources_and_inspection_flags_are_explicit() {

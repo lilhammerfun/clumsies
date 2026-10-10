@@ -8,7 +8,7 @@ use clumsiesd::*;
 use serde_json::{Value, json};
 
 use super::pagination::{self, PageArgs};
-use super::{current_binding, identifier, input, read_json, resolve_project, server};
+use super::{conflict, current_binding, identifier, input, read_json, resolve_project, server};
 
 /// Shared decision explanation sources.
 #[derive(Args)]
@@ -138,14 +138,20 @@ pub(super) enum ReviewCommand {
         id: String,
         /// JSON CreateReviewUpdateRequest containing all ordered proposals and inspected version.
         #[arg(long)]
-        #[arg(required_unless_present = "edit", conflicts_with = "edit")]
+        #[arg(required_unless_present_any = ["edit", "resolve"], conflicts_with_all = ["edit", "resolve"])]
         file: Option<PathBuf>,
         /// Edit the inspected plan's request with conflict evidence in VISUAL or EDITOR.
-        #[arg(long, requires = "version")]
+        #[arg(long, requires = "version", conflicts_with = "resolve")]
         edit: bool,
-        /// Inspected Review revision required for --edit.
-        #[arg(long, requires = "edit", conflicts_with = "file")]
+        /// Resolve conflicts as text, using explicit path and deletion choices.
+        #[arg(long, requires = "version")]
+        resolve: bool,
+        /// Inspected Review revision required for --edit or --resolve.
+        #[arg(long, conflicts_with = "file")]
         version: Option<i64>,
+        /// Explicit content, path, and existence choices per proposal.
+        #[command(flatten)]
+        choices: conflict::Choices,
         /// Upstream reference inspected in the plan; ref-none for an empty reference.
         #[arg(long)]
         reference: String,
@@ -319,9 +325,55 @@ pub(super) fn run(
             id,
             file,
             edit,
+            resolve,
             version,
+            choices,
             reference,
         } => {
+            if resolve {
+                let plan = server(
+                    client,
+                    "POST",
+                    &format!("/api/v1/reviews/{}/update-plans", identifier(&id)?),
+                    Some(json!({"expected_review_version": version})),
+                    None,
+                )?;
+                let template = update_template(plan)?;
+                let candidates = template["plan"]["candidates"]
+                    .as_array()
+                    .ok_or("Invalid update candidates")?;
+                if candidates.iter().any(|candidate| {
+                    candidate["current_commit_id"]
+                        .as_str()
+                        .unwrap_or("ref-none")
+                        != reference
+                }) {
+                    return Err(format!("Upstream reference changed; run clumsies review show {id} and inspect a new plan before retrying").into());
+                }
+                let mut request = template["request"].clone();
+                let result = conflict::resolve(candidates, &choices, |states| {
+                    for (candidate, state) in candidates.iter().zip(states) {
+                        let entry = request["drafts"]
+                            .as_array_mut()
+                            .ok_or("Missing proposals")?
+                            .iter_mut()
+                            .find(|entry| entry["draft_id"] == candidate["draft_id"])
+                            .ok_or("Candidate names an unselected proposal")?;
+                        entry["resolved_state"] = state;
+                    }
+                    server(
+                        client,
+                        "POST",
+                        &format!("/api/v1/reviews/{}/updates", identifier(&id)?),
+                        Some(request),
+                        Some(&reference),
+                    )
+                })?;
+                return output.value(&result);
+            }
+            if !edit && version.is_some() {
+                return Err("--version requires --edit or --resolve".into());
+            }
             let initial = if edit {
                 let plan = server(
                     client,
@@ -459,7 +511,7 @@ pub(super) fn uploaded(
         let detail = client.get_draft(id)?;
         if detail.draft.failed_operation_count > 0 {
             return Err(format!(
-                "Draft upload failed; inspect clumsies draft show {id} before retrying"
+                "Draft upload failed; inspect clumsies draft show {id}, fix the reported cause, then run clumsies draft retry {} and clumsies draft sync {id}; local work is retained", detail.draft.project_id
             )
             .into());
         }
@@ -467,7 +519,7 @@ pub(super) fn uploaded(
             return Ok(detail.draft);
         }
         if Instant::now() >= deadline {
-            return Err("Draft is not synchronized yet; local work is retained".into());
+            return Err(format!("Draft is not synchronized yet; run clumsies draft show {id}, then clumsies draft sync {id} once connectivity is restored; local work is retained").into());
         }
         if !nudged {
             client
@@ -503,24 +555,7 @@ fn diff(
     let mut changes = Vec::new();
     for entry in entries {
         let draft = &entry["draft"];
-        let base = if let Some(commit) = draft["base_commit_id"].as_str() {
-            server(
-                client,
-                "GET",
-                &format!("/api/v1/commits/{}", identifier(commit)?),
-                None,
-                None,
-            )?
-        } else {
-            json!({"tree":{"entries":[]},"blobs":[]})
-        };
-        let (before_path, before, after_path, after) =
-            proposal_text(draft, &entry["operations"], &base)?;
-        let unified = similar::TextDiff::from_lines(&before, &after)
-            .unified_diff()
-            .header(&before_path, &after_path)
-            .to_string();
-        let change = json!({"base_resource":base_resource(&draft["resource"], &base)?, "operations":entry["operations"], "before_path":before_path,"after_path":after_path,"unified_diff":unified});
+        let change = proposal_change(client, draft, &entry["operations"])?;
         if output.json {
             changes.push(change);
         } else {
@@ -531,6 +566,36 @@ fn diff(
         output.value(&json!({"review":detail["review"],"changes":changes}))?;
     }
     Ok(())
+}
+
+/// Computes one synchronized proposal's diff against its immutable ancestor.
+///
+/// # Errors
+/// Rejects missing snapshot content and unsupported operation shapes.
+pub(super) fn proposal_change(
+    client: &DaemonIpcClient,
+    draft: &Value,
+    operations: &Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let base = if let Some(commit) = draft["base_commit_id"].as_str() {
+        server(
+            client,
+            "GET",
+            &format!("/api/v1/commits/{}", identifier(commit)?),
+            None,
+            None,
+        )?
+    } else {
+        json!({"tree":{"entries":[]},"blobs":[]})
+    };
+    let (before_path, before, after_path, after) = proposal_text(draft, operations, &base)?;
+    let unified = similar::TextDiff::from_lines(&before, &after)
+        .unified_diff()
+        .header(&before_path, &after_path)
+        .to_string();
+    Ok(
+        json!({"base_resource":base_resource(&draft["resource"], &base)?, "operations":operations, "before_path":before_path,"after_path":after_path,"unified_diff":unified}),
+    )
 }
 
 /// Finds the resource only within the proposal's authority scope.

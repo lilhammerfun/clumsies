@@ -57,6 +57,36 @@ fn edit<T>(
     initial: &str,
     send: impl FnOnce(String) -> Result<T, Box<dyn std::error::Error>>,
 ) -> Result<T, Box<dyn std::error::Error>> {
+    edit_many(&[initial.to_owned()], |mut texts| send(texts.remove(0)))
+}
+
+/// Edits an ordered batch and retains every buffer until the complete submission succeeds.
+///
+/// # Errors
+/// Keeps all edited files on cancellation, validation, or submission failure.
+pub(super) fn submit_edits<T>(
+    initials: &[String],
+    send: impl FnOnce(Vec<String>) -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    if initials.is_empty() {
+        return send(Vec::new());
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Err(
+            "Conflict editing requires a terminal; use --content with saved files instead".into(),
+        );
+    }
+    edit_many(initials, send)
+}
+
+/// Runs editors sequentially in one private directory before any batch mutation.
+///
+/// # Errors
+/// Retains the directory and its buffers when any editor or the submission fails.
+fn edit_many<T>(
+    initials: &[String],
+    send: impl FnOnce(Vec<String>) -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
     let editor = std::env::var("VISUAL")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -76,31 +106,46 @@ fn edit<T>(
         builder.mode(0o700);
     }
     builder.create(&root)?;
-    let file = root.join("input.txt");
+    let mut files = Vec::new();
     let result = (|| {
-        std::fs::write(&file, initial)?;
-        // Only user configuration is interpreted; the file path is a quoted environment value.
-        let mut command = Command::new(if cfg!(windows) { "cmd" } else { "sh" });
-        command.arg(if cfg!(windows) { "/C" } else { "-c" });
-        command.arg(if cfg!(windows) {
-            format!("{editor} \"%CLUMSIES_EDITOR_FILE%\"")
-        } else {
-            format!("{editor} \"$CLUMSIES_EDITOR_FILE\"")
-        });
-        let status = command.env("CLUMSIES_EDITOR_FILE", &file).status()?;
-        if !status.success() {
-            return Err(
-                format!("Editor exited unsuccessfully: {status}; nothing submitted").into(),
-            );
+        let mut texts = Vec::new();
+        for (index, initial) in initials.iter().enumerate() {
+            let file = root.join(if initials.len() == 1 {
+                "input.txt".to_owned()
+            } else {
+                format!("input-{}.txt", index + 1)
+            });
+            files.push(file.clone());
+            std::fs::write(&file, initial)?;
+            // Only user configuration is interpreted; the file path is a quoted environment value.
+            let mut command = Command::new(if cfg!(windows) { "cmd" } else { "sh" });
+            command.arg(if cfg!(windows) { "/C" } else { "-c" });
+            command.arg(if cfg!(windows) {
+                format!("{editor} \"%CLUMSIES_EDITOR_FILE%\"")
+            } else {
+                format!("{editor} \"$CLUMSIES_EDITOR_FILE\"")
+            });
+            let status = command.env("CLUMSIES_EDITOR_FILE", &file).status()?;
+            if !status.success() {
+                return Err(
+                    format!("Editor exited unsuccessfully: {status}; nothing submitted").into(),
+                );
+            }
+            texts.push(read(&file)?);
         }
-        send(read(&file)?)
+        send(texts)
     })();
     if result.is_ok() {
         if let Err(error) = std::fs::remove_dir_all(&root) {
-            eprintln!("Could not remove editor buffer {}: {error}", file.display());
+            eprintln!(
+                "Could not remove editor directory {}: {error}",
+                root.display()
+            );
         }
     } else {
-        eprintln!("Edited input retained at {}", file.display());
+        for file in files {
+            eprintln!("Edited input retained at {}", file.display());
+        }
     }
     result
 }
@@ -122,7 +167,14 @@ mod tests {
 
     #[test]
     fn editor_process_preserves_failed_input_and_cleans_success() {
-        for mode in ["success", "reject", "cancel", "oversize", "missing"] {
+        for mode in [
+            "success",
+            "reject",
+            "cancel",
+            "oversize",
+            "missing",
+            "batch-reject",
+        ] {
             let root = tempfile::Builder::new()
                 .prefix("editor home with spaces ")
                 .tempdir()
@@ -165,14 +217,21 @@ mod tests {
     #[ignore = "isolated editor driver invoked by parent test"]
     fn editor_fixture() {
         let mode = std::env::var("CLUMSIES_EDITOR_TEST").unwrap();
-        let result = edit("original", |text| {
-            assert_eq!(text, "edited\n第二行\n");
-            if mode == "reject" {
-                Err("Submission failed".into())
-            } else {
-                Ok(())
-            }
-        });
+        let result = if mode == "batch-reject" {
+            edit_many(&["first".into(), "second".into()], |texts| {
+                assert_eq!(texts, vec!["edited\n第二行\n", "edited\n第二行\n"]);
+                Err::<(), _>("Batch submission failed".into())
+            })
+        } else {
+            edit("original", |text| {
+                assert_eq!(text, "edited\n第二行\n");
+                if mode == "reject" {
+                    Err("Submission failed".into())
+                } else {
+                    Ok(())
+                }
+            })
+        };
         let roots: Vec<_> = std::fs::read_dir(std::env::temp_dir()).unwrap().collect();
         if mode == "success" || mode == "missing" {
             assert!(roots.is_empty());
@@ -180,7 +239,19 @@ mod tests {
         } else {
             assert!(result.is_err());
             assert_eq!(roots.len(), 1);
-            let file = roots[0].as_ref().unwrap().path().join("input.txt");
+            let root = roots[0].as_ref().unwrap().path();
+            if mode == "batch-reject" {
+                assert_eq!(
+                    std::fs::read_to_string(root.join("input-1.txt")).unwrap(),
+                    "edited\n第二行\n"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(root.join("input-2.txt")).unwrap(),
+                    "edited\n第二行\n"
+                );
+                return;
+            }
+            let file = root.join("input.txt");
             assert!(file.is_file());
             if mode == "reject" {
                 assert_eq!(std::fs::read_to_string(file).unwrap(), "edited\n第二行\n");
