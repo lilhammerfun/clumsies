@@ -82,6 +82,34 @@ Older Servers may ignore pagination and return at most 200 records; the CLI cann
 
 Project commands and Review lists accept an ID or unique case-insensitive name. Ambiguous names fail; scripts should use IDs. `project join` (alias `select`) selects a project without binding the directory or granting membership. `project bind PROJECT` defaults to the current directory. Inspect conflicting bindings before passing `--revision`; do not guess revisions. Draft `--status` filtering occurs before pagination and accepts `open`, `submitted`, `discarded`, or `merged`.
 
+## Directory context and Draft filters
+
+Text `draft list` and `review list` (without a project argument) use the current directory binding, never the globally selected project. Unbound or inaccessible directories fail explicitly: bind the directory or specify a project. `draft list --global` inspects retained Drafts from all local projects, including unavailable projects. Explicit project IDs work without a successful Server project-name lookup.
+
+```sh
+cd /absolute/path/to/repository
+clumsies draft list --status open
+clumsies review list
+clumsies draft list --project AgentOS --scope project --status open
+clumsies draft list --global
+```
+
+Draft project, scope and status filters run in the daemon before pagination. `--scope` accepts `project` or `org`; `--project` and `--global` are mutually exclusive. JSON `draft list` keeps its existing global default for scripts; add `--project` explicitly when needed. Upgrade CLI and daemon together. The CLI rejects Drafts outside requested filters instead of showing an unfiltered collection from an older resident.
+
+## Multiline input and editors
+
+Comments accept inline text, `--file PATH`, `--file -` (stdin), or `--editor`. Review creation accepts `--description-file`; approve/reject accept `--note-file`. Their `--editor` option composes the description or decision note. Input sources are mutually exclusive. Files/stdin must be UTF-8 and at most 4 MiB. Empty comments are rejected before submission.
+
+```sh
+clumsies review comment REVIEW_ID --version INSPECTED_VERSION --file comment.md
+printf 'First line\nSecond line\n' | clumsies review comment REVIEW_ID --version INSPECTED_VERSION --file -
+clumsies review create DRAFT_ID --title 'Proposal' --description-file description.md
+clumsies review approve REVIEW_ID --version INSPECTED_VERSION --note-file decision.md
+clumsies review comment REVIEW_ID --version INSPECTED_VERSION --editor
+```
+
+Editors use `VISUAL`, then `EDITOR` (for example `code --wait` or `vim`; Windows can use `notepad`). Configure an editor that waits until editing ends. Editor mode requires interactive stdin and stdout; use files/stdin for automation or redirected JSON receipts. A successful editor exit submits the input. Cancel by exiting the editor unsuccessfully; empty comments also prevent submission. Editor, validation or Server failures retain the input in a private temporary directory and report its path on stderr; successful submissions remove it. Retained buffers may contain private content: remove them after recovery.
+
 ## Connect an account and repository
 
 Use your configured Server origin. **An administrator must invite new users first; the CLI does not offer open registration.** Choose the path matching your invitation. Remote origins require HTTPS; loopback HTTP is allowed for local development. Tokens and passwords are never command-line arguments or CLI output.
@@ -183,6 +211,14 @@ clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
 clumsies review update REVIEW_ID --file update.json --reference CURRENT_COMMIT_ID
 clumsies review diff REVIEW_ID
 ```
+
+You can also update directly in an editor:
+
+```sh
+clumsies review update REVIEW_ID --edit --version INSPECTED_VERSION --reference CURRENT_COMMIT_ID
+```
+
+The editor shows `request` and the complete `plan`. Inspect candidates and all proposals, then place each author-confirmed complete state in `request.drafts[].resolved_state`; conflicts still default to null. Only `request` is submitted; editing `plan` cannot replace Server evidence. The CLI rejects changes to the inspected Review version. Candidates, Draft versions, complete proposal sets and upstream references retain Server validation. The JSON template retains path, directory and authority-scope metadata so editing a text body cannot lose other changes. `--file update.json` and `--file -` continue accepting the original request object.
 
 The template deliberately leaves conflict resolutions null. Inspect and edit them before applying; it never silently chooses the ancestor, upstream, or proposal. The Server rejects stale candidates, missing proposals, stale Review versions, and moved references. Approval may be invalidated after updates; inspect and review again.
 

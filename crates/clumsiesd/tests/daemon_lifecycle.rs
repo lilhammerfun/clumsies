@@ -2700,6 +2700,7 @@ async fn local_drafts_can_be_listed_and_read_with_operation_history() {
             status: Some("open".to_owned()),
             limit: None,
             cursor: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -2794,12 +2795,53 @@ async fn local_draft_inventory_paginates_past_terminal_history() {
     .await
     .unwrap();
 
+    sqlx::query("UPDATE local_drafts SET project_id = 'prj_other' WHERE draft_id < 'draft-500'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE local_drafts SET resource_scope = 'project' WHERE draft_id = 'draft-501'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let filtered = service
+        .list_drafts(DaemonDraftListQuery {
+            project_id: Some("prj_test".to_owned()),
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(filtered.items[0].draft_id, "draft-500");
+    let next = service
+        .list_drafts(DaemonDraftListQuery {
+            project_id: Some("prj_test".to_owned()),
+            cursor: filtered.next_cursor,
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(next.items[0].draft_id, "draft-501");
+    assert!(next.next_cursor.is_none());
+    let scoped = service
+        .list_drafts(DaemonDraftListQuery {
+            project_id: Some("prj_test".to_owned()),
+            scope: Some(DaemonDraftScope::Project),
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(scoped.items[0].draft_id, "draft-501");
+    assert!(scoped.next_cursor.is_none());
+
     let first = service
         .list_drafts(DaemonDraftListQuery {
             resource: None,
             status: None,
             cursor: None,
             limit: Some(500),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -2818,6 +2860,7 @@ async fn local_draft_inventory_paginates_past_terminal_history() {
             status: None,
             cursor: Some(cursor),
             limit: Some(500),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -2848,6 +2891,7 @@ async fn local_draft_inventory_paginates_past_terminal_history() {
             status: None,
             cursor: Some("not-a-cursor".to_owned()),
             limit: Some(500),
+            ..Default::default()
         })
         .await
         .unwrap_err();

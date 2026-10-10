@@ -92,6 +92,34 @@ clumsies project current
 
 `bind` 的目录默认是 `.`。目录属于其他项目时，先用 `project bindings 旧项目ID` 查看，再明确执行 `project bind AgentOS . --revision 已查看的版本号`。不要猜版本号；旧项目已删除时，仍可按 ID 查询本地绑定。Draft 的 `--status` 支持 `open`、`submitted`、`discarded`、`merged`，过滤发生在分页之前。
 
+## 当前目录与 Draft 筛选
+
+文本模式的 `draft list` 和省略项目参数的 `review list` 使用当前目录绑定的项目，不会退回全局选中的项目。未绑定目录或项目不可访问时明确失败：先绑定目录，或显式指定项目。`draft list --global` 查看所有本地项目保留的 Draft，包括不可访问项目。显式项目 ID 可以查询保留的本地 Draft，无需服务器成功解析项目名称。
+
+```sh
+cd /absolute/path/to/repository
+clumsies draft list --status open
+clumsies review list
+clumsies draft list --project AgentOS --scope project --status open
+clumsies draft list --global
+```
+
+Draft 的项目、作用域和状态筛选都在 daemon 分页之前执行。`--scope` 接受 `project` 或 `org`；`--project` 与 `--global` 互斥。JSON `draft list` 保留原来跨项目的默认行为，脚本需要指定项目时显式加 `--project`。CLI 和 daemon 必须一起升级；旧 resident 返回不符合筛选的 Draft 时，CLI 会报错，不会把未筛选的集合当作成功结果显示。
+
+## 多行输入与编辑器
+
+评论支持直接传文本、`--file PATH`、`--file -`（stdin）或 `--editor`。创建 Review 支持 `--description-file`；批准、拒绝支持 `--note-file`。这些命令的 `--editor` 分别编辑说明或决定理由。输入来源互斥；文件和 stdin 必须是 UTF-8，最多 4 MiB。空评论在提交前被拒绝。
+
+```sh
+clumsies review comment REVIEW_ID --version INSPECTED_VERSION --file comment.md
+printf '第一行\n第二行\n' | clumsies review comment REVIEW_ID --version INSPECTED_VERSION --file -
+clumsies review create DRAFT_ID --title '提案说明' --description-file description.md
+clumsies review approve REVIEW_ID --version INSPECTED_VERSION --note-file decision.md
+clumsies review comment REVIEW_ID --version INSPECTED_VERSION --editor
+```
+
+编辑器优先使用 `VISUAL`，其次 `EDITOR`（如 `code --wait`、`vim`，Windows 可用 `notepad`），必须等待编辑结束后才退出。编辑器模式要求 stdin 和 stdout 均为交互终端；自动化或重定向 JSON 回执使用文件/stdin。编辑器成功退出就提交输入；取消时让编辑器以非零状态退出，空评论也不会提交。编辑器、校验或服务器失败时，保留私有临时目录中的输入文件，并在 stderr 给出路径；提交成功后清理。保留文件可能含私有内容，恢复后请删除。
+
 ## 登录与目录绑定
 
 使用已配置完成的 Server。**新用户必须先由管理员邀请；CLI 不提供开放注册。** 根据邀请方式选择下面一条路径。远程地址必须为 HTTPS，本机开发允许 loopback HTTP。密码和 Token 不放在命令参数中，也不输出到 CLI 结果。
@@ -190,6 +218,14 @@ clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
 clumsies review update REVIEW_ID --file update.json --reference CURRENT_COMMIT_ID
 clumsies review diff REVIEW_ID
 ```
+
+也可以直接在编辑器中更新：
+
+```sh
+clumsies review update REVIEW_ID --edit --version INSPECTED_VERSION --reference CURRENT_COMMIT_ID
+```
+
+编辑器显示 `request` 和完整 `plan`。查看候选及全部提案，将作者确认的完整状态填入 `request.drafts[].resolved_state`；冲突结果仍默认为 null。只有 `request` 会提交，编辑 `plan` 不会改变服务器证据。CLI 拒绝修改已查看的 Review 版本；候选、Draft 版本、完整提案集合及上游引用仍由服务器校验。JSON 模板保留路径、目录和作用域元数据，避免只编辑正文时丢失其他变更。`--file update.json` 和 `--file -` 仍接受原来的 request 对象。
 
 模板故意不填冲突结果，需要作者明确编辑后应用。服务器会拒绝过期候选、缺失提案、过期 Review 版本和已移动的引用。更新可能撤销原批准，需要重新查看和审阅。
 
