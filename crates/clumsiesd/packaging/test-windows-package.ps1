@@ -38,12 +38,12 @@ try {
     $source = Join-Path $testRoot 'package'
     Expand-Archive $Package $source
     & "$source\install.ps1" -Source $source -InstallRoot $programs
-    $started = (RunCli -Arguments @('daemon', 'start')) | ConvertFrom-Json
-    $reused = (RunCli -Arguments @('daemon', 'start')) | ConvertFrom-Json
+    $started = (RunCli -Arguments @('--json', 'daemon', 'start')) | ConvertFrom-Json
+    $reused = (RunCli -Arguments @('--json', 'daemon', 'start')) | ConvertFrom-Json
     if ($started.daemon_installation_id -ne $reused.daemon_installation_id) { throw 'Resident was not reused' }
     Set-Content (Join-Path $data 'retained-work') 'Retained draft and binding proof'
     & "$source\install.ps1" -Source $source -InstallRoot $programs
-    $upgraded = (RunCli -Arguments @('daemon', 'start')) | ConvertFrom-Json
+    $upgraded = (RunCli -Arguments @('--json', 'daemon', 'start')) | ConvertFrom-Json
     if ($started.daemon_installation_id -ne $upgraded.daemon_installation_id) { throw 'Upgrade changed installation identity' }
     RunCli -Arguments @('daemon', 'stop') | Out-Null
     $before = (Get-FileHash "$runtime\clumsiesd.exe").Hash
@@ -63,7 +63,7 @@ try {
     if (-not $failed) { throw 'Corrupt package unexpectedly installed' }
     RunInstaller
     RunInstaller
-    $installed = (RunCli -Arguments @('daemon', 'start')) | ConvertFrom-Json
+    $installed = (RunCli -Arguments @('--json', 'daemon', 'start')) | ConvertFrom-Json
     if ($started.daemon_installation_id -ne $installed.daemon_installation_id) { throw 'Installer lost retained data' }
     RunCli -Arguments @('daemon', 'stop') | Out-Null
     $uninstaller = Get-ChildItem "$programs\unins*.exe" | Select-Object -First 1

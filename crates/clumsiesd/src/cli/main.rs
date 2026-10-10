@@ -6,6 +6,7 @@
 )]
 
 mod codex_host;
+mod output;
 mod pagination;
 mod review;
 
@@ -19,10 +20,24 @@ use clap::{Parser, Subcommand};
 use clumsiesd::*;
 use serde_json::{Value, json};
 
-/// Human CLI; JSON output preserves server pagination and coordination evidence.
+/// Manage Clumsies projects, drafts, and reviews.
 #[derive(Parser)]
-#[command(name = "clumsies", version, about)]
+#[command(
+    name = "clumsies",
+    version,
+    about,
+    after_help = "Get started:\n  clumsies login --server https://app.clumsies.ai\n  clumsies project list\n  clumsies project bind PROJECT\n  clumsies draft list\n\nUse --json for scripts and --no-pager for direct text output."
+)]
 struct Cli {
+    /// Emit machine-readable JSON (preserves existing response envelopes).
+    #[arg(long, global = true)]
+    json: bool,
+    /// Display directly without a terminal pager.
+    #[arg(long, global = true)]
+    no_pager: bool,
+    /// Include diagnostic details in text output.
+    #[arg(long, global = true, conflicts_with = "json")]
+    verbose: bool,
     /// Action to perform.
     #[command(subcommand)]
     command: Command,
@@ -245,13 +260,71 @@ enum DraftCommand {
 
 /// Parses commands, reports errors on stderr, and uses a nonzero failure status.
 fn main() {
-    if let Err(error) = run(Cli::parse()) {
-        eprintln!("clumsies: {error}");
-        if matches!(error.downcast_ref::<DaemonError>(), Some(DaemonError::Remote(error)) if error.code == "missing_session" || error.details["status"] == 401)
+    let cli = Cli::parse();
+    let (kind, readable) = presentation(&cli.command);
+    let mut output = output::Output::new(cli.json, cli.no_pager, cli.verbose, kind, readable);
+    let result = run(cli, &mut output);
+    let finish = output.finish();
+    if let Err(error) = result.and_then(|()| finish.map_err(Into::into)) {
+        if matches!(error.downcast_ref::<io::Error>(), Some(e) if e.kind() == io::ErrorKind::BrokenPipe)
         {
+            return;
+        }
+        eprintln!("clumsies: {}", output::safe_text(&error.to_string()));
+        if authentication_failure(error.as_ref()) {
             eprintln!("Run clumsies login again; local drafts and bindings are retained.");
         }
         std::process::exit(1);
+    }
+}
+
+/// Finds authentication failures through contextual wrappers without parsing error text.
+fn authentication_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if matches!(error.downcast_ref::<DaemonError>(), Some(DaemonError::Remote(remote)) if remote.code == "missing_session" || remote.details["status"] == 401)
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+/// Selects the public presentation and whether the command supports interactive reading.
+fn presentation(command: &Command) -> (&'static str, bool) {
+    match command {
+        Command::Status { .. } => ("status", false),
+        Command::Daemon { .. } => ("daemon", false),
+        Command::Login { .. } | Command::Redeem { .. } => ("login", false),
+        Command::Logout => ("logout", false),
+        Command::Project { action } => match action {
+            ProjectCommand::List { .. } => ("projects", true),
+            ProjectCommand::Current
+            | ProjectCommand::Bindings { .. }
+            | ProjectCommand::Bind { .. }
+            | ProjectCommand::Unbind { .. } => {
+                ("binding", matches!(action, ProjectCommand::Bindings { .. }))
+            }
+            _ => ("project", false),
+        },
+        Command::Agent { .. } => ("agent", false),
+        Command::Draft { action } => match action {
+            DraftCommand::List { .. } => ("drafts", true),
+            DraftCommand::Plan { .. } => ("plan", true),
+            _ => ("draft", matches!(action, DraftCommand::Show { .. })),
+        },
+        Command::Review { action } => match action {
+            review::ReviewCommand::List { .. } => ("reviews", true),
+            review::ReviewCommand::Comments { .. } => ("comments", true),
+            review::ReviewCommand::Plan { .. } => ("plan", true),
+            review::ReviewCommand::Diff { .. } => ("diff", true),
+            review::ReviewCommand::Comment { .. } => ("comment", false),
+            _ => (
+                "review",
+                matches!(action, review::ReviewCommand::Show { .. }),
+            ),
+        },
     }
 }
 
@@ -259,7 +332,7 @@ fn main() {
 ///
 /// # Errors
 /// Propagates validation, local transport, authentication, and Server failures.
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::Error>> {
     if let Command::Status { project } = cli.command {
         let config = DaemonConfig::from_env()?;
         let client = DaemonIpcClient::new(config.mach_service_name)
@@ -277,7 +350,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let retrieval = project
             .map(|project_id| client.search_index_status(SearchIndexProjectRequest { project_id }))
             .transpose()?;
-        print_json(
+        output.value(
             &json!({"health": client.health()?, "session": client.project_config()?, "sync": sync, "retrieval": retrieval}),
         )?;
         return Ok(());
@@ -295,13 +368,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 action: DaemonCommand::Stop
             }
         ) {
-            return print_json(&json!({"stopped": true}));
+            return output.value(&json!({"stopped": true}));
         }
     }
     let client = resident::ensure_running()?;
     match cli.command {
         Command::Status { .. } => unreachable!(),
-        Command::Daemon { .. } => print_json(&client.health()?),
+        Command::Daemon { .. } => output.value(&client.health()?),
         Command::Login {
             server,
             username,
@@ -326,7 +399,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 sign_in::authenticate_with_browser(&server, !no_browser)?
             };
-            install_session(&client, server, session)
+            install_session(&client, server, session, output)
         }
         Command::Redeem {
             server,
@@ -360,7 +433,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &password,
                 !reset_password,
             )?;
-            install_session(&client, server, session)
+            install_session(&client, server, session, output)
         }
         Command::Logout => {
             let previous = client.project_config()?;
@@ -374,11 +447,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 access_token: None,
                 refresh_token: None,
             })?;
-            print_json(&json!({"signed_out": true}))
+            output.value(&json!({"signed_out": true}))
         }
         Command::Project { action } => match action {
-            ProjectCommand::List { page } => print_json(&list_projects(&client, &page)?),
-            ProjectCommand::Show { id } => print_json(&server(
+            ProjectCommand::List { page } => pagination::print(&page, output, |cursor| {
+                server(
+                    &client,
+                    "GET",
+                    &page.path("/api/v1/projects", cursor),
+                    None,
+                    None,
+                )
+            }),
+            ProjectCommand::Show { id } => output.value(&server(
                 &client,
                 "GET",
                 &format!(
@@ -388,7 +469,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 None,
                 None,
             )?),
-            ProjectCommand::Create { name } => print_json(&server(
+            ProjectCommand::Create { name } => output.value(&server(
                 &client,
                 "POST",
                 "/api/v1/projects",
@@ -404,24 +485,24 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     None,
                     None,
                 )?;
-                print_json(
+                output.value(
                     &client.select_project(DaemonProjectSelectionRequest { project_id: id })?,
                 )
             }
-            ProjectCommand::Bind { id, path, revision } => print_json(
+            ProjectCommand::Bind { id, path, revision } => output.value(
                 &client.replace_project_binding(DaemonProjectBindingReplaceRequest {
                     project_id: resolve_project(&client, &id)?,
                     workspace_root: directory(path)?,
                     expected_revision: revision,
                 })?,
             ),
-            ProjectCommand::Unbind { path, revision } => print_json(
+            ProjectCommand::Unbind { path, revision } => output.value(
                 &client.remove_project_binding(DaemonProjectBindingRemoveRequest {
                     workspace_root: directory(path)?,
                     expected_revision: revision,
                 })?,
             ),
-            ProjectCommand::Bindings { id } => print_json(&client.list_project_bindings(
+            ProjectCommand::Bindings { id } => output.value(&client.list_project_bindings(
                 DaemonProjectBindingListRequest {
                     project_id: if id.starts_with("prj_") {
                         id
@@ -430,7 +511,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     },
                 },
             )?),
-            ProjectCommand::Current => print_json(
+            ProjectCommand::Current => output.value(
                 &DaemonIpcClient::for_agent_runtime(
                     client.service_name(),
                     agent_runtime::current_identity(),
@@ -442,20 +523,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ),
         },
         Command::Agent { action } => match action {
-            AgentCommand::List => print_json(
+            AgentCommand::List => output.value(
                 &client
                     .call(DaemonIpcRequest::empty("agent_adapter_settings"))?
                     .into_payload::<Value>()?,
             ),
             AgentCommand::Enable { host, host_binary } => {
-                configure_agent(&client, &host, true, host_binary)
+                configure_agent(&client, &host, true, host_binary, output)
             }
             AgentCommand::Disable { host, host_binary } => {
-                configure_agent(&client, &host, false, host_binary)
+                configure_agent(&client, &host, false, host_binary, output)
             }
         },
         Command::Draft { action } => match action {
-            DraftCommand::Retry { project } => print_json(
+            DraftCommand::Retry { project } => output.value(
                 &client
                     .call(DaemonIpcRequest::new(
                         "project_retry_sync",
@@ -466,23 +547,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ))?
                     .into_payload::<DaemonRetryResponse>()?,
             ),
-            DraftCommand::List { page, status } => {
-                print_json(&pagination::collect(&page, |cursor| {
-                    Ok(serde_json::to_value(client.list_drafts(
-                        DaemonDraftListQuery {
-                            cursor: cursor.map(str::to_owned),
-                            limit: Some(i64::from(page.limit)),
-                            status: status.clone(),
-                            ..Default::default()
-                        },
-                    )?)?)
-                })?)
-            }
-            DraftCommand::Show { id } => print_json(&client.get_draft(id)?),
-            DraftCommand::Sync { id } => print_json(&review::uploaded(&client, &id)?),
+            DraftCommand::List { page, status } => pagination::print(&page, output, |cursor| {
+                Ok(serde_json::to_value(client.list_drafts(
+                    DaemonDraftListQuery {
+                        cursor: cursor.map(str::to_owned),
+                        limit: Some(i64::from(page.limit)),
+                        status: status.clone(),
+                        ..Default::default()
+                    },
+                )?)?)
+            }),
+            DraftCommand::Show { id } => output.value(&client.get_draft(id)?),
+            DraftCommand::Sync { id } => output.value(&review::uploaded(&client, &id)?),
             DraftCommand::Plan { id } => {
                 let draft = review::uploaded(&client, &id)?;
-                print_json(&server(
+                output.value(&server(
                     &client,
                     "POST",
                     &format!(
@@ -506,7 +585,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 resolved,
             } => {
                 let draft = review::uploaded(&client, &id)?;
-                print_json(&server(
+                output.value(&server(
                     &client,
                     "POST",
                     &format!(
@@ -525,7 +604,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 )?)
             }
         },
-        Command::Review { action } => review::run(&client, action),
+        Command::Review { action } => review::run(&client, action, output),
     }
 }
 
@@ -537,10 +616,11 @@ fn install_session(
     client: &DaemonIpcClient,
     server: String,
     session: sign_in::Session,
+    output: &mut output::Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let previous = client.project_config()?;
     let same_server = previous.server_url.trim_end_matches('/') == server;
-    print_json(
+    output.value(
         &client.replace_project_config(DaemonProjectConfigUpdateRequest {
             server_url: server,
             project_id: same_server.then_some(previous.project_id).flatten(),
@@ -562,6 +642,7 @@ fn configure_agent(
     host: &str,
     enabled: bool,
     host_binary: Option<PathBuf>,
+    output: &mut output::Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = match host {
         "codex" => ProjectAgentAdapterKind::Codex,
@@ -595,7 +676,7 @@ fn configure_agent(
             .to_owned(),
         host_binary_path: host_binary,
     };
-    print_json(
+    output.value(
         &client
             .call(DaemonIpcRequest::new(
                 "set_agent_adapter",
@@ -759,15 +840,6 @@ fn read_json(path: PathBuf) -> Result<Value, Box<dyn std::error::Error>> {
     Ok(serde_json::from_str(&text)?)
 }
 
-/// Prints stable machine-readable output without emitting credentials.
-///
-/// # Errors
-/// Propagates serialization failure.
-fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", serde_json::to_string_pretty(value)?);
-    Ok(())
-}
-
 /// Executes one authenticated request through the resident's refresh and permission boundary.
 ///
 /// # Errors
@@ -825,6 +897,32 @@ fn server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_pagination_retains_authentication_recovery_through_context() {
+        let mut output = output::Output::new(false, true, false, "projects", true);
+        let args = PageArgs {
+            limit: 100,
+            cursor: None,
+            all: false,
+        };
+        let error = pagination::print(&args, &mut output, |_| {
+            Err(DaemonError::Remote(ApiError {
+                code: "server_request_failed".to_owned(),
+                message: "refresh revoked".to_owned(),
+                request_id: "req_test".to_owned(),
+                details: json!({"status":401}),
+            })
+            .into())
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("List incomplete after 0 results")
+        );
+        assert!(authentication_failure(error.as_ref()));
+    }
 
     #[test]
     fn version_identifies_the_human_client_in_distribution_packages() {

@@ -8,14 +8,19 @@ description: 安装 Windows/Linux 命令行，接入 Agent，并在没有图形�
 
 ## 安装
 
-首批包面向 **Linux x86_64（Ubuntu 24.04 或兼容的 glibc 系统）** 和 **Windows x64**。仓库的 **CLI** 工作流生成并验证压缩包及 Windows 用户安装器，后续正式标签发布会包含这些资产。首个版本发布前，可从该工作流下载构建产物。执行前，用旁边的 SHA-256 文件验证压缩包或安装器。
+首批包面向 **Linux x86_64（Ubuntu 24.04 或兼容的 glibc 系统）** 和 **Windows x64**。已发布的压缩包和 Windows 用户安装器从 [GitHub Releases](https://github.com/lilhammerfun/clumsies/releases) 下载。尚未发布的改动可从仓库的 **CLI** 工作流下载已验证的构建产物。执行前，用旁边的 SHA-256 文件验证压缩包或安装器。
 
 Linux 解压 `clumsies-cli-VERSION-linux-x86_64.tar.gz`，进入包目录执行：
 
 ```sh
 sha256sum --check SHA256SUMS
 ./install.sh
-export PATH="$HOME/.local/bin:$PATH"
+```
+
+安装完成后重新打开终端，再执行：
+
+```sh
+clumsies --version
 clumsies daemon start
 ```
 
@@ -32,34 +37,60 @@ clumsies daemon start
 
 `install.ps1 -Uninstall` 删除已安装程序和对应 PATH 项，保留 daemon 数据。用户安装器也可通过 Windows 设置中的应用列表卸载。
 
-macOS App 内嵌 `Contents/Resources/clumsies`，可直接执行或将资源目录加入 PATH。CLI 复用 App 的 launch agent、Keychain、配置和缓存；macOS 不提供独立的 `daemon stop/restart`，由 App 管理运行时。从源码编译的 CLI 也会查找 `/Applications/Clumsies.app` 或 `~/Applications/Clumsies.app`。
-
-## 分页和项目选择
-
-`project list`、`review list PROJECT`、`review comments REVIEW_ID` 和 `draft list` 统一支持 `--limit`（1–200，默认 100）、`--cursor` 和 `--all`。默认只返回一页；将返回的游标原样传入即可继续。`--all` 从第一页开始获取完整列表，不能与 `--cursor` 同用。任一页失败或游标循环时，命令失败，不输出不完整的合并结果。输出继续使用 JSON。
+macOS 安装 App 后，在 DMG 中双击 **Install CLI.command**（只有一个已安装 App 时自动发现）。也可明确指定 App：
 
 ```sh
-clumsies project list --limit 20
-clumsies project list --limit 20 --cursor '返回的游标'
-clumsies project list --all
-clumsies review list AgentOS --all
-clumsies review comments REVIEW_ID --all
-clumsies draft list --status open --limit 20
-clumsies draft list --cursor '返回的游标'
+sh /Volumes/Clumsies/Install\ CLI.command "$HOME/Applications/Clumsies.app"
+# App 自带安装脚本，升级后也可重复执行：
+sh "$HOME/Applications/Clumsies.app/Contents/Resources/install-cli.sh"
 ```
 
-Server 列表返回 `page_info.next_cursor` 和 `page_info.has_more`，本地 Draft 返回顶层 `next_cursor`；游标为 null 表示结束。项目、Review 和讨论分页需要包含本次改动的 Server；旧 Server 会忽略分页参数，最多返回 200 条。Server 采用 offset 分页，并以 ID 处理相同排序时间；并发修改可能移动记录，修改后应重新列出，不能把跨页结果视为固定快照。`--all` 会在内存中保存合并结果。
+安装器创建 `~/.local/bin/clumsies`，自动向 bash/zsh 的用户启动配置追加 PATH，保留原配置。重新打开终端后直接执行 `clumsies --version`；无需手工 export。Linux 的 `install.sh` 同样负责 bash/zsh PATH。其他 shell 暂不支持自动配置，安装器会明确报错。安装器不会覆盖无关命令；macOS 入口指向 App 内嵌 CLI，原位置升级 App 后入口继续有效。移动 App 后需重新设置入口，不能继续使用旧路径。CLI 复用 App 的 launch agent、Keychain、配置和缓存；macOS 的 daemon 由 App 管理。
 
-项目 `show`、`join`、`bind`、`bindings` 和 `review list` 接受项目 ID 或唯一名称（忽略大小写）。名称查找会读取全部可访问页；未找到或存在歧义时直接失败，不修改状态。自动化建议使用 ID。`join`（也可写成 `select`）只选择项目，不会绑定目录。
+## 输出与阅读
+
+默认输出可读文本：列表显示名称、ID、状态和关键同步信息，详情保留 Review 版本、发布引用、作用域及变更证据。`status` 简要显示准备情况和需要处理的问题；`--verbose` 显示诊断细节。长文本在交互终端中自动使用 pager，短输出直接显示。可用 `CLUMSIES_PAGER` 或 `PAGER` 选择阅读器，`--no-pager` 直接打印。默认探测 `less`，否则使用可用的 `more`（Windows 使用系统阅读器）；没有阅读器时直接输出。键位由阅读器决定。JSON、管道和重定向不启用 pager，不输出颜色或动画。
+
+```sh
+clumsies project list
+clumsies draft list --status open
+clumsies review diff REVIEW_ID
+clumsies --no-pager review show REVIEW_ID
+clumsies project list | grep AgentOS
+```
+
+**脚本迁移：以前默认输出 JSON，现在必须显式加 `--json`。** JSON 保留原有响应结构，避免混入人类提示。生成可编辑的协调文件也必须使用 JSON：
+
+```sh
+clumsies --json status
+clumsies project list --json
+clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
+```
+
+## 自动分页与项目选择
+
+文本模式的 `project list`、`review list PROJECT`、`review comments REVIEW_ID` 和 `draft list` 自动跟随服务端游标，逐批展示，无需手工复制 cursor。退出 pager 后停止后续取数，阅读器可能预读数据，已经进行中的一次请求可能完成。中途失败会明确提示列表不完整并返回非零退出码；已经显示的文本不代表完整结果。记录并发变化时，跨页结果也不是固定快照。
+
+JSON 模式保留已有 `--limit`（每次请求 1–200 条，默认 100）、`--cursor` 和 `--all` 语义：默认一页；`--all` 从第一页读取全部结果，不能与 `--cursor` 同用。所有页成功后才输出合并 JSON；任一页失败或游标循环时不输出不完整结果。`--all` 的 JSON 会在内存中保留合并结果。文本模式下 `--limit` 仍是请求批量大小，不限制总条数；`--cursor` 指定起始位置，后续自动遍历。
+
+```sh
+clumsies project list --json --limit 20
+clumsies project list --json --cursor '返回的游标'
+clumsies review list AgentOS --json --all
+```
+
+旧 Server 可能忽略分页参数并最多返回 200 条；CLI 无法恢复服务器未提供的记录。Server 列表使用 `page_info.next_cursor`，本地 Draft 使用顶层 `next_cursor`。
+
+项目 `show`、`join`（别名 `select`）、`bind`、`bindings` 和 `review list` 接受项目 ID 或唯一名称（忽略大小写）。同名时失败，自动化建议使用 ID。`select` 只选择项目，不绑定目录，也不授予权限。
 
 ```sh
 cd /absolute/path/to/repository
-clumsies project join AgentOS
+clumsies project select AgentOS
 clumsies project bind AgentOS
 clumsies project current
 ```
 
-`bind` 的目录默认是 `.`。目录属于其他项目时，错误会提供旧项目 ID 和实际绑定版本。先用 `project bindings 旧项目ID` 查看，再明确执行 `project bind AgentOS . --revision 已查看的版本号`。不要猜版本号；旧项目已删除时，仍可按 ID 查询本地绑定。Draft 的 `--status` 支持 `open`、`submitted`、`discarded`、`merged`，过滤发生在分页之前。
+`bind` 的目录默认是 `.`。目录属于其他项目时，先用 `project bindings 旧项目ID` 查看，再明确执行 `project bind AgentOS . --revision 已查看的版本号`。不要猜版本号；旧项目已删除时，仍可按 ID 查询本地绑定。Draft 的 `--status` 支持 `open`、`submitted`、`discarded`、`merged`，过滤发生在分页之前。
 
 ## 登录与目录绑定
 
@@ -152,7 +183,7 @@ clumsies draft rebase LOCAL_DRAFT_ID --candidate CANDIDATE_ID --version DRAFT_VE
 已有 Review 的更新必须包含全部提案与同一份一致版本：
 
 ```sh
-clumsies review plan REVIEW_ID --version INSPECTED_VERSION > plan.json
+clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
 # 查看 plan.candidates 和 plan.detail 中的全部提案。
 # 将顶层 request 对象复制到 update.json。
 # 有冲突时，编辑候选的 merge_preview.state，并填入对应 resolved_state。

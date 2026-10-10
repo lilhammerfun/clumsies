@@ -8,7 +8,7 @@ use clumsiesd::*;
 use serde_json::{Value, json};
 
 use super::pagination::{self, PageArgs};
-use super::{identifier, print_json, read_json, resolve_project, server};
+use super::{identifier, read_json, resolve_project, server};
 
 /// Review workflow, with explicit concurrency inputs for human decisions.
 #[derive(Subcommand)]
@@ -125,23 +125,24 @@ pub(super) enum ReviewCommand {
 pub(super) fn run(
     client: &DaemonIpcClient,
     action: ReviewCommand,
+    output: &mut super::output::Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         ReviewCommand::List { project, page } => {
             let project = resolve_project(client, &project)?;
             let path = format!("/api/v1/reviews?project_id={}", identifier(&project)?);
-            print_json(&pagination::collect(&page, |cursor| {
+            pagination::print(&page, output, |cursor| {
                 server(client, "GET", &page.path(&path, cursor), None, None)
-            })?)
+            })
         }
-        ReviewCommand::Show { id } => print_json(&detail(client, &id)?),
+        ReviewCommand::Show { id } => output.value(&detail(client, &id)?),
         ReviewCommand::Comments { id, page } => {
             let path = format!("/api/v1/reviews/{}/comments", identifier(&id)?);
-            print_json(&pagination::collect(&page, |cursor| {
+            pagination::print(&page, output, |cursor| {
                 server(client, "GET", &page.path(&path, cursor), None, None)
-            })?)
+            })
         }
-        ReviewCommand::Diff { id } => diff(client, detail(client, &id)?),
+        ReviewCommand::Diff { id } => diff(client, detail(client, &id)?, output),
         ReviewCommand::Create {
             drafts,
             title,
@@ -208,7 +209,7 @@ pub(super) fn run(
             }) {
                 return Err("Reconciliation choices include an unselected draft".into());
             }
-            print_json(&server(
+            output.value(&server(
                 client,
                 "POST",
                 "/api/v1/reviews",
@@ -217,23 +218,23 @@ pub(super) fn run(
             )?)
         }
         ReviewCommand::Approve { id, version, note } => {
-            decision(client, &id, version, "approved", note)
+            decision(client, &id, version, "approved", note, output)
         }
         ReviewCommand::Reject { id, version, note } => {
-            decision(client, &id, version, "rejected", note)
+            decision(client, &id, version, "rejected", note, output)
         }
         ReviewCommand::Merge {
             id,
             version,
             reference,
-        } => print_json(&server(
+        } => output.value(&server(
             client,
             "POST",
             &format!("/api/v1/reviews/{}/merges", identifier(&id)?),
             Some(json!({"expected_review_version": version})),
             Some(&reference),
         )?),
-        ReviewCommand::Comment { id, version, body } => print_json(&server(
+        ReviewCommand::Comment { id, version, body } => output.value(&server(
             client,
             "POST",
             &format!("/api/v1/reviews/{}/comments", identifier(&id)?),
@@ -248,7 +249,7 @@ pub(super) fn run(
                 Some(json!({"expected_review_version": version})),
                 None,
             )?;
-            print_json(&update_template(plan)?)
+            output.value(&update_template(plan)?)
         }
         ReviewCommand::Update {
             id,
@@ -259,7 +260,7 @@ pub(super) fn run(
             if !request["expected_review_version"].is_i64() || !request["drafts"].is_array() {
                 return Err("Use the plan's request object, including expected_review_version and all drafts".into());
             }
-            print_json(&server(
+            output.value(&server(
                 client,
                 "POST",
                 &format!("/api/v1/reviews/{}/updates", identifier(&id)?),
@@ -312,8 +313,9 @@ fn decision(
     version: i64,
     decision: &str,
     note: Option<String>,
+    output: &mut super::output::Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    print_json(&server(
+    output.value(&server(
         client,
         "POST",
         &format!("/api/v1/reviews/{}/decisions", identifier(id)?),
@@ -380,19 +382,18 @@ pub(super) fn uploaded(
 ///
 /// # Errors
 /// Refuses incomplete snapshots or unsupported operation shapes instead of showing a false diff.
-fn diff(client: &DaemonIpcClient, detail: Value) -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "Review {} version {} status {}\nReference {}",
-        detail["review"]["review_id"],
-        detail["review"]["version"],
-        detail["review"]["status"],
-        detail["review"]["coordination"]["current_commit_id"]
-            .as_str()
-            .unwrap_or("ref-none")
-    );
+fn diff(
+    client: &DaemonIpcClient,
+    detail: Value,
+    output: &mut super::output::Output,
+) -> Result<(), Box<dyn std::error::Error>> {
     let entries = detail["drafts"]
         .as_array()
         .ok_or("Review has no ordered proposal set")?;
+    if !output.json {
+        output.value(&json!({"review":detail["review"]}))?;
+    }
+    let mut changes = Vec::new();
     for entry in entries {
         let draft = &entry["draft"];
         let base = if let Some(commit) = draft["base_commit_id"].as_str() {
@@ -404,27 +405,23 @@ fn diff(client: &DaemonIpcClient, detail: Value) -> Result<(), Box<dyn std::erro
                 None,
             )?
         } else {
-            json!({"tree": {"entries": []}, "blobs": []})
+            json!({"tree":{"entries":[]},"blobs":[]})
         };
         let (before_path, before, after_path, after) =
             proposal_text(draft, &entry["operations"], &base)?;
-        // Text alone hides directory, provenance, and description changes.
-        println!(
-            "Resource metadata and ordered operations:\n{}",
-            serde_json::to_string_pretty(&json!({
-                "base_resource": base_resource(&draft["resource"], &base)?,
-                "operations": entry["operations"],
-            }))?
-        );
-        println!(
-            "{}",
-            similar::TextDiff::from_lines(&before, &after)
-                .unified_diff()
-                .header(&before_path, &after_path)
-        );
-        if before == after && before_path != after_path {
-            println!("rename from {before_path}\nrename to {after_path}");
+        let unified = similar::TextDiff::from_lines(&before, &after)
+            .unified_diff()
+            .header(&before_path, &after_path)
+            .to_string();
+        let change = json!({"base_resource":base_resource(&draft["resource"], &base)?, "operations":entry["operations"], "before_path":before_path,"after_path":after_path,"unified_diff":unified});
+        if output.json {
+            changes.push(change);
+        } else {
+            output.value(&json!({"changes":[change]}))?;
         }
+    }
+    if output.json {
+        output.value(&json!({"review":detail["review"],"changes":changes}))?;
     }
     Ok(())
 }

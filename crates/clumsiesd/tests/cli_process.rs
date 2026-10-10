@@ -32,6 +32,8 @@ struct Protocol {
     fail_upload: bool,
     /// Make Review reads fail after the daemon has cached an authoritative response.
     fail_review_read: bool,
+    /// Fail a continuation page after earlier results have been delivered.
+    fail_project_page: bool,
 }
 
 /// One fixture process and its independent home, daemon database, and IPC endpoint.
@@ -129,7 +131,7 @@ impl Fixture {
 
     /// Requires a successful JSON CLI result, retaining useful failure diagnostics.
     fn json(&self, args: &[&str], input: Option<&str>) -> Value {
-        let output = self.cli(args, input);
+        let output = self.cli(&[&["--json"], args].concat(), input);
         assert!(
             output.status.success(),
             "{args:?}: {}",
@@ -298,6 +300,13 @@ async fn api(
     if path == "/fixture/review-read-failure" {
         protocol.fail_review_read = body["enabled"] == true;
         return Json(json!({})).into_response();
+    }
+    if path == "/fixture/project-page-failure" {
+        protocol.fail_project_page = body["enabled"] == true;
+        return Json(json!({})).into_response();
+    }
+    if protocol.fail_project_page && path == "/api/v1/projects" && query.contains_key("cursor") {
+        return failure(StatusCode::SERVICE_UNAVAILABLE, "page_unavailable");
     }
     if protocol.fail_review_read && method == "GET" && path == "/api/v1/reviews/rev_fixture" {
         return failure(StatusCode::SERVICE_UNAVAILABLE, "review_unavailable");
@@ -785,6 +794,56 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
     fixture.json(&["logout"], None);
 }
 
+/// Human lists traverse pages automatically while explicit JSON retains one-page envelopes.
+#[test]
+fn text_output_traverses_without_a_pager_and_json_remains_explicit() {
+    let fixture = Fixture::start();
+    fixture.json(
+        &[
+            "login",
+            "--server",
+            &fixture.origin,
+            "--username",
+            "fixture",
+            "--password-stdin",
+        ],
+        Some("fixture-secret\n"),
+    );
+    let text = fixture.cli(&["project", "list", "--limit", "1"], None);
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("Fixture") && text.contains("Other"));
+    assert!(!text.contains("page_info") && !text.contains("next_cursor") && !text.contains("{\""));
+    let page = fixture.json(&["project", "list", "--limit", "1"], None);
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["page_info"]["has_more"], true);
+    let status = fixture.cli(&["status"], None);
+    assert!(status.status.success());
+    assert!(!String::from_utf8_lossy(&status.stdout).contains("has_access_token"));
+    reqwest::blocking::Client::new()
+        .post(format!("{}/fixture/project-page-failure", fixture.origin))
+        .json(&json!({"enabled":true}))
+        .send()
+        .unwrap();
+    let partial = fixture.cli(&["project", "list", "--limit", "1"], None);
+    assert!(!partial.status.success());
+    assert!(String::from_utf8_lossy(&partial.stdout).contains("Other"));
+    assert!(String::from_utf8_lossy(&partial.stderr).contains("List incomplete after 1 results"));
+    let atomic = fixture.cli(
+        &["project", "list", "--limit", "1", "--json", "--all"],
+        None,
+    );
+    assert!(!atomic.status.success());
+    assert!(
+        atomic.stdout.is_empty(),
+        "A partial JSON collection was emitted"
+    );
+}
+
 /// A cold resident must not keep a parent shell's output pipe alive after the CLI exits.
 #[test]
 fn cold_start_closes_client_output_pipe_while_resident_stays_running() {
@@ -792,7 +851,7 @@ fn cold_start_closes_client_output_pipe_while_resident_stays_running() {
     let mut command = Command::new(env!("CARGO_BIN_EXE_clumsies"));
     isolate(&mut command, fixture.root.path());
     let mut child = command
-        .args(["daemon", "start"])
+        .args(["--json", "daemon", "start"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(std::fs::File::create(fixture.root.path().join("cold-start.stderr")).unwrap())

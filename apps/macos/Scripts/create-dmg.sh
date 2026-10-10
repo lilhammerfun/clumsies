@@ -18,6 +18,9 @@ trap 'rm -rf "$staging"' EXIT
 trap 'exit 1' HUP INT TERM
 
 ditto "$app" "$staging/Clumsies.app"
+cp "$app/Contents/Resources/install-cli.sh" "$staging/Install CLI.command"
+cp "$app/Contents/Resources/shell-path.sh" "$staging/shell-path.sh"
+chmod 755 "$staging/Install CLI.command"
 ln -s /Applications "$staging/Applications"
 mkdir -p "$(dirname "$image")"
 hdiutil create -quiet -volname Clumsies -srcfolder "$staging" \
