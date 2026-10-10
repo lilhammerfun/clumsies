@@ -132,7 +132,7 @@ pub(super) enum ReviewCommand {
         #[arg(long)]
         version: i64,
     },
-    /// Apply author-confirmed candidate choices from a plan's request object.
+    /// Resolve upstream changes in an inspected Review.
     Update {
         /// Review identifier.
         id: String,
