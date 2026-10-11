@@ -1487,7 +1487,8 @@ async fn refresh_upstream_resource_changes(
             sqlx::query(
                 "SELECT draft_id, base_commit_id, current_commit_id, target_id, resource_kind
                  FROM local_drafts
-                 WHERE resource_scope = 'project' AND project_id = $1",
+                 WHERE resource_scope = 'project' AND project_id = $1
+                   AND status IN ('open', 'submitted')",
             )
             .bind(owner_id)
             .fetch_all(&mut **tx)
@@ -1499,6 +1500,7 @@ async fn refresh_upstream_resource_changes(
                         d.resource_kind
                  FROM local_drafts d
                  WHERE d.resource_scope = 'org'
+                   AND d.status IN ('open', 'submitted')
                    AND d.project_id IN (
                        SELECT project_id FROM cached_refs
                        WHERE scope = 'project' AND org_id = $1 AND project_id IS NOT NULL
@@ -2150,6 +2152,88 @@ struct MaterializedManifestEntry<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn upstream_refresh_ignores_terminal_drafts_and_checks_active_drafts() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::migration::migrate_local_db(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO cached_refs
+             (ref_key, name, scope, org_id, project_id, etag, server_updated_at)
+             VALUES ('project:test', 'main', 'project', 'org_test', 'prj_test', 'test', 'now')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let tree = ServerTree {
+            tree_id: "tree_current".to_owned(),
+            entries: vec![ServerTreeEntry {
+                org_source: None,
+                is_directory: false,
+                id: "mem_test".to_owned(),
+                kind: ServerTreeEntryKind::Memory,
+                scope: ServerTreeEntryScope::Project,
+                project_id: Some("prj_test".to_owned()),
+                description: String::new(),
+                path: Some("guide.md".to_owned()),
+                blob_id: "blob_current".to_owned(),
+                source: ServerTreeEntrySource::Project,
+            }],
+        };
+        sqlx::query("INSERT INTO cached_trees (tree_id, payload_json) VALUES ($1, $2)")
+            .bind(&tree.tree_id)
+            .bind(serde_json::to_string(&tree).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO cached_commits
+             (commit_id, scope, org_id, project_id, tree_id, version, created_at, payload_json)
+             VALUES ('commit_current', 'project', 'org_test', 'prj_test', 'tree_current', 1, 'now', '{}')",
+        ).execute(&pool).await.unwrap();
+        for scope in ["project", "org"] {
+            for status in ["open", "submitted", "merged", "discarded"] {
+                let base =
+                    matches!(status, "merged" | "discarded").then_some("uncached_old_commit");
+                sqlx::query(
+                    "INSERT INTO local_drafts
+                     (draft_id, project_id, resource_scope, resource_kind, target_id,
+                      status, base_commit_id, current_commit_id)
+                     VALUES ($1, 'prj_test', $2, 'memory', 'mem_test', $3, $4, 'commit_current')",
+                )
+                .bind(format!("{scope}_{status}"))
+                .bind(scope)
+                .bind(status)
+                .bind(base)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        }
+        let mut tx = pool.begin().await.unwrap();
+        refresh_upstream_resource_changes(&mut tx, "project", "prj_test")
+            .await
+            .unwrap();
+        refresh_upstream_resource_changes(&mut tx, "org", "org_test")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let rows = sqlx::query("SELECT status, has_upstream_resource_changes FROM local_drafts")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        for row in rows {
+            let status: String = row.get("status");
+            assert_eq!(
+                row.get::<bool, _>("has_upstream_resource_changes"),
+                matches!(status.as_str(), "open" | "submitted")
+            );
+        }
+    }
 
     #[test]
     fn commit_sync_running_scope_is_read_as_one_snapshot() {
