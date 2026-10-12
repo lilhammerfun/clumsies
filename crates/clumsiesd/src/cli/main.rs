@@ -1075,6 +1075,13 @@ fn server(
     if body.is_some() {
         headers.insert("content-type".to_owned(), "application/json".to_owned());
     }
+    if method == "POST" && path == "/api/v1/projects" {
+        // Generate once so the daemon's authentication retry keeps the same creation key.
+        headers.insert(
+            "Idempotency-Key".to_owned(),
+            uuid::Uuid::new_v4().to_string(),
+        );
+    }
     if let Some(reference) = reference {
         headers.insert(
             "If-Match".to_owned(),
