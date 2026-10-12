@@ -2,7 +2,9 @@
 
 use super::model::{LockedProject, ProjectCreation, ProjectUpdateState, project_role};
 use crate::app::organization::dto::UserRef;
-use crate::app::project::dto::{AdminProject, Project, ProjectMember, ProjectRef};
+use crate::app::project::dto::{
+    AdminProject, Project, ProjectListEntry, ProjectMember, ProjectOwner, ProjectRef,
+};
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
@@ -557,14 +559,25 @@ pub(crate) async fn list_projects(
     org_id: &str,
     offset: i64,
     limit: i64,
-) -> Result<Vec<Project>, ServerError> {
+) -> Result<Vec<ProjectListEntry>, ServerError> {
     let rows = sqlx::query(
-        "SELECT p.project_id, p.name, p.description, p.revision, p.created_at, p.updated_at
-         FROM projects p
-         JOIN project_members m ON m.project_id = p.project_id
-         WHERE m.user_id = $1 AND p.org_id = $2
-         ORDER BY p.updated_at DESC, p.project_id
-         LIMIT $3 OFFSET $4",
+        "WITH page AS (
+            SELECT p.project_id, p.name, p.description, p.revision, p.created_at, p.updated_at,
+                   m.role AS your_role
+            FROM projects p JOIN project_members m ON m.project_id = p.project_id
+            WHERE m.user_id = $1 AND p.org_id = $2
+            ORDER BY p.updated_at DESC, p.project_id LIMIT $3 OFFSET $4
+         ), membership AS (
+            SELECT pm.project_id, COUNT(*) AS member_count,
+                   MAX(pm.user_id) FILTER (WHERE pm.role = 'owner') AS owner_id
+            FROM project_members pm JOIN page ON page.project_id = pm.project_id
+            GROUP BY pm.project_id
+         )
+         SELECT page.*, membership.member_count, u.user_id AS owner_id,
+                COALESCE(NULLIF(BTRIM(u.display_name), ''), NULLIF(BTRIM(u.username), ''), u.email) AS owner_name
+         FROM page JOIN membership ON membership.project_id = page.project_id
+         LEFT JOIN users u ON u.user_id = membership.owner_id
+         ORDER BY page.updated_at DESC, page.project_id"
     )
     .bind(user_id)
     .bind(org_id)
@@ -572,7 +585,24 @@ pub(crate) async fn list_projects(
     .bind(offset)
     .fetch_all(pool)
     .await?;
-    rows.iter().map(project_from_row).collect()
+    rows.iter()
+        .map(|row| {
+            Ok(ProjectListEntry {
+                project: project_from_row(row)?,
+                your_role: project_role(row.try_get::<String, _>("your_role")?.as_str())?,
+                member_count: row.try_get("member_count")?,
+                owner: row
+                    .try_get::<Option<String>, _>("owner_id")?
+                    .map(|user_id| {
+                        Ok::<_, ServerError>(ProjectOwner {
+                            user_id,
+                            name: row.try_get("owner_name")?,
+                        })
+                    })
+                    .transpose()?,
+            })
+        })
+        .collect()
 }
 
 /// Read required public project metadata.

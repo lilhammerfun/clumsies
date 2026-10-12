@@ -47,9 +47,29 @@ sh "$HOME/Applications/Clumsies.app/Contents/Resources/install-cli.sh"
 
 The installer creates `~/.local/bin/clumsies` and appends PATH setup to bash/zsh user startup files without replacing their contents. Open a new terminal and run `clumsies --version`; no manual export is needed. Linux `install.sh` also sets up bash/zsh PATH. Other shells currently report an explicit setup error. Unrelated commands are never replaced. The macOS link uses the embedded App runtime and survives App upgrades at the same location. Moving the App requires updating the command entry. Credentials, bindings and Drafts are retained; the App continues to own the macOS daemon lifecycle.
 
+## Read published Memory
+
+Run from a project-bound directory:
+
+```sh
+clumsies memory list
+clumsies memory show knowledge/access/README.md
+clumsies memory show MEMORY_ID
+clumsies memory show --all
+clumsies memory show --all --project AgentOS
+clumsies --no-pager memory show --all > project-memory.txt
+clumsies --json memory show --all > project-memory.json
+```
+
+`list` prints an ID/scope/path table without a reader. `show` prints only the Markdown body by default. `--all` separates documents with their paths, adding scope only for duplicate paths. Project IDs, snapshot references and Memory IDs appear only with `--verbose` or `--json`. Short bodies print directly; long bodies open the terminal reader. With default `less`, use Space to advance, `/text` to search and `q` to quit. Pipes, redirection and JSON never open a reader.
+
+Commands read one **published project snapshot**, including selected organization Memory, excluding unpublished Drafts and directory placeholders. `--all` reads every body. Resolve duplicate paths with an ID or `--scope project|org`. `--project` accepts a project ID or unique name; without it, only the current directory binding is used. Unpublished projects have empty lists; missing individual targets fail.
+
+The existing snapshot API needs one reference request and one snapshot request, with no per-Memory body requests. The complete snapshot downloads before output, so quitting stops output but cannot undo the download; memory use grows with snapshot size. JSON contains `project_id`, `commit_id` and `items` (with `content` for body commands), without collection cursors. Inspect unpublished changes with `clumsies draft diff DRAFT_ID`.
+
 ## Output and terminal reading
 
-Commands default to readable text. Lists show names, IDs, lifecycle and sync information; details retain Review versions, references, authority scopes and semantic changes. `status` summarizes readiness and required attention; `--verbose` includes diagnostic fields. Long output automatically uses a terminal pager; short output displays directly. Configure `CLUMSIES_PAGER` or `PAGER`, or pass `--no-pager`. The default detects `less`, then falls back to available `more` (the system reader on Windows), or direct output if no reader exists. Reader key bindings depend on the installed pager. JSON, pipes and redirected output never launch a pager or emit animations or colors.
+Commands default to readable text. Lists show names, IDs, lifecycle and sync information; details retain Review versions, references, authority scopes and semantic changes. `status` summarizes readiness and required attention; `--verbose` includes diagnostic fields. Long diffs, conflict plans and detail content automatically use a terminal pager; short output displays directly. Project, member, Draft, Review and comment tables print directly. Configure `CLUMSIES_PAGER` or `PAGER`, or pass `--no-pager`. The default detects `less`, then falls back to available `more` (the system reader on Windows), or direct output if no reader exists. Reader key bindings depend on the installed pager. JSON, pipes and redirected output never launch a pager or emit animations or colors.
 
 ```sh
 clumsies project list
@@ -68,7 +88,7 @@ clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
 
 ## Automatic pagination and project selection
 
-Text lists automatically follow Server/local cursors and display each batch without collecting every page first. No manual cursor copying is needed. Closing the reader stops subsequent requests, with reader-dependent prefetch. An interrupted fetch reports incomplete results and exits nonzero; already displayed rows do not imply a complete collection. Concurrent updates can move records between pages, so traversal is not a fixed snapshot.
+Text lists automatically follow Server/local cursors and display each batch without collecting every page first. No manual cursor copying is needed. Closing the output pipe stops subsequent requests; an already in-flight request may complete. An interrupted fetch reports incomplete results and exits nonzero; already displayed rows do not imply a complete collection. Concurrent updates can move records between pages, so traversal is not a fixed snapshot.
 
 JSON retains `--limit` (request size 1–200, default 100), `--cursor` and `--all`. By default it returns one page; `--all` starts from the first page and conflicts with `--cursor`. JSON all-pages output is emitted only after every request succeeds, and retains the collection in memory. Failures and cursor loops never produce a partial JSON document. In text mode, `--limit` remains a request batch size rather than a total result limit, and `--cursor` selects the traversal's starting point.
 
@@ -274,3 +294,27 @@ Re-run the verified Linux script, Windows script, or Windows installer to upgrad
 Program uninstall retains credentials, directory bindings, local drafts, and caches. Use `logout` first when you want to remove credentials. Do not roll back to a daemon that cannot read a newer local database schema; stop the runtime and back up the complete daemon data root before a downgrade. The installers do not promise automatic schema downgrades or overwrite unrelated program directories.
 
 Build from source with `cargo build --locked --release -p clumsiesd --bins`. The CLI has no separate credentials file, cache, or business-rule implementation. The historical Zig CLI remains archived in Git commit `4b18f7947a977dbc6b62f560b698dc992597f19d`; this Rust CLI does not restore it.
+
+## Project details and member tables
+
+Human list output uses aligned column headers. Draft paths are resolved from ordered
+rename/create operations or the scoped resource in the immutable base snapshot.
+Unavailable paths are labelled explicitly. Times use the local timezone; full account
+objects and diagnostics remain available with `--verbose` or `--json`.
+
+```sh
+clumsies project current
+clumsies project members
+clumsies project members AgentOS
+clumsies project members AgentOS --json --all
+```
+
+`project current` shows the bound project's name, description, your project role,
+member count, directory and Server. It reads all member pages to count correctly.
+Its JSON output retains the original local binding envelope. Member lists follow
+pagination like other lists; JSON defaults to one page, with `--all` for all pages.
+Project roles come from membership records, independently of organization roles.
+
+Project list columns `YOUR ROLE`, `OWNER`, `MEMBERS` and `DESCRIPTION` come from the list page itself, without per-project member requests. Upgrade the Server for the new summary fields; older Servers display `n/a` (unavailable) rather than inferred roles, owners or counts.
+
+Project, Draft and Review lists display `UPDATED` in local time, consistently with project details. Project timestamps describe project metadata changes, not the latest Memory activity. Default diffs show inspected version, author, file and scope, coordination state, and actual text/metadata changes. `---`/`+++` label before/after paths; leading `+` adds, `-` removes and space retains context. Use `--verbose` for diagnostics or `--json` for the complete original envelope.

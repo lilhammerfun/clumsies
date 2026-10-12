@@ -249,3 +249,77 @@ async fn project_service_checks_membership_before_writing_or_auditing() {
     );
     postgres.shutdown().await;
 }
+
+#[tokio::test]
+async fn project_list_batches_membership_summary_and_preserves_access_and_pages() {
+    let postgres = common::migrated_postgres().await;
+    let pool = &postgres.pool;
+    let installation = common::initialize_installation(
+        pool.clone(),
+        "List summaries",
+        "owner@example.com",
+        "Owner",
+        "owner-summary",
+        "First",
+    )
+    .await;
+    let owner = common::owner_principal(pool).await;
+    sqlx::query("INSERT INTO users (user_id, email, role, status) VALUES ('summary_member', 'member@example.com', 'member', 'active')")
+        .execute(pool).await.unwrap();
+    project::create_admin_project_member(
+        pool,
+        &owner,
+        &installation.project_id,
+        CreateProjectMemberRequest {
+            user_id: "summary_member".into(),
+            role: ProjectRole::Member,
+        },
+    )
+    .await
+    .unwrap();
+    let second = project::create_project_from_request(
+        pool,
+        &owner,
+        project::dto::CreateProjectRequest {
+            name: "Second".into(),
+            description: Some("Useful description".into()),
+        },
+        "summary-second",
+    )
+    .await
+    .unwrap();
+    let first_page = project::list_projects(pool, &owner, 0, 1).await.unwrap();
+    let second_page = project::list_projects(pool, &owner, 1, 1).await.unwrap();
+    assert!(first_page.page_info.has_more);
+    assert!(!second_page.page_info.has_more);
+    assert_ne!(
+        first_page.items[0].project.project_id,
+        second_page.items[0].project.project_id
+    );
+    let all = project::list_projects(pool, &owner, 0, 200).await.unwrap();
+    assert_eq!(all.items.len(), 2);
+    for entry in &all.items {
+        assert_eq!(entry.your_role, ProjectRole::Owner);
+        assert_eq!(entry.owner.as_ref().unwrap().user_id, owner.user_id);
+        assert_eq!(entry.owner.as_ref().unwrap().name, "Owner");
+        assert_eq!(
+            entry.member_count,
+            if entry.project.project_id == second.project_id {
+                1
+            } else {
+                2
+            }
+        );
+        let json = serde_json::to_value(entry).unwrap();
+        assert!(json.get("project_id").is_some() && json.get("project").is_none());
+    }
+    let member = common::principal(pool, "summary_member").await;
+    let accessible = project::list_projects(pool, &member, 0, 200).await.unwrap();
+    assert_eq!(accessible.items.len(), 1);
+    assert_eq!(
+        accessible.items[0].project.project_id,
+        installation.project_id
+    );
+    assert_eq!(accessible.items[0].your_role, ProjectRole::Member);
+    assert_eq!(accessible.items[0].member_count, 2);
+}

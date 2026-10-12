@@ -140,9 +140,32 @@ pub struct UpdateProjectRequest {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectListResponse {
     /// Ordered results included in the current response page.
-    pub items: Vec<Project>,
+    pub items: Vec<ProjectListEntry>,
     /// Continuation metadata for the returned result page.
     pub page_info: PageInfo,
+}
+
+/// Project owner identity needed by a project list, without unrelated account fields.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectOwner {
+    /// Stable identity of the member with the project owner role.
+    pub user_id: String,
+    /// Display name, falling back to username or email when no display name is set.
+    pub name: String,
+}
+
+/// One accessible project's metadata and membership summary, fetched in the same list query.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectListEntry {
+    /// Existing public project fields retain their flat response shape.
+    #[serde(flatten)]
+    pub project: Project,
+    /// The requesting user's project role, independent of organization privileges.
+    pub your_role: ProjectRole,
+    /// Total project memberships, including the owner.
+    pub member_count: i64,
+    /// Owner role identity; absent only when historical data has no owner membership.
+    pub owner: Option<ProjectOwner>,
 }
 
 /// Public project metadata and optimistic concurrency version.

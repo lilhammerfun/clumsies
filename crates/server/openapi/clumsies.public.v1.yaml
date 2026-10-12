@@ -1617,9 +1617,30 @@ components:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/Project"
+            $ref: "#/components/schemas/ProjectListEntry"
         page_info:
           $ref: "#/components/schemas/PageInfo"
+    ProjectListEntry:
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          required: [your_role, member_count, owner]
+          properties:
+            your_role:
+              $ref: "#/components/schemas/ProjectRole"
+            member_count:
+              type: integer
+              minimum: 0
+            owner:
+              oneOf:
+                - type: "null"
+                - type: object
+                  required: [user_id, name]
+                  properties:
+                    user_id:
+                      type: string
+                    name:
+                      type: string
     Project:
       type: object
       required: [project_id, name, description, revision, created_at, updated_at]

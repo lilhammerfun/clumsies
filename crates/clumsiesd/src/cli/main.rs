@@ -8,6 +8,7 @@
 mod codex_host;
 mod conflict;
 mod input;
+mod memory;
 mod output;
 mod pagination;
 mod review;
@@ -102,6 +103,12 @@ enum Command {
         #[command(subcommand)]
         action: ProjectCommand,
     },
+    /// Read published project Memory and selected organization Memory.
+    Memory {
+        /// Memory reading action.
+        #[command(subcommand)]
+        action: memory::MemoryCommand,
+    },
     /// Configure a supported Agent host using daemon-owned adapters.
     Agent {
         /// Adapter action.
@@ -146,6 +153,14 @@ enum ProjectCommand {
     Show {
         /// Project ID or unique name (case-insensitive).
         id: String,
+    },
+    /// List project members; defaults to the current directory’s project.
+    Members {
+        /// Project ID or unique name.
+        id: Option<String>,
+        /// Page size and traversal controls.
+        #[command(flatten)]
+        page: PageArgs,
     },
     /// Create a project using your Server permissions.
     Create {
@@ -297,7 +312,10 @@ fn main() {
     let mut output = output::Output::new(cli.json, cli.no_pager, cli.verbose, kind, readable);
     let binding_context = matches!(
         &cli.command,
-        Command::Project { .. } | Command::Draft { .. } | Command::Review { .. }
+        Command::Project { .. }
+            | Command::Draft { .. }
+            | Command::Review { .. }
+            | Command::Memory { .. }
     );
     let result = run(cli, &mut output);
     let finish = output.finish();
@@ -342,25 +360,29 @@ fn presentation(command: &Command) -> (&'static str, bool) {
         Command::Login { .. } | Command::Redeem { .. } => ("login", false),
         Command::Logout => ("logout", false),
         Command::Project { action } => match action {
-            ProjectCommand::List { .. } => ("projects", true),
-            ProjectCommand::Current
-            | ProjectCommand::Bindings { .. }
+            ProjectCommand::List { .. } => ("projects", false),
+            ProjectCommand::Members { .. } => ("members", false),
+            ProjectCommand::Current => ("current", false),
+            ProjectCommand::Bindings { .. }
             | ProjectCommand::Bind { .. }
-            | ProjectCommand::Unbind { .. } => {
-                ("binding", matches!(action, ProjectCommand::Bindings { .. }))
-            }
+            | ProjectCommand::Unbind { .. } => ("binding", false),
             _ => ("project", false),
+        },
+        Command::Memory { action } => match action {
+            memory::MemoryCommand::List { .. } => ("memories", false),
+            memory::MemoryCommand::Show { .. } => ("memory", true),
         },
         Command::Agent { .. } => ("agent", false),
         Command::Draft { action } => match action {
-            DraftCommand::List { .. } => ("drafts", true),
+            DraftCommand::List { global: true, .. } => ("drafts-global", false),
+            DraftCommand::List { .. } => ("drafts", false),
             DraftCommand::Plan { .. } => ("plan", true),
             DraftCommand::Diff { .. } => ("diff", true),
             _ => ("draft", matches!(action, DraftCommand::Show { .. })),
         },
         Command::Review { action } => match action {
-            review::ReviewCommand::List { .. } => ("reviews", true),
-            review::ReviewCommand::Comments { .. } => ("comments", true),
+            review::ReviewCommand::List { .. } => ("reviews", false),
+            review::ReviewCommand::Comments { .. } => ("comments", false),
             review::ReviewCommand::Plan { .. } => ("plan", true),
             review::ReviewCommand::Diff { .. } => ("diff", true),
             review::ReviewCommand::Comment { .. } => ("comment", false),
@@ -555,7 +577,65 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                     },
                 },
             )?),
-            ProjectCommand::Current => output.value(&current_binding(&client)?),
+            ProjectCommand::Members { id, page } => {
+                let id = match id {
+                    Some(id) => resolve_project(&client, &id)?,
+                    None => current_binding(&client)?.project_id,
+                };
+                pagination::print(&page, output, |cursor| {
+                    server(
+                        &client,
+                        "GET",
+                        &page.path(
+                            &format!("/api/v1/admin/projects/{}/members", identifier(&id)?),
+                            cursor,
+                        ),
+                        None,
+                        None,
+                    )
+                })
+            }
+            ProjectCommand::Current => {
+                let binding = current_binding(&client)?;
+                if output.json {
+                    return output.value(&binding);
+                }
+                let id = identifier(&binding.project_id)?;
+                let project = server(
+                    &client,
+                    "GET",
+                    &format!("/api/v1/projects/{id}"),
+                    None,
+                    None,
+                )?;
+                let me = server(&client, "GET", "/api/v1/me", None, None)?;
+                let args = PageArgs {
+                    limit: 200,
+                    cursor: None,
+                    all: true,
+                };
+                let members = pagination::collect(&args, |cursor| {
+                    server(
+                        &client,
+                        "GET",
+                        &args.path(&format!("/api/v1/admin/projects/{id}/members"), cursor),
+                        None,
+                        None,
+                    )
+                })?;
+                let items = members["items"]
+                    .as_array()
+                    .ok_or("Members response requires items")?;
+                let user_id = me["user"]["user_id"]
+                    .as_str()
+                    .ok_or("Identity response requires a user ID")?;
+                let role = items
+                    .iter()
+                    .find(|member| member["user"]["user_id"].as_str() == Some(user_id))
+                    .map(|member| member["role"].clone())
+                    .unwrap_or(Value::Null);
+                output.value(&json!({"project":project, "binding":binding, "member_count":items.len(), "your_role":role}))
+            }
         },
         Command::Agent { action } => match action {
             AgentCommand::List => output.value(
@@ -631,7 +711,11 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                     None,
                     None,
                 )?;
-                output.value(&json!({"draft":detail["draft"], "changes":[review::proposal_change(&client, &detail["draft"], &detail["operations"])?]}))
+                let mut result = json!({"draft":detail["draft"], "changes":[review::proposal_change(&client, &detail["draft"], &detail["operations"])?]});
+                if !output.json {
+                    result["local_draft_id"] = json!(id);
+                }
+                output.value(&result)
             }
             DraftCommand::Sync { id } => output.value(&review::uploaded(&client, &id)?),
             DraftCommand::Plan { id } => {
@@ -722,6 +806,7 @@ fn run(cli: Cli, output: &mut output::Output) -> Result<(), Box<dyn std::error::
                 output.value(&result)
             }
         },
+        Command::Memory { action } => memory::run(&client, action, output),
         Command::Review { action } => review::run(&client, action, output),
     }
 }
@@ -1053,6 +1138,66 @@ fn server_recovery(path: &str, status: u16, code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_reading_has_explicit_targets_and_reader_policy() {
+        for args in [
+            vec!["clumsies", "memory", "show"],
+            vec!["clumsies", "memory", "show", "x", "--all"],
+            vec!["clumsies", "memory", "show", "x", "--scope", "unknown"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        for args in [
+            vec!["clumsies", "memory", "show", "README.md"],
+            vec![
+                "clumsies",
+                "memory",
+                "show",
+                "--all",
+                "--project",
+                "AgentOS",
+            ],
+        ] {
+            assert_eq!(
+                presentation(&Cli::try_parse_from(args).unwrap().command),
+                ("memory", true)
+            );
+        }
+        assert_eq!(
+            presentation(
+                &Cli::try_parse_from(["clumsies", "memory", "list"])
+                    .unwrap()
+                    .command
+            ),
+            ("memories", false)
+        );
+    }
+
+    #[test]
+    fn readers_are_reserved_for_long_content_not_tables() {
+        for args in [
+            vec!["project", "list"],
+            vec!["project", "members"],
+            vec!["project", "bindings", "p"],
+            vec!["draft", "list"],
+            vec!["draft", "list", "--global"],
+            vec!["review", "list"],
+            vec!["review", "comments", "r"],
+        ] {
+            let cli = Cli::try_parse_from(std::iter::once("clumsies").chain(args)).unwrap();
+            assert!(!presentation(&cli.command).1);
+        }
+        for args in [
+            vec!["draft", "diff", "d"],
+            vec!["review", "diff", "r"],
+            vec!["draft", "show", "d"],
+            vec!["review", "show", "r"],
+        ] {
+            let cli = Cli::try_parse_from(std::iter::once("clumsies").chain(args)).unwrap();
+            assert!(presentation(&cli.command).1);
+        }
+    }
 
     #[test]
     fn human_resolution_requires_inspection_and_explicit_choices() {
