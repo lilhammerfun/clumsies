@@ -416,9 +416,11 @@ async fn api(
     if path.contains("forbidden") {
         return failure(StatusCode::FORBIDDEN, "permission_denied");
     }
-    let project = json!({"project_id":"prj_fixture","name":"Fixture","description":"", "revision":1,"created_at":"2026-10-09T00:00:00Z","updated_at":"2026-10-09T00:00:00Z"});
+    let project = json!({"project_id":"prj_fixture","name":"Fixture","description":"", "revision":1,"your_role":"member","owner":{"user_id":"usr_other","name":"Other User"},"member_count":2,"created_at":"2026-10-09T00:00:00Z","updated_at":"2026-10-09T00:00:00Z"});
     let result = match (method.as_str(), path.as_str()) {
-        ("GET", "/api/v1/me") => json!({"org":{"org_id":"org_fixture"},"projects":[project]}),
+        ("GET", "/api/v1/me") => {
+            json!({"user":{"user_id":"usr_fixture"},"org":{"org_id":"org_fixture"},"projects":[project]})
+        }
         ("GET", "/api/v1/projects") => {
             let other = json!({"project_id":"prj_other","name":"Other"});
             if query.get("limit").map(String::as_str) == Some("1") {
@@ -430,6 +432,14 @@ async fn api(
                 }
             } else {
                 json!({"items":[other,project],"page_info":{"has_more":false,"next_cursor":null}})
+            }
+        }
+        ("GET", "/api/v1/admin/projects/prj_fixture/members") => {
+            if query.contains_key("cursor") {
+                assert_eq!(query["cursor"], "members+/&");
+                json!({"items":[{"project_id":"prj_fixture","role":"member","user":{"user_id":"usr_fixture","display_name":"Fixture User","email":"fixture@example.test","role":"owner"}}],"page_info":{"has_more":false,"next_cursor":null}})
+            } else {
+                json!({"items":[{"project_id":"prj_fixture","role":"admin","user":{"user_id":"usr_other","display_name":"Other User","email":"other@example.test"}}],"page_info":{"has_more":true,"next_cursor":"members+/&"}})
             }
         }
         ("GET", "/api/v1/projects/prj_fixture") => project,
@@ -670,6 +680,44 @@ fn cli_and_mcp_complete_review_and_preserve_work_across_auth_failure() {
             workspace.to_str().unwrap(),
         ],
         None,
+    );
+    let current = fixture.cli_at(&["project", "current"], None, &workspace);
+    assert!(
+        current.status.success(),
+        "{}",
+        String::from_utf8_lossy(&current.stderr)
+    );
+    let current = String::from_utf8(current.stdout).unwrap();
+    assert!(
+        current.contains("Fixture")
+            && current.contains("Members      2")
+            && current.contains("Your role    member"),
+        "{current}"
+    );
+    let members = fixture.cli_at(&["project", "members", "--limit", "1"], None, &workspace);
+    assert!(members.status.success());
+    let text = String::from_utf8(members.stdout).unwrap();
+    assert!(text.contains("ROLE") && text.contains("Other User") && text.contains("Fixture User"));
+    let first_members = fixture.json(&["project", "members", "Fixture", "--limit", "1"], None);
+    assert_eq!(first_members["items"].as_array().unwrap().len(), 1);
+    assert_eq!(first_members["page_info"]["next_cursor"], "members+/&");
+    let all_members = fixture.json(&["project", "members", "Fixture", "--all"], None);
+    assert_eq!(all_members["items"].as_array().unwrap().len(), 2);
+    let memories = fixture.json(&["memory", "list", "--project", "prj_fixture"], None);
+    assert!(memories["items"].as_array().unwrap().is_empty());
+    let bodies = fixture.cli_at(&["memory", "show", "--all"], None, &workspace);
+    assert!(bodies.status.success());
+    assert!(
+        String::from_utf8(bodies.stdout)
+            .unwrap()
+            .contains("No published Memory.")
+    );
+    let missing = fixture.cli_at(&["memory", "show", "missing.md"], None, &workspace);
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8(missing.stderr)
+            .unwrap()
+            .contains("Published Memory not found")
     );
     let store = fixture.mcp(&workspace, json!({"op":{"store":{"resource":"memory","create":{"path":"guide.md","body":"# CLI fixture\n"}}}}));
     assert_ne!(store["result"]["isError"], true, "{store}");

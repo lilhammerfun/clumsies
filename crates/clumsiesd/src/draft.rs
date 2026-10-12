@@ -292,12 +292,12 @@ pub(crate) async fn list_local_drafts(
         .as_deref()
         .map(decode_draft_list_cursor)
         .transpose()?;
-    let rows = sqlx::query(
+    let rows = sqlx::query(&format!(
         "SELECT
             d.draft_id, d.project_id, d.server_draft_id, d.server_version, d.base_commit_id,
             d.current_commit_id, d.freshness, d.has_upstream_resource_changes,
             d.reconciliation, d.reconciliation_candidate_id,
-            d.resource_scope, d.resource_kind, d.target_id, d.path,
+            d.resource_scope, d.resource_kind, d.target_id, {DRAFT_PATH_SQL} AS path,
             d.status, d.created_at, d.updated_at,
             (
                 SELECT COUNT(*)
@@ -322,7 +322,7 @@ pub(crate) async fn list_local_drafts(
            )
          ORDER BY d.updated_at DESC, d.created_at DESC, d.draft_id ASC
          LIMIT $8",
-    )
+    ))
     .bind(resource_kind.as_deref())
     .bind(status.as_deref())
     .bind(query.project_id.as_deref())
@@ -374,12 +374,12 @@ pub(crate) async fn load_local_draft_detail(
     draft_id: &str,
 ) -> Result<DaemonDraftDetail, DaemonError> {
     let mut tx = pool.begin().await?;
-    let row = sqlx::query(
+    let row = sqlx::query(&format!(
         "SELECT
             d.draft_id, d.project_id, d.server_draft_id, d.server_version, d.base_commit_id,
             d.current_commit_id, d.freshness, d.has_upstream_resource_changes,
             d.reconciliation, d.reconciliation_candidate_id,
-            d.resource_scope, d.resource_kind, d.target_id, d.path,
+            d.resource_scope, d.resource_kind, d.target_id, {DRAFT_PATH_SQL} AS path,
             d.status, d.created_at, d.updated_at,
             (
                 SELECT COUNT(*)
@@ -393,7 +393,7 @@ pub(crate) async fn load_local_draft_detail(
             ) AS failed_operation_count
          FROM local_drafts d
          WHERE d.draft_id = $1",
-    )
+    ))
     .bind(draft_id)
     .fetch_optional(&mut *tx)
     .await?
@@ -417,6 +417,24 @@ pub(crate) async fn load_local_draft_detail(
     tx.commit().await?;
     Ok(DaemonDraftDetail { draft, operations })
 }
+
+/// Display path derived in the same read as the Draft, preserving ID-based mutation selectors.
+const DRAFT_PATH_SQL: &str = "COALESCE(
+            (SELECT COALESCE(json_extract(o.operation_json, '$.rename.new_path'),
+                             json_extract(o.operation_json, '$.create.path'))
+             FROM local_draft_operations o WHERE o.draft_id = d.draft_id
+               AND COALESCE(json_extract(o.operation_json, '$.rename.new_path'),
+                            json_extract(o.operation_json, '$.create.path')) IS NOT NULL
+             ORDER BY o.rowid DESC LIMIT 1),
+            d.path,
+            (SELECT json_extract(e.value, '$.path')
+             FROM cached_commits c JOIN cached_trees t ON t.tree_id = c.tree_id,
+                  json_each(t.payload_json, '$.entries') e
+             WHERE c.commit_id = d.base_commit_id
+               AND json_extract(e.value, '$.id') = d.target_id
+               AND json_extract(e.value, '$.scope') = d.resource_scope
+               AND json_extract(e.value, '$.type') = d.resource_kind
+             LIMIT 1))";
 
 pub(crate) fn local_draft_summary_from_row(
     row: &SqliteRow,
@@ -1648,5 +1666,67 @@ pub(crate) async fn reconcile_uploaded_drafts(
     match first_error {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    async fn summary_path(pool: &SqlitePool, id: &str) -> Result<Option<String>, DaemonError> {
+        Ok(sqlx::query_scalar(&format!(
+            "SELECT {DRAFT_PATH_SQL} FROM local_drafts d WHERE d.draft_id = $1"
+        ))
+        .bind(id)
+        .fetch_one(pool)
+        .await?)
+    }
+
+    #[tokio::test]
+    async fn display_path_uses_scoped_ancestor_and_ordered_renames() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        for sql in [
+            "CREATE TABLE local_drafts (draft_id TEXT, path TEXT, base_commit_id TEXT, target_id TEXT, resource_scope TEXT, resource_kind TEXT)",
+            "CREATE TABLE local_draft_operations (draft_id TEXT, operation_json TEXT)",
+            "CREATE TABLE cached_commits (commit_id TEXT, tree_id TEXT)",
+            "CREATE TABLE cached_trees (tree_id TEXT, payload_json TEXT)",
+            "INSERT INTO local_drafts VALUES ('d',NULL,'base','m','project','memory')",
+            "INSERT INTO cached_commits VALUES ('base','tree')",
+            r#"INSERT INTO cached_trees VALUES ('tree','{"entries":[{"id":"m","scope":"org","type":"memory","path":"wrong.md"},{"id":"m","scope":"project","type":"memory","path":"original.md"}]}')"#,
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        assert_eq!(
+            summary_path(&pool, "d").await.unwrap().as_deref(),
+            Some("original.md")
+        );
+        for path in ["first.md", "final.md"] {
+            sqlx::query("INSERT INTO local_draft_operations VALUES ('d', $1)")
+                .bind(json!({"rename":{"new_path":path}}).to_string())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            summary_path(&pool, "d").await.unwrap().as_deref(),
+            Some("final.md")
+        );
+        sqlx::query("DELETE FROM local_draft_operations")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE local_drafts SET resource_scope='missing'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(summary_path(&pool, "d").await.unwrap(), None);
+        sqlx::query("UPDATE local_drafts SET path='created.md'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            summary_path(&pool, "d").await.unwrap().as_deref(),
+            Some("created.md")
+        );
     }
 }

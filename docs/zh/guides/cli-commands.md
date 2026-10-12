@@ -47,9 +47,29 @@ sh "$HOME/Applications/Clumsies.app/Contents/Resources/install-cli.sh"
 
 安装器创建 `~/.local/bin/clumsies`，自动向 bash/zsh 的用户启动配置追加 PATH，保留原配置。重新打开终端后直接执行 `clumsies --version`；无需手工 export。Linux 的 `install.sh` 同样负责 bash/zsh PATH。其他 shell 暂不支持自动配置，安装器会明确报错。安装器不会覆盖无关命令；macOS 入口指向 App 内嵌 CLI，原位置升级 App 后入口继续有效。移动 App 后需重新设置入口，不能继续使用旧路径。CLI 复用 App 的 launch agent、Keychain、配置和缓存；macOS 的 daemon 由 App 管理。
 
+## 阅读已发布 Memory
+
+在绑定项目的目录里执行：
+
+```sh
+clumsies memory list
+clumsies memory show knowledge/access/README.md
+clumsies memory show MEMORY_ID
+clumsies memory show --all
+clumsies memory show --all --project AgentOS
+clumsies --no-pager memory show --all > project-memory.txt
+clumsies --json memory show --all > project-memory.json
+```
+
+`list` 直接显示 ID、作用域和路径表格，不启动阅读器。`show` 默认只输出 Markdown 正文；`--all` 用文件路径分隔各篇，路径重复时再注明作用域。项目 ID、快照和 Memory ID 仅在 `--verbose` 或 `--json` 中显示。短内容直接输出，长正文在交互终端里进入阅读器。默认 `less` 可用空格翻页、`/关键词` 搜索、`q` 退出。管道、重定向和 `--json` 不启动阅读器。
+
+这些命令读取同一份**已发布的项目快照**，包含项目 Memory 和选入该项目的组织 Memory，不包含未发布的 Draft 或目录占位记录。`--all` 展示全部正文；路径重复时须用 ID 或 `--scope project|org` 指定作用域。`--project` 接受项目 ID 或唯一名称，省略时只使用当前目录绑定。未发布项目的列表为空；指定不存在的 Memory 会报错。
+
+读取使用现有快照接口（引用一次、快照一次），不会逐条请求正文。快照完整下载后再输出，因此退出阅读器停止输出，但不会撤销已完成的下载；内存使用量随快照大小增长。JSON 返回 `project_id`、`commit_id` 和 `items`（正文操作的每项含 `content`）；它是该命令的快照结构，没有列表游标。查看未发布改动用 `clumsies draft diff DRAFT_ID`。
+
 ## 输出与阅读
 
-默认输出可读文本：列表显示名称、ID、状态和关键同步信息，详情保留 Review 版本、发布引用、作用域及变更证据。`status` 简要显示准备情况和需要处理的问题；`--verbose` 显示诊断细节。长文本在交互终端中自动使用 pager，短输出直接显示。可用 `CLUMSIES_PAGER` 或 `PAGER` 选择阅读器，`--no-pager` 直接打印。默认探测 `less`，否则使用可用的 `more`（Windows 使用系统阅读器）；没有阅读器时直接输出。键位由阅读器决定。JSON、管道和重定向不启用 pager，不输出颜色或动画。
+默认输出可读文本：列表显示名称、ID、状态和关键同步信息，详情保留 Review 版本、发布引用、作用域及变更证据。`status` 简要显示准备情况和需要处理的问题；`--verbose` 显示诊断细节。差异、冲突计划及详情中的长文本在交互终端中自动使用 pager，短输出直接显示。项目、成员、Draft、Review 和评论列表直接输出表格，不自动启动 pager。可用 `CLUMSIES_PAGER` 或 `PAGER` 选择阅读器，`--no-pager` 直接打印。默认探测 `less`，否则使用可用的 `more`（Windows 使用系统阅读器）；没有阅读器时直接输出。键位由阅读器决定。JSON、管道和重定向不启用 pager，不输出颜色或动画。
 
 ```sh
 clumsies project list
@@ -69,7 +89,7 @@ clumsies review plan REVIEW_ID --version INSPECTED_VERSION --json > plan.json
 
 ## 自动分页与项目选择
 
-文本模式的 `project list`、`review list PROJECT`、`review comments REVIEW_ID` 和 `draft list` 自动跟随服务端游标，逐批展示，无需手工复制 cursor。退出 pager 后停止后续取数，阅读器可能预读数据，已经进行中的一次请求可能完成。中途失败会明确提示列表不完整并返回非零退出码；已经显示的文本不代表完整结果。记录并发变化时，跨页结果也不是固定快照。
+文本模式的 `project list`、`review list PROJECT`、`review comments REVIEW_ID` 和 `draft list` 自动跟随服务端游标，逐批展示，无需手工复制 cursor。列表自动读取接口分页，与终端阅读器无关；关闭输出管道会停止后续取数，已经进行中的请求可能完成。中途失败会明确提示列表不完整并返回非零退出码；已经显示的文本不代表完整结果。记录并发变化时，跨页结果也不是固定快照。
 
 JSON 模式保留已有 `--limit`（每次请求 1–200 条，默认 100）、`--cursor` 和 `--all` 语义：默认一页；`--all` 从第一页读取全部结果，不能与 `--cursor` 同用。所有页成功后才输出合并 JSON；任一页失败或游标循环时不输出不完整结果。`--all` 的 JSON 会在内存中保留合并结果。文本模式下 `--limit` 仍是请求批量大小，不限制总条数；`--cursor` 指定起始位置，后续自动遍历。
 
@@ -281,3 +301,20 @@ clumsies review update REVIEW_ID --edit --version INSPECTED_VERSION --reference 
 卸载保留凭据、绑定、Draft 和缓存；希望移除凭据时先 `logout`。降级前停止进程并备份完整 daemon 数据目录，不要让旧程序读取不兼容的新 schema。安装器不自动降级数据库，也不会覆盖无关程序目录。
 
 源码构建使用 `cargo build --locked --release -p clumsiesd --bins`。CLI 没有另建凭据文件、缓存或业务规则。旧 Zig CLI 仍归档于 Git 提交 `4b18f7947a977dbc6b62f560b698dc992597f19d`，本次 Rust CLI 没有恢复它。
+
+## 项目详情与成员表格
+
+默认列表使用表头和对齐列。Draft 路径从有序重命名／创建操作或不可变基线快照中的同作用域资源解析；无法解析时明确标注。时间使用本地时区。完整账户对象和诊断数据留给 `--verbose` 或 `--json`。
+
+```sh
+clumsies project current
+clumsies project members
+clumsies project members AgentOS
+clumsies project members AgentOS --json --all
+```
+
+`project current` 显示绑定项目的名称、描述、你的项目角色、成员总数、目录和 Server。统计人数时读取所有成员页；JSON 保留原来的本地绑定结构。成员列表与其他列表一样自动分页，JSON 默认一页，`--all` 读取全部。项目角色来自项目成员记录，不使用组织角色代替。
+
+项目列表的 `YOUR ROLE`、`OWNER`、`MEMBERS` 和 `DESCRIPTION` 来自项目列表的一次分页响应，不逐项目读取成员。需要升级 Server 才有新增字段；旧 Server 显示 `n/a`（不可用），不会猜测角色、Owner 或人数。
+
+项目、Draft 和 Review 列表统一显示本地时区的 `UPDATED`；项目详情也是同一格式。项目时间是项目记录修改时间，不代表所有 Memory 的最新活动。默认 diff 显示版本、作者、文件与作用域、状态和实际正文／元数据变化。`---`/`+++` 是修改前／后的路径；行首 `+` 新增、`-` 删除、空格保留上下文。`--verbose` 查看诊断证据，`--json` 导出完整原始结构。

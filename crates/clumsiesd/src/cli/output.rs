@@ -12,7 +12,7 @@ pub(super) struct Output {
     /// Product operation used to select a human presentation.
     kind: &'static str,
     /// Include diagnostic fields in text mode.
-    verbose: bool,
+    pub(super) verbose: bool,
     /// Whether this command can launch an interactive reader.
     paging: bool,
     /// Initial screenful, bounded before switching to streaming output.
@@ -83,7 +83,7 @@ impl Output {
             .as_array()
             .ok_or("List response requires items")?;
         if first {
-            self.text(&format!("{}\n", heading(self.kind)))?;
+            self.text(&list_header(self.kind, self.verbose))?;
         }
         for item in items {
             if self.verbose {
@@ -156,7 +156,11 @@ impl Output {
             shell_reader(&selected)
         } else if let Some(path) = executable("less") {
             let mut cmd = Command::new(path);
-            cmd.arg("-FRX");
+            cmd.arg(if columns(self.kind).is_empty() {
+                "-FRX"
+            } else {
+                "-FRXS"
+            });
             cmd
         } else if cfg!(windows) {
             if executable("more").is_none() {
@@ -273,9 +277,10 @@ pub(super) fn safe_text(text: &str) -> String {
 fn heading(kind: &str) -> &str {
     match kind {
         "projects" => "Projects",
-        "drafts" => "Drafts",
+        "drafts" | "drafts-global" => "Drafts",
         "reviews" => "Reviews",
         "comments" => "Comments",
+        "members" => "Members",
         _ => "Results",
     }
 }
@@ -295,44 +300,204 @@ fn scalar(value: &Value) -> String {
     }
 }
 
-/// Compact multi-line list records keep IDs and paths copyable even in narrow terminals.
-fn list_item(kind: &str, item: &Value) -> String {
+/// Fixed display widths keep columns aligned across streamed pages without buffering the list.
+fn columns(kind: &str) -> Vec<(&'static str, usize)> {
     match kind {
-        "projects" => format!(
-            "{}  {}\n",
-            scalar(&item["name"]),
-            scalar(&item["project_id"])
-        ),
-        "drafts" => format!(
-            "{}  {}  {}\n  project: {}  scope: {}  sync pending/failed: {}/{}  updated: {}\n",
-            scalar(&item["draft_id"]),
-            scalar(&item["status"]),
-            scalar(&item["path"]),
-            scalar(&item["project_id"]),
+        "memories" => vec![("ID", 36), ("SCOPE", 7), ("PATH", 0)],
+        "projects" => vec![
+            ("ID", 36),
+            ("NAME", 24),
+            ("YOUR ROLE", 10),
+            ("OWNER", 24),
+            ("MEMBERS", 7),
+            ("UPDATED", 16),
+            ("DESCRIPTION", 0),
+        ],
+        "drafts" => vec![
+            ("ID", 40),
+            ("STATUS", 10),
+            ("SCOPE", 7),
+            ("SYNC", 14),
+            ("UPDATED", 16),
+            ("PATH", 0),
+        ],
+        "drafts-global" => vec![
+            ("ID", 40),
+            ("PROJECT", 36),
+            ("STATUS", 10),
+            ("SCOPE", 7),
+            ("SYNC", 14),
+            ("UPDATED", 16),
+            ("PATH", 0),
+        ],
+        "reviews" => vec![
+            ("ID", 36),
+            ("STATUS", 10),
+            ("VERSION", 7),
+            ("AUTHOR", 24),
+            ("UPDATED", 16),
+            ("TITLE", 0),
+        ],
+        "members" => vec![("ID", 36), ("ROLE", 10), ("NAME", 24), ("EMAIL", 0)],
+        "comments" => vec![("ID", 36), ("AUTHOR", 24), ("CREATED", 16), ("BODY", 0)],
+        _ => Vec::new(),
+    }
+}
+
+/// Fits a single-line cell using terminal display width, including CJK and combining characters.
+fn cell(value: &str, width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    let value = safe_text(value).replace(['\n', '\r', '\t'], " ");
+    if width == 0 {
+        return value;
+    }
+    let mut value = value;
+    if UnicodeWidthStr::width(value.as_str()) > width {
+        let mut used = 0;
+        value = value
+            .chars()
+            .take_while(|ch| {
+                used += UnicodeWidthChar::width(*ch).unwrap_or(0);
+                used < width
+            })
+            .collect();
+        value.push('…');
+    }
+    let padding = width.saturating_sub(UnicodeWidthStr::width(value.as_str()));
+    format!("{value}{}", " ".repeat(padding))
+}
+
+/// Formats one row with stable widths; the last column preserves the complete value.
+fn row(kind: &str, values: &[String]) -> String {
+    let columns = columns(kind);
+    let cells: Vec<_> = columns
+        .iter()
+        .zip(values)
+        .map(|((_, width), value)| cell(value, *width))
+        .collect();
+    format!("{}\n", cells.join("  "))
+}
+
+/// Emits a header once per collection, including an empty collection.
+fn list_header(kind: &str, verbose: bool) -> String {
+    if verbose || columns(kind).is_empty() {
+        return format!("{}\n", heading(kind));
+    }
+    row(
+        kind,
+        &columns(kind)
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Chooses a human identity without expanding the entire account object.
+fn person(value: &Value) -> String {
+    if value.is_string() {
+        return scalar(value);
+    }
+    ["display_name", "username", "email", "user_id"]
+        .iter()
+        .find_map(|key| value[*key].as_str().filter(|s| !s.trim().is_empty()))
+        .unwrap_or("(unknown)")
+        .to_owned()
+}
+
+/// Converts an RFC3339 timestamp to local wall time without displaying subsecond noise.
+fn date(value: &Value) -> String {
+    value
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| scalar(value))
+}
+
+/// Presents list records as tables; full account and synchronization evidence requires verbose mode.
+fn list_item(kind: &str, item: &Value) -> String {
+    let values = match kind {
+        "memories" => vec![
+            scalar(&item["memory_id"]),
             scalar(&item["scope"]),
-            scalar(&item["pending_operation_count"]),
-            scalar(&item["failed_operation_count"]),
-            scalar(&item["updated_at"])
-        ),
-        "reviews" => format!(
-            "{}  {}  v{}  {}\n  project: {}  author: {}  updated: {}\n",
+            scalar(&item["path"]),
+        ],
+        "projects" => vec![
+            scalar(&item["project_id"]),
+            scalar(&item["name"]),
+            item["your_role"].as_str().unwrap_or("n/a").to_owned(),
+            item["owner"]["name"]
+                .as_str()
+                .unwrap_or(if item.get("owner").is_some() {
+                    "(no owner)"
+                } else {
+                    "n/a"
+                })
+                .to_owned(),
+            item.get("member_count")
+                .filter(|v| !v.is_null())
+                .map(scalar)
+                .unwrap_or_else(|| "n/a".to_owned()),
+            date(&item["updated_at"]),
+            item["description"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("(not set)")
+                .to_owned(),
+        ],
+        "drafts" | "drafts-global" => {
+            let pending = item["pending_operation_count"].as_u64().unwrap_or(0);
+            let failed = item["failed_operation_count"].as_u64().unwrap_or(0);
+            let sync = if failed > 0 {
+                format!("{failed} failed")
+            } else if pending > 0 {
+                format!("{pending} pending")
+            } else {
+                "synced".to_owned()
+            };
+            let mut values = vec![scalar(&item["draft_id"])];
+            if kind == "drafts-global" {
+                values.push(scalar(&item["project_id"]));
+            }
+            values.extend([
+                scalar(&item["status"]),
+                scalar(&item["scope"]),
+                sync,
+                date(&item["updated_at"]),
+                item["path"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("(path unavailable; use draft show)")
+                    .to_owned(),
+            ]);
+            values
+        }
+        "reviews" => vec![
             scalar(&item["review_id"]),
             scalar(&item["status"]),
             scalar(&item["version"]),
+            person(&item["author"]),
+            date(&item["updated_at"]),
             scalar(&item["title"]),
-            scalar(&item["project_id"]),
-            scalar(&item["author"]),
-            scalar(&item["updated_at"])
-        ),
-        "comments" => format!(
-            "{}  {}  {}\n{}\n\n",
+        ],
+        "members" => vec![
+            scalar(&item["user"]["user_id"]),
+            scalar(&item["role"]),
+            person(&item["user"]),
+            scalar(&item["user"]["email"]),
+        ],
+        "comments" => vec![
             scalar(&item["comment_id"]),
-            scalar(&item["author"]),
-            scalar(&item["created_at"]),
-            scalar(&item["body"])
-        ),
-        _ => String::new(),
-    }
+            person(&item["author"]),
+            date(&item["created_at"]),
+            scalar(&item["body"]),
+        ],
+        _ => return String::new(),
+    };
+    row(kind, &values)
 }
 
 /// Appends only selected public fields, keeping long or multi-line values readable.
@@ -342,7 +507,17 @@ fn fields_text(text: &mut String, value: &Value, fields: &[&str]) {
             .get(key)
             .filter(|v| !v.is_null() && !v.as_array().is_some_and(Vec::is_empty))
         {
-            text.push_str(&format!("{}: {}\n", key.replace('_', " "), scalar(value)));
+            if value.as_str().is_some_and(|s| s.trim().is_empty()) {
+                continue;
+            }
+            let shown = if matches!(*key, "author" | "decided_by") {
+                person(value)
+            } else if key.ends_with("_at") {
+                date(value)
+            } else {
+                scalar(value)
+            };
+            text.push_str(&format!("{}: {}\n", key.replace('_', " "), shown));
         }
     }
 }
@@ -516,6 +691,118 @@ fn plan_summary(text: &mut String, value: &Value) {
     text.push_str("Use --json to export full candidate evidence; --verbose shows all fields.\n");
 }
 
+/// Shows the inspected identity and semantic changes without dumping storage or account metadata.
+fn diff_summary(text: &mut String, value: &Value) {
+    let entity = value.get("review").or_else(|| value.get("draft"));
+    if let Some(entity) = entity {
+        if let Some(local) = value["local_draft_id"].as_str() {
+            text.push_str(&format!("Local draft: {local}\n"));
+        }
+        fields_text(
+            text,
+            entity,
+            &[
+                "review_id",
+                "draft_id",
+                "version",
+                "status",
+                "author",
+                "updated_at",
+            ],
+        );
+        if entity.get("review_id").is_some() {
+            fields_text(text, entity, &["title", "description"]);
+        }
+        fields_text(
+            text,
+            &entity["coordination"],
+            &["freshness", "reconciliation", "current_commit_id"],
+        );
+        text.push_str("\nText diff: + added, - removed, space unchanged; --- before, +++ after.\n");
+    }
+    if let Some(changes) = value["changes"].as_array() {
+        for change in changes {
+            let before = scalar(&change["before_path"]);
+            let after = scalar(&change["after_path"]);
+            text.push_str(&format!(
+                "\nFile: {}\n",
+                if before == after {
+                    after.clone()
+                } else {
+                    format!("{before} → {after}")
+                }
+            ));
+            let operations = change["operations"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut actions = Vec::new();
+            for operation in operations {
+                if let Some(action) = operation["action"].as_str()
+                    && actions.last().copied() != Some(action)
+                {
+                    actions.push(action);
+                }
+            }
+            text.push_str(&format!("Change: {}\n", actions.join(" → ")));
+            let scope = operations
+                .first()
+                .and_then(|op| op["resource"]["scope"].as_str())
+                .or_else(|| change["base_resource"]["scope"].as_str());
+            if let Some(scope) = scope {
+                text.push_str(&format!("Scope: {scope}\n"));
+            }
+            let mut metadata = change["base_resource"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            if let Some(kind) = metadata.get("type").cloned() {
+                metadata.insert("kind".to_owned(), kind);
+            }
+            for (index, operation) in operations.iter().enumerate() {
+                if let Some(content) = operation["content"].as_object() {
+                    let mut content = content.clone();
+                    // Updates replace the description; the Server omits None during serialization.
+                    content.entry("description").or_insert(Value::Null);
+                    for (key, next) in content.iter().filter(|(key, _)| key.as_str() != "content") {
+                        let previous = metadata.get(key).cloned().unwrap_or(Value::Null);
+                        let empty =
+                            |v: &Value| v.is_null() || v.as_str().is_some_and(str::is_empty);
+                        if previous != *next && !(empty(&previous) && empty(next)) {
+                            text.push_str(&format!(
+                                "Metadata (operation {}), {}: {} → {}\n",
+                                index + 1,
+                                key.replace('_', " "),
+                                if empty(&previous) {
+                                    "(empty)".to_owned()
+                                } else {
+                                    scalar(&previous)
+                                },
+                                if empty(next) {
+                                    "(empty)".to_owned()
+                                } else {
+                                    scalar(next)
+                                }
+                            ));
+                        }
+                        metadata.insert(key.clone(), next.clone());
+                    }
+                }
+            }
+            let diff = change["unified_diff"].as_str().unwrap_or("");
+            if diff.is_empty() {
+                text.push_str("No text changes.\n");
+            } else {
+                text.push('\n');
+                text.push_str(diff);
+                if !diff.ends_with('\n') {
+                    text.push('\n');
+                }
+            }
+        }
+    }
+}
+
 /// Command-specific summaries retain decision evidence while hiding transport internals.
 fn render(kind: &str, value: &Value, verbose: bool) -> String {
     let mut text = String::new();
@@ -524,7 +811,7 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
         return text;
     }
     if let Some(items) = value["items"].as_array() {
-        text.push_str(&format!("{}\n", heading(kind)));
+        text.push_str(&list_header(kind, false));
         for item in items {
             text.push_str(&list_item(kind, item));
         }
@@ -587,7 +874,8 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
                 evidence(&mut text, &value["retrieval"], 2);
             }
         }
-        "review" | "diff" => {
+        "diff" => diff_summary(&mut text, value),
+        "review" => {
             let review = value
                 .get("review")
                 .or_else(|| value.get("draft"))
@@ -708,6 +996,33 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
             text.push_str("Agent integrations:\n");
             evidence(&mut text, value, 0);
         }
+        "current" => {
+            let project = &value["project"];
+            for (label, field) in [
+                ("Project", "name"),
+                ("ID", "project_id"),
+                ("Description", "description"),
+            ] {
+                let shown = project[field]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or("(not set)");
+                text.push_str(&format!("{label:12} {shown}\n"));
+            }
+            text.push_str(&format!(
+                "{:<12} {}\n",
+                "Updated",
+                date(&project["updated_at"])
+            ));
+            for (label, shown) in [
+                ("Workspace", &value["binding"]["workspace_root"]),
+                ("Server", &value["binding"]["server_url"]),
+                ("Your role", &value["your_role"]),
+                ("Members", &value["member_count"]),
+            ] {
+                text.push_str(&format!("{label:12} {}\n", scalar(shown)));
+            }
+        }
         "binding" => {
             if value.is_array() {
                 evidence(&mut text, value, 0);
@@ -737,6 +1052,7 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
                     "name",
                     "project_id",
                     "description",
+                    "updated_at",
                     "server_url",
                     "ready",
                     "missing_fields",
@@ -771,6 +1087,142 @@ fn render(kind: &str, value: &Value, verbose: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diff_summary_preserves_semantics_without_internal_metadata() {
+        let value = json!({"local_draft_id":"local", "draft":{"draft_id":"remote","version":2,"status":"open","updated_at":"2026-10-10T00:00:00Z","author":{"display_name":"Dylan","avatar_url":"private-avatar","email":"private-email"},"coordination":{"freshness":"behind","reconciliation":"conflicts","current_commit_id":"head","candidate_id":"internal-candidate"}},"changes":[{"before_path":"old.md","after_path":"new.md","base_resource":{"blob_id":"internal-blob","scope":"org","description":"Old","type":"memory"},"operations":[{"action":"update","resource":{"id":"internal-id","scope":"org"},"content":{"kind":"memory","description":"New","content":"not repeated"}},{"action":"update","content":{"kind":"memory","description":"New","content":"not repeated"}},{"action":"rename","new_path":"new.md"}],"unified_diff":"--- old.md\n+++ new.md\n@@ -1 +1 @@\n-old\n+new\n"}]});
+        let text = render("diff", &value, false);
+        for expected in [
+            "Local draft: local",
+            "draft id: remote",
+            "version: 2",
+            "Dylan",
+            "freshness: behind",
+            "reconciliation: conflicts",
+            "current commit id: head",
+            "old.md → new.md",
+            "Change: update → rename",
+            "Scope: org",
+            "description: Old → New",
+            "+new",
+        ] {
+            assert!(text.contains(expected), "{expected}: {text}");
+        }
+        for hidden in [
+            "private-avatar",
+            "private-email",
+            "internal-blob",
+            "internal-id",
+            "internal-candidate",
+            "not repeated",
+            "Base resource metadata",
+            "Operation 1",
+        ] {
+            assert!(!text.contains(hidden), "{hidden}: {text}");
+        }
+        assert_eq!(text.matches("description: Old → New").count(), 1);
+        assert!(render("diff", &value, true).contains("internal-blob"));
+        let cleared = render(
+            "diff",
+            &json!({"changes":[{"before_path":"same.md","after_path":"same.md","base_resource":{"description":"Old"},"operations":[{"action":"update","content":{"content":"unchanged"}}],"unified_diff":""}]}),
+            false,
+        );
+        assert!(
+            cleared.contains("description: Old → (empty)") && cleared.contains("No text changes.")
+        );
+        for (before, after, action) in [
+            ("/dev/null", "created.md", "create"),
+            ("deleted.md", "/dev/null", "delete"),
+            ("old.md", "renamed.md", "rename"),
+        ] {
+            let text = render(
+                "diff",
+                &json!({"changes":[{"before_path":before,"after_path":after,"operations":[{"action":action}],"unified_diff":""}]}),
+                false,
+            );
+            assert!(
+                text.contains(before)
+                    && text.contains(after)
+                    && text.contains(action)
+                    && text.contains("No text changes.")
+            );
+        }
+    }
+
+    #[test]
+    fn timestamps_are_consistent_in_project_review_lists_and_details() {
+        let updated = json!("2026-10-10T00:00:00.123456Z");
+        let expected = date(&updated);
+        assert_eq!(expected.len(), 16);
+        for kind in ["projects", "reviews", "drafts"] {
+            let text = render(kind, &json!({"items":[{"updated_at":updated}]}), false);
+            assert!(
+                text.contains("UPDATED") && text.contains(&expected),
+                "{kind}: {text}"
+            );
+            assert!(!text.contains("123456"));
+        }
+        let text = render("current", &json!({"project":{"updated_at":updated}}), false);
+        assert!(text.contains("Updated") && text.contains(&expected));
+        let text = render("project", &json!({"updated_at":updated}), false);
+        assert!(text.contains(&expected));
+    }
+
+    #[test]
+    fn project_table_displays_batch_fields_and_marks_missing_server_data() {
+        let projects = json!({"items":[{"project_id":"p","name":"中文项目","your_role":"member","owner":{"user_id":"u","name":"Owner"},"member_count":250,"description":"Purpose"}]});
+        let text = render("projects", &projects, false);
+        for expected in [
+            "YOUR ROLE",
+            "OWNER",
+            "MEMBERS",
+            "DESCRIPTION",
+            "Owner",
+            "member",
+            "250",
+            "Purpose",
+        ] {
+            assert!(text.contains(expected));
+        }
+        let old = render(
+            "projects",
+            &json!({"items":[{"project_id":"p","name":"Old Server"}]}),
+            false,
+        );
+        assert!(old.contains("n/a"));
+        assert!(!old.contains("(no owner)"));
+        let missing_owner = render(
+            "projects",
+            &json!({"items":[{"project_id":"p","owner":null,"member_count":1}]}),
+            false,
+        );
+        assert!(missing_owner.contains("(no owner)"));
+    }
+
+    #[test]
+    fn tables_align_unicode_and_hide_account_objects() {
+        use unicode_width::UnicodeWidthStr;
+        assert_eq!(UnicodeWidthStr::width(cell("中文e\u{301}", 8).as_str()), 8);
+        assert_eq!(
+            UnicodeWidthStr::width(cell("中文很长的名字", 6).as_str()),
+            6
+        );
+        assert!(!cell("a\nb\tc", 10).contains(['\n', '\t']));
+        let page = json!({"items":[{"review_id":"rev_test","status":"open","version":2,"title":"标题","author":{"display_name":"中文作者","avatar_url":"private-url","role":"owner","user_id":"u"}}]});
+        let text = render("reviews", &page, false);
+        for field in ["ID", "STATUS", "VERSION", "AUTHOR", "TITLE", "中文作者"] {
+            assert!(text.contains(field));
+        }
+        assert!(!text.contains("private-url") && !text.contains("owner"));
+        assert!(render("members", &json!({"items":[]}), false).contains("No results."));
+        let current = json!({"project":{"name":"AgentOS","project_id":"p","description":""},"binding":{"workspace_root":"/repo","server_url":"https://example.test","revision":2},"member_count":250,"your_role":"member"});
+        let text = render("current", &current, false);
+        for value in ["AgentOS", "(not set)", "/repo", "member", "250"] {
+            assert!(text.contains(value));
+        }
+        assert!(!text.contains("revision"));
+        assert!(render("current", &current, true).contains("revision"));
+    }
 
     #[test]
     fn rebase_receipt_unwraps_server_detail_without_losing_approval_state() {

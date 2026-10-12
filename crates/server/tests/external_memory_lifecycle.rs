@@ -218,7 +218,7 @@ async fn draft_review_merge_produces_org_and_carrier_project_commits() {
         project_page
             .items
             .iter()
-            .any(|project| project.project_id == temporary_project.project_id)
+            .any(|project| project.project.project_id == temporary_project.project_id)
     );
 
     let temporary_project: Project = patch_json_with_if_match(
