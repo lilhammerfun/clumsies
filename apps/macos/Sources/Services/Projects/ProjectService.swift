@@ -208,7 +208,7 @@ final class ProjectService: ObservableObject {
                 // The Server may already reflect the requested state while a
                 // stale local snapshot does not. Treat the authoritative GET
                 // as a successful repair instead of leaving the UI behind.
-                await self.applyProjectOrgSelection(current, toProject: projectId)
+                try await self.applyProjectOrgSelection(current, toProject: projectId)
                 return
             }
             guard self.context.canManageProject(projectId) else {
@@ -227,19 +227,28 @@ final class ProjectService: ObservableObject {
                 expectedRevision: current.revision,
                 resourceIds: nextIds
             )
-            await self.applyProjectOrgSelection(selection, toProject: projectId)
+            try await self.applyProjectOrgSelection(selection, toProject: projectId)
         }
     }
 
     private func applyProjectOrgSelection(
         _ selection: ProjectOrgSelection,
         toProject projectId: String
-    ) async {
+    ) async throws {
+        let authority = context.authorityGeneration
+        let generation = context.workspaceReloadGeneration
+        let observedProject = context.projects.first { $0.id == projectId }
         let commit: (value: CommitStateResponse, response: DaemonServerResponse)? = try? await context.server.getWithMetadata(
             "/api/v1/projects/\(projectId)/commit-state"
         )
         let freshCommit = commit.flatMap { $0.response.isStaleCache ? nil : $0 }
-        guard let index = context.projects.firstIndex(where: { $0.id == projectId }) else { return }
+        let pin: CommitBasePin?
+        if let commitId = freshCommit?.value.ref.commitId { pin = try await context.daemon.retainCommitBase(commitId) }
+        else { pin = nil }
+        try context.ensureAuthority(authority)
+        guard context.workspaceReloadGeneration == generation, context.phase == .ready,
+              let index = context.projects.firstIndex(where: { $0.id == projectId }),
+              context.projects[index] == observedProject else { throw CancellationError() }
         let project = context.projects[index]
         guard selection.revision >= project.orgSelectionRevision else { return }
         catalog.clearStaleResourceState(for: projectId)
@@ -252,7 +261,8 @@ final class ProjectService: ObservableObject {
             }?.value ?? project.refEtag,
             selectedOrgResourceIds: projectOrgResourceIds(selection),
             orgSelectionRevision: selection.revision,
-            isLoaded: project.isLoaded
+            isLoaded: project.isLoaded,
+            baseCommitPin: pin ?? project.baseCommitPin
         )
         catalog.documentsChanged.send()
         if projectId == context.activeProjectId {

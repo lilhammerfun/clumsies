@@ -539,87 +539,90 @@ pub(crate) async fn activate_memory(
     let mut failure_stage = "activation_state";
 
     const ACTIVATION_DEADLINE: Duration = Duration::from_secs(60);
-    let (mut result, deadline_expired) = match tokio::time::timeout(ACTIVATION_DEADLINE, async {
-        let previous_state = activation::decode_activation_state(request.state.as_deref())?;
+    let (mut result, deadline_expired) = match tokio::time::timeout_at(
+        tokio::time::Instant::from_std(total_started + ACTIVATION_DEADLINE),
+        async {
+            let previous_state = activation::decode_activation_state(request.state.as_deref())?;
 
-        failure_stage = "index_head";
-        let started = Instant::now();
-        let _query_guard = crate::performance::wait("search_lock_wait", state.inner.search_lock.lock()).await;
-        // Pin the active storage location until every index query completes;
-        // a concurrent storage move cannot remove the selected SQLite file.
-        let _storage_guard = crate::performance::wait("storage_read_wait", state.inner.storage_access.read()).await;
-        // Preserve the public pre-index contract. A Project without a synced
-        // Ref or usable installed generation must report that condition
-        // before storage/index creation or model scheduling can mask it.
-        let cache = super::commit_sync::memory_cache_under_storage_guard(
-            state,
-            DaemonMemoryCacheRequest {
-                project_id: project_id.clone(),
-            },
-        )
-        .await?;
-        require_ready_memory_cache(cache, &project_id)?;
-        let (pool, _storage) = active_project_index(state, &project_id).await?;
-        let Some(revision_id) = index::ready_index_revision(state, &pool, &project_id).await?
-        else {
-            pool.close().await;
-            drop(_storage_guard);
-            scheduler::ensure_project_queued(state, &project_id).await?;
-            return match state.inner.search_models.status() {
-                SearchModelRuntimeStatus::Missing => Err(SearchFailure::model_preparing(
-                    "search models are waiting for background preparation",
-                )
-                .into()),
-                SearchModelRuntimeStatus::Preparing {
-                    downloaded_bytes,
-                    total_bytes,
-                } => Err(SearchFailure::model_preparing(format!(
-                    "search models are preparing ({downloaded_bytes}/{total_bytes} bytes)"
-                ))
-                .into()),
-                SearchModelRuntimeStatus::Failed => Err(SearchFailure::model(
-                    "search model preparation failed and will retry in the background",
-                )
-                .into()),
-                SearchModelRuntimeStatus::Ready => {
-                    let job = scheduler::status(state, &project_id).await?;
-                    if let Some(job) = job
-                        && job.state == "failed"
-                    {
-                        Err(SearchFailure::failed(job.last_error.unwrap_or_else(|| {
-                            "the background search index build failed".to_owned()
-                        }))
-                        .into())
-                    } else {
-                        Err(SearchFailure::index_preparing(
+            failure_stage = "index_head";
+            let started = Instant::now();
+            let _query_guard = crate::performance::wait("search_lock_wait", state.inner.search_lock.lock()).await;
+            // Pin the active storage location until every index query completes;
+            // a concurrent storage move cannot remove the selected SQLite file.
+            let _storage_guard = crate::performance::wait("storage_read_wait", state.inner.storage_access.read()).await;
+            // Preserve the public pre-index contract. A Project without a synced
+            // Ref or usable installed generation must report that condition
+            // before storage/index creation or model scheduling can mask it.
+            let cache = super::commit_sync::memory_cache_under_storage_guard(
+                state,
+                DaemonMemoryCacheRequest {
+                    project_id: project_id.clone(),
+                },
+            )
+            .await?;
+            require_ready_memory_cache(cache, &project_id)?;
+            let (pool, _storage) = active_project_index(state, &project_id).await?;
+            let Some(revision_id) = index::ready_index_revision(state, &pool, &project_id).await?
+            else {
+                pool.close().await;
+                drop(_storage_guard);
+                scheduler::ensure_project_queued(state, &project_id).await?;
+                return match state.inner.search_models.status() {
+                    SearchModelRuntimeStatus::Missing => Err(SearchFailure::model_preparing(
+                        "search models are waiting for background preparation",
+                    )
+                    .into()),
+                    SearchModelRuntimeStatus::Preparing {
+                        downloaded_bytes,
+                        total_bytes,
+                    } => Err(SearchFailure::model_preparing(format!(
+                        "search models are preparing ({downloaded_bytes}/{total_bytes} bytes)"
+                    ))
+                    .into()),
+                    SearchModelRuntimeStatus::Failed => Err(SearchFailure::model(
+                        "search model preparation failed and will retry in the background",
+                    )
+                    .into()),
+                    SearchModelRuntimeStatus::Ready => {
+                        let job = scheduler::status(state, &project_id).await?;
+                        if let Some(job) = job
+                            && job.state == "failed"
+                        {
+                            Err(SearchFailure::failed(job.last_error.unwrap_or_else(|| {
+                                "the background search index build failed".to_owned()
+                            }))
+                            .into())
+                        } else {
+                            Err(SearchFailure::index_preparing(
                             "the first search index is building in the background; retry shortly",
                         )
                         .into())
+                        }
                     }
-                }
+                };
             };
-        };
-        completion.latencies.index_ensure_us = elapsed_us(started);
-        completion.index_revision = Some(revision_id.clone());
-        let (indexed_effective_hash, indexed_resources) =
-            indexed_corpus(&pool, &revision_id).await?;
-        completion.effective_hash = Some(indexed_effective_hash);
-        completion.resources = indexed_resources;
-        completion.latencies.effective_memory_us = elapsed_us(started);
+            completion.latencies.index_ensure_us = elapsed_us(started);
+            completion.index_revision = Some(revision_id.clone());
+            let (indexed_effective_hash, indexed_resources) =
+                indexed_corpus(&pool, &revision_id).await?;
+            completion.effective_hash = Some(indexed_effective_hash);
+            completion.resources = indexed_resources;
+            completion.latencies.effective_memory_us = elapsed_us(started);
 
-        let response = query::query_index(
-            state,
-            &pool,
-            &revision_id,
-            &query,
-            previous_state,
-            &mut completion,
-            &mut failure_stage,
-        )
-        .await;
-        pool.close().await;
-        response
-    })
+            let response = query::query_index(
+                state,
+                &pool,
+                &revision_id,
+                &query,
+                previous_state,
+                &mut completion,
+                &mut failure_stage,
+            )
+            .await;
+            pool.close().await;
+            response
+        },
+    )
     .await
     {
         Ok(result) => (result, false),
@@ -662,7 +665,13 @@ pub(crate) async fn activate_memory(
             )
             .await
         } else {
-            super::retrieval_history::finish_run(state, &run_id, completion).await
+            super::retrieval_history::finish_run_before(
+                state,
+                &run_id,
+                completion,
+                total_started + ACTIVATION_DEADLINE,
+            )
+            .await
         };
         if let Err(error) = finish_result {
             tracing::error!("failed to finish Retrieval Run {run_id}: {error}");
@@ -1668,7 +1677,7 @@ mod tests {
         .await
         .unwrap();
 
-        let payload = json!({
+        let mut payload = json!({
             "commit": {
                 "commit_id": "commit_test",
                 "scope": "project",
@@ -1727,6 +1736,36 @@ mod tests {
             ],
             "project_org_selection": null
         });
+        let selection = json!({ "project_id": "prj_test", "memories": [], "revision": 0 });
+        payload["project_org_selection"] = selection.clone();
+        payload["tree"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id": "project_org_selection", "type": "project_org_selection",
+                "scope": "daemon", "project_id": "prj_test", "path": null,
+                "blob_id": "blob_selection", "source": "config"
+            }));
+        payload["blobs"].as_array_mut().unwrap().push(json!({
+            "blob_id": "blob_selection", "content": serde_json::to_string(&selection).unwrap()
+        }));
+        let blob_ids = payload["blobs"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .map(|blob| {
+                let old = blob["blob_id"].as_str().unwrap().to_owned();
+                let mut hash = Sha256::new();
+                hash.update(b"blob\0");
+                hash.update(blob["content"].as_str().unwrap().as_bytes());
+                let id = hex::encode(hash.finalize());
+                blob["blob_id"] = json!(id);
+                (old, id)
+            })
+            .collect::<HashMap<_, _>>();
+        for entry in payload["tree"]["entries"].as_array_mut().unwrap() {
+            entry["blob_id"] = json!(blob_ids[entry["blob_id"].as_str().unwrap()]);
+        }
         let marker = serde_json::to_vec(&payload).unwrap();
         let storage = super::super::project_storage::resolve_active(&state, "prj_test")
             .await

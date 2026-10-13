@@ -4,7 +4,8 @@ import Foundation
 enum MemoryTreeProjection {
     static func items(
         resources: [MemoryResource], drafts: [LocalDraft], activeProjectId: String?,
-        selectedOrgResourceIds: Set<String>
+        selectedOrgResourceIds: Set<String>,
+        editBasePin: CommitBasePin? = nil
     ) -> [MemoryListItem] {
         let authoritative = MemoryTreeProjection.memoryTreeResources(
             resources,
@@ -38,7 +39,8 @@ enum MemoryTreeProjection {
                 inherited: resource.scope == .org
                     && activeProjectId != nil
                     && selectedOrgResourceIds.contains(resource.id),
-                projectContextId: activeProjectId
+                projectContextId: activeProjectId,
+                editBasePin: editBasePin
             )
         }
         let authoritativeIds = Set(authoritative.map(\.id))
@@ -49,7 +51,8 @@ enum MemoryTreeProjection {
                 resource: nil,
                 draft: $0,
                 inherited: false,
-                projectContextId: activeProjectId
+                projectContextId: activeProjectId,
+                editBasePin: editBasePin
             )
         })
         return items.sorted { $0.document.path.localizedStandardCompare($1.document.path) == .orderedAscending }

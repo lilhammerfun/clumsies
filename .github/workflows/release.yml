@@ -23,6 +23,10 @@ concurrency:
   group: macos-release
   cancel-in-progress: false
 
+env:
+  # Never decrease this offset: Sparkle compares build versions across channels.
+  CLUMSIES_BUILD_NUMBER_OFFSET: '2'
+
 jobs:
   update-feeds:
     if: github.event_name == 'workflow_dispatch' && inputs.distribution == 'update-feeds'
@@ -45,6 +49,9 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
+
+      - name: Set macOS build number
+        run: echo "CLUMSIES_BUILD_NUMBER=$((GITHUB_RUN_NUMBER + CLUMSIES_BUILD_NUMBER_OFFSET))" >> "$GITHUB_ENV"
 
       - name: Verify source and tagged version
         env:
@@ -69,7 +76,6 @@ jobs:
 
       - name: Build and verify ad-hoc DMG
         env:
-          CLUMSIES_BUILD_NUMBER: ${{ github.run_number }}
           CLUMSIES_AGENT_RUNTIME_BUILD_ID: adhoc-${{ github.sha }}
           DISTRIBUTION: ${{ github.event_name == 'push' && 'release' || 'preview' }}
         run: sh apps/macos/Scripts/archive-adhoc.sh "$DISTRIBUTION"
@@ -100,7 +106,7 @@ jobs:
               "dist/macos/Clumsies-$NATIVE_VERSION-macos-arm64.dmg"
           else
             sh apps/macos/Scripts/generate-appcast.sh "macos-preview-$GITHUB_RUN_NUMBER" \
-              "dist/macos/Clumsies-$NATIVE_VERSION-preview.$GITHUB_RUN_NUMBER-macos-arm64.dmg"
+              "dist/macos/Clumsies-$NATIVE_VERSION-preview.$CLUMSIES_BUILD_NUMBER-macos-arm64.dmg"
           fi
 
       - uses: actions/upload-artifact@v4
@@ -181,6 +187,9 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
 
+      - name: Set macOS build number
+        run: echo "CLUMSIES_BUILD_NUMBER=$((GITHUB_RUN_NUMBER + CLUMSIES_BUILD_NUMBER_OFFSET))" >> "$GITHUB_ENV"
+
       - name: Verify release source is the default branch tip
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -257,7 +266,6 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CLUMSIES_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           CLUMSIES_VERSION=$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' apps/macos/project.yml)
           export CLUMSIES_VERSION

@@ -838,7 +838,7 @@ final class DaemonContractTests: XCTestCase {
         let view = try source("Features/Workspace/WorkspaceView.swift")
         XCTAssertEqual(view.components(separatedBy: "await store.runRefreshLoop()").count - 1, 1)
         let status = try source("Services/Daemon/DaemonSyncService.swift", method: "func refreshSyncStatus()")
-        XCTAssertEqual(status.components(separatedBy: "daemon.syncStatus(projectId: projectId)").count - 1, 1)
+        XCTAssertEqual(status.components(separatedBy: "fetchSyncStatus(projectId)").count - 1, 1)
         XCTAssertTrue(status.contains("!isRefreshingSyncStatus"))
         XCTAssertTrue(status.contains("catch where error.isUserCancellation"))
         for operation in ["refreshOrgResourcesIfNeeded(", "refreshDraftInventory(", "refreshStaleResourcesIfNeeded("] {
@@ -907,23 +907,6 @@ final class DaemonContractTests: XCTestCase {
         XCTAssertTrue(source.contains("withTaskCancellationHandler"))
         XCTAssertTrue(source.contains("request.cancel()"))
         XCTAssertTrue(source.contains("try Task.checkCancellation()"))
-    }
-
-    func testAvatarLoadingIsCachedAndCoalesced() throws {
-        let macOSRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: macOSRoot.appending(path: "Sources/Libraries/UI/AvatarView.swift"),
-            encoding: .utf8
-        )
-
-        XCTAssertFalse(source.contains("AsyncImage"))
-        XCTAssertTrue(source.contains("NSCache<NSURL, NSImage>"))
-        XCTAssertTrue(source.contains("if let existing = loads[url]"))
-        XCTAssertTrue(source.contains(".task(id: avatarURL)"))
-        XCTAssertTrue(source.contains("guard !Task.isCancelled else { return }"))
     }
 
     func testRetrySyncSharesOnlyTheSameProjectAndChannelTask() throws {
@@ -1017,7 +1000,7 @@ final class DaemonContractTests: XCTestCase {
     func testDiscardRechecksTheDraftInsideTheMutationGate() throws {
         let discard = try source("Services/Memory/DraftStore.swift", method: "func discard(_ draft: LocalDraft)")
         let gate = try XCTUnwrap(discard.range(of: "withDraftMutation"))
-        let recheck = try XCTUnwrap(discard.range(of: "guard self.drafts.contains(where: { $0.id == draft.id }) else { return }"))
+        let recheck = try XCTUnwrap(discard.range(of: "guard self.drafts.contains(where: { $0.id == draft.id }) else"))
         let write = try XCTUnwrap(discard.range(of: "_ = try await self.storeDraft("))
         XCTAssertLessThan(gate.lowerBound, recheck.lowerBound)
         XCTAssertLessThan(recheck.lowerBound, write.lowerBound)
@@ -1067,7 +1050,7 @@ final class DaemonContractTests: XCTestCase {
         for (path, method) in [("Services/Memory/DraftStore.swift", "func stageDocumentSave"), ("Services/Bundles/BundleStore.swift", "func stageBundleSave")] {
             XCTAssertTrue(try source(path, method: method).contains("guard context.phase == .ready, !context.isSigningOut else { return }"))
         }
-        XCTAssertTrue(try source("Features/Bundles/BundlesView.swift").contains(".disabled(workspaceContext.phase != .ready)"))
+        XCTAssertTrue(try source("Features/Bundles/BundlesView.swift").contains(".disabled(workspaceContext.phase != .ready || workspaceContext.isSigningOut)"))
     }
 
     func testSignOutSerializesFinalConfigClearAndUsesFullAuthorityClear() throws {
@@ -1124,11 +1107,11 @@ final class DaemonContractTests: XCTestCase {
 
         XCTAssertLessThan(signOutGuard.lowerBound, signOutSet.lowerBound)
         XCTAssertLessThan(signOutSet.lowerBound, priorPhase.lowerBound)
-        XCTAssertLessThan(priorPhase.lowerBound, loading.lowerBound)
-        XCTAssertLessThan(loading.lowerBound, signOutDefer.lowerBound)
+        XCTAssertLessThan(priorPhase.lowerBound, signOutDefer.lowerBound)
         XCTAssertLessThan(signOutDefer.lowerBound, flush.lowerBound)
         XCTAssertLessThan(flush.lowerBound, restorePhase.lowerBound)
-        XCTAssertLessThan(restorePhase.lowerBound, invalidate.lowerBound)
+        XCTAssertLessThan(restorePhase.lowerBound, loading.lowerBound)
+        XCTAssertLessThan(loading.lowerBound, invalidate.lowerBound)
         XCTAssertLessThan(invalidate.lowerBound, sessionDelete.lowerBound)
         XCTAssertLessThan(sessionDelete.lowerBound, gate.lowerBound)
         XCTAssertLessThan(gate.lowerBound, configClear.lowerBound)

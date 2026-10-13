@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 private struct LocalInboxReceipt: Codable {
@@ -15,6 +16,12 @@ private struct PendingInboxReceipt: Codable, Identifiable {
     let action: InboxReceiptAction
 }
 
+private struct InboxReceiptState: Codable {
+    let version: Int
+    let local: [String: LocalInboxReceipt]
+    let pending: [PendingInboxReceipt]
+}
+
 @MainActor
 final class InboxStore: ObservableObject {
     @Published private(set) var unavailableProjects: [DaemonUnavailableProject] = []
@@ -29,6 +36,7 @@ final class InboxStore: ObservableObject {
     private let context: WorkspaceContext
     private let catalog: MemoryCatalog?
     private let defaults: UserDefaults
+    private let receiptDirectory: URL
     private let fetchPage: @MainActor (String?) async throws -> (InboxPage, Bool)
     private let fetchLocal: @MainActor () async throws -> DaemonSyncStatus
     private let updateReceipt: @MainActor (String, InboxReceiptRequest) async throws -> Void
@@ -37,11 +45,14 @@ final class InboxStore: ObservableObject {
     private var localReceipts: [String: LocalInboxReceipt] = [:]
     private var pendingReceipts: [PendingInboxReceipt] = []
     private var preferenceKey: String?
+    private var receiptStorageLoaded = false
+    private var hasReceiptStorageError = false
     private var generation = UUID()
     private var receiptGeneration = UUID()
     private var observations: Set<AnyCancellable> = []
 
     init(
+        receiptDirectory: URL? = nil,
         context: WorkspaceContext,
         catalog: MemoryCatalog? = nil,
         defaults: UserDefaults = .standard,
@@ -52,6 +63,8 @@ final class InboxStore: ObservableObject {
         self.context = context
         self.catalog = catalog
         self.defaults = defaults
+        self.receiptDirectory = receiptDirectory ?? ClumsiesIdentifiers.clientApplicationSupportDirectoryURL
+            .appending(path: "Inbox", directoryHint: .isDirectory)
         self.fetchPage = fetchPage ?? { cursor in
             let result: (value: InboxPage, response: DaemonServerResponse) = try await context.server.getWithMetadata(
                 "/api/v1/me/inbox", query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? []
@@ -82,22 +95,17 @@ final class InboxStore: ObservableObject {
     func prepare(serverURL: String) {
         guard let user = context.account?.userId, let org = context.organization?.orgId else { return }
         let key = "ClumsiesInbox.\(serverURL).\(org).\(user)"
-        guard preferenceKey != key else { return }
+        guard preferenceKey != key || !receiptStorageLoaded else { return }
         reset()
         preferenceKey = key
-        if let data = defaults.data(forKey: key),
-           let receipts = try? JSONDecoder().decode([String: LocalInboxReceipt].self, from: data) {
-            localReceipts = receipts
-        }
-        if let data = defaults.data(forKey: key + ".pending"),
-           let pending = try? JSONDecoder().decode([PendingInboxReceipt].self, from: data) {
-            pendingReceipts = pending
-        }
+        loadReceipts()
     }
 
     func reset() {
         generation = UUID()
         preferenceKey = nil
+        receiptStorageLoaded = false
+        hasReceiptStorageError = false
         remoteItems = []
         localItems = []
         unavailableProjects = []
@@ -114,6 +122,7 @@ final class InboxStore: ObservableObject {
 
     func refresh() async {
         guard context.phase == .ready, preferenceKey != nil, !isLoading else { return }
+        if !receiptStorageLoaded { loadReceipts() }
         isLoading = true
         let requestGeneration = generation
         let authority = context.authorityGeneration
@@ -197,7 +206,7 @@ final class InboxStore: ObservableObject {
 
     @discardableResult
     func acknowledge(_ item: InboxItem, action: InboxReceiptAction) async -> Bool {
-        guard preferenceKey != nil,
+        guard receiptStorageLoaded,
               items.contains(where: { $0.id == item.id && $0.revision == item.revision }) else { return false }
         receiptError = nil
         if let version = item.serverVersion {
@@ -209,7 +218,7 @@ final class InboxStore: ObservableObject {
                     && (($0.action == .read || $0.action == .unread) == isReadAction)
             }
             pendingReceipts.append(pending)
-            guard savePendingReceipts() else { pendingReceipts = prior; return false }
+            guard saveReceipts() else { pendingReceipts = prior; return false }
             publishItems()
             if let failure = ClientServiceStatus.shared.failure,
                [.connection, .localService, .authentication].contains(failure) {
@@ -217,6 +226,8 @@ final class InboxStore: ObservableObject {
             }
             return await sendPendingReceipt(pending)
         } else if var receipt = localReceipts[item.id], receipt.revision == item.revision {
+            let prior = localReceipts
+            let priorItems = localItems
             switch action {
             case .read: receipt.readRevision = item.revision
             case .unread: receipt.readRevision = nil
@@ -227,7 +238,11 @@ final class InboxStore: ObservableObject {
             if let index = localItems.firstIndex(where: { $0.id == item.id && $0.revision == item.revision }) {
                 Self.apply(action, to: &localItems[index])
             }
-            saveReceipts()
+            guard saveReceipts() else {
+                localReceipts = prior
+                localItems = priorItems
+                return false
+            }
         }
         publishItems()
         return true
@@ -235,18 +250,47 @@ final class InboxStore: ObservableObject {
 
     func dismissReceiptError() { receiptError = nil }
 
-    private func savePendingReceipts() -> Bool {
-        guard let preferenceKey else { return false }
+    private func receiptFile(for key: String) -> URL {
+        let identity = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return receiptDirectory.appending(path: identity + ".json", directoryHint: .notDirectory)
+    }
+
+    private func loadReceipts() {
+        guard let preferenceKey else { return }
         do {
-            defaults.set(try JSONEncoder().encode(pendingReceipts), forKey: preferenceKey + ".pending")
-            return true
+            let file = receiptFile(for: preferenceKey)
+            let stored: InboxReceiptState
+            do {
+                stored = try JSONDecoder().decode(InboxReceiptState.self, from: Data(contentsOf: file))
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                stored = .init(version: 1,
+                    local: try defaults.data(forKey: preferenceKey).map {
+                        try JSONDecoder().decode([String: LocalInboxReceipt].self, from: $0)
+                    } ?? [:],
+                    pending: try defaults.data(forKey: preferenceKey + ".pending").map {
+                        try JSONDecoder().decode([PendingInboxReceipt].self, from: $0)
+                    } ?? [])
+            }
+            guard stored.version == 1 else { throw CocoaError(.coderReadCorrupt) }
+            localReceipts = stored.local
+            pendingReceipts = stored.pending
+            receiptStorageLoaded = true
+            if defaults.object(forKey: preferenceKey) != nil || defaults.object(forKey: preferenceKey + ".pending") != nil {
+                if !saveReceipts() { receiptStorageLoaded = false; return }
+                defaults.removeObject(forKey: preferenceKey)
+                defaults.removeObject(forKey: preferenceKey + ".pending")
+            }
+            receiptError = nil
+            hasReceiptStorageError = false
         } catch {
+            receiptStorageLoaded = false
+            hasReceiptStorageError = true
             receiptError = String(localized: "Notification changes couldn't be saved on this Mac. Try again.")
-            return false
         }
     }
 
     private func sendPendingReceipt(_ pending: PendingInboxReceipt) async -> Bool {
+        guard receiptStorageLoaded else { return false }
         guard pendingReceipts.contains(where: { $0.id == pending.id }), !updatingIds.contains(pending.notificationId) else { return true }
         let requestGeneration = generation
         let authority = context.authorityGeneration
@@ -268,15 +312,17 @@ final class InboxStore: ObservableObject {
                 return true
             }
             pendingReceipts.removeAll { $0.id == pending.id }
-            _ = savePendingReceipts()
+            let saved = saveReceipts()
             publishItems()
+            guard saved else { return false }
             receiptError = failure == .invalidInput
                 ? String(localized: "Couldn't update this notification. Refresh Inbox and try again.")
                 : error.actionMessage
             return false
         }
+        let prior = pendingReceipts
         pendingReceipts.removeAll { $0.id == pending.id }
-        _ = savePendingReceipts()
+        guard saveReceipts() else { pendingReceipts = prior; publishItems(); return false }
         receiptError = nil
         publishItems()
         return true
@@ -329,13 +375,28 @@ final class InboxStore: ObservableObject {
         // Resolved conditions leave the local inbox; a later recurrence is a new reminder.
         let activeIds = Set(notices.map(\.id))
         localReceipts = localReceipts.filter { activeIds.contains($0.key) }
-        saveReceipts()
+        _ = saveReceipts()
     }
 
-    private func saveReceipts() {
-        guard let preferenceKey else { return }
-        do { defaults.set(try JSONEncoder().encode(localReceipts), forKey: preferenceKey) }
-        catch { receiptError = String(localized: "Couldn't save notification preferences. \(error.userFacingMessage)") }
+    @discardableResult
+    private func saveReceipts() -> Bool {
+        guard let preferenceKey, receiptStorageLoaded else { return false }
+        do {
+            let file = receiptFile(for: preferenceKey)
+            try FileManager.default.createDirectory(at: receiptDirectory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: receiptDirectory.path)
+            let data = try JSONEncoder().encode(InboxReceiptState(version: 1, local: localReceipts, pending: pendingReceipts))
+            try data.write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            if hasReceiptStorageError { receiptError = nil }
+            hasReceiptStorageError = false
+            return true
+        } catch {
+            hasReceiptStorageError = true
+            receiptError = String(localized: "Notification changes couldn't be saved on this Mac. Try again.")
+            return false
+        }
     }
 
     private func retainProjects(_ accessible: Set<String>) {

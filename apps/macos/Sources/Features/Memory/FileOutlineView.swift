@@ -6,7 +6,7 @@ import SwiftUI
 struct FileOutlineView<Row: View>: NSViewRepresentable {
     let roots: [FileTreeNode]
     @Binding var selection: Set<String>
-    let persistenceKey: String
+    let persistenceKey: String?
     let isFiltering: Bool
     let onOpen: (String) -> Void
     let onRename: (String) -> Void
@@ -106,7 +106,7 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
                 nodes = updatedNodes
                 if outline.autosaveName == nil {
                     outline.autosaveName = parent.persistenceKey
-                    outline.autosaveExpandedItems = !parent.isFiltering
+                    outline.autosaveExpandedItems = parent.persistenceKey != nil && !parent.isFiltering
                 }
                 outline.reloadData()
                 expand(expanded)
@@ -118,7 +118,7 @@ struct FileOutlineView<Row: View>: NSViewRepresentable {
                 outline.collapseItem(nil, collapseChildren: true)
                 expand(expansionBeforeFiltering ?? [])
                 expansionBeforeFiltering = nil
-                outline.autosaveExpandedItems = true
+                outline.autosaveExpandedItems = parent.persistenceKey != nil
             }
             // A tab change may reveal its file. Ordinary refreshes must not
             // undo a folder collapse or scroll the navigator back to the editor.

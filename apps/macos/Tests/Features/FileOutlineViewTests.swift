@@ -7,9 +7,9 @@ import XCTest
 final class FileOutlineViewTests: XCTestCase {
     private var selection: Set<String> = []
     private var opened: [String] = []
-    private let persistenceKey = "FileOutlineTests.\(UUID())"
 
-    private func tree(_ items: [MemoryListItem], filtering: Bool = false) -> FileOutlineView<Text> {
+    private func tree(_ items: [MemoryListItem], filtering: Bool = false,
+                      persistenceKey: String? = nil) -> FileOutlineView<Text> {
         FileOutlineView(
             roots: FileTreeNode.build(items),
             selection: Binding(get: { self.selection }, set: { self.selection = $0 }),
@@ -18,6 +18,19 @@ final class FileOutlineViewTests: XCTestCase {
             onOpen: { self.opened.append($0) },
             onRename: { _ in }
         ) { node, _, _, _ in Text(node.name) }
+    }
+
+    func testTransientOutlineNeverEnablesSystemPersistenceAcrossFiltering() {
+        let items = [memory("a", "folder/a.md")]
+        let view = tree(items)
+        let coordinator = view.makeCoordinator()
+        coordinator.update(view)
+        XCTAssertNil(coordinator.outline.autosaveName)
+        XCTAssertFalse(coordinator.outline.autosaveExpandedItems)
+        coordinator.update(tree(items, filtering: true))
+        coordinator.update(view)
+        XCTAssertNil(coordinator.outline.autosaveName)
+        XCTAssertFalse(coordinator.outline.autosaveExpandedItems)
     }
 
     func testClosedDocumentCanBeOpenedAgainWithoutChangingTreeSelection() throws {
@@ -133,7 +146,16 @@ final class FileOutlineViewTests: XCTestCase {
     }
 
     func testDisclosureStateSurvivesRecreatingTheNavigator() throws {
-        let view = tree([memory("a", "notes/a.md")])
+        guard let isolated = ProcessInfo.processInfo.environment["CLUMSIES_ISOLATED_TEST_HOME"] else {
+            throw XCTSkip("Run Scripts/test.sh with its isolated preferences home.")
+        }
+        let expected = URL(fileURLWithPath: isolated).resolvingSymlinksInPath()
+        let actual = FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath()
+        XCTAssertEqual(actual, expected)
+        guard actual == expected else { return }
+        let persistenceKey = "FileOutlineTests.\(UUID())"
+        defer { UserDefaults.standard.removeObject(forKey: "NSOutlineView Items " + persistenceKey) }
+        let view = tree([memory("a", "notes/a.md")], persistenceKey: persistenceKey)
         let first = view.makeCoordinator()
         first.update(view)
         first.outline.expandItem(try XCTUnwrap(first.outline.item(atRow: 0)))

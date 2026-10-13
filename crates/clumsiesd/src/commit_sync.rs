@@ -151,6 +151,30 @@ pub struct DaemonProjectCheckoutRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// Issue a document Base lease, or acknowledge one after acquiring its file lock.
+pub struct DaemonCommitBasePinRequest {
+    /// Exact immutable snapshot captured when the document was opened.
+    pub commit_id: String,
+    /// Omit to issue a provisional lease; provide the returned ID to acknowledge it.
+    #[serde(default)]
+    pub pin_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// Lease identity and private file that a document reader must keep locked.
+///
+/// Holding a shared OS lock protects the complete Base across daemon restarts.
+/// An unlocked confirmed lease can be collected; its identifier alone is no pin.
+pub struct DaemonCommitBasePin {
+    /// Identity used for the acknowledgment request.
+    pub pin_id: String,
+    /// Immutable snapshot protected by this lease.
+    pub commit_id: String,
+    /// Open this file without following symlinks, then hold a shared lock until release.
+    pub lock_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DaemonProjectCheckout {
     pub project_id: String,
     pub commit_id: Option<String>,
@@ -174,6 +198,16 @@ pub struct DaemonProjectCheckoutResource {
 }
 
 pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS commit_base_pins (
+            pin_id TEXT PRIMARY KEY,
+            commit_id TEXT NOT NULL,
+            issued_at INTEGER NOT NULL,
+            confirmed INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0, 1))
+        )",
+    )
+    .execute(pool)
+    .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS cached_blobs (
             blob_id TEXT PRIMARY KEY,
@@ -503,7 +537,10 @@ pub(super) async fn ensure_commit_cached(
     commit_id: &str,
 ) -> Result<(), DaemonError> {
     validate_cache_component("commit_id", commit_id)?;
-    if cached_commit_exists(&state.inner.pool, commit_id).await? {
+    if load_cached_commit_payload(&state.inner.pool, commit_id)
+        .await?
+        .is_some()
+    {
         return Ok(());
     }
     let payload: ServerCommitPayload =
@@ -528,10 +565,282 @@ pub(super) async fn ensure_commit_cached(
         download_url: Some(format!("/api/v1/commits/{commit_id}")),
         incremental_supported: false,
     };
-    validate_commit_payload(&payload, &synthetic_state)?;
+    let payload = tokio::task::spawn_blocking(move || {
+        validate_commit_payload(&payload, &synthetic_state)?;
+        Ok::<_, DaemonError>(payload)
+    })
+    .await
+    .map_err(|error| DaemonError::Server(format!("Commit verification task failed: {error}")))??;
     let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
     cache_commit_payload(&mut tx, &payload).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// Issue or acknowledge a lease for a complete, verified document Base.
+///
+/// Acquires `sync_lock` before the storage write barrier to exclude Base GC. The
+/// reader must acquire a shared OS file lock before acknowledgment and retain it
+/// while using the Base; provisional unlocked leases have only a short grace period.
+///
+/// # Errors
+/// Returns validation, download, verification, file or database errors. Acknowledgment
+/// rejects missing, unlocked or mismatched leases rather than authorizing an unsafe edit.
+pub(super) async fn retain_commit_base(
+    state: &DaemonState,
+    request: DaemonCommitBasePinRequest,
+) -> Result<DaemonCommitBasePin, DaemonError> {
+    validate_cache_component("commit_id", &request.commit_id)?;
+    let _sync_guard = state.inner.sync_lock.lock().await;
+    let _storage_guard = state.inner.storage_access.write().await;
+    let pin_id = match request.pin_id {
+        Some(pin_id) => {
+            Uuid::parse_str(&pin_id).map_err(|_| expired_base_pin())?;
+            let commit_id: Option<String> =
+                sqlx::query_scalar("SELECT commit_id FROM commit_base_pins WHERE pin_id = $1")
+                    .bind(&pin_id)
+                    .fetch_optional(&state.inner.pool)
+                    .await?;
+            if commit_id.as_deref() != Some(request.commit_id.as_str())
+                || !commit_pin_file_is_locked(&commit_pin_path(state, &pin_id))?
+                || load_cached_commit_payload(&state.inner.pool, &request.commit_id)
+                    .await?
+                    .is_none()
+            {
+                return Err(expired_base_pin());
+            }
+            sqlx::query("UPDATE commit_base_pins SET confirmed = 1 WHERE pin_id = $1")
+                .bind(&pin_id)
+                .execute(&state.inner.pool)
+                .await?;
+            pin_id
+        }
+        None => {
+            ensure_commit_cached(state, &request.commit_id).await?;
+            let pin_id = Uuid::new_v4().to_string();
+            let directory = state.inner.config.root_dir.join("commit-base-pins");
+            super::project_storage::ensure_private_directory(&directory)?;
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let path = commit_pin_path(state, &pin_id);
+            let file = options.open(&path)?;
+            file.sync_all()?;
+            if let Err(error) = sqlx::query(
+                "INSERT INTO commit_base_pins (pin_id, commit_id, issued_at)
+                 VALUES ($1, $2, CAST(strftime('%s', 'now') AS INTEGER))",
+            )
+            .bind(&pin_id)
+            .bind(&request.commit_id)
+            .execute(&state.inner.pool)
+            .await
+            {
+                let _ = std::fs::remove_file(&path);
+                return Err(error.into());
+            }
+            pin_id
+        }
+    };
+    Ok(DaemonCommitBasePin {
+        lock_path: commit_pin_path(state, &pin_id).display().to_string(),
+        pin_id,
+        commit_id: request.commit_id,
+    })
+}
+
+/// Require the editor to reload when its lease can no longer authorize a captured Base.
+fn expired_base_pin() -> DaemonError {
+    DaemonError::State {
+        code: "commit_base_pin_expired",
+        message: "The document Base could not be retained; reload the document before editing."
+            .to_owned(),
+    }
+}
+
+/// Read a target from the immutable Project snapshot captured by the editor.
+///
+/// The caller holds `sync_lock` so GC cannot remove the Base between object reads.
+/// Organization resources are resolved from that snapshot's selection, not a newer Ref.
+///
+/// # Errors
+/// Returns database, verification, scope or missing-target errors; an unavailable
+/// captured Base is never replaced with the current head.
+pub(super) async fn load_captured_project_target(
+    state: &DaemonState,
+    project_id: &str,
+    commit_id: &str,
+    target_id: &str,
+) -> Result<LoadedMemoryResource, DaemonError> {
+    let payload = load_cached_commit_payload(&state.inner.pool, commit_id)
+        .await?
+        .ok_or_else(expired_base_pin)?;
+    if payload.commit.scope != ServerCommitScope::Project
+        || payload.commit.project_id.as_deref() != Some(project_id)
+    {
+        return Err(DaemonError::InvalidRequest(
+            "The captured Base belongs to another Project".to_owned(),
+        ));
+    }
+    let entry = payload
+        .tree
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.id == target_id && entry.kind != ServerTreeEntryKind::ProjectOrgSelection
+        })
+        .ok_or_else(|| {
+            DaemonError::NotFound(format!(
+                "Memory {target_id} is absent from the captured Base"
+            ))
+        })?;
+    let blob = payload
+        .blobs
+        .iter()
+        .find(|blob| blob.blob_id == entry.blob_id)
+        .expect("the captured Base was verified complete");
+    let path = entry.path.clone().expect("Memory path was verified");
+    Ok(LoadedMemoryResource {
+        is_directory: entry.is_directory,
+        resource_id: entry.id.clone(),
+        scope: match entry.scope {
+            ServerTreeEntryScope::Org => SourceScope::Org,
+            ServerTreeEntryScope::Project => SourceScope::Project,
+            ServerTreeEntryScope::Daemon => return Err(expired_base_pin()),
+        },
+        kind: MemoryKind::Memory,
+        title: path.clone(),
+        path,
+        description: entry.description.clone(),
+        content_hash: content_hash(&blob.content),
+        changed: true,
+        content: Some(blob.content.clone()),
+    })
+}
+
+/// Locate an already validated lease identifier inside the daemon's private pin directory.
+fn commit_pin_path(state: &DaemonState, pin_id: &str) -> PathBuf {
+    state
+        .inner
+        .config
+        .root_dir
+        .join("commit-base-pins")
+        .join(format!("{pin_id}.lock"))
+}
+
+/// Probe an OS lease without following a symlink or accepting an unsafe pin directory.
+///
+/// # Errors
+/// Returns file or lock errors. Missing or unsafe files are errors, not evidence that
+/// a document released its Base, so collection can fail closed.
+fn commit_pin_file_is_locked(path: &Path) -> Result<bool, DaemonError> {
+    let directory = std::fs::symlink_metadata(path.parent().ok_or_else(expired_base_pin)?)?;
+    if directory.file_type().is_symlink() || !directory.is_dir() {
+        return Err(expired_base_pin());
+    }
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(expired_base_pin());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = options.open(path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
+/// Capture live document roots and reap unlocked expired leases in the GC transaction.
+///
+/// The caller holds `sync_lock` and the storage write barrier. Live OS locks never
+/// expire by age; expired provisional or unlocked confirmed rows are removed only
+/// when this transaction commits. File cleanup follows that commit separately.
+///
+/// # Errors
+/// Returns database or unsafe/missing pin-file errors before a cache sweep may commit.
+pub(super) async fn live_commit_base_pins(
+    state: &DaemonState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<Vec<String>, DaemonError> {
+    let rows: Vec<(String, String, bool, bool)> = sqlx::query_as(
+        "SELECT pin_id, commit_id, confirmed,
+                       CAST(strftime('%s', 'now') AS INTEGER) - issued_at < 60
+                       FROM commit_base_pins",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut retained = Vec::new();
+    for (pin_id, commit_id, confirmed, provisional) in rows {
+        Uuid::parse_str(&pin_id).map_err(|_| expired_base_pin())?;
+        // A live OS lock survives sleep and daemon restarts; it never expires by time.
+        if commit_pin_file_is_locked(&commit_pin_path(state, &pin_id))?
+            || (!confirmed && provisional)
+        {
+            retained.push(commit_id);
+        } else {
+            sqlx::query("DELETE FROM commit_base_pins WHERE pin_id = $1")
+                .bind(&pin_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    Ok(retained)
+}
+
+/// Remove unlocked orphan lease files after the row-reaping transaction has committed.
+///
+/// The caller keeps `sync_lock` and the storage write barrier to exclude new leases.
+/// Unknown filenames and files with a live OS lock are preserved.
+///
+/// # Errors
+/// Returns database, directory or file errors without undoing the completed safe sweep.
+pub(super) async fn cleanup_commit_base_pin_files(state: &DaemonState) -> Result<(), DaemonError> {
+    let directory = state.inner.config.root_dir.join("commit-base-pins");
+    match std::fs::symlink_metadata(&directory) {
+        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => {}
+        Ok(_) => return Err(expired_base_pin()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    let files = match std::fs::read_dir(directory) {
+        Ok(files) => files,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in files {
+        let entry = entry?;
+        let Some(pin_id) = entry
+            .path()
+            .file_stem()
+            .and_then(|id| id.to_str())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        if Uuid::parse_str(&pin_id).is_err()
+            || entry.path().extension().is_none_or(|ext| ext != "lock")
+        {
+            continue;
+        }
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM commit_base_pins WHERE pin_id = $1)")
+                .bind(&pin_id)
+                .fetch_one(&state.inner.pool)
+                .await?;
+        if !exists && !commit_pin_file_is_locked(&entry.path())? {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
     Ok(())
 }
 
@@ -580,6 +889,9 @@ pub(super) async fn memory_cache_under_storage_guard(
     };
     let generation = storage.generation_path(commit_id.as_deref().unwrap_or(EMPTY_GENERATION));
     if !generation.exists() {
+        restore_missing_project_generation(state, &storage, commit_id.as_deref()).await?;
+    }
+    if !generation.exists() {
         return Ok(DaemonMemoryCacheStatus {
             project_id: request.project_id,
             commit_id,
@@ -591,9 +903,19 @@ pub(super) async fn memory_cache_under_storage_guard(
             )),
         });
     }
-    if let Err(error) =
-        verify_generation_ref(&generation, &request.project_id, commit_id.as_deref())
-    {
+    let verification_root = generation.clone();
+    let verification_project = request.project_id.clone();
+    let verification_commit = commit_id.clone();
+    let verified = tokio::task::spawn_blocking(move || {
+        verify_generation_ref(
+            &verification_root,
+            &verification_project,
+            verification_commit.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| DaemonError::Server(format!("Commit verification task failed: {error}")))?;
+    if let Err(error) = verified {
         return Ok(DaemonMemoryCacheStatus {
             project_id: request.project_id,
             commit_id,
@@ -643,7 +965,17 @@ pub(super) async fn project_checkout(
     let commit_id: Option<String> = row.try_get("commit_id")?;
     let ref_etag: String = row.try_get("etag")?;
     let generation = storage.generation_path(commit_id.as_deref().unwrap_or(EMPTY_GENERATION));
-    if verify_generation_ref(&generation, &request.project_id, commit_id.as_deref()).is_err() {
+    if !generation.exists() {
+        restore_missing_project_generation(state, &storage, commit_id.as_deref()).await?;
+    }
+    let project_id = request.project_id.clone();
+    let checkout_commit_id = commit_id.clone();
+    let checkout = tokio::task::spawn_blocking(move || {
+        load_project_checkout(&generation, &project_id, checkout_commit_id.as_deref())
+    })
+    .await
+    .map_err(|error| DaemonError::Server(format!("Project snapshot task failed: {error}")))??;
+    let Some(mut checkout) = checkout else {
         return Ok(DaemonProjectCheckout {
             project_id: request.project_id,
             commit_id,
@@ -654,15 +986,7 @@ pub(super) async fn project_checkout(
             resources: Vec::new(),
             ready: false,
         });
-    }
-
-    let project_id = request.project_id;
-    let checkout_commit_id = commit_id.clone();
-    let mut checkout = tokio::task::spawn_blocking(move || {
-        load_project_checkout(&generation, &project_id, checkout_commit_id.as_deref())
-    })
-    .await
-    .map_err(|error| DaemonError::Server(format!("Project snapshot task failed: {error}")))??;
+    };
     checkout.ref_etag = Some(ref_etag);
     Ok(checkout)
 }
@@ -1004,40 +1328,79 @@ async fn install_ref(
     let observation = crate::performance::start("commit_install");
     let mut changed = false;
     let result = async {
+        let previous_commit_id = match materialized_project_id {
+            Some(project_id) => {
+                load_ref_commit(&state.inner.pool, &project_ref_key(project_id)).await?
+            }
+            None => None,
+        };
         let remote_commit_id = commit_state.reference.commit_id.as_deref();
         if let Some(commit_id) = remote_commit_id {
             validate_cache_component("commit_id", commit_id)?;
-            let commit_cached = cached_commit_exists(&state.inner.pool, commit_id).await?;
-            let generation_ready = match materialized_project_id {
+            let cached_payload = load_cached_commit_payload(&state.inner.pool, commit_id).await?;
+            let generation_payload = match materialized_project_id {
                 Some(project_id) => {
                     let storage = super::project_storage::resolve_active(state, project_id).await?;
                     let root = storage.generation_path(commit_id);
-                    if root.exists() {
-                        verify_generation_ref(&root, project_id, Some(commit_id))?;
-                        true
-                    } else {
-                        false
-                    }
+                    let project_id = project_id.to_owned();
+                    let commit_id = commit_id.to_owned();
+                    tokio::task::spawn_blocking(move || {
+                        verify_generation_ref(&root, &project_id, Some(&commit_id))
+                    })
+                    .await
+                    .map_err(|error| {
+                        DaemonError::Server(format!("Commit verification task failed: {error}"))
+                    })?
+                    .ok()
+                    .flatten()
                 }
-                None => true,
+                None => None,
             };
-            if commit_cached && generation_ready {
+            let generation_ready =
+                materialized_project_id.is_none() || generation_payload.is_some();
+            if cached_payload.is_some() && generation_ready {
+                let _storage_guard = state.inner.storage_access.write().await;
                 let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
                 changed = upsert_ref(&mut tx, &commit_state.reference, etag).await?;
                 tx.commit().await?;
+                if let Some(project_id) = materialized_project_id {
+                    prune_project_generations(
+                        state,
+                        project_id,
+                        Some(commit_id),
+                        previous_commit_id.as_deref(),
+                    )
+                    .await;
+                }
                 state.inner.search_index_notify.notify_one();
                 return Ok(());
             }
 
-            let payload: ServerCommitPayload = crate::performance::observe(
-                "commit_download",
-                get_server_json(state, &format!("/api/v1/commits/{commit_id}")),
-            )
-            .await?;
-            let validation = crate::performance::start("commit_validate");
-            let validation_result = validate_commit_payload(&payload, commit_state);
-            validation.finish_result(&validation_result);
-            validation_result?;
+            let payload = match cached_payload.or(generation_payload) {
+                Some(payload) => payload,
+                None => {
+                    crate::performance::observe(
+                        "commit_download",
+                        get_server_json(state, &format!("/api/v1/commits/{commit_id}")),
+                    )
+                    .await?
+                }
+            };
+            let validation_state = commit_state.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                let observation = crate::performance::start("commit_validate");
+                let result = (|| {
+                    validate_commit_payload(&payload, &validation_state)?;
+                    Ok::<_, DaemonError>(payload)
+                })();
+                observation.finish_result(&result);
+                result
+            })
+            .await
+            .map_err(|error| {
+                DaemonError::Server(format!("Commit verification task failed: {error}"))
+            })??;
+            let _storage_guard = state.inner.storage_access.write().await;
             let mut installed_location_revision = None;
             if let Some(project_id) = materialized_project_id {
                 let storage = super::project_storage::resolve_active(state, project_id).await?;
@@ -1046,7 +1409,12 @@ async fn install_ref(
                 let project_id = project_id.to_owned();
                 let materialized_payload = payload.clone();
                 tokio::task::spawn_blocking(move || {
-                    ensure_project_generation(&managed_root, &project_id, &materialized_payload)
+                    ensure_project_generation(
+                        &managed_root,
+                        &project_id,
+                        &materialized_payload,
+                        true,
+                    )
                 })
                 .await
                 .map_err(|error| {
@@ -1071,14 +1439,24 @@ async fn install_ref(
             cache_commit_payload(&mut tx, &payload).await?;
             changed = upsert_ref(&mut tx, &commit_state.reference, etag).await?;
             tx.commit().await?;
+            if let Some(project_id) = materialized_project_id {
+                prune_project_generations(
+                    state,
+                    project_id,
+                    Some(commit_id),
+                    previous_commit_id.as_deref(),
+                )
+                .await;
+            }
             state.inner.search_index_notify.notify_one();
         } else {
+            let _storage_guard = state.inner.storage_access.write().await;
             if let Some(project_id) = materialized_project_id {
                 let storage = super::project_storage::resolve_active(state, project_id).await?;
                 let managed_root = storage.managed_root;
                 let project_id = project_id.to_owned();
                 tokio::task::spawn_blocking(move || {
-                    ensure_empty_generation(&managed_root, &project_id)
+                    ensure_empty_generation(&managed_root, &project_id, true)
                 })
                 .await
                 .map_err(|error| {
@@ -1088,6 +1466,10 @@ async fn install_ref(
             let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
             changed = upsert_ref(&mut tx, &commit_state.reference, etag).await?;
             tx.commit().await?;
+            if let Some(project_id) = materialized_project_id {
+                prune_project_generations(state, project_id, None, previous_commit_id.as_deref())
+                    .await;
+            }
             state.inner.search_index_notify.notify_one();
         }
         Ok(())
@@ -1103,6 +1485,117 @@ async fn install_ref(
     let elapsed_us = observation.finish(outcome);
     tracing::info!(event = "commit_install_completed", request_id = %crate::diagnostics::request_id(), outcome, elapsed_us);
     result
+}
+
+/// Retain published generations, live reader leases and unfinished Draft dependencies.
+///
+/// Call with `sync_lock` and the storage write barrier held, after Ref publication.
+/// An immediate transaction stays open through directory deletion so Draft insertion
+/// cannot cross the roots snapshot. Failed lease reads abort before any file sweep;
+/// maintenance failures never withdraw the already committed Ref.
+async fn prune_project_generations(
+    state: &DaemonState,
+    project_id: &str,
+    current_commit_id: Option<&str>,
+    previous_commit_id: Option<&str>,
+) {
+    let result = async {
+        let storage = super::project_storage::resolve_active(state, project_id).await?;
+        let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut retained = sqlx::query_scalar::<_, String>(
+            "SELECT base_commit_id FROM local_drafts d
+             WHERE project_id = $1 AND base_commit_id IS NOT NULL
+               AND (status IN ('open', 'submitted') OR EXISTS (
+                   SELECT 1 FROM local_draft_operations o
+                   WHERE o.draft_id = d.draft_id AND o.sync_status <> 'synced'))
+             UNION SELECT current_commit_id FROM local_drafts d
+             WHERE project_id = $1 AND current_commit_id IS NOT NULL
+               AND (status IN ('open', 'submitted') OR EXISTS (
+                   SELECT 1 FROM local_draft_operations o
+                   WHERE o.draft_id = d.draft_id AND o.sync_status <> 'synced'))",
+        )
+        .bind(project_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        retained.extend(live_commit_base_pins(state, &mut tx).await?);
+        let current = current_commit_id.unwrap_or(EMPTY_GENERATION).to_owned();
+        retained.insert(current.clone());
+        let saved_previous: Option<String> =
+            sqlx::query_scalar("SELECT value FROM daemon_meta WHERE key = $1")
+                .bind(format!("previous_project_generation:{project_id}"))
+                .fetch_optional(&mut *tx)
+                .await?;
+        let previous = previous_commit_id
+            .filter(|previous| *previous != current)
+            .map(str::to_owned)
+            .or(saved_previous);
+        let previous = match previous {
+            Some(previous) => Some(previous),
+            None => sqlx::query_scalar::<_, Option<String>>(
+                "SELECT parent_commit_id FROM cached_commits WHERE commit_id = $1",
+            )
+            .bind(&current)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten(),
+        };
+        if let Some(previous) = previous {
+            retained.insert(previous);
+        }
+        tokio::task::spawn_blocking(move || {
+            prune_generation_directories(&storage.managed_root, &storage.project_id, &retained)
+        })
+        .await
+        .map_err(|error| {
+            DaemonError::Server(format!("Commit cache cleanup task failed: {error}"))
+        })??;
+        tx.commit().await?;
+        cleanup_commit_base_pin_files(state).await
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(%project_id, "published Commit cache cleanup failed: {error}");
+    }
+}
+
+/// Delete only verified daemon generations and abandoned daemon staging directories.
+///
+/// The caller holds the storage write barrier so readers cannot lose a generation.
+/// Unrecognized or corrupt generation directories are preserved for investigation.
+///
+/// # Errors
+/// Returns directory or deletion errors; generations already removed stay removed.
+fn prune_generation_directories(
+    managed_root: &Path,
+    project_id: &str,
+    retained: &BTreeSet<String>,
+) -> Result<(), DaemonError> {
+    for entry in std::fs::read_dir(managed_root.join("generations"))? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if retained.contains(&name) || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let abandoned = [".tmp-", ".corrupt-"].iter().any(|prefix| {
+            name.strip_prefix(prefix)
+                .is_some_and(|id| Uuid::parse_str(id).is_ok())
+        });
+        if abandoned
+            || verify_generation_ref(
+                &entry.path(),
+                project_id,
+                (name != EMPTY_GENERATION).then_some(name.as_str()),
+            )
+            .is_ok()
+        {
+            std::fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) async fn verify_current_project_generation_at(
@@ -1122,7 +1615,12 @@ pub(super) async fn verify_current_project_generation_at(
     };
     let commit_id: Option<String> = row.try_get("commit_id")?;
     let generation = generations_root.join(commit_id.as_deref().unwrap_or(EMPTY_GENERATION));
-    verify_generation_ref(&generation, project_id, commit_id.as_deref())
+    let project_id = project_id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        verify_generation_ref(&generation, &project_id, commit_id.as_deref()).map(|_| ())
+    })
+    .await
+    .map_err(|error| DaemonError::Server(format!("Commit verification task failed: {error}")))?
 }
 
 fn validate_commit_payload(
@@ -1145,6 +1643,15 @@ fn validate_commit_payload(
         ));
     }
 
+    validate_commit_objects(payload)
+}
+
+/// Verify Blob addresses, Tree ownership/paths and the exact selected-organization Blob.
+///
+/// # Errors
+/// Returns payload-integrity errors for missing, duplicate, unreferenced or inconsistent
+/// objects. Validation changes neither incoming Blob bytes nor stored historical objects.
+fn validate_commit_objects(payload: &ServerCommitPayload) -> Result<(), DaemonError> {
     let mut blobs = HashMap::new();
     for blob in &payload.blobs {
         if blob_object_id(&blob.content) != blob.blob_id {
@@ -1161,16 +1668,13 @@ fn validate_commit_payload(
         }
     }
 
-    let mut entry_ids = BTreeSet::new();
+    let selection_blob_id = validate_commit_tree(
+        &payload.tree,
+        payload.commit.scope,
+        payload.commit.project_id.as_deref(),
+    )?;
     let mut referenced_blobs = BTreeSet::new();
-    let mut selection_blob_id = None;
     for entry in &payload.tree.entries {
-        if !entry_ids.insert(entry.id.as_str()) {
-            return Err(DaemonError::Server(format!(
-                "Tree contains duplicate entry {}",
-                entry.id
-            )));
-        }
         if !blobs.contains_key(entry.blob_id.as_str()) {
             return Err(DaemonError::Server(format!(
                 "Tree entry {} references a missing Blob",
@@ -1186,18 +1690,10 @@ fn validate_commit_payload(
             ));
         }
         referenced_blobs.insert(entry.blob_id.as_str());
-        validate_tree_entry_ownership(entry, &payload.commit)?;
-        if entry.kind == ServerTreeEntryKind::ProjectOrgSelection {
-            if selection_blob_id.replace(entry.blob_id.as_str()).is_some() {
-                return Err(DaemonError::Server(
-                    "Project Commit contains more than one organization selection".to_owned(),
-                ));
-            }
-        } else {
+        if entry.kind != ServerTreeEntryKind::ProjectOrgSelection {
             materialized_resource_content(entry.kind, &blobs[entry.blob_id.as_str()].content)?;
         }
     }
-    validate_materialization_paths(&payload.tree.entries)?;
     if referenced_blobs.len() != blobs.len() {
         return Err(DaemonError::Server(
             "Commit payload contains unreferenced Blobs".to_owned(),
@@ -1254,22 +1750,73 @@ fn validate_commit_payload(
     Ok(())
 }
 
+/// Validate a Tree's ownership and portable paths, returning its selection Blob identity.
+///
+/// # Errors
+/// Returns invalid-ownership, duplicate-entry, directory or conflicting-path errors.
+fn validate_commit_tree<'a>(
+    tree: &'a ServerTree,
+    scope: ServerCommitScope,
+    project_id: Option<&str>,
+) -> Result<Option<&'a str>, DaemonError> {
+    let mut entry_ids = BTreeSet::new();
+    let mut selection_blob_id = None;
+    for entry in &tree.entries {
+        if !entry_ids.insert(entry.id.as_str()) {
+            return Err(DaemonError::Server(format!(
+                "Tree contains duplicate entry {}",
+                entry.id,
+            )));
+        }
+        validate_tree_entry_ownership(entry, scope, project_id)?;
+        if entry.is_directory && entry.kind != ServerTreeEntryKind::Memory {
+            return Err(DaemonError::Server(
+                "directory entries must be memories with empty content".to_owned(),
+            ));
+        }
+        if entry.kind == ServerTreeEntryKind::ProjectOrgSelection
+            && selection_blob_id.replace(entry.blob_id.as_str()).is_some()
+        {
+            return Err(DaemonError::Server(
+                "Project Commit contains more than one organization selection".to_owned(),
+            ));
+        }
+    }
+    validate_materialization_paths(&tree.entries)?;
+    match scope {
+        ServerCommitScope::Project if project_id.is_none() || selection_blob_id.is_none() => {
+            return Err(DaemonError::Server(
+                "Project Commit is missing its organization selection or project_id".to_owned(),
+            ));
+        }
+        ServerCommitScope::Org if selection_blob_id.is_some() => {
+            return Err(DaemonError::Server(
+                "Organization Commit contains a project organization selection".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(selection_blob_id)
+}
+
 fn validate_tree_entry_ownership(
     entry: &ServerTreeEntry,
-    commit: &ServerCommit,
+    scope: ServerCommitScope,
+    project_id: Option<&str>,
 ) -> Result<(), DaemonError> {
-    let valid = match (commit.scope, entry.kind, entry.scope) {
+    let valid = match (scope, entry.kind, entry.scope) {
         (
             ServerCommitScope::Project,
             ServerTreeEntryKind::ProjectOrgSelection,
             ServerTreeEntryScope::Daemon,
         ) => {
-            entry.project_id == commit.project_id
+            entry.project_id.as_deref() == project_id
                 && entry.path.is_none()
                 && entry.source == ServerTreeEntrySource::Config
         }
         (ServerCommitScope::Project, _, ServerTreeEntryScope::Project) => {
-            entry.project_id == commit.project_id && entry.source == ServerTreeEntrySource::Project
+            entry.project_id.as_deref() == project_id
+                && entry.source == ServerTreeEntrySource::Project
         }
         (ServerCommitScope::Project, _, ServerTreeEntryScope::Org) => {
             entry.project_id.is_none() && entry.source == ServerTreeEntrySource::SelectedOrg
@@ -1371,6 +1918,13 @@ fn insert_materialization_path(
     Ok(())
 }
 
+/// Admit verified immutable objects or repair corrupt cached projections in one transaction.
+///
+/// The caller validates the incoming payload and owns commit/rollback. Blob content
+/// is stored verbatim; scalar Commit fields and header JSON are repaired together.
+///
+/// # Errors
+/// Returns database errors or a valid immutable-object collision before commit.
 async fn cache_commit_payload(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     payload: &ServerCommitPayload,
@@ -1383,10 +1937,17 @@ async fn cache_commit_payload(
                 .await?;
         match existing {
             Some(content) if content != blob.content => {
-                return Err(DaemonError::Server(format!(
-                    "Cached Blob {} violates immutability",
-                    blob.blob_id
-                )));
+                if blob_object_id(&content) == blob.blob_id {
+                    return Err(DaemonError::Server(format!(
+                        "Cached Blob {} violates immutability",
+                        blob.blob_id
+                    )));
+                }
+                sqlx::query("UPDATE cached_blobs SET content = $2 WHERE blob_id = $1")
+                    .bind(&blob.blob_id)
+                    .bind(&blob.content)
+                    .execute(&mut **tx)
+                    .await?;
             }
             Some(_) => {}
             None => {
@@ -1407,10 +1968,49 @@ async fn cache_commit_payload(
             .await?;
     match existing_tree {
         Some(value) if value != tree_json => {
-            return Err(DaemonError::Server(format!(
-                "Cached Tree {} violates immutability",
-                payload.tree.tree_id
-            )));
+            if let Ok(existing) = serde_json::from_str::<ServerTree>(&value)
+                && existing.tree_id == payload.tree.tree_id
+                && existing != payload.tree
+            {
+                let owners: Vec<(String, Option<String>, String)> = sqlx::query_as(
+                    "SELECT scope, project_id, payload_json FROM cached_commits WHERE tree_id = $1",
+                )
+                .bind(&existing.tree_id)
+                .fetch_all(&mut **tx)
+                .await?;
+                // Missing Blob bytes do not make an immutable Tree's metadata corrupt.
+                let valid = owners.is_empty()
+                    || owners.iter().any(|(scope, project_id, header_json)| {
+                        if let Ok(header) = serde_json::from_str::<ServerCommit>(header_json)
+                            && header.tree_id == existing.tree_id
+                            && validate_commit_tree(
+                                &existing,
+                                header.scope,
+                                header.project_id.as_deref(),
+                            )
+                            .is_ok()
+                        {
+                            return true;
+                        }
+                        let scope = match scope.as_str() {
+                            "org" => ServerCommitScope::Org,
+                            "project" => ServerCommitScope::Project,
+                            _ => return false,
+                        };
+                        validate_commit_tree(&existing, scope, project_id.as_deref()).is_ok()
+                    });
+                if valid {
+                    return Err(DaemonError::Server(format!(
+                        "Cached Tree {} violates immutability",
+                        payload.tree.tree_id,
+                    )));
+                }
+            }
+            sqlx::query("UPDATE cached_trees SET payload_json = $2 WHERE tree_id = $1")
+                .bind(&payload.tree.tree_id)
+                .bind(&tree_json)
+                .execute(&mut **tx)
+                .await?;
         }
         Some(_) => {}
         None => {
@@ -1422,39 +2022,53 @@ async fn cache_commit_payload(
         }
     }
     let commit_json = serde_json::to_string(&payload.commit)?;
-    let existing: Option<String> =
-        sqlx::query_scalar("SELECT payload_json FROM cached_commits WHERE commit_id = $1")
-            .bind(&payload.commit.commit_id)
-            .fetch_optional(&mut **tx)
-            .await?;
-    match existing {
-        Some(value) if value != commit_json => {
+    let existing: Option<CachedCommitRecord> = sqlx::query_as(
+        "SELECT commit_id, scope, org_id, project_id, tree_id, parent_commit_id,
+                version, created_at, payload_json FROM cached_commits WHERE commit_id = $1",
+    )
+    .bind(&payload.commit.commit_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(existing) = &existing {
+        if let Ok(header) = serde_json::from_str::<ServerCommit>(&existing.payload_json)
+            && header.commit_id == payload.commit.commit_id
+            && header.version > 0
+            && header.parent_commit_id.as_deref() != Some(header.commit_id.as_str())
+            && header != payload.commit
+        {
             return Err(DaemonError::Server(format!(
                 "Cached Commit {} violates immutability",
                 payload.commit.commit_id
             )));
         }
-        Some(_) => {}
-        None => {
-            sqlx::query(
-                "INSERT INTO cached_commits (
-                    commit_id, scope, org_id, project_id, tree_id,
-                    parent_commit_id, version, created_at, payload_json
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            )
-            .bind(&payload.commit.commit_id)
-            .bind(payload.commit.scope.as_str())
-            .bind(&payload.commit.org_id)
-            .bind(&payload.commit.project_id)
-            .bind(&payload.commit.tree_id)
-            .bind(&payload.commit.parent_commit_id)
-            .bind(payload.commit.version)
-            .bind(&payload.commit.created_at)
-            .bind(commit_json)
-            .execute(&mut **tx)
-            .await?;
+        if existing.matches(&payload.commit) && existing.payload_json == commit_json {
+            return Ok(());
         }
     }
+    // Header JSON and scalar lookup columns form one cached object. Repair all
+    // columns together, including when only the scalar projection was damaged.
+    sqlx::query(
+        "INSERT INTO cached_commits (
+            commit_id, scope, org_id, project_id, tree_id,
+            parent_commit_id, version, created_at, payload_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT(commit_id) DO UPDATE SET
+            scope = excluded.scope, org_id = excluded.org_id,
+            project_id = excluded.project_id, tree_id = excluded.tree_id,
+            parent_commit_id = excluded.parent_commit_id, version = excluded.version,
+            created_at = excluded.created_at, payload_json = excluded.payload_json",
+    )
+    .bind(&payload.commit.commit_id)
+    .bind(payload.commit.scope.as_str())
+    .bind(&payload.commit.org_id)
+    .bind(&payload.commit.project_id)
+    .bind(&payload.commit.tree_id)
+    .bind(&payload.commit.parent_commit_id)
+    .bind(payload.commit.version)
+    .bind(&payload.commit.created_at)
+    .bind(commit_json)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -1477,6 +2091,21 @@ async fn upsert_ref(
             .fetch_optional(&mut **tx)
             .await?;
     let ref_changed = previous_commit_id.as_ref() != Some(&reference.commit_id);
+    if ref_changed
+        && reference.scope == ServerCommitScope::Project
+        && let Some(previous) = previous_commit_id.as_ref()
+    {
+        let project_id = reference
+            .project_id
+            .as_deref()
+            .expect("Project Ref ownership was validated");
+        upsert_meta_value(
+            tx,
+            &format!("previous_project_generation:{project_id}"),
+            Some(previous.as_deref().unwrap_or(EMPTY_GENERATION)),
+        )
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO cached_refs (
             ref_key, name, scope, org_id, project_id, commit_id, etag, server_updated_at
@@ -1512,7 +2141,11 @@ async fn upsert_ref(
                      freshness = CASE WHEN base_commit_id IS $2 THEN 'current' ELSE 'behind' END,
                      reconciliation = CASE WHEN current_commit_id IS $2 THEN reconciliation ELSE 'unknown' END,
                      reconciliation_candidate_id = CASE WHEN current_commit_id IS $2 THEN reconciliation_candidate_id ELSE NULL END
-                 WHERE project_id = $1 AND resource_scope = 'project'",
+                 WHERE project_id = $1 AND resource_scope = 'project'
+                   AND (status IN ('open', 'submitted') OR EXISTS (
+                       SELECT 1 FROM local_draft_operations o
+                       WHERE o.draft_id = local_drafts.draft_id AND o.sync_status <> 'synced'
+                   ))",
             )
             .bind(project_id)
             .bind(&reference.commit_id)
@@ -1528,6 +2161,10 @@ async fn upsert_ref(
                      reconciliation = CASE WHEN current_commit_id IS $2 THEN reconciliation ELSE 'unknown' END,
                      reconciliation_candidate_id = CASE WHEN current_commit_id IS $2 THEN reconciliation_candidate_id ELSE NULL END
                  WHERE resource_scope = 'org'
+                   AND (status IN ('open', 'submitted') OR EXISTS (
+                       SELECT 1 FROM local_draft_operations o
+                       WHERE o.draft_id = local_drafts.draft_id AND o.sync_status <> 'synced'
+                   ))
                    AND project_id IN (
                        SELECT project_id FROM cached_refs
                        WHERE scope = 'project' AND org_id = $1 AND project_id IS NOT NULL
@@ -1567,7 +2204,10 @@ async fn refresh_upstream_resource_changes(
                 "SELECT draft_id, base_commit_id, current_commit_id, target_id, resource_kind
                  FROM local_drafts
                  WHERE resource_scope = 'project' AND project_id = $1
-                   AND status IN ('open', 'submitted')",
+                   AND (status IN ('open', 'submitted') OR EXISTS (
+                       SELECT 1 FROM local_draft_operations o
+                       WHERE o.draft_id = local_drafts.draft_id AND o.sync_status <> 'synced'
+                   ))",
             )
             .bind(owner_id)
             .fetch_all(&mut **tx)
@@ -1579,7 +2219,10 @@ async fn refresh_upstream_resource_changes(
                         d.resource_kind
                  FROM local_drafts d
                  WHERE d.resource_scope = 'org'
-                   AND d.status IN ('open', 'submitted')
+                   AND (d.status IN ('open', 'submitted') OR EXISTS (
+                       SELECT 1 FROM local_draft_operations o
+                       WHERE o.draft_id = d.draft_id AND o.sync_status <> 'synced'
+                   ))
                    AND d.project_id IN (
                        SELECT project_id FROM cached_refs
                        WHERE scope = 'project' AND org_id = $1 AND project_id IS NOT NULL
@@ -1653,21 +2296,26 @@ async fn cached_resource_entry(
         ))
     })?;
     let tree: ServerTree = serde_json::from_str(&tree_json)?;
-    let expected_kind = match resource_kind {
-        "memory" => ServerTreeEntryKind::Memory,
-        "context" => ServerTreeEntryKind::Context,
-        "rule" => ServerTreeEntryKind::Rule,
-        "workflow" => ServerTreeEntryKind::Workflow,
-        _ => {
-            return Err(DaemonError::Server(format!(
-                "unknown Draft resource kind {resource_kind}"
-            )));
-        }
-    };
+    if !matches!(resource_kind, "memory" | "context" | "rule" | "workflow") {
+        return Err(DaemonError::Server(format!(
+            "unknown Draft resource kind {resource_kind}"
+        )));
+    }
+    // The mutable Draft type is canonical Memory. Immutable historical Trees
+    // keep their original Context/Rule/Workflow tags and retain the same target.
     Ok(tree
         .entries
         .into_iter()
-        .find(|entry| entry.id == target_id && entry.kind == expected_kind)
+        .find(|entry| {
+            entry.id == target_id
+                && matches!(
+                    entry.kind,
+                    ServerTreeEntryKind::Memory
+                        | ServerTreeEntryKind::Context
+                        | ServerTreeEntryKind::Rule
+                        | ServerTreeEntryKind::Workflow
+                )
+        })
         .map(|entry| (entry.path, entry.blob_id)))
 }
 
@@ -1681,18 +2329,158 @@ async fn load_ref_commit(pool: &SqlitePool, key: &str) -> Result<Option<String>,
     .flatten())
 }
 
-async fn cached_commit_exists(pool: &SqlitePool, commit_id: &str) -> Result<bool, DaemonError> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cached_commits WHERE commit_id = $1")
-        .bind(commit_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(count == 1)
+/// Load a complete cached snapshot and verify its objects away from the async worker.
+///
+/// Incomplete or corrupt derived content is a cache miss; database access failures
+/// are preserved. Callers exclude GC while consuming the returned Base.
+///
+/// # Errors
+/// Returns database or verification-task errors, rather than treating them as misses.
+async fn load_cached_commit_payload(
+    pool: &SqlitePool,
+    commit_id: &str,
+) -> Result<Option<ServerCommitPayload>, DaemonError> {
+    let record: Option<CachedCommitRecord> = sqlx::query_as(
+        "SELECT commit_id, scope, org_id, project_id, tree_id, parent_commit_id,
+                version, created_at, payload_json FROM cached_commits WHERE commit_id = $1",
+    )
+    .bind(commit_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(record) = record else {
+        return Ok(None);
+    };
+    let Ok(commit) = serde_json::from_str::<ServerCommit>(&record.payload_json) else {
+        return Ok(None);
+    };
+    if !record.matches(&commit) {
+        return Ok(None);
+    }
+    let tree_json: Option<String> =
+        sqlx::query_scalar("SELECT payload_json FROM cached_trees WHERE tree_id = $1")
+            .bind(&commit.tree_id)
+            .fetch_optional(pool)
+            .await?;
+    let Some(tree_json) = tree_json else {
+        return Ok(None);
+    };
+    cached_tree_payload(pool, commit, &tree_json).await
+}
+
+/// Assemble a Tree's exact Blob set and validate its complete immutable payload.
+///
+/// # Errors
+/// Returns database or verification-task errors. Invalid content yields a cache miss.
+async fn cached_tree_payload<'a>(
+    executor: impl sqlx::Executor<'a, Database = sqlx::Sqlite>,
+    commit: ServerCommit,
+    tree_json: &str,
+) -> Result<Option<ServerCommitPayload>, DaemonError> {
+    let Ok(tree) = serde_json::from_str::<ServerTree>(tree_json) else {
+        return Ok(None);
+    };
+    if tree.tree_id != commit.tree_id
+        || commit.version < 1
+        || commit.parent_commit_id.as_deref() == Some(commit.commit_id.as_str())
+    {
+        return Ok(None);
+    }
+    let rows = sqlx::query(
+        "SELECT DISTINCT b.blob_id, b.content
+         FROM cached_blobs b
+         JOIN json_each($1, '$.entries') e ON b.blob_id = json_extract(e.value, '$.blob_id')
+         ORDER BY b.blob_id",
+    )
+    .bind(tree_json)
+    .fetch_all(executor)
+    .await?;
+    let blobs = rows
+        .into_iter()
+        .map(|row| {
+            Ok(ServerBlob {
+                blob_id: row.try_get("blob_id")?,
+                content: row.try_get("content")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    let project_org_selection = tree
+        .entries
+        .iter()
+        .find(|entry| entry.kind == ServerTreeEntryKind::ProjectOrgSelection)
+        .and_then(|entry| blobs.iter().find(|blob| blob.blob_id == entry.blob_id))
+        .map(|blob| serde_json::from_str(&blob.content))
+        .transpose();
+    let Ok(project_org_selection) = project_org_selection else {
+        return Ok(None);
+    };
+    let payload = ServerCommitPayload {
+        commit,
+        tree,
+        blobs,
+        project_org_selection,
+    };
+    tokio::task::spawn_blocking(move || {
+        validate_commit_objects(&payload).ok()?;
+        Some(payload)
+    })
+    .await
+    .map_err(|error| {
+        DaemonError::Server(format!("Cached Commit verification task failed: {error}"))
+    })
+}
+
+/// Rebuild a missing generation offline from a complete central snapshot.
+///
+/// The caller holds the storage barrier. If central objects are unavailable, request
+/// synchronization and leave the generation missing; no replacement head is invented.
+///
+/// # Errors
+/// Returns identity, database, filesystem or verification errors without replacing a
+/// corrupt existing generation or deleting local Draft operations.
+async fn restore_missing_project_generation(
+    state: &DaemonState,
+    storage: &super::project_storage::ActiveProjectStorage,
+    commit_id: Option<&str>,
+) -> Result<(), DaemonError> {
+    let payload = match commit_id {
+        Some(commit_id) => {
+            let Some(payload) = load_cached_commit_payload(&state.inner.pool, commit_id).await?
+            else {
+                state.request_sync();
+                return Ok(());
+            };
+            if payload.commit.commit_id != commit_id
+                || payload.commit.scope != ServerCommitScope::Project
+                || payload.commit.project_id.as_deref() != Some(storage.project_id.as_str())
+                || payload.commit.tree_id != payload.tree.tree_id
+            {
+                return Err(DaemonError::Server(
+                    "Cached Commit identity does not match its Ref".to_owned(),
+                ));
+            }
+            Some(payload)
+        }
+        None => None,
+    };
+    let storage = storage.clone();
+    tokio::task::spawn_blocking(move || match payload {
+        Some(payload) => {
+            ensure_project_generation(&storage.managed_root, &storage.project_id, &payload, false)
+        }
+        None => ensure_empty_generation(&storage.managed_root, &storage.project_id, false),
+    })
+    .await
+    .map_err(|error| {
+        DaemonError::Server(format!("Commit cache recovery task failed: {error}"))
+    })??;
+    Ok(())
 }
 
 fn ensure_project_generation(
     managed_root: &Path,
     project_id: &str,
     payload: &ServerCommitPayload,
+    repair_corrupt: bool,
 ) -> Result<PathBuf, DaemonError> {
     let marker = serde_json::to_vec(payload)?;
     ensure_generation(
@@ -1700,11 +2488,21 @@ fn ensure_project_generation(
         project_id,
         &payload.commit.commit_id,
         &marker,
+        repair_corrupt,
         |root| materialize_payload(root, project_id, payload),
     )
 }
 
-fn ensure_empty_generation(managed_root: &Path, project_id: &str) -> Result<PathBuf, DaemonError> {
+/// Materialize a verified empty Ref through the same guarded publication path as a Commit.
+///
+/// # Errors
+/// Returns path, file or verification errors; corrupt existing directories are replaced
+/// only when the caller explicitly permits repair and a complete candidate is ready.
+fn ensure_empty_generation(
+    managed_root: &Path,
+    project_id: &str,
+    repair_corrupt: bool,
+) -> Result<PathBuf, DaemonError> {
     let marker = serde_json::to_vec(&json!({
         "project_id": project_id,
         "commit_id": null
@@ -1714,6 +2512,7 @@ fn ensure_empty_generation(managed_root: &Path, project_id: &str) -> Result<Path
         project_id,
         EMPTY_GENERATION,
         &marker,
+        repair_corrupt,
         |root| {
             std::fs::create_dir_all(root.join("cache/memory"))?;
             let manifest = MaterializedManifest {
@@ -1737,6 +2536,7 @@ fn ensure_generation(
     project_id: &str,
     generation: &str,
     marker: &[u8],
+    repair_corrupt: bool,
     materialize: impl FnOnce(&Path) -> Result<(), DaemonError>,
 ) -> Result<PathBuf, DaemonError> {
     validate_cache_component("project_id", project_id)?;
@@ -1744,13 +2544,33 @@ fn ensure_generation(
     let generations = managed_root.join("generations");
     super::project_storage::ensure_private_directory(&generations)?;
     let final_root = generations.join(generation);
-    if final_root.exists() {
-        verify_generation_marker(&final_root, marker)?;
-        return Ok(final_root);
+    match std::fs::symlink_metadata(&final_root) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(DaemonError::Server(format!(
+                    "Materialized generation {} is not a safe directory",
+                    final_root.display()
+                )));
+            }
+            let verified = verify_generation_marker(&final_root, marker).and_then(|()| {
+                verify_generation_ref(
+                    &final_root,
+                    project_id,
+                    (generation != EMPTY_GENERATION).then_some(generation),
+                )
+            });
+            match verified {
+                Ok(_) => return Ok(final_root),
+                Err(error) if !repair_corrupt => return Err(error),
+                Err(_) => {}
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
 
     let temporary_root = generations.join(format!(".tmp-{}", Uuid::new_v4().simple()));
-    std::fs::create_dir(&temporary_root)?;
+    super::project_storage::ensure_private_directory(&temporary_root)?;
     let build_result = (|| {
         materialize(&temporary_root)?;
         super::project_storage::write_private_file(
@@ -1758,6 +2578,11 @@ fn ensure_generation(
             marker,
         )?;
         super::project_storage::secure_managed_tree(&temporary_root)?;
+        verify_generation_ref(
+            &temporary_root,
+            project_id,
+            (generation != EMPTY_GENERATION).then_some(generation),
+        )?;
         Ok::<(), DaemonError>(())
     })();
     if let Err(error) = build_result {
@@ -1765,18 +2590,36 @@ fn ensure_generation(
         return Err(error);
     }
 
-    match std::fs::rename(&temporary_root, &final_root) {
-        Ok(()) => Ok(final_root),
+    let displaced = generations.join(format!(".corrupt-{}", Uuid::new_v4().simple()));
+    if repair_corrupt
+        && final_root.exists()
+        && let Err(error) = std::fs::rename(&final_root, &displaced)
+    {
+        let _ = std::fs::remove_dir_all(&temporary_root);
+        return Err(error.into());
+    }
+    let result = match std::fs::rename(&temporary_root, &final_root) {
+        Ok(()) => Ok(final_root.clone()),
         Err(_error) if final_root.exists() => {
             let _ = std::fs::remove_dir_all(&temporary_root);
-            verify_generation_marker(&final_root, marker)?;
-            Ok(final_root)
+            verify_generation_marker(&final_root, marker).map(|()| final_root.clone())
         }
         Err(error) => {
             let _ = std::fs::remove_dir_all(&temporary_root);
             Err(error.into())
         }
+    };
+    if result.is_err() && displaced.exists() && !final_root.exists() {
+        std::fs::rename(&displaced, &final_root)?;
     }
+    if result.is_ok() && displaced.exists() {
+        std::fs::remove_dir_all(&displaced)?;
+    }
+    #[cfg(unix)]
+    if result.is_ok() {
+        std::fs::File::open(&generations)?.sync_all()?;
+    }
+    result
 }
 
 fn verify_generation_marker(root: &Path, expected: &[u8]) -> Result<(), DaemonError> {
@@ -1794,12 +2637,23 @@ fn verify_generation_ref(
     root: &Path,
     project_id: &str,
     commit_id: Option<&str>,
-) -> Result<(), DaemonError> {
-    if !root.is_dir() {
+) -> Result<Option<ServerCommitPayload>, DaemonError> {
+    let metadata = std::fs::symlink_metadata(root)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(DaemonError::Server(format!(
             "Materialized generation {} is missing",
             root.display()
         )));
+    }
+    for name in ["manifest.json", "commit-payload.json"] {
+        let path = root.join(name);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(DaemonError::Server(format!(
+                "Materialized generation file {} is not safe",
+                path.display()
+            )));
+        }
     }
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
@@ -1829,12 +2683,16 @@ fn verify_generation_ref(
                 || payload.commit.scope != ServerCommitScope::Project
                 || payload.commit.project_id.as_deref() != Some(project_id)
                 || payload.commit.tree_id != payload.tree.tree_id
+                || manifest.get("tree_id").and_then(|value| value.as_str())
+                    != Some(payload.tree.tree_id.as_str())
             {
                 return Err(DaemonError::Server(format!(
                     "Materialized generation {} has an invalid Commit marker",
                     root.display()
                 )));
             }
+            validate_commit_objects(&payload)?;
+            Ok(Some(payload))
         }
         None => {
             let marker: serde_json::Value = serde_json::from_slice(&marker)?;
@@ -1848,19 +2706,22 @@ fn verify_generation_ref(
                     root.display()
                 )));
             }
+            Ok(None)
         }
     }
-    Ok(())
 }
 
 fn load_project_checkout(
     root: &Path,
     project_id: &str,
     commit_id: Option<&str>,
-) -> Result<DaemonProjectCheckout, DaemonError> {
-    verify_generation_ref(root, project_id, commit_id)?;
+) -> Result<Option<DaemonProjectCheckout>, DaemonError> {
+    let payload = match verify_generation_ref(root, project_id, commit_id) {
+        Ok(payload) => payload,
+        Err(_) => return Ok(None),
+    };
     let Some(commit_id) = commit_id else {
-        return Ok(DaemonProjectCheckout {
+        return Ok(Some(DaemonProjectCheckout {
             project_id: project_id.to_owned(),
             commit_id: None,
             ref_etag: None,
@@ -1869,11 +2730,10 @@ fn load_project_checkout(
             selected_org_resource_ids: Vec::new(),
             resources: Vec::new(),
             ready: true,
-        });
+        }));
     };
 
-    let payload: ServerCommitPayload =
-        serde_json::from_slice(&std::fs::read(root.join("commit-payload.json"))?)?;
+    let payload = payload.expect("verified non-empty Project Commit has a payload");
     let blobs = payload
         .blobs
         .iter()
@@ -1952,7 +2812,7 @@ fn load_project_checkout(
         });
     }
 
-    Ok(DaemonProjectCheckout {
+    Ok(Some(DaemonProjectCheckout {
         project_id: project_id.to_owned(),
         commit_id: Some(commit_id.to_owned()),
         ref_etag: None,
@@ -1961,7 +2821,7 @@ fn load_project_checkout(
         selected_org_resource_ids: selected_org_resource_ids.into_iter().collect(),
         resources,
         ready: true,
-    })
+    }))
 }
 
 fn project_checkout_content(
@@ -2116,6 +2976,34 @@ struct ServerRef {
     project_id: Option<String>,
     commit_id: Option<String>,
     updated_at: String,
+}
+
+#[derive(sqlx::FromRow)]
+/// Scalar lookup columns and header JSON that must describe the same cached Commit.
+struct CachedCommitRecord {
+    commit_id: String,
+    scope: String,
+    org_id: String,
+    project_id: Option<String>,
+    tree_id: String,
+    parent_commit_id: Option<String>,
+    version: i64,
+    created_at: String,
+    payload_json: String,
+}
+
+impl CachedCommitRecord {
+    /// Reject scalar lookup projections that disagree with their immutable header JSON.
+    fn matches(&self, header: &ServerCommit) -> bool {
+        self.commit_id == header.commit_id
+            && self.scope == header.scope.as_str()
+            && self.org_id == header.org_id
+            && self.project_id == header.project_id
+            && self.tree_id == header.tree_id
+            && self.parent_commit_id == header.parent_commit_id
+            && self.version == header.version
+            && self.created_at == header.created_at
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -2312,6 +3200,1006 @@ mod tests {
                 matches!(status.as_str(), "open" | "submitted")
             );
         }
+    }
+
+    fn test_project_payload(version: i64, source: Option<i64>) -> ServerCommitPayload {
+        let selection = json!({"project_id": "prj_test", "memories": [], "revision": 0});
+        let content = format!("Memory version {version}");
+        let selection_content = serde_json::to_string(&selection).unwrap();
+        let blob = ServerBlob {
+            blob_id: blob_object_id(&content),
+            content,
+        };
+        let selection_blob = ServerBlob {
+            blob_id: blob_object_id(&selection_content),
+            content: selection_content,
+        };
+        ServerCommitPayload {
+            commit: ServerCommit {
+                commit_id: format!("commit_{version}"),
+                scope: ServerCommitScope::Project,
+                org_id: "org_test".to_owned(),
+                project_id: Some("prj_test".to_owned()),
+                tree_id: format!("tree_{version}"),
+                parent_commit_id: (version > 1).then(|| format!("commit_{}", version - 1)),
+                version,
+                created_at: "2026-10-12T00:00:00Z".to_owned(),
+            },
+            tree: ServerTree {
+                tree_id: format!("tree_{version}"),
+                entries: vec![
+                    ServerTreeEntry {
+                        id: "memory_test".to_owned(),
+                        kind: ServerTreeEntryKind::Memory,
+                        scope: ServerTreeEntryScope::Project,
+                        project_id: Some("prj_test".to_owned()),
+                        path: Some("memory.md".to_owned()),
+                        blob_id: blob.blob_id.clone(),
+                        source: ServerTreeEntrySource::Project,
+                        org_source: source.map(|source| crate::types::OrgMemorySource {
+                            resource_id: "memory_org".to_owned(),
+                            commit_id: format!("commit_{source}"),
+                        }),
+                        is_directory: false,
+                        description: String::new(),
+                    },
+                    ServerTreeEntry {
+                        id: "selection".to_owned(),
+                        kind: ServerTreeEntryKind::ProjectOrgSelection,
+                        scope: ServerTreeEntryScope::Daemon,
+                        project_id: Some("prj_test".to_owned()),
+                        path: None,
+                        blob_id: selection_blob.blob_id.clone(),
+                        source: ServerTreeEntrySource::Config,
+                        org_source: None,
+                        is_directory: false,
+                        description: String::new(),
+                    },
+                ],
+            },
+            blobs: vec![blob, selection_blob],
+            project_org_selection: Some(selection),
+        }
+    }
+
+    struct NoCredentials;
+
+    impl crate::CredentialStore for NoCredentials {
+        fn load(&self) -> Result<Option<ServerCredentials>, crate::CredentialStoreError> {
+            Ok(None)
+        }
+        fn replace(&self, _: &ServerCredentials) -> Result<(), crate::CredentialStoreError> {
+            Ok(())
+        }
+        fn clear(&self) -> Result<(), crate::CredentialStoreError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn daemon_restart_waits_for_inflight_writer_and_recovers_unsynced_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let config = crate::DaemonConfig::for_root(root.path());
+        let state = DaemonState::initialize_with_credential_store(
+            config.clone(),
+            std::sync::Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        let stored = state.store_draft_operation(serde_json::from_value(json!({
+            "project_id": "prj_restart", "scope": "org", "resource": "memory", "source": "mcp_store",
+            "op": {"create": {"path": "context/restart.md", "content": {"content": "unsynced body preserved"}}}
+        })).unwrap()).await.unwrap();
+        let mut writer = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE local_draft_operations SET sync_status = 'syncing' WHERE local_operation_id = $1")
+            .bind(&stored.local_operation_id).execute(&mut *writer).await.unwrap();
+        drop(state);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let mut restart = tokio::spawn(async move {
+            started_tx.send(()).unwrap();
+            DaemonState::initialize_with_credential_store(
+                config,
+                std::sync::Arc::new(NoCredentials),
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut restart)
+                .await
+                .is_err(),
+            "restart must wait for the writer before reading the existing schema"
+        );
+        writer.commit().await.unwrap();
+        let restarted = restart.await.unwrap().unwrap();
+        let detail = restarted.get_draft(&stored.draft_id).await.unwrap();
+        assert_eq!(
+            detail.operations[0].sync_status,
+            crate::types::DraftOperationSyncStatus::Queued
+        );
+        assert_eq!(detail.draft.pending_operation_count, 1);
+        assert_eq!(
+            detail.operations[0]
+                .operation
+                .create
+                .as_ref()
+                .unwrap()
+                .content
+                .content,
+            "unsynced body preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_document_base_pin_survives_age_and_daemon_restart_then_releases() {
+        let root = tempfile::tempdir().unwrap();
+        let config = crate::DaemonConfig::for_root(root.path());
+        let state = DaemonState::initialize_with_credential_store(
+            config.clone(),
+            std::sync::Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        let payload = test_project_payload(1, None);
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        cache_commit_payload(&mut tx, &payload).await.unwrap();
+        tx.commit().await.unwrap();
+        let pin = state
+            .retain_commit_base(DaemonCommitBasePinRequest {
+                commit_id: "commit_1".to_owned(),
+                pin_id: None,
+            })
+            .await
+            .unwrap();
+        let acknowledgement = DaemonCommitBasePinRequest {
+            commit_id: "commit_1".to_owned(),
+            pin_id: Some(pin.pin_id.clone()),
+        };
+        assert!(
+            state
+                .retain_commit_base(acknowledgement.clone())
+                .await
+                .is_err()
+        );
+        let reader = std::fs::File::open(&pin.lock_path).unwrap();
+        reader.try_lock_shared().unwrap();
+        state
+            .retain_commit_base(acknowledgement.clone())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE commit_base_pins SET issued_at = 0")
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        state.inner.pool.close().await;
+        drop(state);
+        let state = DaemonState::initialize_with_credential_store(
+            config,
+            std::sync::Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        state.retain_commit_base(acknowledgement).await.unwrap();
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        assert_eq!(
+            live_commit_base_pins(&state, &mut tx).await.unwrap(),
+            ["commit_1"]
+        );
+        tx.commit().await.unwrap();
+        drop(reader);
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        assert!(
+            live_commit_base_pins(&state, &mut tx)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        tx.commit().await.unwrap();
+        cleanup_commit_base_pin_files(&state).await.unwrap();
+        assert!(!Path::new(&pin.lock_path).exists());
+    }
+
+    #[tokio::test]
+    async fn unclaimed_base_pin_expires_and_cannot_be_acknowledged_after_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let state = DaemonState::initialize_with_credential_store(
+            crate::DaemonConfig::for_root(root.path()),
+            std::sync::Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        cache_commit_payload(&mut tx, &test_project_payload(1, None))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let pin = state
+            .retain_commit_base(DaemonCommitBasePinRequest {
+                commit_id: "commit_1".to_owned(),
+                pin_id: None,
+            })
+            .await
+            .unwrap();
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        assert_eq!(
+            live_commit_base_pins(&state, &mut tx).await.unwrap(),
+            ["commit_1"]
+        );
+        tx.commit().await.unwrap();
+        sqlx::query("UPDATE commit_base_pins SET issued_at = 0")
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        assert!(
+            live_commit_base_pins(&state, &mut tx)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        tx.commit().await.unwrap();
+        let reader = std::fs::File::open(&pin.lock_path).unwrap();
+        reader.try_lock_shared().unwrap();
+        let error = state
+            .retain_commit_base(DaemonCommitBasePinRequest {
+                commit_id: "commit_1".to_owned(),
+                pin_id: Some(pin.pin_id),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DaemonError::State {
+                code: "commit_base_pin_expired",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn desktop_captured_base_preserves_old_and_empty_snapshots_after_head_advances() {
+        let root = tempfile::tempdir().unwrap();
+        let state = DaemonState::initialize_with_credential_store(
+            crate::DaemonConfig::for_root(root.path()),
+            std::sync::Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        for version in [1, 2] {
+            cache_commit_payload(&mut tx, &test_project_payload(version, None))
+                .await
+                .unwrap();
+        }
+        upsert_ref(
+            &mut tx,
+            &ServerRef {
+                name: MAIN_REF.to_owned(),
+                scope: ServerCommitScope::Project,
+                org_id: "org_test".to_owned(),
+                project_id: Some("prj_test".to_owned()),
+                commit_id: Some("commit_2".to_owned()),
+                updated_at: "now".to_owned(),
+            },
+            "head_2",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let service = DaemonIpcService::new(state.clone());
+        let empty: DaemonDraftOperationResponse = service.dispatch(DaemonIpcRequest::new(
+            "desktop_store_draft_operation", json!({
+                "draft_id": null, "base_commit_id": null, "base_commit_captured": true,
+                "project_id": "prj_test", "scope": "project", "resource": "memory", "source": "desktop",
+                "op": {"create": {"path": "from-empty.md", "content": {"content": "An edit from the empty snapshot"}}}
+            }),
+        )).await.into_payload().unwrap();
+        assert_eq!(
+            service
+                .get_draft(&empty.draft_id)
+                .await
+                .unwrap()
+                .draft
+                .base_commit_id,
+            None
+        );
+        let old: DaemonDraftOperationResponse = service.dispatch(DaemonIpcRequest::new(
+            "desktop_store_draft_operation", json!({
+                "draft_id": null, "base_commit_id": "commit_1", "base_commit_captured": true,
+                "project_id": "prj_test", "scope": "project", "resource": "memory", "source": "desktop",
+                "op": {"update": {"id": "memory_test", "content": {"content": "Edit kept against the original Base"}}}
+            }),
+        )).await.into_payload().unwrap();
+        assert_eq!(
+            service
+                .get_draft(&old.draft_id)
+                .await
+                .unwrap()
+                .draft
+                .base_commit_id
+                .as_deref(),
+            Some("commit_1")
+        );
+        let invalid = service.dispatch(DaemonIpcRequest::new(
+            "desktop_store_draft_operation", json!({
+                "draft_id": old.draft_id, "base_commit_id": null, "base_commit_captured": true,
+                "project_id": "prj_test", "scope": "project", "resource": "memory", "source": "desktop",
+                "op": {"update": {"id": "memory_test", "content": {"content": "Must not overwrite the existing Draft"}}}
+            }),
+        )).await.into_payload::<DaemonDraftOperationResponse>();
+        assert!(invalid.is_err());
+        assert_eq!(
+            service
+                .get_draft(&old.draft_id)
+                .await
+                .unwrap()
+                .operations
+                .len(),
+            1
+        );
+        let batch: Vec<DaemonDraftOperationResponse> = service.dispatch(DaemonIpcRequest::new(
+            "desktop_create_memory_drafts", json!({
+                "project_id": "prj_test", "base_commit_id": null,
+                "operations": [{"create": {"path": "empty-batch.md", "content": {"content": "Empty Base batch"}}}]
+            }),
+        )).await.into_payload().unwrap();
+        assert_eq!(
+            service
+                .get_draft(&batch[0].draft_id)
+                .await
+                .unwrap()
+                .draft
+                .base_commit_id,
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn base_pin_parent_symlink_cannot_release_a_live_document_or_delete_external_files() {
+        let root = tempfile::tempdir().unwrap();
+        let state = DaemonState::initialize_with_credential_store(
+            crate::DaemonConfig::for_root(root.path()),
+            std::sync::Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        cache_commit_payload(&mut tx, &test_project_payload(1, None))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let pin = state
+            .retain_commit_base(DaemonCommitBasePinRequest {
+                commit_id: "commit_1".to_owned(),
+                pin_id: None,
+            })
+            .await
+            .unwrap();
+        let reader = std::fs::File::open(&pin.lock_path).unwrap();
+        reader.try_lock_shared().unwrap();
+        state
+            .retain_commit_base(DaemonCommitBasePinRequest {
+                commit_id: "commit_1".to_owned(),
+                pin_id: Some(pin.pin_id.clone()),
+            })
+            .await
+            .unwrap();
+        let directory = Path::new(&pin.lock_path).parent().unwrap();
+        let old = directory.with_file_name("old-pins");
+        std::fs::rename(directory, &old).unwrap();
+        let outside = root.path().join("outside-pins");
+        std::fs::create_dir(&outside).unwrap();
+        let external_file = outside.join(format!("{}.lock", Uuid::new_v4()));
+        std::fs::write(&external_file, b"do not delete").unwrap();
+        std::os::unix::fs::symlink(&outside, directory).unwrap();
+        let mut tx = state
+            .inner
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap();
+        assert!(live_commit_base_pins(&state, &mut tx).await.is_err());
+        tx.rollback().await.unwrap();
+        assert!(cleanup_commit_base_pin_files(&state).await.is_err());
+        assert_eq!(std::fs::read(external_file).unwrap(), b"do not delete");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM commit_base_pins")
+                .fetch_one(&state.inner.pool)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_publications_prune_history_without_invalidating_active_readers_or_drafts() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = crate::DaemonConfig::for_root(root.path());
+        config.project.server_url = "https://clumsies.test".to_owned();
+        config.project.project_id = Some("prj_test".to_owned());
+        let state = DaemonState::initialize_with_credential_store(
+            config,
+            std::sync::Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        let mut pinned_reader = None;
+        for version in 1..=4 {
+            let payload = test_project_payload(version, None);
+            let mut tx = state
+                .inner
+                .pool
+                .begin_with("BEGIN IMMEDIATE")
+                .await
+                .unwrap();
+            cache_commit_payload(&mut tx, &payload).await.unwrap();
+            tx.commit().await.unwrap();
+            if version < 4 {
+                let _sync = state.inner.sync_lock.lock().await;
+                let reference = ServerRef {
+                    name: MAIN_REF.to_owned(),
+                    scope: ServerCommitScope::Project,
+                    org_id: "org_test".to_owned(),
+                    project_id: Some("prj_test".to_owned()),
+                    commit_id: Some(payload.commit.commit_id.clone()),
+                    updated_at: payload.commit.created_at.clone(),
+                };
+                let commit_state = ServerCommitState {
+                    update_available: true,
+                    reference,
+                    latest: Some(payload.commit),
+                    download_url: None,
+                    incremental_supported: false,
+                };
+                install_ref(
+                    &state,
+                    &commit_state,
+                    &format!("commit_{version}"),
+                    Some("prj_test"),
+                )
+                .await
+                .unwrap();
+                if version == 1 {
+                    sqlx::query("INSERT INTO local_drafts (draft_id, project_id, base_commit_id, current_commit_id, resource_scope, resource_kind, path, status) VALUES ('draft_test', 'prj_test', 'commit_1', 'commit_1', 'project', 'memory', 'proposal.md', 'open')")
+                        .execute(&state.inner.pool).await.unwrap();
+                }
+            }
+            if version == 2 {
+                let pin = state
+                    .retain_commit_base(DaemonCommitBasePinRequest {
+                        commit_id: "commit_2".to_owned(),
+                        pin_id: None,
+                    })
+                    .await
+                    .unwrap();
+                let reader = std::fs::File::open(&pin.lock_path).unwrap();
+                reader.try_lock_shared().unwrap();
+                state
+                    .retain_commit_base(DaemonCommitBasePinRequest {
+                        commit_id: "commit_2".to_owned(),
+                        pin_id: Some(pin.pin_id),
+                    })
+                    .await
+                    .unwrap();
+                pinned_reader = Some(reader);
+            }
+        }
+        let storage = super::super::project_storage::resolve_active(&state, "prj_test")
+            .await
+            .unwrap();
+        let reader = state.inner.storage_access.read().await;
+        let worker_state = state.clone();
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let worker_started = started.clone();
+        let mut worker = tokio::spawn(async move {
+            let _sync = worker_state.inner.sync_lock.lock().await;
+            let payload = test_project_payload(4, None);
+            let reference = ServerRef {
+                name: MAIN_REF.to_owned(),
+                scope: ServerCommitScope::Project,
+                org_id: "org_test".to_owned(),
+                project_id: Some("prj_test".to_owned()),
+                commit_id: Some(payload.commit.commit_id.clone()),
+                updated_at: payload.commit.created_at.clone(),
+            };
+            let commit_state = ServerCommitState {
+                update_available: true,
+                reference,
+                latest: Some(payload.commit),
+                download_url: None,
+                incremental_supported: false,
+            };
+            worker_started.notify_one();
+            install_ref(&worker_state, &commit_state, "commit_4", Some("prj_test"))
+                .await
+                .unwrap();
+            install_ref(&worker_state, &commit_state, "commit_4", Some("prj_test"))
+                .await
+                .unwrap();
+        });
+        started.notified().await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), &mut worker)
+                .await
+                .is_err()
+        );
+        assert!(storage.generation_path("commit_2").exists());
+        verify_generation_ref(
+            &storage.generation_path("commit_3"),
+            "prj_test",
+            Some("commit_3"),
+        )
+        .unwrap();
+        drop(reader);
+        tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(storage.generation_path("commit_2").exists());
+        verify_generation_ref(
+            &storage.generation_path("commit_2"),
+            "prj_test",
+            Some("commit_2"),
+        )
+        .unwrap();
+        for version in [1, 3, 4] {
+            assert!(
+                storage
+                    .generation_path(&format!("commit_{version}"))
+                    .exists()
+            );
+        }
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT commit_id FROM cached_commits ORDER BY commit_id")
+                .fetch_all(&state.inner.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining,
+            vec!["commit_1", "commit_2", "commit_3", "commit_4"]
+        );
+        // The editor can retain a delivered Base without creating a Draft
+        // until its first save, after several newer snapshots are installed.
+        let saved = state
+            .store_draft_operation(DaemonDraftOperationRequest {
+                draft_id: None,
+                base_commit_id: Some("commit_2".to_owned()),
+                project_id: "prj_test".to_owned(),
+                scope: DaemonDraftScope::Project,
+                resource: DaemonDraftResourceKind::Memory,
+                op: DaemonDraftOperation {
+                    create: None,
+                    update: Some(DaemonUpdateDraftOperation::Content(
+                        DaemonContentDraftUpdate {
+                            id: "memory_test".to_owned(),
+                            content: DaemonDraftContent {
+                                org_source: None,
+                                is_directory: false,
+                                description: None,
+                                content: "First edit from an older open document".to_owned(),
+                            },
+                            description: None,
+                        },
+                    )),
+                    rename: None,
+                    delete: None,
+                    discard: None,
+                },
+                source: Some(DaemonDraftOperationSource::Desktop),
+            })
+            .await
+            .unwrap();
+        assert!(saved.queued);
+        let effective = crate::search::load_effective_memory(&state, "prj_test")
+            .await
+            .unwrap();
+        let edited = effective
+            .resources
+            .iter()
+            .find(|resource| resource.resource_id == "memory_test")
+            .unwrap();
+        assert_eq!(edited.content, "First edit from an older open document");
+        assert_eq!(edited.draft_id.as_deref(), Some(saved.draft_id.as_str()));
+
+        drop(pinned_reader);
+        let _sync = state.inner.sync_lock.lock().await;
+        let _storage = state.inner.storage_access.write().await;
+        sqlx::query("UPDATE local_drafts SET status = 'merged' WHERE draft_id = $1")
+            .bind(&saved.draft_id)
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        prune_project_generations(&state, "prj_test", Some("commit_4"), Some("commit_3")).await;
+        assert!(
+            storage.generation_path("commit_2").exists(),
+            "a terminal Draft with an unsynchronized operation must still retain its Base"
+        );
+        sqlx::query("UPDATE local_draft_operations SET sync_status = 'synced' WHERE draft_id = $1")
+            .bind(&saved.draft_id)
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        prune_project_generations(&state, "prj_test", Some("commit_4"), Some("commit_3")).await;
+        assert!(
+            !storage.generation_path("commit_2").exists(),
+            "released readers and fully synchronized terminal Drafts do not retain old generations"
+        );
+    }
+
+    #[test]
+    fn generations_retain_current_previous_and_draft_base_but_not_abandoned_work() {
+        let root = tempfile::tempdir().unwrap();
+        for version in 1..=4 {
+            ensure_project_generation(
+                root.path(),
+                "prj_test",
+                &test_project_payload(version, None),
+                false,
+            )
+            .unwrap();
+        }
+        let generations = root.path().join("generations");
+        let unknown = generations.join("user-data");
+        std::fs::create_dir(&unknown).unwrap();
+        std::fs::write(unknown.join("keep"), b"untouched").unwrap();
+        let abandoned = generations.join(format!(".tmp-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir(&abandoned).unwrap();
+        prune_generation_directories(
+            root.path(),
+            "prj_test",
+            &BTreeSet::from([
+                "commit_1".to_owned(),
+                "commit_3".to_owned(),
+                "commit_4".to_owned(),
+            ]),
+        )
+        .unwrap();
+        assert!(!generations.join("commit_2").exists());
+        assert!(!abandoned.exists());
+        for version in [1, 3, 4] {
+            verify_generation_ref(
+                &generations.join(format!("commit_{version}")),
+                "prj_test",
+                Some(&format!("commit_{version}")),
+            )
+            .unwrap();
+        }
+        assert_eq!(std::fs::read(unknown.join("keep")).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn corrupt_generation_is_only_replaced_after_a_valid_candidate_is_ready() {
+        let root = tempfile::tempdir().unwrap();
+        let generation = ensure_empty_generation(root.path(), "prj_test", false).unwrap();
+        std::fs::write(generation.join("manifest.json"), b"corrupt").unwrap();
+        let marker =
+            serde_json::to_vec(&json!({"project_id": "prj_test", "commit_id": null})).unwrap();
+        assert!(
+            ensure_generation(
+                root.path(),
+                "prj_test",
+                EMPTY_GENERATION,
+                &marker,
+                true,
+                |_| { Err(DaemonError::Server("materialization failed".to_owned())) }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read(generation.join("manifest.json")).unwrap(),
+            b"corrupt"
+        );
+        assert!(ensure_empty_generation(root.path(), "prj_test", false).is_err());
+        ensure_empty_generation(root.path(), "prj_test", true).unwrap();
+        verify_generation_ref(&generation, "prj_test", None).unwrap();
+        assert_eq!(
+            std::fs::read_dir(root.path().join("generations"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_commit_repairs_scalar_projection_without_overwriting_valid_history() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate(&pool).await.unwrap();
+        let original = test_project_payload(1, None);
+        let mut tx = pool.begin().await.unwrap();
+        cache_commit_payload(&mut tx, &original).await.unwrap();
+        tx.commit().await.unwrap();
+        for corrupt_json in [false, true] {
+            sqlx::query(
+                "UPDATE cached_commits SET scope = 'org', org_id = 'wrong-org',
+                project_id = NULL, tree_id = 'wrong-tree', parent_commit_id = 'wrong-parent',
+                version = 99, created_at = 'wrong-time' WHERE commit_id = 'commit_1'",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            if corrupt_json {
+                sqlx::query(
+                    "UPDATE cached_commits SET payload_json = '{}' WHERE commit_id = 'commit_1'",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+            assert!(
+                load_cached_commit_payload(&pool, "commit_1")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let mut tx = pool.begin().await.unwrap();
+            cache_commit_payload(&mut tx, &original).await.unwrap();
+            tx.commit().await.unwrap();
+            let record: CachedCommitRecord =
+                sqlx::query_as("SELECT * FROM cached_commits WHERE commit_id = 'commit_1'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert!(record.matches(&original.commit));
+            let restored = load_cached_commit_payload(&pool, "commit_1")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(restored.commit, original.commit);
+            assert_eq!(restored.tree, original.tree);
+            let mut tx = pool.begin().await.unwrap();
+            assert!(
+                cached_resource_entry(&mut tx, Some("commit_1"), "memory_test", "memory")
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            tx.rollback().await.unwrap();
+        }
+        let mut changed = original.clone();
+        changed.commit.created_at = "different-valid-time".to_owned();
+        let mut tx = pool.begin().await.unwrap();
+        let error = cache_commit_payload(&mut tx, &changed).await.unwrap_err();
+        assert!(error.to_string().contains("violates immutability"));
+        tx.rollback().await.unwrap();
+        assert_eq!(
+            load_cached_commit_payload(&pool, "commit_1")
+                .await
+                .unwrap()
+                .unwrap()
+                .commit,
+            original.commit
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_memory_draft_reads_legacy_immutable_tree_kind() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate(&pool).await.unwrap();
+        for kind in [
+            ServerTreeEntryKind::Context,
+            ServerTreeEntryKind::Rule,
+            ServerTreeEntryKind::Workflow,
+        ] {
+            let mut payload = test_project_payload(1, None);
+            payload.tree.entries[0].kind = kind;
+            sqlx::query("DELETE FROM cached_commits")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM cached_trees")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            cache_commit_payload(&mut tx, &payload).await.unwrap();
+            let entry = cached_resource_entry(&mut tx, Some("commit_1"), "memory_test", "memory")
+                .await
+                .unwrap();
+            assert_eq!(
+                entry,
+                Some((
+                    Some("memory.md".into()),
+                    payload.tree.entries[0].blob_id.clone()
+                ))
+            );
+            tx.commit().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn valid_cached_tree_still_rejects_an_immutable_collision() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate(&pool).await.unwrap();
+        let mut original = test_project_payload(1, None);
+        let mut tx = pool.begin().await.unwrap();
+        cache_commit_payload(&mut tx, &original).await.unwrap();
+        tx.commit().await.unwrap();
+        let mut changed = original.clone();
+        changed.tree.entries[0].path = Some("different.md".to_owned());
+        validate_commit_objects(&changed).unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let error = cache_commit_payload(&mut tx, &changed).await.unwrap_err();
+        assert!(error.to_string().contains("violates immutability"));
+        tx.rollback().await.unwrap();
+        let mut cached = load_cached_commit_payload(&pool, "commit_1")
+            .await
+            .unwrap()
+            .unwrap();
+        original.blobs.sort_by(|a, b| a.blob_id.cmp(&b.blob_id));
+        cached.blobs.sort_by(|a, b| a.blob_id.cmp(&b.blob_id));
+        assert_eq!(cached, original);
+    }
+
+    #[tokio::test]
+    async fn cached_tree_collisions_preserve_prior_ownership_even_without_valid_blob_bytes() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate(&pool).await.unwrap();
+        let original = test_project_payload(1, None);
+        let expected_tree = serde_json::to_string(&original.tree).unwrap();
+        let mut other_project = test_project_payload(2, None);
+        other_project.commit.project_id = Some("prj_other".to_owned());
+        other_project.commit.tree_id = original.tree.tree_id.clone();
+        other_project.tree.tree_id = original.tree.tree_id.clone();
+        for entry in &mut other_project.tree.entries {
+            entry.project_id = Some("prj_other".to_owned());
+        }
+        let selection = other_project.project_org_selection.as_mut().unwrap();
+        selection["project_id"] = json!("prj_other");
+        let selection_content = serde_json::to_string(selection).unwrap();
+        other_project.blobs[1] = ServerBlob {
+            blob_id: blob_object_id(&selection_content),
+            content: selection_content,
+        };
+        other_project.tree.entries[1].blob_id = other_project.blobs[1].blob_id.clone();
+        let mut organization = test_project_payload(2, None);
+        organization.commit.scope = ServerCommitScope::Org;
+        organization.commit.project_id = None;
+        organization.commit.tree_id = original.tree.tree_id.clone();
+        organization.tree.tree_id = original.tree.tree_id.clone();
+        organization.tree.entries.truncate(1);
+        organization.tree.entries[0].scope = ServerTreeEntryScope::Org;
+        organization.tree.entries[0].source = ServerTreeEntrySource::Org;
+        organization.tree.entries[0].project_id = None;
+        organization.blobs.truncate(1);
+        organization.project_org_selection = None;
+        for incoming in [other_project, organization] {
+            validate_commit_objects(&incoming).unwrap();
+            for corruption in ["complete", "missing_blob", "corrupt_blob", "scalar_owner"] {
+                let mut tx = pool.begin().await.unwrap();
+                cache_commit_payload(&mut tx, &original).await.unwrap();
+                tx.commit().await.unwrap();
+                match corruption {
+                    "scalar_owner" => {
+                        sqlx::query("UPDATE cached_commits SET scope = 'org', project_id = NULL WHERE commit_id = $1")
+                            .bind(&original.commit.commit_id).execute(&pool).await.unwrap();
+                    }
+                    "missing_blob" => {
+                        sqlx::query("DELETE FROM cached_blobs WHERE blob_id = $1")
+                            .bind(&original.blobs[0].blob_id)
+                            .execute(&pool)
+                            .await
+                            .unwrap();
+                    }
+                    "corrupt_blob" => {
+                        sqlx::query(
+                            "UPDATE cached_blobs SET content = 'damaged' WHERE blob_id = $1",
+                        )
+                        .bind(&original.blobs[0].blob_id)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                    }
+                    _ => {}
+                }
+                let mut tx = pool.begin().await.unwrap();
+                let error = cache_commit_payload(&mut tx, &incoming).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("Cached Tree"),
+                    "{corruption}: {error}"
+                );
+                tx.rollback().await.unwrap();
+                let tree: String =
+                    sqlx::query_scalar("SELECT payload_json FROM cached_trees WHERE tree_id = $1")
+                        .bind(&original.tree.tree_id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(tree, expected_tree);
+                let changed_commit: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM cached_commits WHERE commit_id = $1")
+                        .bind(&incoming.commit.commit_id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(changed_commit, 0);
+                let new_blob: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM cached_blobs WHERE blob_id = $1")
+                        .bind(&incoming.blobs[0].blob_id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    new_blob, 0,
+                    "rejecting a collision rolls back newly inserted Blob bytes"
+                );
+            }
+        }
+        sqlx::query("UPDATE cached_trees SET payload_json = 'malformed' WHERE tree_id = $1")
+            .bind(&original.tree.tree_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        cache_commit_payload(&mut tx, &original).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(
+            load_cached_commit_payload(&pool, &original.commit.commit_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

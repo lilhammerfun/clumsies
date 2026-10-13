@@ -6,6 +6,15 @@ struct WorkspaceLoader: Sendable {
     let daemon: DaemonXPCClient
     let bootstrap: DaemonBootstrapController
     let server: ServerClient
+    private let retainBase: @Sendable (String) async throws -> CommitBasePin
+
+    init(daemon: DaemonXPCClient, bootstrap: DaemonBootstrapController, server: ServerClient,
+         retainBase: (@Sendable (String) async throws -> CommitBasePin)? = nil) {
+        self.daemon = daemon
+        self.bootstrap = bootstrap
+        self.server = server
+        self.retainBase = retainBase ?? { try await daemon.retainCommitBase($0) }
+    }
 
     func load(onDaemonReady: @MainActor @Sendable (DaemonHealth) -> Void = { _ in }) async throws -> WorkspaceSnapshot {
         let started = Date()
@@ -61,14 +70,16 @@ struct WorkspaceLoader: Sendable {
             scopes.append(ResourceLoadScope(
                 projectId: activeProject.id,
                 projectName: activeProject.name,
-                refCommitId: activeProject.refCommitId
+                refCommitId: activeProject.refCommitId,
+                baseCommitPin: activeProject.baseCommitPin
             ))
         }
         let resourceGroups = try await concurrentMap(scopes, maxConcurrent: 2) { scope in
             try await loadResourcesWithMetadata(
                 projectId: scope.projectId,
                 projectName: scope.projectName,
-                refCommitId: scope.refCommitId
+                refCommitId: scope.refCommitId,
+                baseCommitPin: scope.baseCommitPin
             )
         }
         let resources = resourceGroups.flatMap { $0.resources }
@@ -81,7 +92,7 @@ struct WorkspaceLoader: Sendable {
             activeProjectId.flatMap { id in
                 me.projects.first(where: { $0.projectId == id })
             }.map { reference in
-                Task { try await loadProjectStateWithMetadata(reference) }
+                Task { try await loadProjectStateWithMetadata(reference, retainingBase: false) }
             }
         defer { verifiedProjectTask?.cancel() }
         let verifiedOrgCommit = try await verifiedOrgRequest
@@ -171,7 +182,8 @@ struct WorkspaceLoader: Sendable {
                     for: resource,
                     allowingStaleCache: true
                 )
-            }
+            },
+            retainBase: retainBase
         )
     }
 
@@ -181,7 +193,8 @@ struct WorkspaceLoader: Sendable {
         listDrafts: @escaping @Sendable (DaemonDraftListQuery) async throws -> DaemonDraftListResponse,
         loadDraft: @escaping @Sendable (String) async throws -> DaemonDraftDetail,
         loadContent: @escaping @Sendable (MemoryResource) async throws
-            -> (resource: MemoryResource, hasStaleServerResponse: Bool)
+            -> (resource: MemoryResource, hasStaleServerResponse: Bool),
+        retainBase: (@Sendable (String) async throws -> CommitBasePin)? = nil
     ) async throws -> (
         loadedBaselines: [MemoryResource],
         drafts: [LocalDraft],
@@ -210,9 +223,9 @@ struct WorkspaceLoader: Sendable {
             }
         }
         let resourceSnapshot = hydratedResources
-        let drafts = try await concurrentMap(activeDrafts) { summary in
-            Self.mapDraft(try await loadDraft(summary.draftId), resources: resourceSnapshot)
-        }
+        let details = try await concurrentMap(activeDrafts) { try await loadDraft($0.draftId) }
+        let drafts = try await Self.mapDraftsRetainingBases(details,
+            resources: resourceSnapshot, retainBase: retainBase)
         try Task.checkCancellation()
         return (
             loadedBaselines,
@@ -238,10 +251,11 @@ struct WorkspaceLoader: Sendable {
         let resources = try await loadResourcesWithMetadata(
             projectId: state.state.id,
             projectName: state.state.name,
-            refCommitId: state.state.refCommitId
+            refCommitId: state.state.refCommitId,
+            baseCommitPin: state.state.baseCommitPin
         )
         let verifiedState = try await loadProjectStateWithMetadata(
-            .init(projectId: id, name: name)
+            .init(projectId: id, name: name), retainingBase: false
         )
         guard state.state.refCommitId == verifiedState.state.refCommitId,
               state.state.selectedOrgResourceIds == verifiedState.state.selectedOrgResourceIds,
@@ -263,12 +277,16 @@ struct WorkspaceLoader: Sendable {
     ) async throws -> (state: ProjectState, resources: [MemoryResource])? {
         let checkout = try await daemon.projectCheckout(id)
         guard checkout.ready else { return nil }
-        return Self.mapProjectCheckout(checkout, projectName: name)
+        let pin: CommitBasePin?
+        if let commitId = checkout.commitId { pin = try await retainBase(commitId) }
+        else { pin = nil }
+        return Self.mapProjectCheckout(checkout, projectName: name, baseCommitPin: pin)
     }
 
     static func mapProjectCheckout(
         _ checkout: DaemonProjectCheckout,
-        projectName: String
+        projectName: String,
+        baseCommitPin: CommitBasePin? = nil
     ) -> (state: ProjectState, resources: [MemoryResource]) {
         let resources = checkout.resources.compactMap { resource -> MemoryResource? in
             guard resource.scope == .project else { return nil }
@@ -290,7 +308,8 @@ struct WorkspaceLoader: Sendable {
                 refCommitId: checkout.commitId,
                 contentLoaded: true,
                 document: document,
-                orgSource: resource.content.orgSource
+                orgSource: resource.content.orgSource,
+                baseCommitPin: baseCommitPin
             )
         }
         return (
@@ -301,7 +320,8 @@ struct WorkspaceLoader: Sendable {
                 refEtag: checkout.refEtag ?? "",
                 selectedOrgResourceIds: Set(checkout.selectedOrgResourceIds),
                 orgSelectionRevision: checkout.orgSelectionRevision,
-                isLoaded: true
+                isLoaded: true,
+                baseCommitPin: baseCommitPin
             ),
             resources
         )
@@ -322,9 +342,12 @@ struct WorkspaceLoader: Sendable {
         for resource: MemoryResource,
         allowingStaleCache: Bool = false
     ) async throws -> (resource: MemoryResource, hasStaleServerResponse: Bool) {
-        guard !resource.contentLoaded else { return (resource, false) }
-        let prefix = resource.projectId.map { "/api/v1/projects/\($0)" } ?? "/api/v1/org"
         var loaded = resource
+        if loaded.baseCommitPin == nil, let commitId = loaded.refCommitId {
+            loaded.baseCommitPin = try await retainBase(commitId)
+        }
+        guard !resource.contentLoaded else { return (loaded, false) }
+        let prefix = resource.projectId.map { "/api/v1/projects/\($0)" } ?? "/api/v1/org"
         let result: (value: MemoryDetail, response: DaemonServerResponse) =
             try await server.getWithMetadata("\(prefix)/memories/\(resource.id)")
         loaded.document.body = try Self.validatedMemoryContent(
@@ -553,7 +576,8 @@ struct WorkspaceLoader: Sendable {
     }
 
     private func loadProjectStateWithMetadata(
-        _ project: ProjectReference
+        _ project: ProjectReference,
+        retainingBase: Bool = true
     ) async throws -> (state: ProjectState, hasStaleServerResponse: Bool) {
         async let commitRequest: (value: CommitStateResponse, response: DaemonServerResponse) = server.getWithMetadata(
             "/api/v1/projects/\(project.projectId)/commit-state"
@@ -562,6 +586,9 @@ struct WorkspaceLoader: Sendable {
             "/api/v1/projects/\(project.projectId)/org-selections"
         )
         let (commit, selection) = try await (commitRequest, selectionRequest)
+        let pin: CommitBasePin?
+        if retainingBase, let commitId = commit.value.ref.commitId { pin = try await retainBase(commitId) }
+        else { pin = nil }
         return (
             .init(
                 id: project.projectId,
@@ -570,7 +597,8 @@ struct WorkspaceLoader: Sendable {
                 refEtag: etag(from: commit.response),
                 selectedOrgResourceIds: Set(selection.value.memories.map(\.memoryId)),
                 orgSelectionRevision: selection.value.revision,
-                isLoaded: true
+                isLoaded: true,
+                baseCommitPin: pin
             ),
             commit.response.isStaleCache || selection.response.isStaleCache
         )
@@ -591,11 +619,17 @@ struct WorkspaceLoader: Sendable {
     private func loadResourcesWithMetadata(
         projectId: String?,
         projectName: String?,
-        refCommitId: String?
+        refCommitId: String?,
+        baseCommitPin: CommitBasePin? = nil
     ) async throws -> (resources: [MemoryResource], hasStaleServerResponse: Bool) {
         let prefix = projectId.map { "/api/v1/projects/\($0)" } ?? "/api/v1/org"
         let metadata: (items: [MemoryMetadata], hasStaleServerResponse: Bool) =
             try await loadAllWithMetadata("\(prefix)/memories")
+        let pin: CommitBasePin?
+        if let baseCommitPin { pin = baseCommitPin }
+        else if let refCommitId { pin = try await retainBase(refCommitId) }
+        else { pin = nil }
+        try Task.checkCancellation()
         return (metadata.items.map { metadata in
             .init(
                 id: metadata.memoryId,
@@ -613,7 +647,8 @@ struct WorkspaceLoader: Sendable {
                     body: "",
                     isDirectory: metadata.isDirectory == true
                 ),
-                orgSource: metadata.orgSource
+                orgSource: metadata.orgSource,
+                baseCommitPin: pin
             )
         }, metadata.hasStaleServerResponse)
     }
@@ -780,6 +815,41 @@ struct WorkspaceLoader: Sendable {
         )
     }
 
+    func loadMappedDraft(_ detail: DaemonDraftDetail, resources: [MemoryResource]) async throws -> LocalDraft {
+        try await loadMappedDrafts([detail], resources: resources)[0]
+    }
+
+    func loadMappedDrafts(_ details: [DaemonDraftDetail], resources: [MemoryResource]) async throws -> [LocalDraft] {
+        try await Self.mapDraftsRetainingBases(details, resources: resources, retainBase: retainBase)
+    }
+
+    private static func mapDraftsRetainingBases(
+        _ details: [DaemonDraftDetail], resources: [MemoryResource],
+        retainBase: (@Sendable (String) async throws -> CommitBasePin)?
+    ) async throws -> [LocalDraft] {
+        let drafts = details.map { mapDraft($0, resources: resources) }
+        guard let retainBase else { return drafts }
+        let commitIds = Set(drafts.filter { [.open, .submitted].contains($0.status) }.compactMap(\.baseCommitId))
+        let existingPins = Dictionary(resources.compactMap(\.baseCommitPin).map { ($0.commitId, $0) },
+            uniquingKeysWith: { first, _ in first })
+        let acquired = try await concurrentMap(Array(commitIds)) { commitId -> (String, CommitBasePin?) in
+            if let existing = existingPins[commitId] { return (commitId, existing) }
+            do { return (commitId, try await retainBase(commitId)) }
+            catch where error.isUserCancellation { throw error }
+            catch { return (commitId, nil) }
+        }
+        let pins = Dictionary(uniqueKeysWithValues: acquired)
+        try Task.checkCancellation()
+        return drafts.map { draft in
+            var draft = draft
+            if [.open, .submitted].contains(draft.status), let commitId = draft.baseCommitId {
+                draft.baseCommitPin = pins[commitId] ?? nil
+                draft.baseCommitAvailable = draft.baseCommitPin != nil
+            }
+            return draft
+        }
+    }
+
     private static func apply(
         content: DaemonDraftContent,
         to document: EditableMemoryDocument
@@ -803,4 +873,5 @@ private struct ResourceLoadScope: Sendable {
     let projectId: String?
     let projectName: String?
     let refCommitId: String?
+    var baseCommitPin: CommitBasePin? = nil
 }

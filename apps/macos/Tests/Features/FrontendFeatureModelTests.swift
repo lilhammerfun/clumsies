@@ -300,25 +300,6 @@ final class FrontendFeatureModelTests: XCTestCase {
         XCTAssertFalse(model.loadFailed)
     }
 
-    func testDiagnosticsPaginationCannotReplaceNewProjectCursor() async {
-        let started = expectation(description: "Old project page")
-        var pending: CheckedContinuation<RetrievalRunListResponse, Never>?
-        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(), fetchRuns: { request in
-            if request.cursor != nil {
-                return await withCheckedContinuation { pending = $0; started.fulfill() }
-            }
-            return .init(items: [], nextCursor: request.projectId == "old" ? "old-next" : "new-next")
-        })
-        await model.load(projectId: "old")
-        let old = Task { await model.loadMore() }
-        await fulfillment(of: [started], timeout: 1)
-        await model.load(projectId: "new")
-        pending?.resume(returning: .init(items: [], nextCursor: "obsolete"))
-        await old.value
-        XCTAssertEqual(model.nextCursor, "new-next")
-        XCTAssertFalse(model.isLoadingMore)
-        XCTAssertNil(model.errorMessage)
-    }
 
     func testRecoverySnapshotCannotRestoreSignedOutSessionState() async {
         let started = expectation(description: "Recovery snapshot")

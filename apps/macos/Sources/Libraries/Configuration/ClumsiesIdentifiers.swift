@@ -51,6 +51,15 @@ enum ClumsiesIdentifiers {
     )
     static let xpcReplyQueue = "\(daemon).xpc-replies"
 
+    static var clientApplicationSupportDirectoryURL: URL {
+        var directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: Bundle.main.bundleIdentifier ?? stableAppBundleIdentifier, directoryHint: .isDirectory)
+        if let developmentInstanceID {
+            directory = directory.appending(components: "dev", developmentInstanceID)
+        }
+        return directory
+    }
+
     static var daemonLogDirectoryURL: URL {
         if let path = bundleSetting("CLUMSIES_DAEMON_LOG_DIR") {
             return URL(fileURLWithPath: path, isDirectory: true)

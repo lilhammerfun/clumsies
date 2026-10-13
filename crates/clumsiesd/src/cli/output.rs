@@ -153,7 +153,7 @@ impl Output {
                 );
                 return;
             }
-            shell_reader(&selected)
+            shell_command(&selected)
         } else if let Some(path) = executable("less") {
             let mut cmd = Command::new(path);
             cmd.arg(if columns(self.kind).is_empty() {
@@ -166,7 +166,7 @@ impl Output {
             if executable("more").is_none() {
                 return;
             }
-            shell_reader("more")
+            shell_command("more")
         } else if let Some(path) = executable("more") {
             Command::new(path)
         } else {
@@ -251,13 +251,26 @@ fn executable(name: &str) -> Option<std::path::PathBuf> {
     })
 }
 
-/// Interprets only the user's explicitly configured pager command, never server content.
-fn shell_reader(value: &str) -> Command {
-    let mut command = Command::new(if cfg!(windows) { "cmd" } else { "sh" });
-    command
-        .arg(if cfg!(windows) { "/C" } else { "-c" })
-        .arg(value);
-    command
+/// Interprets a trusted editor or pager command using the platform shell.
+///
+/// Windows receives cmd's outer quotes without CRT escaping. Generated editor paths
+/// remain quoted environment values, with delayed expansion disabled to preserve '!'.
+pub(super) fn shell_command(value: &str) -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/D", "/S", "/V:OFF", "/C"])
+            .raw_arg(format!("\"{value}\""));
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(value);
+        command
+    }
 }
 
 /// Renders terminal controls visibly so server text cannot issue terminal commands.
@@ -1322,6 +1335,10 @@ mod tests {
         let Some(path) = std::env::var_os("CLUMSIES_PAGER_CAPTURE") else {
             return;
         };
+        assert_eq!(
+            std::env::args_os().last().unwrap(),
+            "configured pager argument & with spaces"
+        );
         if std::env::var("CLUMSIES_PAGER_MODE").as_deref() == Ok("cancel") {
             std::fs::write(path, b"reader exited").unwrap();
             return;
@@ -1336,7 +1353,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let executable = std::env::current_exe().unwrap();
         let pager = format!(
-            "\"{}\" --ignored --exact output::tests::pager_reader_fixture --nocapture",
+            "\"{}\" --ignored --exact output::tests::pager_reader_fixture --nocapture --skip \"configured pager argument & with spaces\"",
             executable.display()
         );
         for mode in [

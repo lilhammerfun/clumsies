@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::sqlite::{
+    SqliteAutoVacuum, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, Transaction};
 
 use super::chunker::build_units;
@@ -58,6 +60,7 @@ pub(crate) async fn connect_project_index(path: &Path) -> Result<SqlitePool, Dae
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
+        .auto_vacuum(SqliteAutoVacuum::Incremental)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
         .synchronous(SqliteSynchronous::Normal);
@@ -113,7 +116,7 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
                 Some(3) | Some(4) | Some(5) | Some(PROJECT_INDEX_SCHEMA_VERSION)
             ))
     {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         for statement in [
             "DROP TABLE IF EXISTS search_units_fts",
             "DROP TABLE IF EXISTS search_heads",
@@ -127,7 +130,7 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
         tx.commit().await?;
     }
     if matches!(existing_version, Some(3) | Some(4) | Some(5)) {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         if existing_version == Some(3) {
             sqlx::query("ALTER TABLE search_revisions ADD COLUMN embedding_revision TEXT")
                 .execute(&mut *tx)
@@ -181,7 +184,7 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
         .fetch_one(pool)
         .await?;
         if create_sql.contains("kind IN") && !create_sql.contains("'memory'") {
-            let mut tx = pool.begin().await?;
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             for statement in [
                 "DROP TABLE IF EXISTS search_units_fts",
                 "DROP TABLE IF EXISTS search_heads",
@@ -204,7 +207,7 @@ async fn migrate_project_index(pool: &SqlitePool) -> Result<(), DaemonError> {
     // Keep the fresh schema and its version marker in one SQLite transaction.
     // A process crash must never leave a partial set of tables that a later
     // open could accidentally bless as the current schema.
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS search_revisions (
             revision_id TEXT PRIMARY KEY,
@@ -809,7 +812,7 @@ async fn persist_cached_vectors(
     dimensions: usize,
     vectors: &[(String, Vec<f32>)],
 ) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     for (hash, vector) in vectors {
         sqlx::query(
             "INSERT INTO search_vector_cache (
@@ -1026,7 +1029,7 @@ async fn write_prepared_index(
         )
         .into());
     }
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let already_ready: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM search_revisions
          WHERE project_id = $1 AND revision_id = $2 AND status = 'ready'",
@@ -1161,7 +1164,7 @@ pub(super) async fn publish_staged_index(
     effective_hash: &str,
     revision_id: &str,
 ) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let ready: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM search_revisions
          WHERE project_id = $1 AND effective_hash = $2
@@ -1189,7 +1192,7 @@ pub(super) async fn prune_old_ready_revisions(
     retain: usize,
 ) -> Result<(), DaemonError> {
     let retain = retain.max(1) as i64;
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let obsolete = sqlx::query_scalar::<_, String>(
         "SELECT revision_id FROM search_revisions
          WHERE project_id = $1 AND status = 'ready'
@@ -1212,6 +1215,16 @@ pub(super) async fn prune_old_ready_revisions(
     }
     prune_unused_vector_cache(&mut tx, VECTOR_CACHE_RETAIN_UNUSED).await?;
     tx.commit().await?;
+    // The caller excludes queries and pins storage through publication cleanup.
+    // A cache-space failure must not turn an already published index into a failed job.
+    if let Err(error) = async {
+        crate::migration::prepare_local_db_incremental_vacuum(pool).await?;
+        crate::migration::reclaim_local_db_pages(pool).await
+    }
+    .await
+    {
+        tracing::warn!(%project_id, "project search index space reclamation is pending: {error}");
+    }
     Ok(())
 }
 
@@ -1788,6 +1801,115 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(cache_exists, 1);
+    }
+
+    #[tokio::test]
+    async fn disk_index_reclamation_preserves_current_head_and_content() {
+        use sqlx::Connection;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("search.sqlite");
+        let pool = connect_project_index(&path).await.unwrap();
+        for (revision, date) in [("old", "2026-01-01"), ("current", "2026-02-01")] {
+            sqlx::query(
+                "INSERT INTO search_revisions (
+                revision_id,project_id,effective_hash,model_revision,embedding_revision,
+                dimensions,parser_version,chunker_version,ranking_version,status,ready_at
+             ) VALUES ($1,'project',$1,'model','embedding',1,$2,$3,$4,'ready',$5)",
+            )
+            .bind(revision)
+            .bind(PARSER_VERSION)
+            .bind(CHUNKER_VERSION)
+            .bind(RANKING_CONFIG_VERSION)
+            .bind(date)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let content = if revision == "old" {
+                "x".repeat(8 * 1024 * 1024)
+            } else {
+                "current frozen body".to_owned()
+            };
+            sqlx::query(
+                "INSERT INTO search_resources
+                (revision_id,resource_id,project_id,scope,kind,path,title,content,content_hash)
+                VALUES ($1,'resource','project','project','memory','memory.md','Title',$2,$3)",
+            )
+            .bind(revision)
+            .bind(&content)
+            .bind(super::super::sha256(&content))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO search_heads VALUES ('project','current')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        // Model an actual pre-upgrade NONE-mode index with its complete data,
+        // rather than assuming a newly created index still uses the old mode.
+        let mut legacy = sqlx::SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(&path)
+                .auto_vacuum(SqliteAutoVacuum::None)
+                .journal_mode(SqliteJournalMode::Wal),
+        )
+        .await
+        .unwrap();
+        sqlx::query("VACUUM").execute(&mut legacy).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&mut legacy)
+                .await
+                .unwrap(),
+            0
+        );
+        legacy.close().await.unwrap();
+        let pool = connect_project_index(&path).await.unwrap();
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let before = std::fs::metadata(&path).unwrap().len();
+        assert!(before > 8 * 1024 * 1024);
+        prune_old_ready_revisions(&pool, "project", 1)
+            .await
+            .unwrap();
+        let head: String = sqlx::query_scalar("SELECT revision_id FROM search_heads")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(head, "current");
+        let content: String = sqlx::query_scalar("SELECT content FROM search_resources")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(content, "current frozen body");
+        let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(mode, 2);
+        let check: String = sqlx::query_scalar("PRAGMA quick_check")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(check, "ok");
+        assert!(std::fs::metadata(&path).unwrap().len() < before / 4);
+        let wal_size =
+            std::fs::metadata(path.with_extension("sqlite-wal")).map_or(0, |info| info.len());
+        assert!(wal_size < 4 * 1024 * 1024);
+        pool.close().await;
+        let reopened = connect_project_index(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT content FROM search_resources")
+                .fetch_one(&reopened)
+                .await
+                .unwrap(),
+            content
+        );
+        reopened.close().await;
     }
 
     #[tokio::test]

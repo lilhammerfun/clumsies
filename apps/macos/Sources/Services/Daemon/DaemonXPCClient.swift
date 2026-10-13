@@ -1,5 +1,6 @@
 import Foundation
 import XPC
+import Darwin
 
 struct DaemonXPCClient: Sendable {
     static let serviceName = ClumsiesIdentifiers.daemon
@@ -21,6 +22,42 @@ struct DaemonXPCClient: Sendable {
 
     func projectConfig() async throws -> DaemonProjectConfig {
         try await call(method: "project_config", payload: EmptyPayload())
+    }
+
+    func retainCommitBase(
+        _ commitId: String,
+        requestPin: (@Sendable (DaemonCommitBasePinRequest) async throws -> DaemonCommitBasePinResponse)? = nil
+    ) async throws -> CommitBasePin {
+        let requestPin = requestPin ?? { request in
+            try await self.call(method: "retain_commit_base", payload: request)
+        }
+        for attempt in 0..<2 {
+            try Task.checkCancellation()
+            let issued = try await requestPin(.init(commitId: commitId, pinId: nil))
+            guard issued.commitId == commitId, !issued.pinId.isEmpty, issued.lockPath.hasPrefix("/") else {
+                throw DaemonXPCError.invalidReply
+            }
+            let descriptor = open(issued.lockPath, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard descriptor >= 0 else { throw CocoaError(.fileReadUnknown) }
+            let pin = CommitBasePin(commitId: commitId) { close(descriptor) }
+            var status = stat()
+            guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG,
+                  flock(descriptor, LOCK_SH | LOCK_NB) == 0 else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            do {
+                let acknowledged = try await requestPin(.init(commitId: commitId, pinId: issued.pinId))
+                try Task.checkCancellation()
+                guard acknowledged.pinId == issued.pinId, acknowledged.commitId == commitId,
+                      acknowledged.lockPath == issued.lockPath else { throw DaemonXPCError.invalidReply }
+                return pin
+            } catch {
+                if attempt == 0, let failure = error as? DaemonXPCError,
+                   case .daemon(let payload) = failure, payload.code == "commit_base_pin_expired" { continue }
+                throw error
+            }
+        }
+        throw DaemonXPCError.invalidReply
     }
 
     func replaceProjectConfig(_ update: DaemonProjectConfigUpdate) async throws -> DaemonProjectConfig {
@@ -94,16 +131,6 @@ struct DaemonXPCClient: Sendable {
     func inspectCodexPlugin(_ request: DaemonCodexPluginRequest) async throws
         -> DaemonCodexPluginStatus {
         try await call(method: "inspect_codex_plugin", payload: request, timeout: 40)
-    }
-
-    func reconcileCodexPlugin(_ request: DaemonCodexPluginRequest) async throws
-        -> DaemonCodexPluginStatus {
-        try await call(method: "reconcile_codex_plugin", payload: request, timeout: 130)
-    }
-
-    func installProjectAgentAdapter(_ request: DaemonProjectAgentAdapterInstallRequest) async throws
-        -> DaemonProjectAgentAdapter {
-        try await call(method: "install_project_agent_adapter", payload: request)
     }
 
     func removeProjectAgentAdapter(_ request: DaemonProjectAgentAdapterRemoveRequest) async throws
@@ -198,11 +225,6 @@ struct DaemonXPCClient: Sendable {
         try await call(method: "dashboard_retrieval_statistics", payload: request)
     }
 
-    func listRetrievalRuns(_ request: RetrievalRunListRequest) async throws
-        -> RetrievalRunListResponse {
-        try await call(method: "list_retrieval_runs", payload: request)
-    }
-
     func listRecalls(_ request: ListRecallsRequest) async throws -> ListRecallsResponse {
         try await call(method: "list_recalls", payload: request)
     }
@@ -231,13 +253,6 @@ struct DaemonXPCClient: Sendable {
     func resolveEvaluationCase(_ request: ResolveEvaluationCaseRequest) async throws
         -> EvaluationCaseDetail {
         try await call(method: "resolve_evaluation_case", payload: request)
-    }
-
-    func clearRetrievalRuns(projectId: String?) async throws -> ClearRetrievalRunsResponse {
-        try await call(
-            method: "clear_retrieval_runs",
-            payload: ClearRetrievalRunsRequest(projectId: projectId)
-        )
     }
 
     func exportEvaluationSet(projectId: String?, caseIds: [String] = []) async throws

@@ -1,8 +1,8 @@
 //! Daemon synchronization and publication against the production server over real TCP.
 
 use clumsiesd::{
-    DaemonConfig, DaemonContentDraftUpdate, DaemonCreateDraftOperation, DaemonDeleteDraftOperation,
-    DaemonDraftContent, DaemonDraftListQuery, DaemonDraftOperation,
+    DaemonCommitBasePinRequest, DaemonConfig, DaemonContentDraftUpdate, DaemonCreateDraftOperation,
+    DaemonDeleteDraftOperation, DaemonDraftContent, DaemonDraftListQuery, DaemonDraftOperation,
     DaemonDraftOperationRecordSource, DaemonDraftOperationRequest, DaemonDraftOperationSource,
     DaemonDraftResourceKind, DaemonDraftScope, DaemonIpcService, DaemonLocalDraftStatus,
     DaemonMemoryCacheRequest, DaemonMemoryCacheState, DaemonProjectCheckoutRequest,
@@ -348,6 +348,32 @@ async fn cache_root_for_commit(
         .unwrap();
     assert_eq!(cache.commit_id.as_deref(), Some(commit_id));
     std::path::PathBuf::from(cache.active_generation_path.unwrap())
+}
+
+// A path retained across syncs represents an open historical reader, not an
+// indefinitely cached generation. Exercise the real lease/acknowledgement contract.
+async fn retain_cache_reader(service: &DaemonIpcService, commit_id: &str) -> std::fs::File {
+    let pin = service
+        .retain_commit_base(DaemonCommitBasePinRequest {
+            commit_id: commit_id.to_owned(),
+            pin_id: None,
+        })
+        .await
+        .unwrap();
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&pin.lock_path)
+        .unwrap();
+    reader.lock_shared().unwrap();
+    service
+        .retain_commit_base(DaemonCommitBasePinRequest {
+            commit_id: commit_id.to_owned(),
+            pin_id: Some(pin.pin_id),
+        })
+        .await
+        .unwrap();
+    reader
 }
 
 async fn current_project_commit_id(pool: &sqlx::PgPool, project_id: &str) -> String {
@@ -1749,6 +1775,8 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         &workflow_create_project_commit,
     )
     .await;
+    let workflow_create_reader =
+        retain_cache_reader(&service, &workflow_create_project_commit).await;
     assert_eq!(
         std::fs::read_to_string(
             workflow_create_root.join("cache/memory/workflow/memory-publication")
@@ -1866,6 +1894,7 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
             .join("cache/memory/workflow/memory-publication")
             .exists()
     );
+    drop(workflow_create_reader);
 
     let delete_workflow = delete_resource_draft(
         &service,
@@ -1900,6 +1929,10 @@ async fn rule_and_workflow_crud_preserve_materialized_markdown() {
         &workflow_delete_project_commit,
     )
     .await;
+    assert!(
+        !workflow_create_root.exists(),
+        "Closed historical readers must not retain old generations forever."
+    );
     assert!(
         !workflow_delete_root
             .join("cache/memory/workflow/memory-publish")
@@ -2179,6 +2212,8 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         &workflow_update_project_commit,
     )
     .await;
+    let workflow_update_reader =
+        retain_cache_reader(&service, &workflow_update_project_commit).await;
     assert!(
         !workflow_update_root
             .join("cache/memory/workflow/shared-publication")
@@ -2313,6 +2348,17 @@ async fn selected_hub_rule_and_workflow_changes_converge_without_reselection() {
         Err(server::error::ServerError::NotFound { .. })
     ));
 
+    drop(workflow_update_reader);
+    service
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::Commits,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !workflow_update_root.exists(),
+        "The closed reader's old generation should be reclaimed."
+    );
     server.shutdown().await;
 }
 

@@ -999,11 +999,25 @@ async fn initialization_rejects_an_old_local_schema() {
     .unwrap();
 
     assert!(matches!(error, DaemonError::InvalidConfig(_)));
-    assert!(error.to_string().contains("recreate the daemon database"));
+    assert!(error.to_string().contains("preserve the database"));
+    assert!(error.to_string().contains("compatible daemon version"));
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", database_path.display()))
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT value FROM daemon_meta WHERE key = 'schema_version'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "3"
+    );
+    pool.close().await;
 }
 
 #[tokio::test]
-async fn schema_13_migration_removes_metaprompt_and_resets_rebuildable_memory_state() {
+async fn schema_13_migration_preserves_unmapped_history_until_explicitly_removed() {
     let root = tempfile::tempdir().unwrap();
     let database_path = root.path().join("local.db");
     std::fs::File::create(&database_path).unwrap();
@@ -1101,6 +1115,28 @@ async fn schema_13_migration_removes_metaprompt_and_resets_rebuildable_memory_st
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
+    let before_drafts: Vec<String> = sqlx::query_scalar(
+        "SELECT json_array(draft_id, project_id, server_draft_id, server_version, base_commit_id,
+                           resource_scope, resource_kind, target_id, path, conflict_base_commit_id,
+                           conflict_current_commit_id, conflicted_at, status, created_at, updated_at)
+         FROM local_drafts ORDER BY draft_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let before_operations: Vec<String> = sqlx::query_scalar(
+        "SELECT json_array(rowid, local_operation_id, draft_id, server_operation_id, resource_kind,
+                           operation_json, source, sync_status, last_error, created_at, updated_at)
+         FROM local_draft_operations ORDER BY rowid",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let before_meta: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value FROM daemon_meta ORDER BY key")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     pool.close().await;
 
     let stale_generation = root
@@ -1113,6 +1149,73 @@ async fn schema_13_migration_removes_metaprompt_and_resets_rebuildable_memory_st
     )
     .unwrap();
 
+    let error = DaemonState::initialize_with_credential_store(
+        DaemonConfig::for_root(root.path()),
+        Arc::new(common::TestCredentialStore::default()),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy metaprompt Draft history")
+    );
+    assert!(error.to_string().contains("compatible daemon to export"));
+    let pool = sqlx::SqlitePool::connect(&database_url).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT json_array(draft_id, project_id, server_draft_id, server_version, base_commit_id,
+                               resource_scope, resource_kind, target_id, path, conflict_base_commit_id,
+                               conflict_current_commit_id, conflicted_at, status, created_at, updated_at)
+             FROM local_drafts ORDER BY draft_id"
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap(),
+        before_drafts
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT json_array(rowid, local_operation_id, draft_id, server_operation_id, resource_kind,
+                               operation_json, source, sync_status, last_error, created_at, updated_at)
+             FROM local_draft_operations ORDER BY rowid"
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap(),
+        before_operations
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (String, String)>("SELECT key, value FROM daemon_meta ORDER BY key")
+            .fetch_all(&pool)
+            .await
+            .unwrap(),
+        before_meta
+    );
+    assert!(stale_generation.join("META_PROMPT.md").exists());
+
+    // Only this disposable fixture models explicit removal after export.
+    // Production migration must never silently discard these historical rows.
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        sqlx::query("DELETE FROM local_draft_operations WHERE resource_kind = 'metaprompt'")
+            .execute(&mut *tx)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1
+    );
+    assert_eq!(
+        sqlx::query("DELETE FROM local_drafts WHERE resource_kind = 'metaprompt'")
+            .execute(&mut *tx)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1
+    );
+    tx.commit().await.unwrap();
+    pool.close().await;
     let _state = common::initialize_daemon(
         DaemonConfig::for_root(root.path()),
         common::TestCredentialStore::default(),
@@ -1164,8 +1267,17 @@ async fn schema_13_migration_removes_metaprompt_and_resets_rebuildable_memory_st
     ] {
         let query = format!("SELECT COUNT(*) FROM {table}");
         let count: i64 = sqlx::query_scalar(&query).fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 0, "{table} was not reset");
+        assert_eq!(count, 1, "{table} must retain the original cached object");
     }
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT payload_json FROM cached_trees WHERE tree_id = 'tree_old'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "{\"tree_id\":\"tree_old\",\"entries\":[{\"type\":\"metaprompt\"}]}"
+    );
     let replay_cursor: Option<String> =
         sqlx::query_scalar("SELECT value FROM daemon_meta WHERE key = 'draft_events_cursor'")
             .fetch_optional(&pool)
@@ -1582,7 +1694,7 @@ async fn schema_18_migration_replaces_graded_judgments_with_confirmed_evidence()
             query TEXT NOT NULL,
             query_category TEXT,
             notes TEXT,
-            judgment_version BIGINT NOT NULL,
+            judgment_version BIGINT NOT NULL CHECK (judgment_version > 0),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
@@ -1591,31 +1703,52 @@ async fn schema_18_migration_replaces_graded_judgments_with_confirmed_evidence()
             case_id TEXT NOT NULL,
             resource_id TEXT NOT NULL,
             unit_key TEXT,
-            relevance BIGINT NOT NULL,
-            missed INTEGER NOT NULL,
+            relevance BIGINT NOT NULL CHECK (relevance BETWEEN 0 AND 3),
+            missed INTEGER NOT NULL CHECK (missed IN (0, 1)),
             evidence_excerpt TEXT NOT NULL,
             notes TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            UNIQUE (case_id, resource_id, unit_key, missed)
         )",
         "INSERT INTO evaluation_cases VALUES (
             'case_ready', 'run_ready', 'corpus_ready', 'project_test', 'ready query',
-            NULL, NULL, 4, '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z'
+            'architecture', 'Historical case notes', 4, '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z'
         )",
         "INSERT INTO evaluation_cases VALUES (
             'case_draft', 'run_draft', 'corpus_draft', 'project_test', 'draft query',
             NULL, NULL, 1, '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z'
         )",
         "INSERT INTO evaluation_judgments VALUES (
-            'judgment_relevant', 'case_ready', 'resource_expected', NULL, 3, 1,
-            'Expected evidence', NULL, '2026-07-02T00:00:00Z'
+            'judgment_relevant', 'case_ready', 'resource_expected', 'unit_expected', 3, 1,
+            'Expected evidence', 'Historical missed notes', '2026-07-02T00:00:00Z'
+        )",
+        "INSERT INTO evaluation_judgments VALUES (
+            'judgment_matched', 'case_ready', 'resource_expected', 'unit_expected', 1, 0,
+            'Matched evidence', 'Historical graded notes', '2026-07-03T00:00:00Z'
         )",
         "INSERT INTO evaluation_judgments VALUES (
             'judgment_irrelevant', 'case_ready', 'resource_wrong', 'unit_wrong', 0, 0,
-            'Wrong evidence', NULL, '2026-07-02T00:00:00Z'
+            'Wrong evidence', 'Historical negative notes', '2026-07-02T00:00:00Z'
         )",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
+    let old_cases: Vec<String> = sqlx::query_scalar(
+        "SELECT json_array(case_id, source_run_id, corpus_id, project_id, query,
+                           query_category, notes, judgment_version, created_at, updated_at)
+         FROM evaluation_cases ORDER BY case_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let old_judgments: Vec<String> = sqlx::query_scalar(
+        "SELECT json_array(judgment_id, case_id, resource_id, unit_key, relevance,
+                           missed, evidence_excerpt, notes, created_at)
+         FROM evaluation_judgments ORDER BY judgment_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     pool.close().await;
 
     let _state = common::initialize_daemon(
@@ -1646,8 +1779,38 @@ async fn schema_18_migration_replaces_graded_judgments_with_confirmed_evidence()
         vec![(
             "case_ready".to_owned(),
             "resource_expected".to_owned(),
-            None
+            Some("unit_expected".to_owned())
         )]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT evidence_id FROM evaluation_evidence")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "judgment_matched",
+        "the current projection prefers an observed match; both original grades remain archived"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT json_array(case_id, source_run_id, corpus_id, project_id, query,
+                               query_category, notes, judgment_version, created_at, updated_at)
+             FROM retired_evaluation_cases_v18 ORDER BY case_id"
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap(),
+        old_cases
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT json_array(judgment_id, case_id, resource_id, unit_key, relevance,
+                               missed, evidence_excerpt, notes, created_at)
+             FROM retired_evaluation_judgments_v18 ORDER BY judgment_id"
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap(),
+        old_judgments
     );
     let legacy_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master
@@ -5127,17 +5290,7 @@ async fn sync_retry_uploads_new_local_draft_to_server() {
     let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO cached_commits (
-            commit_id, scope, org_id, project_id, tree_id,
-            parent_commit_id, version, created_at, payload_json
-         ) VALUES ($1, 'project', 'org_test', 'prj_test', 'tree_test',
-                   NULL, 1, '2026-07-08T00:00:00Z', '{}')",
-    )
-    .bind(COMMIT_A)
-    .execute(&pool)
-    .await
-    .unwrap();
+    cache_draft_base_fixture(&pool, COMMIT_A, None, "tree_test").await;
     let service = DaemonIpcService::new(state.clone());
 
     service
@@ -5428,18 +5581,7 @@ async fn server_reconciliation_projection_keeps_lifecycle_separate_from_coordina
         .await
         .unwrap();
     for (commit_id, tree_id) in [(COMMIT_A, "tree_a"), (COMMIT_B, "tree_b")] {
-        sqlx::query(
-            "INSERT INTO cached_commits (
-                commit_id, scope, org_id, project_id, tree_id,
-                parent_commit_id, version, created_at, payload_json
-             ) VALUES ($1, 'project', 'org_test', 'prj_conflict', $2,
-                       NULL, 1, '2026-07-15T00:00:00Z', '{}')",
-        )
-        .bind(commit_id)
-        .bind(tree_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        cache_draft_base_fixture(&pool, commit_id, Some("prj_conflict"), tree_id).await;
     }
     let service = DaemonIpcService::new(state);
 
@@ -6001,6 +6143,274 @@ async fn concurrent_unauthorized_requests_share_a_same_session_refresh() {
 }
 
 #[tokio::test]
+async fn concurrent_expired_gets_preserve_authentication_failure_and_pending_work() {
+    for refresh_status in [400, 401, 403] {
+        let probe = RefreshProbeState::default();
+        probe.allow_stale.store(true, Ordering::Release);
+        probe
+            .refresh_status
+            .store(refresh_status, Ordering::Release);
+        let app = Router::new()
+            .route("/api/v1/refresh-probe", get(refresh_probe_request))
+            .route("/api/v1/auth/token", post(refresh_probe_token))
+            .with_state(probe.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let root = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::for_root(root.path());
+        config.project.server_url = format!("http://{address}");
+        let (state, credentials) = common::initialize_authenticated_daemon(
+            config,
+            "stale-token",
+            Some("initial-refresh-token".to_owned()),
+        )
+        .await;
+        let draft = state
+            .store_draft_operation(DaemonDraftOperationRequest {
+                draft_id: None,
+                base_commit_id: None,
+                project_id: "prj_expiry".to_owned(),
+                scope: DaemonDraftScope::Org,
+                resource: DaemonDraftResourceKind::Memory,
+                op: DaemonDraftOperation {
+                    create: Some(DaemonCreateDraftOperation {
+                        path: "pending.md".to_owned(),
+                        content: context_content("Unsynced text retained"),
+                        description: None,
+                    }),
+                    update: None,
+                    rename: None,
+                    delete: None,
+                    discard: None,
+                },
+                source: Some(DaemonDraftOperationSource::Desktop),
+            })
+            .await
+            .unwrap();
+        let request = DaemonServerRequest {
+            method: "GET".to_owned(),
+            path: "/api/v1/refresh-probe".to_owned(),
+            headers: BTreeMap::new(),
+            body: None,
+        };
+        let cached = state.server_request(request.clone()).await.unwrap();
+        wait_for_server_response_cache(&state, &request.path, &cached.body).await;
+        probe.allow_stale.store(false, Ordering::Release);
+        let service = DaemonIpcService::new(state.clone());
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let service = service.clone();
+            let payload = serde_json::to_value(&request).unwrap();
+            requests.push(tokio::spawn(async move {
+                service
+                    .dispatch(DaemonIpcRequest::new("server_request", payload))
+                    .await
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(2), probe.refresh_started.notified())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), probe.both_stale.notified())
+            .await
+            .unwrap();
+        probe.release_refresh.notify_one();
+        for request in requests {
+            let response = tokio::time::timeout(Duration::from_secs(2), request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                !response.ok,
+                "a rejected GET must not return the old cached body"
+            );
+            let error = response.error.unwrap();
+            assert_eq!(
+                error.details["status"], 401,
+                "CLI login advice requires the structured authentication status"
+            );
+            assert_ne!(error.code, "sync_session_changed");
+        }
+        assert_eq!(probe.refresh_requests.load(Ordering::Acquire), 1);
+        assert!(credentials.credentials().is_none());
+        let detail = state.get_draft(&draft.draft_id).await.unwrap();
+        assert_eq!(detail.draft.pending_operation_count, 1);
+        assert_eq!(
+            detail.operations[0]
+                .operation
+                .create
+                .as_ref()
+                .unwrap()
+                .content
+                .content,
+            "Unsynced text retained"
+        );
+        let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM server_response_cache")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        pool.close().await;
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn denied_refresh_cannot_expire_a_replacement_or_explicitly_signed_out_session() {
+    for signed_out in [false, true] {
+        let probe = RefreshProbeState::default();
+        probe.refresh_status.store(401, Ordering::Release);
+        let app = Router::new()
+            .route("/api/v1/refresh-probe", get(refresh_probe_request))
+            .route("/api/v1/auth/token", post(refresh_probe_token))
+            .with_state(probe.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let root = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::for_root(root.path());
+        config.project.server_url = format!("http://{address}");
+        let (state, credentials) = common::initialize_authenticated_daemon(
+            config,
+            "stale-token",
+            Some("initial-refresh-token".to_owned()),
+        )
+        .await;
+        let request = DaemonServerRequest {
+            method: "GET".to_owned(),
+            path: "/api/v1/refresh-probe".to_owned(),
+            headers: BTreeMap::new(),
+            body: None,
+        };
+        let old = tokio::spawn({
+            let state = state.clone();
+            let request = request.clone();
+            async move { state.server_request(request).await }
+        });
+        tokio::time::timeout(Duration::from_secs(2), probe.refresh_started.notified())
+            .await
+            .unwrap();
+        state
+            .replace_project_config(DaemonProjectConfigUpdateRequest {
+                server_url: format!("http://{address}"),
+                project_id: None,
+                memory_guidelines_path: None,
+                access_token: (!signed_out).then(|| "replacement-token".to_owned()),
+                refresh_token: (!signed_out).then(|| "replacement-refresh-token".to_owned()),
+            })
+            .await
+            .unwrap();
+        let replacement = if signed_out {
+            None
+        } else {
+            let response = state.server_request(request.clone()).await.unwrap();
+            wait_for_server_response_cache(&state, &request.path, &response.body).await;
+            Some(response)
+        };
+        probe.release_refresh.notify_one();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), old)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(DaemonError::State {
+                code: "sync_session_changed",
+                ..
+            })
+        ));
+        assert_eq!(probe.refresh_requests.load(Ordering::Acquire), 1);
+        assert_eq!(probe.fresh_requests.load(Ordering::Acquire), 0);
+        server.abort();
+        if let Some(replacement) = replacement {
+            assert_eq!(
+                credentials.credentials().unwrap().access_token,
+                "replacement-token"
+            );
+            let offline = state.server_request(request).await.unwrap();
+            assert_eq!(
+                offline.body, replacement.body,
+                "an old denial must not invalidate the replacement account's cache"
+            );
+            assert_eq!(
+                offline.headers.get("x-clumsies-cache").map(String::as_str),
+                Some("stale")
+            );
+            assert_eq!(probe.replacement_requests.load(Ordering::Acquire), 1);
+        } else {
+            assert!(credentials.credentials().is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn unauthorized_get_cannot_reuse_cache_when_refresh_is_temporarily_unavailable() {
+    let probe = RefreshProbeState::default();
+    probe.allow_stale.store(true, Ordering::Release);
+    probe.refresh_status.store(503, Ordering::Release);
+    let app = Router::new()
+        .route("/api/v1/refresh-probe", get(refresh_probe_request))
+        .route("/api/v1/auth/token", post(refresh_probe_token))
+        .with_state(probe.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    let (state, credentials) = common::initialize_authenticated_daemon(
+        config,
+        "stale-token",
+        Some("initial-refresh-token".to_owned()),
+    )
+    .await;
+    let request = DaemonServerRequest {
+        method: "GET".to_owned(),
+        path: "/api/v1/refresh-probe".to_owned(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    let live = state.server_request(request.clone()).await.unwrap();
+    wait_for_server_response_cache(&state, &request.path, &live.body).await;
+    probe.allow_stale.store(false, Ordering::Release);
+    let denied = tokio::spawn({
+        let state = state.clone();
+        async move { state.server_request(request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(2), probe.refresh_started.notified())
+        .await
+        .unwrap();
+    probe.release_refresh.notify_one();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), denied)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(DaemonError::ServerResponse { status: 503, .. })
+    ));
+    assert_eq!(
+        credentials.credentials().unwrap().access_token,
+        "stale-token"
+    );
+    let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM server_response_cache")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    pool.close().await;
+    server.abort();
+}
+
+#[tokio::test]
 async fn request_is_not_replayed_after_same_server_session_replacement_during_refresh() {
     let old_probe = RefreshProbeState::default();
     let old_app = Router::new()
@@ -6046,12 +6456,18 @@ async fn request_is_not_replayed_after_same_server_session_replacement_during_re
         .unwrap();
     old_probe.release_refresh.notify_one();
 
-    let response = tokio::time::timeout(Duration::from_secs(2), request)
+    let error = tokio::time::timeout(Duration::from_secs(2), request)
         .await
-        .expect("the superseded request should return its original 401")
+        .expect("the superseded request should report its changed session")
         .unwrap()
-        .unwrap();
-    assert_eq!(response.status, 401);
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DaemonError::State {
+            code: "sync_session_changed",
+            ..
+        }
+    ));
     assert_eq!(old_probe.replacement_requests.load(Ordering::Acquire), 0);
     assert_eq!(old_probe.refresh_requests.load(Ordering::Acquire), 1);
     let credentials = credential_store.credentials().unwrap();
@@ -6229,6 +6645,433 @@ async fn server_proxy_uses_stale_cache_only_for_read_failures() {
         .await
         .unwrap();
     assert!(state.server_request(get_request).await.is_err());
+}
+
+#[tokio::test]
+async fn server_proxy_revokes_stale_cache_after_denials_and_successful_writes() {
+    let status = Arc::new(AtomicUsize::new(200));
+    let app = Router::new()
+        .route(
+            "/api/v1/cache-probe",
+            get(cache_status_probe)
+                .post(cache_status_probe)
+                .put(cache_status_probe)
+                .patch(cache_status_probe)
+                .delete(cache_status_probe),
+        )
+        .with_state(status.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    let get_request = DaemonServerRequest {
+        method: "GET".to_owned(),
+        path: "/api/v1/cache-probe".to_owned(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    for denied_status in [401, 403] {
+        status.store(200, Ordering::Release);
+        let live = state.server_request(get_request.clone()).await.unwrap();
+        wait_for_server_response_cache(&state, &get_request.path, &live.body).await;
+        status.store(denied_status, Ordering::Release);
+        assert_eq!(
+            state
+                .server_request(get_request.clone())
+                .await
+                .unwrap()
+                .status,
+            denied_status as u16
+        );
+        status.store(503, Ordering::Release);
+        let unavailable = state.server_request(get_request.clone()).await.unwrap();
+        assert_eq!(unavailable.status, 503);
+        assert!(!unavailable.headers.contains_key("x-clumsies-cache"));
+    }
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        status.store(200, Ordering::Release);
+        let live = state.server_request(get_request.clone()).await.unwrap();
+        wait_for_server_response_cache(&state, &get_request.path, &live.body).await;
+        let write = state
+            .server_request(DaemonServerRequest {
+                method: method.to_owned(),
+                ..get_request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(write.status, 200);
+        status.store(503, Ordering::Release);
+        assert_eq!(
+            state
+                .server_request(get_request.clone())
+                .await
+                .unwrap()
+                .status,
+            503
+        );
+    }
+
+    status.store(200, Ordering::Release);
+    let live = state.server_request(get_request.clone()).await.unwrap();
+    wait_for_server_response_cache(&state, &get_request.path, &live.body).await;
+    let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER reject_cache_delete BEFORE DELETE ON server_response_cache
+        BEGIN SELECT RAISE(ABORT, 'cache delete rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        state
+            .server_request(DaemonServerRequest {
+                method: "POST".to_owned(),
+                ..get_request.clone()
+            })
+            .await
+            .unwrap()
+            .status,
+        200,
+        "a successful Server write must stay successful when its optional cache fails"
+    );
+    status.store(503, Ordering::Release);
+    assert_eq!(state.server_request(get_request).await.unwrap().status, 503);
+    let marker_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM daemon_meta WHERE key = 'server_response_cache_credential_scope_v1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        marker_count, 0,
+        "failed deletion must not leave cached rows inheritable on restart"
+    );
+    pool.close().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn server_proxy_keeps_private_cache_only_when_restart_credentials_match() {
+    let status = Arc::new(AtomicUsize::new(200));
+    let app = Router::new()
+        .route("/api/v1/cache-probe", get(cache_status_probe))
+        .with_state(status.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    let (state, store) =
+        common::initialize_authenticated_daemon(config.clone(), "test-token", None).await;
+    let request = DaemonServerRequest {
+        method: "GET".to_owned(),
+        path: "/api/v1/cache-probe".to_owned(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    let live = state.server_request(request.clone()).await.unwrap();
+    wait_for_server_response_cache(&state, &request.path, &live.body).await;
+    drop(state);
+    status.store(503, Ordering::Release);
+    let state = common::initialize_daemon(config.clone(), store.clone()).await;
+    assert_eq!(
+        state
+            .server_request(request.clone())
+            .await
+            .unwrap()
+            .headers
+            .get("x-clumsies-cache")
+            .map(String::as_str),
+        Some("stale")
+    );
+    drop(state);
+    clumsiesd::CredentialStore::replace(
+        &store,
+        &ServerCredentials {
+            server_url: config.project.server_url.clone(),
+            access_token: "replacement-token".to_owned(),
+            refresh_token: None,
+        },
+    )
+    .unwrap();
+    let state = common::initialize_daemon(config, store).await;
+    assert_eq!(state.server_request(request).await.unwrap().status, 503);
+    server.abort();
+}
+
+#[tokio::test]
+async fn server_proxy_old_request_cannot_read_the_replacement_accounts_cache() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let app = Router::new().route(
+        "/api/v1/cache-probe",
+        get({
+            let started = started.clone();
+            let release = release.clone();
+            move |headers: axum::http::HeaderMap| {
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    if proxy_header_value(&headers, "authorization").as_deref()
+                        == Some("Bearer test-token")
+                    {
+                        started.notify_one();
+                        release.notified().await;
+                        (
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({"account":"old"})),
+                        )
+                            .into_response()
+                    } else {
+                        Json(json!({"account":"new"})).into_response()
+                    }
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    let request = DaemonServerRequest {
+        method: "GET".to_owned(),
+        path: "/api/v1/cache-probe".to_owned(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    let older = tokio::spawn({
+        let state = state.clone();
+        let request = request.clone();
+        async move { state.server_request(request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+    state
+        .replace_project_config(DaemonProjectConfigUpdateRequest {
+            server_url: format!("http://{address}"),
+            project_id: None,
+            memory_guidelines_path: None,
+            access_token: Some("replacement-token".to_owned()),
+            refresh_token: None,
+        })
+        .await
+        .unwrap();
+    let fresh = state.server_request(request.clone()).await.unwrap();
+    wait_for_server_response_cache(&state, &request.path, &fresh.body).await;
+    release.notify_one();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), older)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(DaemonError::State {
+            code: "sync_session_changed",
+            ..
+        })
+    ));
+    server.abort();
+}
+
+async fn cache_status_probe(
+    axum::extract::State(status): axum::extract::State<Arc<AtomicUsize>>,
+    headers: axum::http::HeaderMap,
+) -> impl axum::response::IntoResponse {
+    assert!(matches!(
+        proxy_header_value(&headers, "authorization").as_deref(),
+        Some("Bearer test-token" | "Bearer replacement-token")
+    ));
+    (
+        axum::http::StatusCode::from_u16(status.load(Ordering::Acquire) as u16).unwrap(),
+        Json(json!({"source":"live"})),
+    )
+}
+
+#[tokio::test]
+async fn server_proxy_does_not_cache_authentication_or_no_store_responses() {
+    use axum::response::IntoResponse;
+    let app = Router::new()
+        .route(
+            "/api/v1/auth/credentials",
+            get(|| async { Json(json!({"secret":"private"})) }),
+        )
+        .route(
+            "/api/v1/no-store",
+            get(|| async {
+                (
+                    [("cache-control", "no-store")],
+                    Json(json!({"secret":"private"})),
+                )
+                    .into_response()
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    for path in ["/api/v1/auth/credentials", "/api/v1/no-store"] {
+        assert_eq!(
+            state
+                .server_request(DaemonServerRequest {
+                    method: "GET".to_owned(),
+                    path: path.to_owned(),
+                    headers: BTreeMap::new(),
+                    body: None
+                })
+                .await
+                .unwrap()
+                .status,
+            200
+        );
+    }
+    let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM server_response_cache")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    pool.close().await;
+    server.abort();
+    server.await.unwrap_err();
+    for path in ["/api/v1/auth/credentials", "/api/v1/no-store"] {
+        assert!(
+            state
+                .server_request(DaemonServerRequest {
+                    method: "GET".to_owned(),
+                    path: path.to_owned(),
+                    headers: BTreeMap::new(),
+                    body: None
+                })
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn server_proxy_never_masks_a_denied_or_deleted_response_with_a_broken_body() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for (status, length, body) in [
+            ("200 OK", 7, "private"),
+            ("403 Forbidden", 100, "partial"),
+            ("503 Service Unavailable", 4, "down"),
+            ("200 OK", 7, "private"),
+            ("404 Not Found", 100, "partial"),
+            ("503 Service Unavailable", 4, "down"),
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 8192];
+            let size = stream.read(&mut buffer).await.unwrap();
+            let request = std::str::from_utf8(&buffer[..size]).unwrap();
+            assert!(request.starts_with("GET /api/v1/cache-probe HTTP/1.1"));
+            assert!(request.contains("authorization: Bearer test-token"));
+            stream.write_all(format!("HTTP/1.1 {status}\r\ncontent-length: {length}\r\nconnection: close\r\n\r\n{body}").as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        }
+    });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    let request = DaemonServerRequest {
+        method: "GET".to_owned(),
+        path: "/api/v1/cache-probe".to_owned(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    for _ in 0..2 {
+        let live = state.server_request(request.clone()).await.unwrap();
+        wait_for_server_response_cache(&state, &request.path, &live.body).await;
+        assert!(
+            state.server_request(request.clone()).await.is_err(),
+            "receiving denied or deleted headers must forbid fallback even when the body transfer fails"
+        );
+        assert_eq!(
+            state.server_request(request.clone()).await.unwrap().status,
+            503
+        );
+    }
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn server_proxy_does_not_revive_project_cache_after_live_membership_revocation() {
+    let probe = ProjectLifecycleProbe::default();
+    probe.membership.store(1, Ordering::SeqCst);
+    let app = Router::new()
+        .route("/api/v1/me", get(lifecycle_identity))
+        .route(
+            "/api/v1/projects/{project_id}/commit-state",
+            get(lifecycle_project_commit),
+        )
+        .route("/api/v1/org/commit-state", get(lifecycle_org_commit))
+        .route("/api/v1/draft-events", get(lifecycle_events))
+        .with_state(probe.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    config.project.project_id = Some("prj_recovery".to_owned());
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::All,
+        })
+        .await
+        .unwrap();
+    let request = DaemonServerRequest {
+        method: "GET".to_owned(),
+        path: "/api/v1/projects/prj_recovery/commit-state".to_owned(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    let live = state.server_request(request.clone()).await.unwrap();
+    wait_for_server_response_cache(&state, &request.path, &live.body).await;
+    probe.membership.store(2, Ordering::SeqCst);
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::All,
+        })
+        .await
+        .unwrap();
+    assert!(state.project_config_status().project_id.is_none());
+    probe.commit_status.store(503, Ordering::SeqCst);
+    assert_eq!(
+        state.server_request(request).await.unwrap().status,
+        503,
+        "observed membership revocation must invalidate the previous project's successful cache"
+    );
+    server.abort();
 }
 
 #[tokio::test]
@@ -6418,6 +7261,247 @@ async fn draft_operation_rejects_multiple_operation_variants() {
 }
 
 #[tokio::test]
+async fn commit_sync_repairs_incomplete_central_cache_with_and_without_a_generation() {
+    let server = AtomicCommitServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = server.url.clone();
+    config.project.project_id = Some("prj_atomic".to_owned());
+    let (state, _) =
+        common::initialize_authenticated_daemon(config, "fake-access-token", None).await;
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::Commits,
+        })
+        .await
+        .unwrap();
+    let installed = state
+        .memory_cache(DaemonMemoryCacheRequest {
+            project_id: "prj_atomic".to_owned(),
+        })
+        .await
+        .unwrap();
+    let generation = PathBuf::from(installed.active_generation_path.unwrap());
+    let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+        .await
+        .unwrap();
+    for remove_generation in [false, true] {
+        for corruption in [
+            "missing_tree",
+            "missing_blob",
+            "corrupt_blob",
+            "corrupt_tree",
+            "corrupt_commit",
+        ] {
+            match corruption {
+                "missing_tree" => {
+                    sqlx::query("DELETE FROM cached_trees WHERE tree_id = 'tree-valid'")
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                "missing_blob" => {
+                    sqlx::query("DELETE FROM cached_blobs WHERE blob_id = $1")
+                        .bind(test_blob_id("Valid authority"))
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                "corrupt_blob" => {
+                    sqlx::query("UPDATE cached_blobs SET content = 'damaged' WHERE blob_id = $1")
+                        .bind(test_blob_id("Valid authority"))
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                "corrupt_tree" => {
+                    sqlx::query("UPDATE cached_trees SET payload_json = 'malformed' WHERE tree_id = 'tree-valid'").execute(&pool).await.unwrap();
+                }
+                "corrupt_commit" => {
+                    sqlx::query("UPDATE cached_commits SET payload_json = 'malformed' WHERE commit_id = 'commit-valid'").execute(&pool).await.unwrap();
+                }
+                _ => unreachable!(),
+            }
+            if remove_generation {
+                std::fs::remove_dir_all(&generation).unwrap();
+                let missing = state
+                    .memory_cache(DaemonMemoryCacheRequest {
+                        project_id: "prj_atomic".to_owned(),
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    missing.state,
+                    DaemonMemoryCacheState::GenerationMissing,
+                    "{corruption}"
+                );
+            }
+            state
+                .retry_sync(DaemonSyncRetryRequest {
+                    channel: SyncRetryChannel::Commits,
+                })
+                .await
+                .unwrap();
+            let checkout = state
+                .project_checkout(DaemonProjectCheckoutRequest {
+                    project_id: "prj_atomic".to_owned(),
+                })
+                .await
+                .unwrap();
+            assert!(checkout.ready, "{corruption}");
+            assert_eq!(checkout.resources[0].content.content, "Valid authority");
+            let retained_content: String =
+                sqlx::query_scalar("SELECT content FROM cached_blobs WHERE blob_id = $1")
+                    .bind(test_blob_id("Valid authority"))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(retained_content, "Valid authority");
+        }
+    }
+    let draft = state
+        .store_draft_operation(DaemonDraftOperationRequest {
+            draft_id: None,
+            base_commit_id: None,
+            project_id: "prj_atomic".to_owned(),
+            scope: DaemonDraftScope::Project,
+            resource: DaemonDraftResourceKind::Memory,
+            op: DaemonDraftOperation {
+                create: Some(DaemonCreateDraftOperation {
+                    path: "unsynced.md".to_owned(),
+                    content: context_content("Pending local edit"),
+                    description: None,
+                }),
+                update: None,
+                rename: None,
+                delete: None,
+                discard: None,
+            },
+            source: Some(DaemonDraftOperationSource::Desktop),
+        })
+        .await
+        .unwrap();
+    let before: String =
+        sqlx::query_scalar("SELECT operation_json FROM local_draft_operations WHERE draft_id = $1")
+            .bind(&draft.draft_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE cached_blobs SET content = 'damaged' WHERE blob_id = $1")
+        .bind(test_blob_id("Valid authority"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::Commits,
+        })
+        .await
+        .unwrap();
+    let after: String =
+        sqlx::query_scalar("SELECT operation_json FROM local_draft_operations WHERE draft_id = $1")
+            .bind(&draft.draft_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+    assert!(after.contains("Pending local edit"));
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn purged_project_cache_recovers_offline_and_preserves_draft_bases() {
+    let server = AtomicCommitServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = server.url.clone();
+    config.project.project_id = Some("prj_atomic".to_owned());
+    let cache_dir = config.cache_dir.clone();
+    let (state, _) =
+        common::initialize_authenticated_daemon(config, "fake-access-token", None).await;
+    state
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::Commits,
+        })
+        .await
+        .unwrap();
+    let draft = state
+        .store_draft_operation(DaemonDraftOperationRequest {
+            draft_id: None,
+            base_commit_id: None,
+            project_id: "prj_atomic".to_owned(),
+            scope: DaemonDraftScope::Project,
+            resource: DaemonDraftResourceKind::Memory,
+            op: DaemonDraftOperation {
+                create: Some(DaemonCreateDraftOperation {
+                    path: "local/proposal.md".to_owned(),
+                    content: context_content("Unsynchronized proposal"),
+                    description: None,
+                }),
+                update: None,
+                rename: None,
+                delete: None,
+                discard: None,
+            },
+            source: Some(DaemonDraftOperationSource::Desktop),
+        })
+        .await
+        .unwrap();
+    assert!(draft.queued);
+    std::fs::remove_dir_all(&cache_dir).unwrap();
+    // A recovery read must use the validated local Commit, even when the
+    // Server now advertises an invalid replacement.
+    server.publish_invalid_commit();
+    let checkout = state
+        .project_checkout(DaemonProjectCheckoutRequest {
+            project_id: "prj_atomic".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert!(checkout.ready);
+    assert_eq!(checkout.commit_id.as_deref(), Some("commit-valid"));
+    assert_eq!(checkout.resources[0].content.content, "Valid authority");
+    let storage = state
+        .project_storage(DaemonProjectStorageRequest {
+            project_id: "prj_atomic".to_owned(),
+        })
+        .await
+        .unwrap();
+    state
+        .clear_project_cache(DaemonProjectCacheClearRequest {
+            project_id: "prj_atomic".to_owned(),
+            expected_location_revision: storage.location_revision,
+        })
+        .await
+        .unwrap();
+    let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+        .await
+        .unwrap();
+    let base: String =
+        sqlx::query_scalar("SELECT base_commit_id FROM local_drafts WHERE draft_id = $1")
+            .bind(&draft.draft_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(base, "commit-valid");
+    let operation_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM local_draft_operations WHERE draft_id = $1")
+            .bind(&draft.draft_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(operation_count, 1);
+    let retained_base_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM cached_commits WHERE commit_id = $1")
+            .bind(&base)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(retained_base_count, 1);
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn invalid_commit_payload_does_not_advance_the_installed_ref() {
     let server = AtomicCommitServer::start().await;
     let root = tempfile::tempdir().unwrap();
@@ -6545,29 +7629,40 @@ async fn invalid_commit_payload_does_not_advance_the_installed_ref() {
         }
     ));
 
-    std::fs::remove_dir_all(&installed_root).unwrap();
-    let missing = service
+    server.revision.store(0, Ordering::Release);
+    service
+        .retry_sync(DaemonSyncRetryRequest {
+            channel: SyncRetryChannel::Commits,
+        })
+        .await
+        .unwrap();
+    let repaired = service
         .memory_cache(DaemonMemoryCacheRequest {
             project_id: "prj_atomic".to_owned(),
         })
         .await
         .unwrap();
-    assert_eq!(missing.state, DaemonMemoryCacheState::GenerationMissing);
-    let missing_activation = service
-        .activate_memory(ActivateMemoryRequest {
+    assert_eq!(repaired.state, DaemonMemoryCacheState::Ready);
+
+    std::fs::remove_dir_all(&installed_root).unwrap();
+    let recovered = service
+        .memory_cache(DaemonMemoryCacheRequest {
             project_id: "prj_atomic".to_owned(),
-            query: "authority".to_owned(),
-            state: None,
         })
         .await
-        .unwrap_err();
-    assert!(matches!(
-        missing_activation,
-        DaemonError::State {
-            code: "commit_generation_missing",
-            ..
-        }
-    ));
+        .unwrap();
+    assert_eq!(recovered.state, DaemonMemoryCacheState::Ready);
+    let recovered_checkout = service
+        .project_checkout(DaemonProjectCheckoutRequest {
+            project_id: "prj_atomic".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert!(recovered_checkout.ready);
+    assert_eq!(
+        recovered_checkout.resources[0].content.content,
+        "Valid authority"
+    );
 }
 
 async fn wait_for_create_request(server: &FakeServer) {
@@ -6656,6 +7751,8 @@ struct RefreshProbeState {
     both_stale: Arc<Notify>,
     refresh_started: Arc<Notify>,
     release_refresh: Arc<Notify>,
+    allow_stale: Arc<AtomicBool>,
+    refresh_status: Arc<AtomicUsize>,
 }
 
 fn refresh_probe_server_request() -> DaemonServerRequest {
@@ -6675,6 +7772,9 @@ async fn refresh_probe_request(
 
     match proxy_header_value(&headers, "authorization").as_deref() {
         Some("Bearer stale-token") => {
+            if state.allow_stale.load(Ordering::Acquire) {
+                return Json(json!({ "authorized": true })).into_response();
+            }
             if state.stale_requests.fetch_add(1, Ordering::AcqRel) == 1 {
                 state.both_stale.notify_one();
             }
@@ -6702,14 +7802,24 @@ async fn refresh_probe_request(
 
 async fn refresh_probe_token(
     axum::extract::State(state): axum::extract::State<RefreshProbeState>,
-) -> Json<serde_json::Value> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
     state.refresh_requests.fetch_add(1, Ordering::AcqRel);
     state.refresh_started.notify_one();
     state.release_refresh.notified().await;
+    let status = state.refresh_status.load(Ordering::Acquire);
+    if status != 0 {
+        return (
+            axum::http::StatusCode::from_u16(status as u16).unwrap(),
+            Json(json!({ "error": "refresh rejected" })),
+        )
+            .into_response();
+    }
     Json(json!({
         "access_token": "fresh-token",
         "refresh_token": "rotated-refresh-token"
     }))
+    .into_response()
 }
 
 #[derive(Clone)]
@@ -7100,6 +8210,54 @@ fn test_blob_id(content: &str) -> String {
     hasher.update(b"blob\0");
     hasher.update(content.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+async fn cache_draft_base_fixture(
+    pool: &sqlx::SqlitePool,
+    commit_id: &str,
+    project_id: Option<&str>,
+    tree_id: &str,
+) {
+    let scope = if project_id.is_some() {
+        "project"
+    } else {
+        "org"
+    };
+    let commit = json!({
+        "commit_id": commit_id, "scope": scope, "org_id": "org_test", "project_id": project_id,
+        "tree_id": tree_id, "parent_commit_id": null, "version": 1, "created_at": "2026-07-15T00:00:00Z"
+    });
+    let mut entries = Vec::new();
+    let mut tx = pool.begin().await.unwrap();
+    if let Some(project_id) = project_id {
+        let selection = serde_json::to_string(
+            &json!({"project_id": project_id, "memories": [], "revision": 0}),
+        )
+        .unwrap();
+        let content = format!("Published memory at {commit_id}");
+        for body in [&selection, &content] {
+            sqlx::query("INSERT INTO cached_blobs (blob_id, content) VALUES ($1, $2) ON CONFLICT(blob_id) DO NOTHING")
+                .bind(test_blob_id(body)).bind(body).execute(&mut *tx).await.unwrap();
+        }
+        entries.push(json!({
+            "id": "project_org_selection", "type": "project_org_selection", "scope": "daemon",
+            "project_id": project_id, "path": null, "blob_id": test_blob_id(&selection), "source": "config"
+        }));
+        entries.push(json!({
+            "id": "ctx_conflict", "type": "memory", "scope": "project", "project_id": project_id,
+            "path": "docs/conflict.md", "blob_id": test_blob_id(&content), "source": "project"
+        }));
+    }
+    sqlx::query("INSERT INTO cached_trees (tree_id, payload_json) VALUES ($1, $2)")
+        .bind(tree_id)
+        .bind(serde_json::to_string(&json!({"tree_id": tree_id, "entries": entries})).unwrap())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO cached_commits (commit_id, scope, org_id, project_id, tree_id, parent_commit_id, version, created_at, payload_json) VALUES ($1, $2, 'org_test', $3, $4, NULL, 1, '2026-07-15T00:00:00Z', $5)")
+        .bind(commit_id).bind(scope).bind(project_id).bind(tree_id).bind(serde_json::to_string(&commit).unwrap())
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
 }
 
 impl FakeServer {

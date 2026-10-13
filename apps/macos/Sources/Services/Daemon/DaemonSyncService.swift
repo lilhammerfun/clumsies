@@ -10,11 +10,20 @@ private struct SyncRetryTaskHandle {
 final class DaemonSyncService: ObservableObject {
     private let context: WorkspaceContext
     private let feedback: WorkspaceFeedback
+    private let fetchSyncStatus: (String?) async throws -> DaemonSyncStatus
+    private var syncStatusGeneration = UUID()
+    var synchronizedWorkspaceDataGeneration = UUID()
+    private var observations: Set<AnyCancellable> = []
     var onRetryCompleted: (() async -> Void)?
 
-    init(context: WorkspaceContext, feedback: WorkspaceFeedback) {
+    init(context: WorkspaceContext, feedback: WorkspaceFeedback,
+         fetchSyncStatus: ((String?) async throws -> DaemonSyncStatus)? = nil) {
         self.context = context
         self.feedback = feedback
+        self.fetchSyncStatus = fetchSyncStatus ?? { try await context.daemon.syncStatus(projectId: $0) }
+        context.projectSelectionChanges.sink { [weak self] in
+            self?.invalidateRefreshes()
+        }.store(in: &observations)
     }
 
     @Published var runtime: RuntimeState?
@@ -140,15 +149,18 @@ final class DaemonSyncService: ObservableObject {
 
     func refreshSyncStatus() async {
         guard context.phase == .ready, !isRefreshingSyncStatus else { return }
+        let request = UUID()
+        syncStatusGeneration = request
         isRefreshingSyncStatus = true
-        defer { isRefreshingSyncStatus = false }
+        defer { if syncStatusGeneration == request { isRefreshingSyncStatus = false } }
         let generation = context.workspaceReloadGeneration
         let projectId = context.activeProjectId
         guard let runtime = runtime else { return }
         do {
-            let sync = try await context.daemon.syncStatus(projectId: projectId)
+            let sync = try await fetchSyncStatus(projectId)
             try Task.checkCancellation()
-            guard context.workspaceReloadGeneration == generation,
+            guard syncStatusGeneration == request,
+                  context.workspaceReloadGeneration == generation,
                   context.activeProjectId == projectId,
                   context.phase == .ready else {
                 return
@@ -167,7 +179,8 @@ final class DaemonSyncService: ObservableObject {
         } catch where error.isUserCancellation {
             return
         } catch {
-            guard context.workspaceReloadGeneration == generation,
+            guard syncStatusGeneration == request,
+                  context.workspaceReloadGeneration == generation,
                   context.activeProjectId == projectId else {
                 return
             }
@@ -201,6 +214,7 @@ final class DaemonSyncService: ObservableObject {
     }
 
     func resetAuthority() {
+        invalidateRefreshes()
         cancelLoading()
         cancelSyncRetries()
         runtime = nil
@@ -208,8 +222,16 @@ final class DaemonSyncService: ObservableObject {
     }
 
     func applyRuntime(_ runtime: RuntimeState) {
+        invalidateRefreshes()
         self.runtime = runtime
         syncStatusAvailable = false
+    }
+
+    private func invalidateRefreshes() {
+        syncStatusGeneration = UUID()
+        synchronizedWorkspaceDataGeneration = UUID()
+        isRefreshingSyncStatus = false
+        isRefreshingSynchronizedWorkspaceData = false
     }
 }
 

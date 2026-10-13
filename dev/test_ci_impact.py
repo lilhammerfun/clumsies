@@ -2,9 +2,11 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 from ci_impact import CHECKS, COMPONENTS, classify, changed_paths, delivery_is_current, event_plan, gate_errors
@@ -99,6 +101,73 @@ class ImpactTests(unittest.TestCase):
         for invalid in ("{}", "null", "not-json", json.dumps({name: "false" for name in COMPONENTS})):
             needs["changes"]["outputs"]["plan"] = invalid
             self.assertTrue(gate_errors(needs))
+
+
+
+class ReleaseBuildTests(unittest.TestCase):
+    workflow = Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
+
+    def job(self, name):
+        source = self.workflow.read_text()
+        return re.search(r"^  " + name + r":\n(.*?)(?=^  [a-z][a-z_-]*:|\Z)", source, re.M | re.S)[1]
+
+    def run_step(self, job, name):
+        step = self.job(job).split("      - name: " + name + "\n", 1)[1].split("\n      - ", 1)[0]
+        return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+    def build_environment(self, job, root, run_number=31):
+        offset = re.search(r"^  CLUMSIES_BUILD_NUMBER_OFFSET: '(\d+)'$", self.workflow.read_text(), re.M)[1]
+        body = re.search(r"- name: Set macOS build number\n        run: (.+)", self.job(job))[1]
+        environment = os.environ | {"GITHUB_RUN_NUMBER": str(run_number),
+            "CLUMSIES_BUILD_NUMBER_OFFSET": offset, "GITHUB_ENV": str(root / "github-env")}
+        subprocess.run(["/bin/sh", "-eu", "-c", body], env=environment, check=True)
+        key, value = (root / "github-env").read_text().splitlines()[-1].split("=", 1)
+        self.assertEqual(key, "CLUMSIES_BUILD_NUMBER")
+        return environment | {key: value}
+
+    def test_both_native_jobs_advance_past_installed_build_and_remain_monotonic(self):
+        for job in ("macos-adhoc", "macos-release"):
+            with self.subTest(job=job), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                first = int(self.build_environment(job, root)["CLUMSIES_BUILD_NUMBER"])
+                second = int(self.build_environment(job, root, 32)["CLUMSIES_BUILD_NUMBER"])
+                self.assertGreater(first, 32)
+                self.assertGreater(second, first)
+                self.assertNotIn("CLUMSIES_BUILD_NUMBER:", self.job(job))
+
+    def test_preview_and_tag_sign_the_archive_named_with_actual_build_number(self):
+        for event, tag, filename in (("workflow_dispatch", "macos-preview-31", "Clumsies-9.8.7-preview.33-macos-arm64.dmg"),
+                ("push", "v9.8.7", "Clumsies-9.8.7-macos-arm64.dmg")):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "apps/macos").mkdir(parents=True)
+                (root / "apps/macos/project.yml").write_text('MARKETING_VERSION: "9.8.7"\n')
+                (root / "dist/macos").mkdir(parents=True)
+                (root / "dist/macos" / filename).write_text("synthetic archive")
+                (root / "bin").mkdir()
+                signer = root / "bin/sh"
+                signer.write_text('#!/bin/sh\nset -eu\ntest "$1" = apps/macos/Scripts/generate-appcast.sh\n'
+                    'test "$2" = "$EXPECTED_TAG"\ntest -f "$3"\nprintf "%s\\n" "$3" > "$CALL_LOG"\n')
+                signer.chmod(0o755)
+                environment = self.build_environment("macos-adhoc", root) | {
+                    "GITHUB_EVENT_NAME": event, "GITHUB_REF_NAME": tag, "SPARKLE_PRIVATE_KEY": "synthetic-test-key",
+                    "EXPECTED_TAG": tag, "CALL_LOG": str(root / "called"), "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"]}
+                subprocess.run(["/bin/bash", "-eu", "-c", self.run_step("macos-adhoc", "Sign the in-app update")],
+                    env=environment, cwd=root, check=True)
+                self.assertEqual((root / "called").read_text().strip(), "dist/macos/" + filename)
+
+    def test_notarized_archive_receives_the_same_computed_build_number(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "apps/macos/Scripts").mkdir(parents=True)
+            (root / "apps/macos/project.yml").write_text('MARKETING_VERSION: "9.8.7"\n')
+            archive = root / "apps/macos/Scripts/archive-release.sh"
+            archive.write_text('#!/bin/sh\nset -eu\nprintf "%s|%s\\n" "$CLUMSIES_BUILD_NUMBER" "$CLUMSIES_VERSION" > "$CALL_LOG"\n')
+            archive.chmod(0o755)
+            environment = self.build_environment("macos-release", root) | {"CALL_LOG": str(root / "called")}
+            subprocess.run(["/bin/bash", "-eu", "-c", self.run_step("macos-release", "Build and notarize native macOS app")],
+                env=environment, cwd=root, check=True)
+            self.assertEqual((root / "called").read_text().strip(), "33|9.8.7")
 
 
 class GitRangeTests(unittest.TestCase):

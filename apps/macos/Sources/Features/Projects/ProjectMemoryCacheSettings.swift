@@ -98,7 +98,7 @@ struct ProjectMemoryCacheSettings: View {
             if self.confirmation == .reset {
                 Text("Clumsies will move the Project cache back to its standard macOS location.")
             } else {
-                Text("Drafts and settings are preserved. Commit generations and the search index will be rebuilt.")
+                Text("This clears the Project’s downloaded memories and search index. Connect to the server to rebuild them. Drafts, settings, retrieval history and evaluations are kept.")
             }
         }
     }

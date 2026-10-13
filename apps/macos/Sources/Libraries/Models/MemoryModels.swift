@@ -110,6 +110,7 @@ struct MemoryResource: Identifiable, Hashable, Sendable {
     var contentLoaded: Bool
     var document: EditableMemoryDocument
     var orgSource: OrgMemorySource? = nil
+    var baseCommitPin: CommitBasePin? = nil
 }
 
 struct LocalDraft: Identifiable, Hashable, Sendable {
@@ -136,6 +137,8 @@ struct LocalDraft: Identifiable, Hashable, Sendable {
     var orgSource: OrgMemorySource? = nil
     /// Reconciliation can leave an open record with no remaining operations.
     var hasChanges: Bool = true
+    var baseCommitPin: CommitBasePin? = nil
+    var baseCommitAvailable = true
 }
 
 struct MemoryListItem: Identifiable, Hashable, Sendable {
@@ -147,6 +150,7 @@ struct MemoryListItem: Identifiable, Hashable, Sendable {
     /// stable carrier for a new local Draft on selected Org authority; it is
     /// deliberately distinct from resource ownership.
     var projectContextId: String? = nil
+    var editBasePin: CommitBasePin? = nil
 
     var document: EditableMemoryDocument {
         draft?.document ?? resource?.document ?? .init(
@@ -228,6 +232,7 @@ struct ProjectState: Identifiable, Hashable, Sendable {
     let selectedOrgResourceIds: Set<String>
     let orgSelectionRevision: Int
     let isLoaded: Bool
+    var baseCommitPin: CommitBasePin? = nil
 }
 
 struct RuntimeState: Equatable, Sendable {

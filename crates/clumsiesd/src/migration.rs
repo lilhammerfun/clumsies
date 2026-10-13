@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::sqlite::{
+    SqliteAutoVacuum, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::{Connection, Row, SqlitePool};
 use uuid::Uuid;
 
@@ -14,6 +16,50 @@ use crate::{
     RuntimeProjectConfig, ServerCredentials,
 };
 use crate::{agent_adapter, commit_sync, project_storage, retrieval_history, search};
+
+/// Own the connection whose foreign-key checks a table rebuild temporarily disables.
+///
+/// An armed guard discards the connection on cancellation or restoration failure;
+/// call `disarm` only after foreign-key enforcement has been restored successfully.
+struct ForeignKeyMigrationConnection {
+    connection: sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    armed: bool,
+}
+
+impl ForeignKeyMigrationConnection {
+    fn new(connection: sqlx::pool::PoolConnection<sqlx::Sqlite>) -> Self {
+        Self {
+            connection,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl std::ops::Deref for ForeignKeyMigrationConnection {
+    type Target = sqlx::SqliteConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
+impl std::ops::DerefMut for ForeignKeyMigrationConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.connection
+    }
+}
+
+impl Drop for ForeignKeyMigrationConnection {
+    fn drop(&mut self) {
+        if self.armed {
+            self.connection.close_on_drop();
+        }
+    }
+}
 
 pub(crate) fn prepare_directories(config: &DaemonConfig) -> Result<(), DaemonError> {
     project_storage::ensure_private_directory(&config.root_dir)?;
@@ -26,9 +72,12 @@ pub(crate) async fn connect_local_db(path: &Path) -> Result<SqlitePool, DaemonEr
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
+        // Every connection must request the same mode before any later VACUUM.
+        .auto_vacuum(SqliteAutoVacuum::Incremental)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
-        .synchronous(SqliteSynchronous::Normal);
+        // Unsynchronized Drafts and queued operations must survive power loss.
+        .synchronous(SqliteSynchronous::Full);
     Ok(SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
@@ -154,20 +203,30 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
         existing_schema_version = 40;
     }
     if existing_schema_version == 40 {
-        agent_adapter::global::migrate(pool).await?;
-        sqlx::query("UPDATE daemon_meta SET value = '41' WHERE key = 'schema_version'")
-            .execute(pool)
-            .await?;
+        agent_adapter::global::migrate_for_schema(pool, Some(41)).await?;
         existing_schema_version = 41;
     }
     if existing_schema_version == 41 {
         retire_agent_run_tables(pool).await?;
         existing_schema_version = 42;
     }
+    if existing_schema_version == 42 {
+        migrate_local_schema_42_to_43(pool).await?;
+        existing_schema_version = 43;
+    }
+    if existing_schema_version == 43 {
+        migrate_local_schema_43_to_44(pool).await?;
+        existing_schema_version = 44;
+    }
     if existing_schema_version != 0 && existing_schema_version != CURRENT_LOCAL_SCHEMA_VERSION {
         return Err(DaemonError::InvalidConfig(format!(
-            "local database schema version {existing_schema_version} is incompatible with version {CURRENT_LOCAL_SCHEMA_VERSION}; recreate the daemon database"
+            "local database schema version {existing_schema_version} is incompatible with version {CURRENT_LOCAL_SCHEMA_VERSION}; preserve the database and use a compatible daemon version"
         )));
+    }
+    if existing_schema_version == 0 {
+        // An explicit bootstrap checkpoint distinguishes an interrupted fresh
+        // install from an existing business database whose marker was lost.
+        stamp_schema_version(pool, 0).await?;
     }
     sqlx::query(
         "DELETE FROM daemon_meta
@@ -213,7 +272,8 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
     .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS local_draft_operations (
-            local_operation_id TEXT PRIMARY KEY,
+            operation_rowid INTEGER PRIMARY KEY,
+            local_operation_id TEXT NOT NULL UNIQUE,
             draft_id TEXT NOT NULL REFERENCES local_drafts(draft_id) ON DELETE CASCADE,
             server_operation_id TEXT,
             resource_kind TEXT NOT NULL CHECK (resource_kind IN ('context', 'rule', 'workflow', 'memory')),
@@ -255,6 +315,8 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
     )
     .execute(pool)
     .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_local_draft_operations_draft_id ON local_draft_operations (draft_id)")
+        .execute(pool).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_retries (
             retry_id TEXT PRIMARY KEY,
@@ -292,30 +354,298 @@ pub(crate) async fn migrate_local_db(pool: &SqlitePool) -> Result<(), DaemonErro
     Ok(())
 }
 
+/// Commit a bootstrap checkpoint while holding SQLite's writer reservation.
+///
+/// # Errors
+/// Returns database errors without committing a partial checkpoint.
+async fn stamp_schema_version(pool: &SqlitePool, target: i64) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    stamp_schema_version_in_tx(&mut tx, target).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Advance the version marker inside the transaction that changes its schema.
+///
+/// The caller owns commit or rollback. An existing newer marker is never lowered;
+/// legacy unit fixtures without `daemon_meta` are left unchanged.
+///
+/// # Errors
+/// Returns database errors before the caller commits its schema changes.
+pub(crate) async fn stamp_schema_version_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    target: i64,
+) -> Result<(), DaemonError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'daemon_meta')",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if exists {
+        sqlx::query(
+            "INSERT INTO daemon_meta (key, value) VALUES ('schema_version', $1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value
+             WHERE CAST(daemon_meta.value AS INTEGER) <= CAST(excluded.value AS INTEGER)",
+        )
+        .bind(target.to_string())
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Canonicalize mutable Draft kind projections and commit their schema checkpoint.
+///
+/// Immutable Trees, Blob bytes and operation JSON are left unchanged.
+///
+/// # Errors
+/// Returns database errors; kind changes, the index and version roll back together.
+async fn migrate_local_schema_43_to_44(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    for table in ["local_drafts", "local_draft_operations"] {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $1)",
+        )
+        .bind(table)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !exists {
+            continue;
+        }
+        sqlx::query(&format!(
+            "UPDATE {table} SET resource_kind = 'memory'
+             WHERE resource_kind IN ('context', 'rule', 'workflow')",
+        ))
+        .execute(&mut *tx)
+        .await?;
+    }
+    let operations_exist: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'local_draft_operations')")
+        .fetch_one(&mut *tx).await?;
+    if operations_exist {
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_local_draft_operations_draft_id ON local_draft_operations (draft_id)")
+            .execute(&mut *tx).await?;
+    }
+    stamp_schema_version_in_tx(&mut tx, 44).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Give operation rowids a persistent integer primary key before database compaction.
+///
+/// The rebuild copies original rowids and every operation field verbatim, preserving
+/// replay order through VACUUM. Its schema checkpoint commits in the same transaction.
+///
+/// # Errors
+/// Returns database errors; failed rebuilds preserve the original table and version.
+async fn migrate_local_schema_42_to_43(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'local_draft_operations')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if exists {
+        sqlx::query(
+            "CREATE TABLE local_draft_operations_v43 (
+                operation_rowid INTEGER PRIMARY KEY,
+                local_operation_id TEXT NOT NULL UNIQUE,
+                draft_id TEXT NOT NULL REFERENCES local_drafts(draft_id) ON DELETE CASCADE,
+                server_operation_id TEXT,
+                resource_kind TEXT NOT NULL CHECK (resource_kind IN ('context', 'rule', 'workflow', 'memory')),
+                operation_json TEXT NOT NULL,
+                source TEXT NOT NULL CHECK (source IN ('desktop', 'cli', 'mcp_store', 'server')),
+                sync_status TEXT NOT NULL CHECK (sync_status IN ('queued', 'syncing', 'retrying', 'synced', 'failed')),
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO local_draft_operations_v43 (
+                operation_rowid, local_operation_id, draft_id, server_operation_id,
+                resource_kind, operation_json, source, sync_status, last_error,
+                created_at, updated_at
+             ) SELECT rowid, local_operation_id, draft_id, server_operation_id,
+                      resource_kind, operation_json, source, sync_status, last_error,
+                      created_at, updated_at
+               FROM local_draft_operations",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DROP TABLE local_draft_operations")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE local_draft_operations_v43 RENAME TO local_draft_operations")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX idx_local_draft_operations_server_operation_id
+             ON local_draft_operations (server_operation_id)
+             WHERE server_operation_id IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX idx_local_draft_operations_sync_status
+             ON local_draft_operations (sync_status)",
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query("UPDATE daemon_meta SET value = '43' WHERE key = 'schema_version'")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Enable bounded page reclamation at startup, after migrations and before readers.
+///
+/// Databases without incremental mode need one full VACUUM. Once enabled, subsequent
+/// startups avoid that rewrite. A successful conversion is followed by WAL truncation.
+///
+/// # Errors
+/// Returns database or deferred-checkpoint errors. A completed conversion remains
+/// valid even if its subsequent checkpoint must be retried.
+pub(crate) async fn prepare_local_db_incremental_vacuum(
+    pool: &SqlitePool,
+) -> Result<(), DaemonError> {
+    let mut connection = pool.acquire().await?;
+    let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+        .fetch_one(&mut *connection)
+        .await?;
+    if mode != 2 {
+        sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query("VACUUM").execute(&mut *connection).await?;
+        drop(connection);
+        reclaim_local_db_pages(pool).await?;
+    }
+    Ok(())
+}
+
+/// Open an independent nonblocking maintenance connection with the pool's durability.
+///
+/// Only this connection receives a zero busy timeout; pooled business connections
+/// retain their configured timeout and FULL durability, including on cancellation.
+///
+/// # Errors
+/// Returns connection or SQLite initialization errors.
+pub(crate) async fn maintenance_connection(
+    pool: &SqlitePool,
+) -> Result<sqlx::SqliteConnection, DaemonError> {
+    let options = pool
+        .connect_options()
+        .as_ref()
+        .clone()
+        .auto_vacuum(SqliteAutoVacuum::Incremental)
+        .busy_timeout(Duration::ZERO);
+    Ok(sqlx::SqliteConnection::connect_with(&options).await?)
+}
+
+/// Truncate the WAL on a maintenance connection without waiting for active readers.
+///
+/// # Errors
+/// Returns SQLite errors or `local_db_reclamation_deferred` when the checkpoint is
+/// busy. Already committed business data remains committed.
+pub(crate) async fn checkpoint_maintenance(
+    connection: &mut sqlx::SqliteConnection,
+) -> Result<(), DaemonError> {
+    let (busy, _, _): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+        .fetch_one(&mut *connection)
+        .await?;
+    if busy != 0 {
+        return Err(DaemonError::State {
+            code: "local_db_reclamation_deferred",
+            message: "Local database reclamation is deferred while readers or writers are active"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Reclaim up to 1,024 free pages and checkpoint on a private maintenance connection.
+///
+/// This runs after logical deletion has committed and always closes its connection.
+/// It does not change pooled connection settings or undo a successful logical sweep.
+///
+/// # Errors
+/// Returns SQLite, connection-close or deferred-checkpoint errors; callers may retry
+/// physical maintenance while continuing to use the committed database.
+pub(super) async fn reclaim_local_db_pages(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut connection = maintenance_connection(pool).await?;
+    let result = async {
+        let free_pages: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+            .fetch_one(&mut connection)
+            .await?;
+        let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+            .fetch_one(&mut connection)
+            .await?;
+        if mode == 2 && free_pages > 0 {
+            // Each returned row advances the pragma; execute() alone can stop early.
+            sqlx::query("PRAGMA incremental_vacuum(1024)")
+                .fetch_all(&mut connection)
+                .await?;
+        }
+        checkpoint_maintenance(&mut connection).await
+    }
+    .await;
+    let closed = connection.close().await;
+    match (result, closed) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
 pub(crate) async fn migrate_local_schema_20_to_21(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let local_drafts_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT 1 FROM sqlite_master
             WHERE type = 'table' AND name = 'local_drafts'
          )",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
     if !local_drafts_exists {
+        stamp_schema_version_in_tx(&mut tx, 21).await?;
+        tx.commit().await?;
         return Ok(());
     }
-    sqlx::query(
-        "ALTER TABLE local_drafts
-         ADD COLUMN has_upstream_resource_changes INTEGER NOT NULL
-         CHECK (has_upstream_resource_changes IN (0, 1)) DEFAULT 0",
-    )
-    .execute(pool)
-    .await?;
+    let columns = sqlx::query("PRAGMA table_info(local_drafts)")
+        .fetch_all(&mut *tx)
+        .await?;
+    if !columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "has_upstream_resource_changes")
+    {
+        sqlx::query(
+            "ALTER TABLE local_drafts
+             ADD COLUMN has_upstream_resource_changes INTEGER NOT NULL
+             CHECK (has_upstream_resource_changes IN (0, 1)) DEFAULT 0",
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    stamp_schema_version_in_tx(&mut tx, 21).await?;
+    tx.commit().await?;
     Ok(())
 }
 
 // Historical upgrade steps only; fresh databases do not create AgentRun tables.
-async fn migrate_legacy_agent_runs(pool: &SqlitePool) -> Result<(), DaemonError> {
+/// Preserve legacy AgentRun tables until later rebuilds and retirement can complete.
+///
+/// # Errors
+/// Returns database errors; optional checkpoint and schema changes roll back together.
+async fn migrate_legacy_agent_runs(
+    pool: &SqlitePool,
+    target: Option<i64>,
+) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     for statement in [
         "CREATE TABLE IF NOT EXISTS agent_runs (
             run_id TEXT PRIMARY KEY,
@@ -371,11 +701,11 @@ async fn migrate_legacy_agent_runs(pool: &SqlitePool) -> Result<(), DaemonError>
         "CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_occurred
          ON agent_run_events (run_id, occurred_at DESC, event_id DESC)",
     ] {
-        sqlx::query(statement).execute(pool).await?;
+        sqlx::query(statement).execute(&mut *tx).await?;
     }
 
     let event_columns = sqlx::query("PRAGMA table_info(agent_run_events)")
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?;
     if !event_columns
         .iter()
@@ -385,15 +715,19 @@ async fn migrate_legacy_agent_runs(pool: &SqlitePool) -> Result<(), DaemonError>
             "ALTER TABLE agent_run_events
              ADD COLUMN event_fingerprint TEXT NOT NULL DEFAULT 'legacy'",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+    if let Some(target) = target {
+        stamp_schema_version_in_tx(&mut tx, target).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
 // Keep historical records and foreign-key relationships without an active runtime schema.
 async fn retire_agent_run_tables(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     for table in ["agent_runs", "agent_run_events"] {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $1)",
@@ -415,44 +749,87 @@ async fn retire_agent_run_tables(pool: &SqlitePool) -> Result<(), DaemonError> {
 }
 
 pub(crate) async fn migrate_local_schema_21_to_22(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(22)).await
 }
 
 pub(crate) async fn migrate_local_schema_22_to_23(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(23)).await
 }
 
 pub(crate) async fn migrate_local_schema_23_to_24(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(24)).await
 }
 
 pub(crate) async fn migrate_local_schema_24_to_25(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(25)).await
 }
 
 pub(crate) async fn migrate_local_schema_25_to_26(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(26)).await
 }
 
 pub(crate) async fn migrate_local_schema_27_to_28(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
-    let table_sql: Option<String> = sqlx::query_scalar(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'",
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-    if table_sql
-        .as_deref()
-        .is_some_and(|sql| sql.contains("'manual'"))
-    {
-        tx.commit().await?;
-        return Ok(());
-    }
-    if table_sql.is_none() {
-        // A library that never ran the schema-25 migration has no agent_runs
-        // table at all; create the v28 shape directly instead of rebuilding.
+    let connection = pool.acquire().await?;
+    let mut connection = ForeignKeyMigrationConnection::new(connection);
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *connection)
+        .await?;
+    let result = async {
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
+        let table_sql: Option<String> = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'",
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if table_sql
+            .as_deref()
+            .is_some_and(|sql| sql.contains("'manual'"))
+        {
+            stamp_schema_version_in_tx(&mut tx, 28).await?;
+            tx.commit().await?;
+            return Ok(());
+        }
+        if table_sql.is_none() {
+            // A library that never ran the schema-25 migration has no agent_runs
+            // table at all; create the v28 shape directly instead of rebuilding.
+            for statement in [
+                "CREATE TABLE agent_runs (
+                    run_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    issue_number BIGINT CHECK (issue_number IS NULL OR issue_number > 0),
+                    host TEXT NOT NULL CHECK (host IN ('codex', 'claude-code', 'zed', 'manual')),
+                    host_run_key TEXT NOT NULL,
+                    host_session_id TEXT,
+                    parent_run_id TEXT REFERENCES agent_runs(run_id),
+                    kind TEXT NOT NULL CHECK (kind IN ('root', 'subagent')),
+                    phase TEXT NOT NULL CHECK (phase IN ('running', 'ended')),
+                    outcome TEXT CHECK (outcome IN ('completed', 'blocked', 'failed', 'cancelled', 'unknown')),
+                    end_reason TEXT,
+                    display_label TEXT,
+                    summary TEXT,
+                    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+                    start_observed INTEGER NOT NULL DEFAULT 1 CHECK (start_observed IN (0, 1)),
+                    started_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    lease_expires_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    UNIQUE (project_id, host, host_run_key)
+                )",
+                "CREATE INDEX idx_agent_runs_project_issue_latest
+                 ON agent_runs (project_id, issue_number, last_seen_at DESC, run_id DESC)",
+                "CREATE INDEX idx_agent_runs_running_lease
+                 ON agent_runs (phase, lease_expires_at)",
+                "CREATE INDEX idx_agent_runs_project_session
+                 ON agent_runs (project_id, host, host_session_id, phase)",
+            ] {
+                sqlx::query(statement).execute(&mut *tx).await?;
+            }
+            stamp_schema_version_in_tx(&mut tx, 28).await?;
+            tx.commit().await?;
+            return Ok(());
+        }
         for statement in [
-            "CREATE TABLE agent_runs (
+            "CREATE TABLE agent_runs_v28 (
                 run_id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
                 issue_number BIGINT CHECK (issue_number IS NULL OR issue_number > 0),
@@ -474,6 +851,17 @@ pub(crate) async fn migrate_local_schema_27_to_28(pool: &SqlitePool) -> Result<(
                 ended_at TEXT,
                 UNIQUE (project_id, host, host_run_key)
             )",
+            "INSERT INTO agent_runs_v28 (
+                run_id, project_id, issue_number, host, host_run_key, host_session_id,
+                parent_run_id, kind, phase, outcome, end_reason, display_label, summary,
+                revision, start_observed, started_at, last_seen_at, lease_expires_at, ended_at
+             )
+             SELECT run_id, project_id, issue_number, host, host_run_key, host_session_id,
+                    parent_run_id, kind, phase, outcome, end_reason, display_label, summary,
+                    revision, start_observed, started_at, last_seen_at, lease_expires_at, ended_at
+             FROM agent_runs",
+            "DROP TABLE agent_runs",
+            "ALTER TABLE agent_runs_v28 RENAME TO agent_runs",
             "CREATE INDEX idx_agent_runs_project_issue_latest
              ON agent_runs (project_id, issue_number, last_seen_at DESC, run_id DESC)",
             "CREATE INDEX idx_agent_runs_running_lease
@@ -483,62 +871,30 @@ pub(crate) async fn migrate_local_schema_27_to_28(pool: &SqlitePool) -> Result<(
         ] {
             sqlx::query(statement).execute(&mut *tx).await?;
         }
+        stamp_schema_version_in_tx(&mut tx, 28).await?;
         tx.commit().await?;
-        return Ok(());
+        Ok(())
     }
-    for statement in [
-        "CREATE TABLE agent_runs_v28 (
-            run_id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            issue_number BIGINT CHECK (issue_number IS NULL OR issue_number > 0),
-            host TEXT NOT NULL CHECK (host IN ('codex', 'claude-code', 'zed', 'manual')),
-            host_run_key TEXT NOT NULL,
-            host_session_id TEXT,
-            parent_run_id TEXT REFERENCES agent_runs(run_id),
-            kind TEXT NOT NULL CHECK (kind IN ('root', 'subagent')),
-            phase TEXT NOT NULL CHECK (phase IN ('running', 'ended')),
-            outcome TEXT CHECK (outcome IN ('completed', 'blocked', 'failed', 'cancelled', 'unknown')),
-            end_reason TEXT,
-            display_label TEXT,
-            summary TEXT,
-            revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
-            start_observed INTEGER NOT NULL DEFAULT 1 CHECK (start_observed IN (0, 1)),
-            started_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            lease_expires_at TEXT NOT NULL,
-            ended_at TEXT,
-            UNIQUE (project_id, host, host_run_key)
-        )",
-        "INSERT INTO agent_runs_v28 (
-            run_id, project_id, issue_number, host, host_run_key, host_session_id,
-            parent_run_id, kind, phase, outcome, end_reason, display_label, summary,
-            revision, start_observed, started_at, last_seen_at, lease_expires_at, ended_at
-         )
-         SELECT run_id, project_id, issue_number, host, host_run_key, host_session_id,
-                parent_run_id, kind, phase, outcome, end_reason, display_label, summary,
-                revision, start_observed, started_at, last_seen_at, lease_expires_at, ended_at
-         FROM agent_runs",
-        "DROP TABLE agent_runs",
-        "ALTER TABLE agent_runs_v28 RENAME TO agent_runs",
-        "CREATE INDEX idx_agent_runs_project_issue_latest
-         ON agent_runs (project_id, issue_number, last_seen_at DESC, run_id DESC)",
-        "CREATE INDEX idx_agent_runs_running_lease
-         ON agent_runs (phase, lease_expires_at)",
-        "CREATE INDEX idx_agent_runs_project_session
-         ON agent_runs (project_id, host, host_session_id, phase)",
-    ] {
-        sqlx::query(statement).execute(&mut *tx).await?;
+    .await;
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *connection)
+        .await;
+    if restored.is_ok() {
+        connection.disarm();
     }
-    tx.commit().await?;
-    Ok(())
+    match (result, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
 }
 
 pub(crate) async fn migrate_local_schema_26_to_27(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(27)).await
 }
 
 pub(crate) async fn migrate_local_schema_28_to_29(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(29)).await
 }
 
 /// Widen the agent_runs host CHECK constraint to accept the opencode plugin
@@ -561,65 +917,82 @@ pub(crate) async fn migrate_local_schema_29_to_30(pool: &SqlitePool) -> Result<(
         .as_deref()
         .is_some_and(|sql| sql.contains("'opencode'"))
     {
+        drop(connection);
+        stamp_schema_version(pool, 30).await?;
         return Ok(());
     }
     if table_sql.is_none() {
         // A library that never ran schema 28 has no agent_runs table at all;
         // the work_tracking::migrate path already creates the widened shape.
+        drop(connection);
+        stamp_schema_version(pool, 30).await?;
         return Ok(());
     }
+    let mut connection = ForeignKeyMigrationConnection::new(connection);
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
-    let mut tx = connection.begin().await?;
-    for statement in [
-        "CREATE TABLE agent_runs_v30 (
-            run_id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            issue_number BIGINT CHECK (issue_number IS NULL OR issue_number > 0),
-            host TEXT NOT NULL CHECK (host IN ('codex', 'claude-code', 'zed', 'manual', 'opencode')),
-            host_run_key TEXT NOT NULL,
-            host_session_id TEXT,
-            parent_run_id TEXT REFERENCES agent_runs(run_id),
-            kind TEXT NOT NULL CHECK (kind IN ('root', 'subagent')),
-            phase TEXT NOT NULL CHECK (phase IN ('running', 'ended')),
-            outcome TEXT CHECK (outcome IN ('completed', 'blocked', 'failed', 'cancelled', 'unknown')),
-            end_reason TEXT,
-            display_label TEXT,
-            summary TEXT,
-            revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
-            start_observed INTEGER NOT NULL DEFAULT 1 CHECK (start_observed IN (0, 1)),
-            started_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            lease_expires_at TEXT NOT NULL,
-            ended_at TEXT,
-            UNIQUE (project_id, host, host_run_key)
-        )",
-        "INSERT INTO agent_runs_v30 (
-            run_id, project_id, issue_number, host, host_run_key, host_session_id,
-            parent_run_id, kind, phase, outcome, end_reason, display_label, summary,
-            revision, start_observed, started_at, last_seen_at, lease_expires_at, ended_at
-         )
-         SELECT run_id, project_id, issue_number, host, host_run_key, host_session_id,
+    let result = async {
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
+        for statement in [
+            "CREATE TABLE agent_runs_v30 (
+                run_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                issue_number BIGINT CHECK (issue_number IS NULL OR issue_number > 0),
+                host TEXT NOT NULL CHECK (host IN ('codex', 'claude-code', 'zed', 'manual', 'opencode')),
+                host_run_key TEXT NOT NULL,
+                host_session_id TEXT,
+                parent_run_id TEXT REFERENCES agent_runs(run_id),
+                kind TEXT NOT NULL CHECK (kind IN ('root', 'subagent')),
+                phase TEXT NOT NULL CHECK (phase IN ('running', 'ended')),
+                outcome TEXT CHECK (outcome IN ('completed', 'blocked', 'failed', 'cancelled', 'unknown')),
+                end_reason TEXT,
+                display_label TEXT,
+                summary TEXT,
+                revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+                start_observed INTEGER NOT NULL DEFAULT 1 CHECK (start_observed IN (0, 1)),
+                started_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                lease_expires_at TEXT NOT NULL,
+                ended_at TEXT,
+                UNIQUE (project_id, host, host_run_key)
+            )",
+            "INSERT INTO agent_runs_v30 (
+                run_id, project_id, issue_number, host, host_run_key, host_session_id,
                 parent_run_id, kind, phase, outcome, end_reason, display_label, summary,
                 revision, start_observed, started_at, last_seen_at, lease_expires_at, ended_at
-         FROM agent_runs",
-        "DROP TABLE agent_runs",
-        "ALTER TABLE agent_runs_v30 RENAME TO agent_runs",
-        "CREATE INDEX idx_agent_runs_project_issue_latest
-         ON agent_runs (project_id, issue_number, last_seen_at DESC, run_id DESC)",
-        "CREATE INDEX idx_agent_runs_running_lease
-         ON agent_runs (phase, lease_expires_at)",
-        "CREATE INDEX idx_agent_runs_project_session
-         ON agent_runs (project_id, host, host_session_id, phase)",
-    ] {
-        sqlx::query(statement).execute(&mut *tx).await?;
+             )
+             SELECT run_id, project_id, issue_number, host, host_run_key, host_session_id,
+                    parent_run_id, kind, phase, outcome, end_reason, display_label, summary,
+                    revision, start_observed, started_at, last_seen_at, lease_expires_at, ended_at
+             FROM agent_runs",
+            "DROP TABLE agent_runs",
+            "ALTER TABLE agent_runs_v30 RENAME TO agent_runs",
+            "CREATE INDEX idx_agent_runs_project_issue_latest
+             ON agent_runs (project_id, issue_number, last_seen_at DESC, run_id DESC)",
+            "CREATE INDEX idx_agent_runs_running_lease
+             ON agent_runs (phase, lease_expires_at)",
+            "CREATE INDEX idx_agent_runs_project_session
+             ON agent_runs (project_id, host, host_session_id, phase)",
+        ] {
+            sqlx::query(statement).execute(&mut *tx).await?;
+        }
+        stamp_schema_version_in_tx(&mut tx, 30).await?;
+        tx.commit().await?;
+        Ok(())
     }
-    tx.commit().await?;
-    sqlx::query("PRAGMA foreign_keys = ON")
+    .await;
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *connection)
-        .await?;
-    Ok(())
+        .await;
+    if restored.is_ok() {
+        connection.disarm();
+    }
+    match (result, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
 }
 
 /// Widen the project_agent_adapters adapter CHECK constraint to accept the
@@ -628,7 +1001,7 @@ pub(crate) async fn migrate_local_schema_29_to_30(pool: &SqlitePool) -> Result<(
 /// and is referenced by nothing else, so the rebuild is FK-safe on a single
 /// transaction.
 pub(crate) async fn migrate_local_schema_30_to_31(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let table_sql: Option<String> = sqlx::query_scalar(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_agent_adapters'",
     )
@@ -638,12 +1011,14 @@ pub(crate) async fn migrate_local_schema_30_to_31(pool: &SqlitePool) -> Result<(
         .as_deref()
         .is_some_and(|sql| sql.contains("'opencode'"))
     {
+        stamp_schema_version_in_tx(&mut tx, 31).await?;
         tx.commit().await?;
         return Ok(());
     }
     if table_sql.is_none() {
         // A library that never ran schema 20 has no project_agent_adapters
         // table; agent_adapter::migrate creates the widened shape.
+        stamp_schema_version_in_tx(&mut tx, 31).await?;
         tx.commit().await?;
         return Ok(());
     }
@@ -676,26 +1051,30 @@ pub(crate) async fn migrate_local_schema_30_to_31(pool: &SqlitePool) -> Result<(
     ] {
         sqlx::query(statement).execute(&mut *tx).await?;
     }
+    stamp_schema_version_in_tx(&mut tx, 31).await?;
     tx.commit().await?;
     Ok(())
 }
 
 pub(crate) async fn migrate_local_schema_31_to_32(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(32)).await
 }
 
 pub(crate) async fn migrate_local_schema_32_to_33(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(33)).await
 }
 
 pub(crate) async fn migrate_local_schema_33_to_34(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate_legacy_agent_runs(pool).await
+    migrate_legacy_agent_runs(pool, Some(34)).await
 }
 
 pub(crate) async fn migrate_local_schema_34_to_35(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut tx = pool.begin().await?;
     sqlx::query("UPDATE agent_runs SET host = 'opencode' WHERE host = 'manual'")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    stamp_schema_version_in_tx(&mut tx, 35).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -711,12 +1090,13 @@ pub(crate) async fn migrate_local_schema_34_to_35(pool: &SqlitePool) -> Result<(
 /// rebuild inside a transaction, then re-enable — all on one pooled
 /// connection so the pragma is guaranteed to apply.
 pub(crate) async fn migrate_local_schema_35_to_36(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut connection = pool.acquire().await?;
+    let connection = pool.acquire().await?;
+    let mut connection = ForeignKeyMigrationConnection::new(connection);
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
     let result = async {
-        let mut tx = connection.begin().await?;
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
         let table_sql: Option<String> = sqlx::query_scalar(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'",
         )
@@ -726,6 +1106,7 @@ pub(crate) async fn migrate_local_schema_35_to_36(pool: &SqlitePool) -> Result<(
             .as_deref()
             .is_some_and(|sql| sql.contains("'dsh'"))
         {
+            stamp_schema_version_in_tx(&mut tx, 36).await?;
             tx.commit().await?;
             return Ok(());
         }
@@ -764,6 +1145,7 @@ pub(crate) async fn migrate_local_schema_35_to_36(pool: &SqlitePool) -> Result<(
             ] {
                 sqlx::query(statement).execute(&mut *tx).await?;
             }
+            stamp_schema_version_in_tx(&mut tx, 36).await?;
             tx.commit().await?;
             return Ok(());
         }
@@ -813,20 +1195,47 @@ pub(crate) async fn migrate_local_schema_35_to_36(pool: &SqlitePool) -> Result<(
         ] {
             sqlx::query(statement).execute(&mut *tx).await?;
         }
+        stamp_schema_version_in_tx(&mut tx, 36).await?;
         tx.commit().await?;
         Ok(())
     }
     .await;
     // The pragma is connection-scoped: restore it even on failure so the
     // pooled connection never leaks with FK enforcement disabled.
-    sqlx::query("PRAGMA foreign_keys = ON")
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *connection)
-        .await?;
-    result
+        .await;
+    if restored.is_ok() {
+        connection.disarm();
+    }
+    match (result, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
 }
 
+/// Upgrade supported legacy Drafts only after proving no unmappable history would be lost.
+///
+/// A metaprompt Draft or operation, including terminal history, aborts before the first
+/// DDL. Supported changes and the version marker then share one writer transaction.
+///
+/// # Errors
+/// Returns preservation/compatibility or database errors; failed upgrades retain the
+/// original schema, Draft fields, operation queue and version for export or retry.
 pub(crate) async fn migrate_local_schema_13_to_14(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let unmapped_history: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM local_drafts WHERE resource_kind = 'metaprompt')
+             OR EXISTS(SELECT 1 FROM local_draft_operations WHERE resource_kind = 'metaprompt')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if unmapped_history {
+        return Err(DaemonError::InvalidConfig(
+            "local database contains legacy metaprompt Draft history that cannot be migrated without data loss; preserve the database and use a compatible daemon to export these records before upgrading".to_owned(),
+        ));
+    }
     for statement in [
         "DROP INDEX IF EXISTS idx_local_drafts_target_id",
         "DROP INDEX IF EXISTS idx_local_drafts_server_draft_id",
@@ -895,12 +1304,13 @@ pub(crate) async fn migrate_local_schema_13_to_14(pool: &SqlitePool) -> Result<(
         sqlx::query(statement).execute(&mut *tx).await?;
     }
     migrate_legacy_rule_operations(&mut tx).await?;
+    stamp_schema_version_in_tx(&mut tx, 14).await?;
     tx.commit().await?;
     Ok(())
 }
 
 pub(crate) async fn migrate_local_schema_14_to_15(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     for statement in [
         "DROP INDEX IF EXISTS idx_local_drafts_target_id",
         "DROP INDEX IF EXISTS idx_local_drafts_server_draft_id",
@@ -964,16 +1374,17 @@ pub(crate) async fn migrate_local_schema_14_to_15(pool: &SqlitePool) -> Result<(
     ] {
         sqlx::query(statement).execute(&mut *tx).await?;
     }
+    stamp_schema_version_in_tx(&mut tx, 15).await?;
     tx.commit().await?;
     Ok(())
 }
 
 pub(crate) async fn migrate_local_schema_15_to_16(pool: &SqlitePool) -> Result<(), DaemonError> {
-    create_project_bindings_table(pool).await
+    create_project_bindings_table_for_schema(pool, Some(16)).await
 }
 
 pub(crate) async fn migrate_local_schema_16_to_17(pool: &SqlitePool) -> Result<(), DaemonError> {
-    project_storage::migrate(pool).await
+    project_storage::migrate_for_schema(pool, Some(17)).await
 }
 
 pub(crate) async fn migrate_local_schema_17_to_18(pool: &SqlitePool) -> Result<(), DaemonError> {
@@ -985,10 +1396,22 @@ pub(crate) async fn migrate_local_schema_18_to_19(pool: &SqlitePool) -> Result<(
 }
 
 pub(crate) async fn migrate_local_schema_19_to_20(pool: &SqlitePool) -> Result<(), DaemonError> {
-    agent_adapter::migrate(pool).await
+    agent_adapter::migrate_for_schema(pool, Some(20)).await
 }
 
 pub(crate) async fn create_project_bindings_table(pool: &SqlitePool) -> Result<(), DaemonError> {
+    create_project_bindings_table_for_schema(pool, None).await
+}
+
+/// Install bindings and optionally checkpoint the same historical migration step.
+///
+/// # Errors
+/// Returns database errors without committing partial DDL or a standalone checkpoint.
+async fn create_project_bindings_table_for_schema(
+    pool: &SqlitePool,
+    target: Option<i64>,
+) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS project_bindings (
             server_url TEXT NOT NULL,
@@ -1000,14 +1423,18 @@ pub(crate) async fn create_project_bindings_table(pool: &SqlitePool) -> Result<(
             PRIMARY KEY (server_url, workspace_root)
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_project_bindings_project
          ON project_bindings (server_url, project_id)",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    if let Some(target) = target {
+        stamp_schema_version_in_tx(&mut tx, target).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -1141,6 +1568,13 @@ fn render_legacy_rule_markdown(
     )
 }
 
+/// Invalidate legacy derived project files without removing immutable offline Bases or Refs.
+///
+/// The reset marker is cleared only after directory cleanup succeeds. Referenced central
+/// objects remain available to Drafts; dependency-aware GC handles unreachable history.
+///
+/// # Errors
+/// Returns database or filesystem errors; the marker remains retryable after cleanup failure.
 pub(crate) async fn reset_memory_cache_if_required(
     pool: &SqlitePool,
     cache_dir: &Path,
@@ -1154,17 +1588,10 @@ pub(crate) async fn reset_memory_cache_if_required(
         return Ok(());
     }
 
-    let mut tx = pool.begin().await?;
-    for statement in [
-        "DELETE FROM cached_refs",
-        "DELETE FROM cached_commits",
-        "DELETE FROM cached_trees",
-        "DELETE FROM cached_blobs",
-    ] {
-        sqlx::query(statement).execute(&mut *tx).await?;
-    }
-    tx.commit().await?;
-
+    // Old kind-constrained search indexes and file layouts must be rebuilt,
+    // but immutable cached objects are also the offline Base of local Drafts.
+    // Keep their original bytes and Refs; the dependency-aware GC will reclaim
+    // only objects that no Draft or live document still needs.
     match std::fs::remove_dir_all(cache_dir.join("projects")) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1183,9 +1610,25 @@ pub(crate) async fn current_schema_version(pool: &SqlitePool) -> Result<i64, Dae
         sqlx::query_scalar("SELECT value FROM daemon_meta WHERE key = 'schema_version'")
             .fetch_optional(pool)
             .await?;
-    Ok(value
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or_default())
+    match value {
+        None => {
+            let business_tables_exist: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name <> 'daemon_meta' AND name NOT GLOB 'sqlite_*')",
+            ).fetch_one(pool).await?;
+            if business_tables_exist {
+                return Err(DaemonError::InvalidConfig(
+                    "local database schema version is missing from an existing database; preserve the database and restore its version from a verified backup".to_owned(),
+                ));
+            }
+            Ok(0)
+        },
+        Some(value) => value.parse::<i64>().map_err(|_| {
+            DaemonError::InvalidConfig(
+                "local database schema version is corrupt; preserve the database and restore its version from a verified backup".to_owned(),
+            )
+        }),
+    }
 }
 
 pub(crate) async fn load_or_create_installation_id(
@@ -1346,12 +1789,13 @@ pub(crate) async fn upsert_meta_value(
 }
 
 pub(crate) async fn migrate_local_schema_36_to_37(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut connection = pool.acquire().await?;
+    let connection = pool.acquire().await?;
+    let mut connection = ForeignKeyMigrationConnection::new(connection);
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
     let result = async {
-        let mut tx = connection.begin().await?;
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
 
         // local_drafts: widen resource_kind so the unified Memory kind is
         // accepted; existing rows keep their legacy values untouched.
@@ -1484,25 +1928,34 @@ pub(crate) async fn migrate_local_schema_36_to_37(pool: &SqlitePool) -> Result<(
         .bind(META_MEMORY_CACHE_RESET_REQUIRED)
         .execute(&mut *tx)
         .await?;
+        stamp_schema_version_in_tx(&mut tx, 37).await?;
         tx.commit().await?;
         Ok(())
     }
     .await;
-    sqlx::query("PRAGMA foreign_keys = ON")
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *connection)
-        .await?;
-    result
+        .await;
+    if restored.is_ok() {
+        connection.disarm();
+    }
+    match (result, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
 }
 
 /// Widens the `agent_runs`, `project_agent_adapters`, and `adapter_fs_ops`
 /// CHECK constraints to accept `dsh`.
 pub(crate) async fn migrate_local_schema_37_to_38(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut connection = pool.acquire().await?;
+    let connection = pool.acquire().await?;
+    let mut connection = ForeignKeyMigrationConnection::new(connection);
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
     let result = async {
-        let mut tx = connection.begin().await?;
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
 
         // 1. agent_runs
         let runs_sql: Option<String> = sqlx::query_scalar(
@@ -1626,25 +2079,35 @@ pub(crate) async fn migrate_local_schema_37_to_38(pool: &SqlitePool) -> Result<(
             }
         }
 
+        stamp_schema_version_in_tx(&mut tx, 38).await?;
+
         tx.commit().await?;
         Ok(())
     }
     .await;
-    sqlx::query("PRAGMA foreign_keys = ON")
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *connection)
-        .await?;
-    result
+        .await;
+    if restored.is_ok() {
+        connection.disarm();
+    }
+    match (result, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
 }
 
 /// Widens the `agent_runs`, `project_agent_adapters`, and `adapter_fs_ops`
 /// CHECK constraints to accept `antigravity`.
 pub(crate) async fn migrate_local_schema_38_to_39(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut connection = pool.acquire().await?;
+    let connection = pool.acquire().await?;
+    let mut connection = ForeignKeyMigrationConnection::new(connection);
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
     let result = async {
-        let mut tx = connection.begin().await?;
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
 
         // 1. agent_runs
         let runs_sql: Option<String> = sqlx::query_scalar(
@@ -1768,24 +2231,34 @@ pub(crate) async fn migrate_local_schema_38_to_39(pool: &SqlitePool) -> Result<(
             }
         }
 
+        stamp_schema_version_in_tx(&mut tx, 39).await?;
+
         tx.commit().await?;
         Ok(())
     }
     .await;
-    sqlx::query("PRAGMA foreign_keys = ON")
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *connection)
-        .await?;
-    result
+        .await;
+    if restored.is_ok() {
+        connection.disarm();
+    }
+    match (result, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
 }
 
 /// Widens persisted retrieval-history resource kinds to accept `memory`.
 pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut connection = pool.acquire().await?;
+    let connection = pool.acquire().await?;
+    let mut connection = ForeignKeyMigrationConnection::new(connection);
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
     let result = async {
-        let mut tx = connection.begin().await?;
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
 
         let candidates_sql: Option<String> = sqlx::query_scalar(
             "SELECT sql FROM sqlite_master
@@ -1913,19 +2386,1084 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
             }
         }
 
+        stamp_schema_version_in_tx(&mut tx, 40).await?;
+
         tx.commit().await?;
         Ok(())
     }
     .await;
-    sqlx::query("PRAGMA foreign_keys = ON")
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *connection)
-        .await?;
-    result
+        .await;
+    if restored.is_ok() {
+        connection.disarm();
+    }
+    match (result, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn connect_legacy_none_db(path: &Path) -> SqlitePool {
+        SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true)
+                    .auto_vacuum(SqliteAutoVacuum::None)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .busy_timeout(Duration::from_secs(5))
+                    .synchronous(SqliteSynchronous::Full),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn schema_36_offline_upgrade_preserves_old_base_and_ordered_partial_draft() {
+        use serde_json::json;
+        use sha2::{Digest, Sha256};
+
+        struct NoCredentials;
+        impl CredentialStore for NoCredentials {
+            fn load(&self) -> Result<Option<ServerCredentials>, CredentialStoreError> {
+                Ok(None)
+            }
+            fn replace(&self, _: &ServerCredentials) -> Result<(), CredentialStoreError> {
+                Ok(())
+            }
+            fn clear(&self) -> Result<(), CredentialStoreError> {
+                Ok(())
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::for_root(root.path());
+        config.project.server_url = "http://127.0.0.1:9".to_owned();
+        config.sync.enabled = false;
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        // Actual pre-Memory CHECK constraints and implicit rowids force the
+        // 36->37 rebuild; no current schema is merely relabeled as version 36.
+        for statement in [
+            "CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            "INSERT INTO daemon_meta VALUES ('schema_version', '36')",
+            "CREATE TABLE local_drafts (
+                draft_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, server_draft_id TEXT,
+                server_version BIGINT NOT NULL DEFAULT 0, base_commit_id TEXT, current_commit_id TEXT,
+                freshness TEXT NOT NULL CHECK (freshness IN ('current', 'behind')) DEFAULT 'current',
+                has_upstream_resource_changes INTEGER NOT NULL CHECK (has_upstream_resource_changes IN (0, 1)) DEFAULT 0,
+                reconciliation TEXT NOT NULL CHECK (reconciliation IN ('unknown', 'clean', 'conflicts')) DEFAULT 'unknown',
+                reconciliation_candidate_id TEXT,
+                resource_scope TEXT NOT NULL CHECK (resource_scope IN ('org', 'project')),
+                resource_kind TEXT NOT NULL CHECK (resource_kind IN ('context', 'rule', 'workflow')),
+                target_id TEXT, path TEXT,
+                status TEXT NOT NULL CHECK (status IN ('open', 'submitted', 'merged', 'discarded')) DEFAULT 'open',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))",
+            "CREATE TABLE local_draft_operations (
+                local_operation_id TEXT PRIMARY KEY,
+                draft_id TEXT NOT NULL REFERENCES local_drafts(draft_id) ON DELETE CASCADE,
+                server_operation_id TEXT,
+                resource_kind TEXT NOT NULL CHECK (resource_kind IN ('context', 'rule', 'workflow')),
+                operation_json TEXT NOT NULL,
+                source TEXT NOT NULL CHECK (source IN ('desktop', 'cli', 'mcp_store', 'server')),
+                sync_status TEXT NOT NULL CHECK (sync_status IN ('queued', 'syncing', 'retrying', 'synced', 'failed')),
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))",
+            "CREATE TABLE cached_blobs (blob_id TEXT PRIMARY KEY, content TEXT NOT NULL)",
+            "CREATE TABLE cached_trees (tree_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL)",
+            "CREATE TABLE cached_commits (
+                commit_id TEXT PRIMARY KEY, scope TEXT NOT NULL CHECK (scope IN ('org', 'project')),
+                org_id TEXT NOT NULL, project_id TEXT, tree_id TEXT NOT NULL, parent_commit_id TEXT,
+                version BIGINT NOT NULL, created_at TEXT NOT NULL, payload_json TEXT NOT NULL)",
+            "CREATE TABLE cached_refs (
+                ref_key TEXT PRIMARY KEY, name TEXT NOT NULL, scope TEXT NOT NULL CHECK (scope IN ('org', 'project')),
+                org_id TEXT NOT NULL, project_id TEXT, commit_id TEXT, etag TEXT NOT NULL, server_updated_at TEXT NOT NULL,
+                installed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        let blob_id = |body: &str| {
+            let mut hash = Sha256::new();
+            hash.update(b"blob\0");
+            hash.update(body.as_bytes());
+            hex::encode(hash.finalize())
+        };
+        let selection =
+            json!({"project_id":"legacy_project", "memories":[], "revision":0}).to_string();
+        for (commit_id, tree_id, version, body) in [
+            (
+                "legacy_base",
+                "legacy_base_tree",
+                1,
+                "# Original Base\r\n\r\nUntouched body.\r\n",
+            ),
+            (
+                "legacy_head",
+                "legacy_head_tree",
+                2,
+                "# New published body\n",
+            ),
+        ] {
+            for raw in [selection.as_str(), body] {
+                sqlx::query("INSERT OR IGNORE INTO cached_blobs VALUES ($1, $2)")
+                    .bind(blob_id(raw))
+                    .bind(raw)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            let commit = json!({
+                "commit_id":commit_id, "scope":"project", "org_id":"legacy_org", "project_id":"legacy_project",
+                "tree_id":tree_id, "parent_commit_id":null, "version":version, "created_at":"2026-07-15T00:00:00Z"
+            }).to_string();
+            let tree = json!({"tree_id":tree_id, "entries":[
+                {"id":"legacy_memory", "type":"context", "scope":"project", "project_id":"legacy_project",
+                 "path":"context/original.md", "blob_id":blob_id(body), "source":"project"},
+                {"id":"selection", "type":"project_org_selection", "scope":"daemon", "project_id":"legacy_project",
+                 "path":null, "blob_id":blob_id(&selection), "source":"config"}
+            ]}).to_string();
+            sqlx::query("INSERT INTO cached_trees VALUES ($1, $2)")
+                .bind(tree_id)
+                .bind(tree)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO cached_commits VALUES ($1, 'project', 'legacy_org', 'legacy_project', $2, NULL, $3, '2026-07-15T00:00:00Z', $4)")
+                .bind(commit_id).bind(tree_id).bind(version).bind(commit).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO cached_refs (ref_key, name, scope, org_id, project_id, commit_id, etag, server_updated_at) VALUES ('project:legacy_project', 'refs/heads/main', 'project', 'legacy_org', 'legacy_project', 'legacy_head', 'legacy_head', '2026-07-15T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO local_drafts (draft_id, project_id, base_commit_id, current_commit_id, resource_scope, resource_kind, target_id, status) VALUES ('legacy_draft', 'legacy_project', 'legacy_base', 'legacy_head', 'project', 'context', 'legacy_memory', 'open')")
+            .execute(&pool).await.unwrap();
+        for (order, operation_id, path) in [
+            (41, "operation_z", "context/intermediate.md"),
+            (97, "operation_a", "context/renamed.md"),
+        ] {
+            let raw = json!({"rename":{"id":"legacy_memory", "new_path":path, "description":"Local metadata only"}}).to_string();
+            sqlx::query("INSERT INTO local_draft_operations (rowid, local_operation_id, draft_id, resource_kind, operation_json, source, sync_status) VALUES ($1, $2, 'legacy_draft', 'context', $3, 'desktop', 'queued')")
+                .bind(order).bind(operation_id).bind(raw).execute(&pool).await.unwrap();
+        }
+        let blobs: Vec<(String, String)> =
+            sqlx::query_as("SELECT blob_id, content FROM cached_blobs ORDER BY blob_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let trees: Vec<(String, String)> =
+            sqlx::query_as("SELECT tree_id, payload_json FROM cached_trees ORDER BY tree_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let commits: Vec<(String, String)> =
+            sqlx::query_as("SELECT commit_id, payload_json FROM cached_commits ORDER BY commit_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let operations: Vec<(String, String)> = sqlx::query_as(
+            "SELECT local_operation_id, operation_json FROM local_draft_operations ORDER BY rowid",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        let obsolete = config
+            .cache_dir
+            .join("projects/legacy_project/old-index.sqlite");
+        std::fs::create_dir_all(obsolete.parent().unwrap()).unwrap();
+        std::fs::write(&obsolete, b"obsolete kind-constrained index").unwrap();
+
+        let state =
+            crate::DaemonState::initialize_with_credential_store(config, Arc::new(NoCredentials))
+                .await
+                .unwrap();
+        assert!(!obsolete.exists());
+        assert_eq!(
+            current_schema_version(&state.inner.pool).await.unwrap(),
+            CURRENT_LOCAL_SCHEMA_VERSION
+        );
+        assert_eq!(
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT blob_id, content FROM cached_blobs ORDER BY blob_id"
+            )
+            .fetch_all(&state.inner.pool)
+            .await
+            .unwrap(),
+            blobs
+        );
+        assert_eq!(
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT tree_id, payload_json FROM cached_trees ORDER BY tree_id"
+            )
+            .fetch_all(&state.inner.pool)
+            .await
+            .unwrap(),
+            trees
+        );
+        assert_eq!(
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT commit_id, payload_json FROM cached_commits ORDER BY commit_id"
+            )
+            .fetch_all(&state.inner.pool)
+            .await
+            .unwrap(),
+            commits
+        );
+        assert_eq!(sqlx::query_as::<_, (String, String)>("SELECT local_operation_id, operation_json FROM local_draft_operations ORDER BY rowid").fetch_all(&state.inner.pool).await.unwrap(), operations);
+        let detail = state.get_draft("legacy_draft").await.unwrap();
+        assert_eq!(detail.draft.base_commit_id.as_deref(), Some("legacy_base"));
+        assert!(
+            detail
+                .operations
+                .iter()
+                .all(|operation| operation.sync_status == crate::DraftOperationSyncStatus::Queued)
+        );
+        let checkout = state
+            .project_checkout(crate::DaemonProjectCheckoutRequest {
+                project_id: "legacy_project".to_owned(),
+            })
+            .await
+            .unwrap();
+        assert!(checkout.ready);
+        assert_eq!(checkout.commit_id.as_deref(), Some("legacy_head"));
+        assert_eq!(
+            checkout.resources[0].content.content,
+            "# New published body\n"
+        );
+        let effective = search::load_effective_memory(&state, "legacy_project")
+            .await
+            .unwrap();
+        assert_eq!(effective.resources.len(), 1);
+        assert_eq!(effective.resources[0].path, "context/renamed.md");
+        assert_eq!(
+            effective.resources[0].content,
+            "# Original Base\r\n\r\nUntouched body.\r\n"
+        );
+        assert_eq!(
+            effective.resources[0].draft_id.as_deref(),
+            Some("legacy_draft")
+        );
+    }
+
+    #[tokio::test]
+    async fn canceled_foreign_key_rebuild_discards_its_unprotected_connection() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        let connection = pool.acquire().await.unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut connection = ForeignKeyMigrationConnection::new(connection);
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+            ready_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(connection);
+        });
+        ready_rx.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            connections.push(pool.acquire().await.unwrap());
+        }
+        for connection in &mut connections {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA foreign_keys")
+                    .fetch_one(&mut **connection)
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
+        drop(connections);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn interrupted_fresh_bootstrap_resumes_without_relabeling_unmarked_business_data() {
+        let fixture = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate_local_db(&fixture).await.unwrap();
+        let first_business_ddl: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_drafts'",
+        )
+        .fetch_one(&fixture)
+        .await
+        .unwrap();
+        fixture.close().await;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("local.db");
+        let pool = connect_local_db(&path).await.unwrap();
+        sqlx::query("CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        stamp_schema_version(&pool, 0).await.unwrap();
+        sqlx::query(&first_business_ddl)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO local_drafts (draft_id, project_id, resource_scope, resource_kind) VALUES ('keep', 'p', 'project', 'memory')")
+            .execute(&pool).await.unwrap();
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        assert_eq!(
+            current_schema_version(&pool).await.unwrap(),
+            CURRENT_LOCAL_SCHEMA_VERSION
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT draft_id FROM local_drafts")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "keep"
+        );
+        sqlx::query("INSERT INTO local_draft_operations (local_operation_id, draft_id, resource_kind, operation_json, source, sync_status) VALUES ('new-op', 'keep', 'memory', '{}', 'desktop', 'queued')")
+            .execute(&pool).await.unwrap();
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn missing_schema_version_refuses_to_relabel_existing_business_database() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        sqlx::query("INSERT INTO local_drafts (draft_id, project_id, resource_scope, resource_kind) VALUES ('keep', 'p', 'project', 'memory')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM daemon_meta WHERE key = 'schema_version'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = migrate_local_db(&pool).await.unwrap_err();
+        assert!(error.to_string().contains("schema version is missing"));
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT draft_id FROM local_drafts")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "keep"
+        );
+        assert!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM daemon_meta WHERE key = 'schema_version'"
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+            .is_none()
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn corrupt_schema_version_preserves_business_rows_and_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        sqlx::query("INSERT INTO local_drafts (draft_id, project_id, resource_scope, resource_kind) VALUES ('keep', 'p', 'project', 'memory')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("UPDATE daemon_meta SET value = '44-broken' WHERE key = 'schema_version'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = migrate_local_db(&pool).await.unwrap_err();
+        assert!(error.to_string().contains("schema version is corrupt"));
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM daemon_meta WHERE key = 'schema_version'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "44-broken"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT draft_id FROM local_drafts")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "keep"
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn schema_44_canonicalizes_mutable_kinds_without_rewriting_history() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        let tree_json = r#"{"tree_id":"old-tree","entries":[{"id":"legacy-rule","scope":"project","type":"rule","path":"rules/old.md"}]}"#;
+        sqlx::query("INSERT INTO cached_trees VALUES ('old-tree', $1)")
+            .bind(tree_json)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO cached_commits (commit_id, scope, org_id, project_id, tree_id, version, created_at, payload_json) VALUES ('old-base', 'project', 'org', 'p', 'old-tree', 1, 'old', '{}')")
+            .execute(&pool).await.unwrap();
+        for (rowid, kind, status) in [
+            (9, "context", "open"),
+            (35, "rule", "merged"),
+            (70, "workflow", "discarded"),
+        ] {
+            sqlx::query("INSERT INTO local_drafts (draft_id, project_id, resource_scope, resource_kind, target_id, base_commit_id, status) VALUES ($1, 'p', 'project', $1, 'legacy-rule', 'old-base', $2)")
+                .bind(kind).bind(status).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO local_draft_operations (operation_rowid, local_operation_id, draft_id, resource_kind, operation_json, source, sync_status, last_error) VALUES ($1, $2, $2, $2, $3, 'desktop', 'failed', 'keep-error')")
+                .bind(rowid).bind(kind).bind(format!(r#"{{"legacy":"{kind}"}}"#)).execute(&pool).await.unwrap();
+        }
+        type HistoryRow = (i64, String, String, String, String);
+        let before: Vec<HistoryRow> = sqlx::query_as("SELECT rowid, local_operation_id, operation_json, sync_status, last_error FROM local_draft_operations ORDER BY rowid").fetch_all(&pool).await.unwrap();
+        sqlx::query("UPDATE daemon_meta SET value = '43' WHERE key = 'schema_version'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP INDEX idx_local_draft_operations_draft_id")
+            .execute(&pool)
+            .await
+            .unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        let after: Vec<HistoryRow> = sqlx::query_as("SELECT rowid, local_operation_id, operation_json, sync_status, last_error FROM local_draft_operations ORDER BY rowid").fetch_all(&pool).await.unwrap();
+        assert_eq!(after, before);
+        let mut tx = pool.begin().await.unwrap();
+        let mut operation = serde_json::from_value(
+            json!({"rename": {"id": "legacy-rule", "new_path": "renamed.md"}}),
+        )
+        .unwrap();
+        let resolved = crate::draft::resolve_local_draft(
+            &mut tx,
+            crate::draft::LocalDraftResolutionInput {
+                requested_draft_id: Some("context"),
+                project_id: "p",
+                requested_base_commit_id: Some("old-base"),
+                requested_base_commit_captured: true,
+                new_draft_base_commit_id: None,
+                scope: crate::types::DaemonDraftScope::Project,
+                resource: crate::types::DaemonDraftResourceKind::Memory,
+                op: &mut operation,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved, "context");
+        tx.rollback().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM local_drafts WHERE resource_kind = 'memory'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            3
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM local_draft_operations WHERE resource_kind = 'memory'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            3
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT payload_json FROM cached_trees")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            tree_json
+        );
+        let path: Option<String> = sqlx::query_scalar(&format!(
+            "SELECT {} FROM local_drafts d WHERE draft_id = 'rule'",
+            crate::draft::DRAFT_PATH_SQL
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(path.as_deref(), Some("rules/old.md"));
+        let indexes: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            indexes
+                .iter()
+                .any(|name| name == "idx_local_draft_operations_draft_id")
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn interrupted_legacy_upgrade_resumes_from_committed_step() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("local.db");
+        let pool = connect_local_db(&path).await.unwrap();
+        for statement in [
+            "CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            "INSERT INTO daemon_meta VALUES ('schema_version', '13')",
+            "CREATE TABLE local_drafts (
+                draft_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+                server_draft_id TEXT, server_version BIGINT NOT NULL DEFAULT 0,
+                base_commit_id TEXT, resource_scope TEXT NOT NULL, resource_kind TEXT NOT NULL,
+                target_id TEXT, path TEXT, conflict_base_commit_id TEXT,
+                conflict_current_commit_id TEXT, conflicted_at TEXT,
+                status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+            "CREATE TABLE local_draft_operations (
+                local_operation_id TEXT PRIMARY KEY, draft_id TEXT NOT NULL REFERENCES local_drafts(draft_id) ON DELETE CASCADE,
+                server_operation_id TEXT, resource_kind TEXT NOT NULL, operation_json TEXT NOT NULL,
+                source TEXT NOT NULL, sync_status TEXT NOT NULL, last_error TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+            "INSERT INTO local_drafts VALUES ('legacy', 'p', NULL, 0, 'base', 'project', 'context', 'mem', 'keep.md', 'base', 'current', 'old', 'conflicted', 'old', 'later')",
+            "INSERT INTO local_draft_operations VALUES ('op', 'legacy', NULL, 'context', '{\"draft text\":\"keep unchanged\"}', 'desktop', 'queued', NULL, 'old', 'later')",
+        ] { sqlx::query(statement).execute(&pool).await.unwrap(); }
+        migrate_local_schema_13_to_14(&pool).await.unwrap();
+        assert_eq!(current_schema_version(&pool).await.unwrap(), 14);
+        migrate_local_schema_14_to_15(&pool).await.unwrap();
+        assert_eq!(current_schema_version(&pool).await.unwrap(), 15);
+        // Stop between historical steps, close all connections, and take the
+        // same public migration path used by a restarted daemon.
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        assert_eq!(
+            current_schema_version(&pool).await.unwrap(),
+            CURRENT_LOCAL_SCHEMA_VERSION
+        );
+        let draft: (String, String, String, String, String) = sqlx::query_as("SELECT resource_kind, status, base_commit_id, current_commit_id, path FROM local_drafts WHERE draft_id = 'legacy'").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            draft,
+            (
+                "memory".into(),
+                "submitted".into(),
+                "base".into(),
+                "current".into(),
+                "keep.md".into()
+            )
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT operation_json FROM local_draft_operations WHERE local_operation_id = 'op'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            r#"{"draft text":"keep unchanged"}"#
+        );
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        pool.close().await;
+    }
+
+    async fn test_pool_with_v27_history(path: &Path) -> SqlitePool {
+        let pool = connect_local_db(path).await.unwrap();
+        for statement in [
+            "CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            "INSERT INTO daemon_meta VALUES ('schema_version', '27')",
+            "CREATE TABLE agent_runs (
+                run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+                issue_number BIGINT CHECK (issue_number IS NULL OR issue_number > 0),
+                host TEXT NOT NULL CHECK (host IN ('codex', 'claude-code', 'zed')),
+                host_run_key TEXT NOT NULL, host_session_id TEXT,
+                parent_run_id TEXT REFERENCES agent_runs(run_id),
+                kind TEXT NOT NULL CHECK (kind IN ('root', 'subagent')),
+                phase TEXT NOT NULL CHECK (phase IN ('running', 'ended')),
+                outcome TEXT, end_reason TEXT, display_label TEXT, summary TEXT,
+                revision BIGINT NOT NULL DEFAULT 1, start_observed INTEGER NOT NULL DEFAULT 1,
+                started_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, lease_expires_at TEXT NOT NULL, ended_at TEXT,
+                UNIQUE (project_id, host, host_run_key))",
+            "INSERT INTO agent_runs (run_id, project_id, host, host_run_key, kind, phase, started_at, last_seen_at, lease_expires_at) VALUES ('parent', 'p', 'codex', 'parent', 'root', 'running', 'old', 'old', 'old')",
+            "INSERT INTO agent_runs (run_id, project_id, host, host_run_key, parent_run_id, kind, phase, started_at, last_seen_at, lease_expires_at) VALUES ('child', 'p', 'codex', 'child', 'parent', 'subagent', 'running', 'old', 'old', 'old')",
+            "CREATE TABLE agent_run_events (
+                event_id TEXT PRIMARY KEY, event_fingerprint TEXT NOT NULL,
+                run_id TEXT REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+                host_session_id TEXT, event_type TEXT NOT NULL CHECK (event_type IN ('started', 'heartbeat', 'ended', 'session_ended')),
+                source TEXT NOT NULL CHECK (source IN ('hook', 'recovery')),
+                outcome TEXT, summary TEXT, occurred_at TEXT NOT NULL, received_at TEXT NOT NULL)",
+            "INSERT INTO agent_run_events VALUES ('event', 'fingerprint', 'child', NULL, 'started', 'hook', NULL, 'historical event', 'old', 'old')",
+            "CREATE TABLE historical_issue_link (issue_id TEXT PRIMARY KEY, run_id TEXT REFERENCES agent_runs(run_id))",
+            "INSERT INTO historical_issue_link VALUES ('issue', 'child')",
+        ] { sqlx::query(statement).execute(&pool).await.unwrap(); }
+        pool
+    }
+
+    #[tokio::test]
+    async fn schema_27_rebuild_preserves_children_and_restart_history() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("local.db");
+        let pool = test_pool_with_v27_history(&path).await;
+        migrate_local_schema_27_to_28(&pool).await.unwrap();
+        assert_eq!(current_schema_version(&pool).await.unwrap(), 28);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_run_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retired_agent_runs")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+        let event: (String, String) =
+            sqlx::query_as("SELECT run_id, summary FROM retired_agent_run_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(event, ("child".into(), "historical event".into()));
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT run_id FROM historical_issue_link")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "child"
+        );
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            current_schema_version(&pool).await.unwrap(),
+            CURRENT_LOCAL_SCHEMA_VERSION
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn schema_27_failed_copy_keeps_history_and_restores_foreign_keys() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("local.db");
+        let pool = test_pool_with_v27_history(&path).await;
+        sqlx::query("CREATE TABLE agent_runs_v28 (blocker TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(migrate_local_schema_27_to_28(&pool).await.is_err());
+        assert_eq!(current_schema_version(&pool).await.unwrap(), 27);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_runs")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_run_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        // Borrow every pooled connection together, including the restored one.
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            connections.push(pool.acquire().await.unwrap());
+        }
+        for connection in &mut connections {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA foreign_keys")
+                    .fetch_one(&mut **connection)
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
+        drop(connections);
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
+        sqlx::query("DROP TABLE agent_runs_v28")
+            .execute(&pool)
+            .await
+            .unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retired_agent_run_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn existing_schema_writers_wait_before_reading_a_background_writer_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        for kind in ["adapter", "global", "storage"] {
+            let mut writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+            sqlx::query("INSERT INTO daemon_meta (key, value) VALUES ('background-write', 'new') ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+                .execute(&mut *writer).await.unwrap();
+            let migration_pool = pool.clone();
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let mut migration = tokio::spawn(async move {
+                started_tx.send(()).unwrap();
+                match kind {
+                    "adapter" => agent_adapter::migrate_for_schema(&migration_pool, Some(20)).await,
+                    "global" => {
+                        agent_adapter::global::migrate_for_schema(&migration_pool, Some(41)).await
+                    }
+                    "storage" => {
+                        project_storage::migrate_for_schema(&migration_pool, Some(17)).await
+                    }
+                    _ => unreachable!(),
+                }
+            });
+            started_rx.await.unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), &mut migration)
+                    .await
+                    .is_err(),
+                "{kind} must reserve the writer before existing CREATE IF NOT EXISTS reads"
+            );
+            writer.commit().await.unwrap();
+            migration.await.unwrap().unwrap();
+            assert_eq!(
+                current_schema_version(&pool).await.unwrap(),
+                CURRENT_LOCAL_SCHEMA_VERSION
+            );
+        }
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn page_reclamation_defers_without_waiting_or_changing_business_pool_options() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        prepare_local_db_incremental_vacuum(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE sample (body TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sample VALUES ('old snapshot')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut reader = pool.begin().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT body FROM sample")
+                .fetch_one(&mut *reader)
+                .await
+                .unwrap(),
+            "old snapshot"
+        );
+        sqlx::query("UPDATE sample SET body = 'new committed body'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = tokio::time::timeout(Duration::from_millis(200), reclaim_local_db_pages(&pool))
+            .await
+            .expect("maintenance must not wait on an active reader")
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DaemonError::State {
+                code: "local_db_reclamation_deferred",
+                ..
+            }
+        ));
+        let mut connections = Vec::new();
+        for _ in 0..4 {
+            connections.push(pool.acquire().await.unwrap());
+        }
+        for connection in &mut connections {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA busy_timeout")
+                    .fetch_one(&mut **connection)
+                    .await
+                    .unwrap(),
+                5000
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA synchronous")
+                    .fetch_one(&mut **connection)
+                    .await
+                    .unwrap(),
+                2
+            );
+        }
+        drop(connections);
+        reader.rollback().await.unwrap();
+        reclaim_local_db_pages(&pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT body FROM sample")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "new committed body"
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn first_vacuum_conversion_does_not_leave_a_database_sized_wal() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("local.db");
+        let pool = connect_legacy_none_db(&path).await;
+        migrate_local_db(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE sample (id INTEGER PRIMARY KEY, body BLOB)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sample (body) VALUES (zeroblob(8388608))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
+        prepare_local_db_incremental_vacuum(&pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT length(body) FROM sample")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            8388608
+        );
+        assert!(
+            std::fs::metadata(path.with_file_name("local.db-wal"))
+                .map(|metadata| metadata.len() < 1_048_576)
+                .unwrap_or(true)
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn schema_43_preserves_operation_order_and_constraints_through_vacuum() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("local.db");
+        let pool = connect_legacy_none_db(&path).await;
+        migrate_local_db(&pool).await.unwrap();
+        // Build the previous installed schema, whose business ordering used the
+        // implicit rowid. Sparse rows expose VACUUM's old renumbering behavior.
+        let schema: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_draft_operations'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DROP TABLE local_draft_operations")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            &schema
+                .replace("operation_rowid INTEGER PRIMARY KEY,", "")
+                .replace(
+                    "local_operation_id TEXT NOT NULL UNIQUE",
+                    "local_operation_id TEXT PRIMARY KEY",
+                ),
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE daemon_meta SET value = '42' WHERE key = 'schema_version'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO local_drafts (draft_id, project_id, resource_scope, resource_kind) VALUES ('draft', 'p', 'project', 'memory')")
+            .execute(&pool).await.unwrap();
+        for (rowid, id, status) in [
+            (9, "z", "queued"),
+            (35, "a", "retrying"),
+            (70, "m", "failed"),
+        ] {
+            sqlx::query(
+                "INSERT INTO local_draft_operations (rowid, local_operation_id, draft_id,
+                 server_operation_id, resource_kind, operation_json, source, sync_status,
+                 last_error, created_at, updated_at)
+                 VALUES ($1, $2, 'draft', $2, 'memory', $3, 'desktop', $4, 'error', 'same', 'later')",
+            )
+            .bind(rowid).bind(id).bind(json!({"delete": {"id": id}}).to_string()).bind(status)
+            .execute(&pool).await.unwrap();
+        }
+        let read_operations = "SELECT rowid, local_operation_id, server_operation_id,
+            operation_json, sync_status, last_error, created_at, updated_at
+            FROM local_draft_operations ORDER BY rowid";
+        type OperationRow = (i64, String, String, String, String, String, String, String);
+        let before: Vec<OperationRow> = sqlx::query_as(read_operations)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
+        migrate_local_db(&pool).await.unwrap();
+        // Pin every other pool connection before conversion. A random later
+        // checkout must not VACUUM using the previous connection-local mode.
+        let mut preexisting_connections = Vec::new();
+        for _ in 0..4 {
+            let mut connection = pool.acquire().await.unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                    .fetch_one(&mut *connection)
+                    .await
+                    .unwrap(),
+                0
+            );
+            preexisting_connections.push(connection);
+        }
+        prepare_local_db_incremental_vacuum(&pool).await.unwrap();
+        prepare_local_db_incremental_vacuum(&pool).await.unwrap();
+        for connection in &mut preexisting_connections {
+            sqlx::query("VACUUM")
+                .execute(&mut **connection)
+                .await
+                .unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                    .fetch_one(&mut **connection)
+                    .await
+                    .unwrap(),
+                2
+            );
+        }
+        drop(preexisting_connections);
+        let mut maintenance = maintenance_connection(&pool).await.unwrap();
+        sqlx::query("VACUUM")
+            .execute(&mut maintenance)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&mut maintenance)
+                .await
+                .unwrap(),
+            2
+        );
+        maintenance.close().await.unwrap();
+        sqlx::query("VACUUM").execute(&pool).await.unwrap();
+        let after: Vec<OperationRow> = sqlx::query_as(read_operations)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(after, before);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM local_draft_operations WHERE rowid = operation_rowid"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            3
+        );
+        for (local, server) in [("z", "new"), ("new", "z")] {
+            assert!(sqlx::query("INSERT INTO local_draft_operations (local_operation_id, draft_id, server_operation_id, resource_kind, operation_json, source, sync_status) VALUES ($1, 'draft', $2, 'memory', '{}', 'desktop', 'queued')")
+                .bind(local).bind(server).execute(&pool).await.is_err());
+        }
+        sqlx::query("INSERT INTO local_draft_operations (local_operation_id, draft_id, resource_kind, operation_json, source, sync_status) VALUES ('next', 'draft', 'memory', '{}', 'desktop', 'queued')")
+            .execute(&pool).await.unwrap();
+        assert!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT rowid FROM local_draft_operations WHERE local_operation_id = 'next'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+                > 70
+        );
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        sqlx::query("DELETE FROM local_drafts WHERE draft_id = 'draft'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM local_draft_operations")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn local_business_database_uses_full_wal_durability_on_each_connection() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = connect_local_db(&root.path().join("local.db"))
+            .await
+            .unwrap();
+        let mut first = pool.acquire().await.unwrap();
+        let mut second = pool.acquire().await.unwrap();
+        for connection in [&mut first, &mut second] {
+            let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            let durability: i64 = sqlx::query_scalar("PRAGMA synchronous")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            assert_eq!(mode, "wal");
+            assert_eq!(durability, 2);
+        }
+        drop((first, second));
+        pool.close().await;
+    }
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[tokio::test]
@@ -1952,7 +3490,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        migrate_legacy_agent_runs(&pool).await.unwrap();
+        migrate_legacy_agent_runs(&pool, None).await.unwrap();
         for statement in [
             "CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
             "INSERT INTO daemon_meta VALUES ('schema_version', '41')",
@@ -2289,6 +3827,17 @@ mod tests {
             .await
             .unwrap();
         retrieval_history::migrate(&pool).await.unwrap();
+        // Shared-text references did not exist in the installed v39 schema.
+        for statement in [
+            "DROP INDEX idx_retrieval_run_candidates_text",
+            "DROP INDEX idx_retrieval_run_candidates_legacy_text",
+            "DROP INDEX idx_retrieval_run_resources_text",
+            "DROP INDEX idx_retrieval_run_resources_legacy_text",
+            "ALTER TABLE retrieval_run_candidates DROP COLUMN evidence_excerpt_hash",
+            "ALTER TABLE retrieval_run_resources DROP COLUMN content_preview_hash",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
 
         // Recreate the three tables with their v39 kind CHECK while keeping
         // the rest of the production schema byte-for-byte equivalent.

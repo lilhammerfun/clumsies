@@ -1,6 +1,6 @@
 //! Session-scoped project availability for synchronization and local recovery.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -16,6 +16,8 @@ pub(crate) struct ProjectAccess {
     pub(crate) org_id: String,
     /// Projects explicitly accessible to the authenticated user.
     pub(crate) project_ids: BTreeSet<String>,
+    project_roles: BTreeMap<String, String>,
+    capabilities: BTreeSet<String>,
 }
 
 /// Locally retained work whose project is absent from the live membership list.
@@ -36,6 +38,8 @@ struct Identity {
     org: Organization,
     /// Complete, unpaginated project membership list.
     projects: Vec<Project>,
+    #[serde(default)]
+    capabilities: BTreeSet<String>,
 }
 
 /// Organization identity from the server.
@@ -50,6 +54,8 @@ struct Organization {
 struct Project {
     /// Stable project ID.
     project_id: String,
+    #[serde(default)]
+    role: String,
 }
 
 /// Refresh membership directly from the server without using a fallback cache.
@@ -67,19 +73,36 @@ pub(crate) async fn refresh(state: &DaemonState) -> Result<(), DaemonError> {
     if state.project_config_snapshot().session_revision != session.session_revision {
         return Err(session_changed());
     }
+    let project_roles = identity
+        .projects
+        .into_iter()
+        .map(|project| (project.project_id, project.role))
+        .collect::<BTreeMap<_, _>>();
+    let next = ProjectAccess {
+        session_revision: session.session_revision,
+        org_id: identity.org.org_id,
+        project_ids: project_roles.keys().cloned().collect(),
+        project_roles,
+        capabilities: identity.capabilities,
+    };
+    let permissions_changed = current(state).is_none_or(|previous| {
+        previous.org_id != next.org_id
+            || previous.project_roles != next.project_roles
+            || previous.capabilities != next.capabilities
+    });
+    if permissions_changed {
+        state
+            .invalidate_server_response_cache(session.session_revision)
+            .await;
+        if state.project_config_snapshot().session_revision != session.session_revision {
+            return Err(session_changed());
+        }
+    }
     *state
         .inner
         .project_access
         .write()
-        .expect("project access lock poisoned") = Some(ProjectAccess {
-        session_revision: session.session_revision,
-        org_id: identity.org.org_id,
-        project_ids: identity
-            .projects
-            .into_iter()
-            .map(|p| p.project_id)
-            .collect(),
-    });
+        .expect("project access lock poisoned") = Some(next);
     state.reconcile_project_selection().await?;
     crate::draft::resume_deferred_events(state, &require_current(state)?.project_ids).await?;
     Ok(())

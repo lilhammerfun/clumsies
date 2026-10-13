@@ -101,6 +101,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match process_mode(&args)? {
         ProcessMode::McpServe(required_adapter) => run_mcp_proxy(required_adapter),
         ProcessMode::Daemon => {
+            // launchd supplies this path even when config parsing fails during a crash loop.
+            if args.is_empty()
+                && let Some(log_dir) = std::env::var_os("CLUMSIES_DAEMON_LOG_DIR")
+                && let Err(error) =
+                    clumsiesd::diagnostics::bound_launchd_output(Path::new(&log_dir))
+            {
+                eprintln!("launchd_log_retention_failed kind={:?}", error.kind());
+            }
             #[cfg(not(target_os = "macos"))]
             let _instance_lock = if args.is_empty() {
                 Some(acquire_instance_lock()?)

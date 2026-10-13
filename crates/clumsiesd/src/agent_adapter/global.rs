@@ -31,7 +31,30 @@ pub struct DaemonSetAgentAdapterRequest {
     pub host_binary_path: Option<String>,
 }
 
-pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
+/// Install host adapter preference/recovery tables and their optional version checkpoint.
+///
+/// # Errors
+/// Returns database errors; DDL and the checkpoint roll back together.
+pub(crate) async fn migrate_for_schema(
+    pool: &SqlitePool,
+    target: Option<i64>,
+) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    migrate_in_tx(&mut tx).await?;
+    if let Some(target) = target {
+        crate::migration::stamp_schema_version_in_tx(&mut tx, target).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Add host adapter tables to the caller's existing schema transaction.
+///
+/// # Errors
+/// Returns database errors; the caller owns commit or rollback.
+pub(super) async fn migrate_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<(), DaemonError> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS host_agent_adapters (
             adapter TEXT PRIMARY KEY CHECK (adapter IN ('codex', 'claude-code', 'opencode', 'dsh', 'antigravity')),
@@ -40,7 +63,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             manifest_json TEXT
         )",
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS host_adapter_fs_ops (
@@ -48,7 +71,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             operation_json TEXT NOT NULL
         )",
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -475,7 +498,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        migrate(&pool).await.unwrap();
+        migrate_for_schema(&pool, None).await.unwrap();
         let runtime_path = home.join(if cfg!(windows) {
             "clumsiesd.exe"
         } else {

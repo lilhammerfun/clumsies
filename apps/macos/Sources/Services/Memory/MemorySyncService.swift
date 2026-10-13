@@ -164,13 +164,17 @@ final class MemorySyncService: ObservableObject {
                         authoritativeCommitId: authoritativeCommitId,
                         authoritativeRefEtag: authoritativeRefEtag,
                         selectedOrgResourceIds: project.selectedOrgResourceIds,
-                        orgSelectionRevision: project.orgSelectionRevision
+                        orgSelectionRevision: project.orgSelectionRevision,
+                        baseCommitPin: project.baseCommitPin
                     )
                 }
                 feedback.resolveBackgroundError(errorSource)
                 return true
             }
             let checkout = try await context.daemon.projectCheckout(projectId)
+            let checkoutBasePin: CommitBasePin?
+            if let commitId = checkout.commitId { checkoutBasePin = try await context.daemon.retainCommitBase(commitId) }
+            else { checkoutBasePin = nil }
             guard !Task.isCancelled, context.activeProjectId == projectId,
                   context.projects.first(where: { $0.id == projectId }) == project,
                   catalog.staleResourceRefreshGenerations[projectId] == refreshGeneration else {
@@ -216,7 +220,8 @@ final class MemorySyncService: ObservableObject {
                     // file tree can expose their Sync action. They are not
                     // part of the observed local generation and must not make
                     // the next poll conclude that the plan is already applied.
-                    provisionalResourceIds: catalog.provisionalStaleAdditionIds
+                    provisionalResourceIds: catalog.provisionalStaleAdditionIds,
+                    authoritativeBasePin: checkoutBasePin
                   ) else {
                 return false
             }
@@ -242,7 +247,8 @@ final class MemorySyncService: ObservableObject {
                     authoritativeCommitId: authoritativeCommitId ?? serverCursor,
                     authoritativeRefEtag: authoritativeRefEtag ?? checkout.refEtag,
                     selectedOrgResourceIds: Set(checkout.selectedOrgResourceIds),
-                    orgSelectionRevision: checkout.orgSelectionRevision
+                    orgSelectionRevision: checkout.orgSelectionRevision,
+                    baseCommitPin: checkoutBasePin
                 )
             }
             feedback.resolveBackgroundError(errorSource)
@@ -347,7 +353,8 @@ final class MemorySyncService: ObservableObject {
                 orgSelectionRevision: snapshot.orgSelectionRevision,
                 generation: snapshot.generation,
                 local: local,
-                remote: snapshot.remote
+                remote: snapshot.remote,
+                authoritativeBasePin: snapshot.authoritativeBasePin
             )
         }
         return hydrated

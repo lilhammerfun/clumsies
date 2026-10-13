@@ -202,6 +202,10 @@ final class MemoryCatalog: ObservableObject {
         }?.value ?? before.response.headers.first {
             $0.key.caseInsensitiveCompare("etag") == .orderedSame
         }?.value
+        let pin: CommitBasePin?
+        if let commitId { pin = try await context.daemon.retainCommitBase(commitId) }
+        else { pin = nil }
+        try Task.checkCancellation()
         return (
             commitId,
             refEtag,
@@ -216,7 +220,8 @@ final class MemoryCatalog: ObservableObject {
                     updatedAt: item.updatedAt,
                     refCommitId: commitId,
                     contentLoaded: item.isDirectory == true,
-                    document: .init(title: item.name, path: item.path, body: "", isDirectory: item.isDirectory == true)
+                    document: .init(title: item.name, path: item.path, body: "", isDirectory: item.isDirectory == true),
+                    baseCommitPin: pin
                 )
             }
         )
@@ -300,7 +305,8 @@ final class MemoryCatalog: ObservableObject {
         authoritativeCommitId: String,
         authoritativeRefEtag: String?,
         selectedOrgResourceIds: Set<String>,
-        orgSelectionRevision: Int
+        orgSelectionRevision: Int,
+        baseCommitPin: CommitBasePin? = nil
     ) {
         guard !staleResourceSnapshots.values.contains(where: { $0.projectId == projectId }),
               let index = context.projects.firstIndex(where: { $0.id == projectId }) else {
@@ -314,7 +320,8 @@ final class MemoryCatalog: ObservableObject {
             refEtag: authoritativeRefEtag ?? current.refEtag,
             selectedOrgResourceIds: selectedOrgResourceIds,
             orgSelectionRevision: orgSelectionRevision,
-            isLoaded: current.isLoaded
+            isLoaded: current.isLoaded,
+            baseCommitPin: baseCommitPin ?? (current.refCommitId == authoritativeCommitId ? current.baseCommitPin : nil)
         )
         for resourceIndex in resources.indices
         where resources[resourceIndex].scope == .project
@@ -332,7 +339,8 @@ final class MemoryCatalog: ObservableObject {
                 refCommitId: authoritativeCommitId,
                 contentLoaded: resource.contentLoaded,
                 document: resource.document,
-                orgSource: resource.orgSource
+                orgSource: resource.orgSource,
+                baseCommitPin: context.projects[index].baseCommitPin
             )
         }
     }
@@ -372,7 +380,8 @@ final class MemoryCatalog: ObservableObject {
             authoritativeCommitId: snapshot.authoritativeCommitId,
             authoritativeRefEtag: snapshot.authoritativeRefEtag,
             selectedOrgResourceIds: snapshot.selectedOrgResourceIds,
-            orgSelectionRevision: snapshot.orgSelectionRevision
+            orgSelectionRevision: snapshot.orgSelectionRevision,
+            baseCommitPin: snapshot.authoritativeBasePin
         )
     }
 

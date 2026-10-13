@@ -641,13 +641,6 @@ struct CreateReviewMergeRequest: Codable, Sendable {
     let expectedReviewVersion: Int
 }
 
-struct DraftOperationInput: Codable, Sendable {
-    let action: String
-    let resource: ServerDraftResourceReference
-    let content: DaemonDraftContent?
-    let newPath: String?
-}
-
 struct ReviewMergeResponse: Codable, Sendable {
     let review: ReviewMetadata
     let commitId: String?

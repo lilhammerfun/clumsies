@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 mod agent_adapter;
 pub mod agent_runtime;
+mod commit_retention;
 mod commit_sync;
 pub mod config;
 mod credentials;
@@ -40,8 +41,9 @@ pub use agent_adapter::{
     DaemonSetAgentAdapterRequest, ProjectAgentAdapterDelivery, ProjectAgentAdapterKind,
 };
 pub use commit_sync::{
-    DaemonMemoryCacheRequest, DaemonMemoryCacheState, DaemonMemoryCacheStatus,
-    DaemonProjectCheckout, DaemonProjectCheckoutRequest, DaemonProjectCheckoutResource,
+    DaemonCommitBasePin, DaemonCommitBasePinRequest, DaemonMemoryCacheRequest,
+    DaemonMemoryCacheState, DaemonMemoryCacheStatus, DaemonProjectCheckout,
+    DaemonProjectCheckoutRequest, DaemonProjectCheckoutResource,
 };
 pub use config::{
     CURRENT_LOCAL_SCHEMA_VERSION, DAEMON_AGENT_LABEL, DAEMON_MACH_SERVICE_NAME,

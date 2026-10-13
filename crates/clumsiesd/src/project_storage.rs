@@ -262,6 +262,21 @@ struct OwnershipMarker {
 }
 
 pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
+    migrate_for_schema(pool, None).await
+}
+
+/// Install project-location and move-journal tables with an optional schema checkpoint.
+///
+/// DDL and the supplied checkpoint share one immediate writer transaction, allowing
+/// interrupted upgrades to resume without losing persisted custom locations.
+///
+/// # Errors
+/// Returns database errors without committing a partial storage-schema migration.
+pub(crate) async fn migrate_for_schema(
+    pool: &SqlitePool,
+    target: Option<i64>,
+) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS project_storage_locations (
             authority_key TEXT NOT NULL,
@@ -280,7 +295,7 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             )
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS project_storage_moves (
@@ -307,15 +322,19 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             completed_at TEXT
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_project_storage_moves_active
          ON project_storage_moves (authority_key, project_id)
          WHERE state NOT IN ('completed', 'failed')",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    if let Some(target) = target {
+        crate::migration::stamp_schema_version_in_tx(&mut tx, target).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -713,12 +732,42 @@ pub(crate) fn ensure_managed_root(
     Ok(())
 }
 
+/// Create or secure a managed directory, rejecting a symlink at the requested path.
+///
+/// # Errors
+/// Returns filesystem or unsafe-directory errors; callers must also validate any
+/// externally selected ancestor path before treating it as managed storage.
 pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), DaemonError> {
-    fs::create_dir_all(path)?;
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(storage_error(
+            "marker_mismatch",
+            format!(
+                "Managed storage path {} is not a safe directory",
+                path.display()
+            ),
+        ));
+    }
     set_mode(path, 0o700)?;
     Ok(())
 }
 
+/// Publish private bytes through a synced sibling temporary file and atomic rename.
+///
+/// Unix files use mode 0600; the containing directory is synced after publication.
+/// Failures before rename leave the prior file intact and clean up the temporary.
+///
+/// # Errors
+/// Returns invalid-name, directory or I/O errors. A directory-sync failure after
+/// rename can report an error even though the replacement is already visible.
 pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), DaemonError> {
     if let Some(parent) = path.parent() {
         ensure_private_directory(parent)?;
@@ -731,14 +780,22 @@ pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), Dae
         })?;
     let temporary = path.with_file_name(format!(".{file_name}.tmp-{}", Uuid::new_v4().simple()));
     let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
         set_mode(&temporary, 0o600)?;
         file.write_all(contents)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
         Ok::<(), DaemonError>(())
     })();
     if result.is_err() {
@@ -1368,7 +1425,6 @@ fn projected_storage(
     project_id: &str,
     setting: Option<&StorageSetting>,
 ) -> Result<ActiveProjectStorage, DaemonError> {
-    let default_selected_root = default_selected_root(state)?;
     let (mode, selected_root, location_revision) = match setting {
         Some(setting) if setting.mode == DaemonProjectStorageMode::Custom => {
             let selected_root = setting.selected_root_path.as_deref().ok_or_else(|| {
@@ -1385,12 +1441,12 @@ fn projected_storage(
         }
         Some(setting) => (
             DaemonProjectStorageMode::Default,
-            default_selected_root.clone(),
+            default_selected_root(state)?,
             setting.location_revision,
         ),
         None => (
             DaemonProjectStorageMode::Default,
-            default_selected_root,
+            default_selected_root(state)?,
             DEFAULT_LOCATION_REVISION,
         ),
     };
@@ -1423,6 +1479,8 @@ fn managed_root_for(
 }
 
 fn default_selected_root(state: &DaemonState) -> Result<PathBuf, DaemonError> {
+    // macOS may purge Caches while the daemon is still running.
+    ensure_private_directory(&state.inner.config.cache_dir)?;
     Ok(fs::canonicalize(&state.inner.config.cache_dir)?)
 }
 
@@ -2384,5 +2442,51 @@ mod available_space_tests {
         ensure_available_space(root.path(), 0).unwrap();
         assert!(ensure_available_space(root.path(), u64::MAX).is_err());
         assert!(ensure_available_space(&root.path().join("missing"), 0).is_err());
+    }
+
+    #[test]
+    fn private_file_replacement_cleans_failed_temporary_files() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("record.json");
+        write_private_file(&target, b"old").unwrap();
+        write_private_file(&target, b"new").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(root.path()).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        fs::remove_file(&target).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep"), b"preserved").unwrap();
+        assert!(write_private_file(&target, b"replacement").is_err());
+        assert_eq!(fs::read(target.join("keep")).unwrap(), b"preserved");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_directory_does_not_follow_a_symbolic_link() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+        let managed = root.path().join("managed");
+        symlink(&outside, &managed).unwrap();
+        assert!(ensure_private_directory(&managed).is_err());
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert!(write_private_file(&managed.join("secret"), b"private").is_err());
+        assert!(!outside.join("secret").exists());
     }
 }

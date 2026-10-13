@@ -27,8 +27,11 @@ final class WorkspaceCoordinator {
     private var observations: Set<AnyCancellable> = []
 
     init(storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil,
+         loadDraft: (@Sendable (String) async throws -> DaemonDraftDetail)? = nil,
+         createMemoryDrafts: (@Sendable (DaemonCreateMemoryDraftsRequest) async throws -> [DaemonDraftOperationResponse])? = nil,
+         retainBase: (@Sendable (String) async throws -> CommitBasePin)? = nil,
          navigationDefaults: UserDefaults? = nil) {
-        let context = WorkspaceContext()
+        let context = WorkspaceContext(retainBase: retainBase)
         self.context = context
         let catalog = MemoryCatalog(context: context)
         self.catalog = catalog
@@ -41,7 +44,7 @@ final class WorkspaceCoordinator {
         self.agents = agents
         let bundles = BundleStore(catalog: catalog, context: context, feedback: feedback)
         self.bundles = bundles
-        let edits = DraftStore(catalog: catalog, context: context, feedback: feedback, sessions: sessions, storeDraft: storeDraft)
+        let edits = DraftStore(catalog: catalog, context: context, feedback: feedback, sessions: sessions, storeDraft: storeDraft, loadDraft: loadDraft)
         self.edits = edits
         let refresh = DaemonSyncService(context: context, feedback: feedback)
         self.refresh = refresh
@@ -53,9 +56,9 @@ final class WorkspaceCoordinator {
         self.navigation = navigation
         let projects = ProjectService(agents: agents, bundles: bundles, catalog: catalog, context: context, edits: edits, refresh: refresh, sessions: sessions)
         self.projects = projects
-        let reconciliation = DraftReconciliationService(catalog: catalog, context: context, edits: edits, refresh: refresh, sessions: sessions)
+        let reconciliation = DraftReconciliationService(catalog: catalog, context: context, edits: edits, refresh: refresh, sessions: sessions, loadDraft: loadDraft)
         self.reconciliation = reconciliation
-        let memory = MemoryModel(catalog: catalog, context: context, edits: edits, feedback: feedback, navigation: navigation, projects: projects, reconciliation: reconciliation, sessions: sessions)
+        let memory = MemoryModel(catalog: catalog, context: context, edits: edits, feedback: feedback, navigation: navigation, projects: projects, reconciliation: reconciliation, sessions: sessions, createDrafts: createMemoryDrafts, loadDraft: loadDraft)
         self.memory = memory
         let reviews = ReviewsModel(context: context, edits: edits, feedback: feedback, navigation: navigation, reconciliation: reconciliation, sessions: sessions)
         self.reviews = reviews
@@ -431,12 +434,12 @@ final class WorkspaceCoordinator {
         guard !context.isSigningOut else { return }
         context.isSigningOut = true
         let priorPhase = context.phase
-        context.phase = .loading
         defer { self.context.isSigningOut = false }
         guard await flushPendingChanges() else {
             context.phase = priorPhase
             return
         }
+        context.phase = .loading
         context.workspaceReloadGeneration = UUID()
         cancelPostReadyWork()
         WorkspaceLoadPolicy.invalidateWorkspaceTransitionState(
@@ -470,7 +473,7 @@ final class WorkspaceCoordinator {
         guard await edits.flushPendingDocumentChanges() else { return false }
         do {
             try await bundles.flushPendingChanges()
-            return true
+            return !hasPendingChanges
         } catch {
             feedback.errorMessage = error.actionMessage
             return false
@@ -532,12 +535,19 @@ final class WorkspaceCoordinator {
     @discardableResult
     func refreshSynchronizedWorkspaceData() async -> WorkspaceRefreshScheduler.Result {
         guard context.phase == .ready, !refresh.isRefreshingSynchronizedWorkspaceData else { return .deferred }
+        let request = UUID()
+        refresh.synchronizedWorkspaceDataGeneration = request
         refresh.isRefreshingSynchronizedWorkspaceData = true
-        defer { self.refresh.isRefreshingSynchronizedWorkspaceData = false }
+        defer {
+            if refresh.synchronizedWorkspaceDataGeneration == request {
+                refresh.isRefreshingSynchronizedWorkspaceData = false
+            }
+        }
         let generation = context.workspaceReloadGeneration
         let projectId = context.activeProjectId
         let orgCurrent = await self.sync.refreshOrgResourcesIfNeeded(isActive: { self.navigation.selectedSection == .memory })
-        guard context.workspaceReloadGeneration == generation,
+        guard refresh.synchronizedWorkspaceDataGeneration == request,
+              context.workspaceReloadGeneration == generation,
               context.activeProjectId == projectId,
               context.phase == .ready,
               !Task.isCancelled,
@@ -549,7 +559,8 @@ final class WorkspaceCoordinator {
             includeFailed: sync.pendingOperationCount > 0 || sync.failedOperationCount > 0,
             generation: generation
         )
-        guard context.workspaceReloadGeneration == generation,
+        guard refresh.synchronizedWorkspaceDataGeneration == request,
+              context.workspaceReloadGeneration == generation,
               context.activeProjectId == projectId,
               context.phase == .ready,
               !Task.isCancelled else {
@@ -560,6 +571,7 @@ final class WorkspaceCoordinator {
     }
 
     func clearAuthorityScopedWorkspace() {
+        if context.account != nil { AvatarImageCache.resetShared() }
         cancelPostReadyWork()
         refresh.resetAuthority()
         feedback.resetBackgroundErrorPresentation()

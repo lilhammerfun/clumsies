@@ -73,6 +73,7 @@ pub(crate) struct LocalDraftResolutionInput<'a> {
     pub(crate) requested_draft_id: Option<&'a str>,
     pub(crate) project_id: &'a str,
     pub(crate) requested_base_commit_id: Option<&'a str>,
+    pub(crate) requested_base_commit_captured: bool,
     pub(crate) new_draft_base_commit_id: Option<&'a str>,
     pub(crate) scope: DaemonDraftScope,
     pub(crate) resource: DaemonDraftResourceKind,
@@ -87,6 +88,7 @@ pub(crate) async fn resolve_local_draft(
         requested_draft_id,
         project_id,
         requested_base_commit_id,
+        requested_base_commit_captured,
         new_draft_base_commit_id,
         scope,
         resource,
@@ -114,7 +116,7 @@ pub(crate) async fn resolve_local_draft(
             )));
         }
         let stored_base_commit_id: Option<String> = row.try_get("base_commit_id")?;
-        if requested_base_commit_id.is_some()
+        if (requested_base_commit_captured || requested_base_commit_id.is_some())
             && stored_base_commit_id.as_deref() != requested_base_commit_id
         {
             return Err(DaemonError::InvalidRequest(format!(
@@ -191,7 +193,7 @@ pub(crate) async fn resolve_local_draft(
             )));
         }
         let stored_base_commit_id: Option<String> = existing.try_get("base_commit_id")?;
-        if requested_base_commit_id.is_some()
+        if (requested_base_commit_captured || requested_base_commit_id.is_some())
             && stored_base_commit_id.as_deref() != requested_base_commit_id
         {
             return Err(DaemonError::InvalidRequest(format!(
@@ -419,7 +421,7 @@ pub(crate) async fn load_local_draft_detail(
 }
 
 /// Display path derived in the same read as the Draft, preserving ID-based mutation selectors.
-const DRAFT_PATH_SQL: &str = "COALESCE(
+pub(crate) const DRAFT_PATH_SQL: &str = "COALESCE(
             (SELECT COALESCE(json_extract(o.operation_json, '$.rename.new_path'),
                              json_extract(o.operation_json, '$.create.path'))
              FROM local_draft_operations o WHERE o.draft_id = d.draft_id
@@ -433,7 +435,8 @@ const DRAFT_PATH_SQL: &str = "COALESCE(
              WHERE c.commit_id = d.base_commit_id
                AND json_extract(e.value, '$.id') = d.target_id
                AND json_extract(e.value, '$.scope') = d.resource_scope
-               AND json_extract(e.value, '$.type') = d.resource_kind
+               AND CASE WHEN json_extract(e.value, '$.type') IN ('context', 'rule', 'workflow', 'memory')
+                        THEN 'memory' ELSE json_extract(e.value, '$.type') END = d.resource_kind
              LIMIT 1))";
 
 pub(crate) fn local_draft_summary_from_row(

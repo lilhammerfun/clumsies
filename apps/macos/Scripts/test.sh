@@ -5,6 +5,8 @@ set -eu
 derived_data="${CLUMSIES_MACOS_DERIVED_DATA:-/private/tmp/clumsies-macos-tests}"
 result_root=$(mktemp -d "${TMPDIR:-/private/tmp}/clumsies-macos-test-results.XXXXXX")
 trap 'rm -rf -- "$result_root"' EXIT
+test_preferences_home="$result_root/home"
+mkdir -p "$test_preferences_home/Library/Preferences"
 
 xcodegen generate --spec apps/macos/project.yml
 
@@ -13,7 +15,10 @@ test_language() {
     shift
     result_bundle="$result_root/Clumsies-$language.xcresult"
     set +e
-    CLUMSIES_SKIP_DAEMON_BUILD=1 xcodebuild -quiet \
+    CFFIXED_USER_HOME="$test_preferences_home" \
+        TEST_RUNNER_CFFIXED_USER_HOME="$test_preferences_home" \
+        TEST_RUNNER_CLUMSIES_ISOLATED_TEST_HOME="$test_preferences_home" \
+        CLUMSIES_SKIP_DAEMON_BUILD=1 xcodebuild -quiet \
         -project apps/macos/Clumsies.xcodeproj \
         -scheme Clumsies \
         -configuration Debug \

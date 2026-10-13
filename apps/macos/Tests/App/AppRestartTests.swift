@@ -63,7 +63,8 @@ final class AppRestartTests: XCTestCase {
         // Closing this descriptor models the OS closing it at App process exit.
         try exitSignal.close()
         let launch = XCTNSPredicateExpectation(predicate: exists, object: nil)
-        await fulfillment(of: [launch], timeout: 3)
+        // The child process may be scheduled behind concurrent builds and process tests.
+        await fulfillment(of: [launch], timeout: 10)
         XCTAssertEqual(try String(contentsOf: recorded, encoding: .utf8), "-n\n\(app.path)\n")
     }
 }

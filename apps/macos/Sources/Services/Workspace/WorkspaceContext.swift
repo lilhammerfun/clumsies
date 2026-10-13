@@ -5,7 +5,10 @@ import Foundation
 final class WorkspaceContext: ObservableObject {
     let projectSelectionChanges = PassthroughSubject<Void, Never>()
 
-    init() {
+    private let retainBase: (@Sendable (String) async throws -> CommitBasePin)?
+
+    init(retainBase: (@Sendable (String) async throws -> CommitBasePin)? = nil) {
+        self.retainBase = retainBase
     }
 
     @Published var phase: ApplicationPhase = .launching
@@ -39,7 +42,7 @@ final class WorkspaceContext: ObservableObject {
 
     var administrationMutationGeneration = UUID()
 
-    var isSigningOut = false
+    @Published var isSigningOut = false
 
     var projectSelectionGeneration = UUID()
 
@@ -144,7 +147,7 @@ final class WorkspaceContext: ObservableObject {
     }
 
     var loader: WorkspaceLoader {
-        WorkspaceLoader(daemon: daemon, bootstrap: bootstrap, server: server)
+        WorkspaceLoader(daemon: daemon, bootstrap: bootstrap, server: server, retainBase: retainBase)
     }
 
     func invalidateProjectSelection() {

@@ -5,6 +5,7 @@ import XCTest
 
 @MainActor
 final class InboxTests: XCTestCase {
+    private var receiptDirectory: URL!
     @MainActor private final class Responses {
         var version = 1
         var unavailable = false
@@ -14,6 +15,10 @@ final class InboxTests: XCTestCase {
 
     override func setUp() async throws {
         ClientServiceStatus.shared.reset()
+        let directory = FileManager.default.temporaryDirectory.appending(path: "InboxTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        receiptDirectory = directory
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
     }
 
     private func context() -> WorkspaceContext {
@@ -90,7 +95,7 @@ final class InboxTests: XCTestCase {
         var receipts: [String] = []
         let notices = [accountNotification("welcome"), accountNotification("project_joined"),
             accountNotification("project_removed"), notification()]
-        let store = InboxStore(context: context, defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: notices, nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { id, _ in receipts.append(id) })
         store.prepare(serverURL: "test")
@@ -120,7 +125,7 @@ final class InboxTests: XCTestCase {
     func testToolbarKeepsFiltersLeadingAndFocusesTheTrailingNativeSearch() async throws {
         let context = context()
         var receipts: [InboxReceiptAction] = []
-        let store = InboxStore(context: context, defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
             fetchLocal: { self.snapshot(failed: true) },
             updateReceipt: { _, request in receipts.append(request.action) })
@@ -210,7 +215,7 @@ final class InboxTests: XCTestCase {
 
     func testCheckboxSelectionDoesNotReadAndToolbarArchivesTheWholeSelection() async throws {
         var receipts: [(String, InboxReceiptAction)] = []
-        let store = InboxStore(context: context(), defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.notification("one"), self.notification("two")], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { id, request in receipts.append((id, request.action)) })
         store.prepare(serverURL: "test")
@@ -288,7 +293,7 @@ final class InboxTests: XCTestCase {
     }
 
     func testWelcomeOpensInsideMainWindowAndMarksReadWithoutASheet() async throws {
-        let store = InboxStore(context: context(), defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.accountNotification("welcome")], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in })
         store.prepare(serverURL: "test")
@@ -344,7 +349,7 @@ final class InboxTests: XCTestCase {
     func testReadUnreadAndArchiveAreIndependentAndBatchArchiveCanBeUndone() async throws {
         let context = context(), defaults = try preferences()
         var requests: [InboxReceiptAction] = []
-        let store = InboxStore(context: context, defaults: defaults,
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
             fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
             fetchLocal: { self.snapshot(failed: true) },
             updateReceipt: { _, request in requests.append(request.action) })
@@ -372,7 +377,7 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(store.unreadCount, 2)
         XCTAssertEqual(requests, [.archive, .restore, .read, .unread])
 
-        let restarted = InboxStore(context: context, defaults: defaults,
+        let restarted = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
             fetchPage: { _ in (.init(items: [], nextCursor: nil), false) },
             fetchLocal: { self.snapshot(failed: true) })
         restarted.prepare(serverURL: "test")
@@ -383,7 +388,7 @@ final class InboxTests: XCTestCase {
     func testBatchStopsAfterReceiptFailureAndUndoCannotCrossAccountReset() async throws {
         let context = context()
         var count = 0
-        let store = InboxStore(context: context, defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.notification("one"), self.notification("two")], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in
                 count += 1
@@ -422,7 +427,7 @@ final class InboxTests: XCTestCase {
         let context = context()
         var opened: [InboxDestination] = []
         var receipts: [InboxReceiptAction] = []
-        let store = InboxStore(context: context, defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.notification(), self.notification("shared:project", kind: "shared_update")], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() },
             updateReceipt: { _, request in
@@ -463,7 +468,7 @@ final class InboxTests: XCTestCase {
     func testAuthorityChangeDuringNavigationCannotAcknowledgeOldMessages() async throws {
         let context = context()
         var didAcknowledge = false
-        let store = InboxStore(context: context, defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in didAcknowledge = true })
         store.prepare(serverURL: "test")
@@ -487,7 +492,7 @@ final class InboxTests: XCTestCase {
     func testOrdinaryDraftActivityDoesNotCreateNotifications() async throws {
         let context = context()
         let responses = Responses()
-        let store = InboxStore(context: context, defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: [], nextCursor: nil), false) },
             fetchLocal: { self.snapshot(pending: responses.pending, behind: 3) })
         store.prepare(serverURL: "test")
@@ -503,7 +508,7 @@ final class InboxTests: XCTestCase {
         let context = context(), defaults = try preferences()
         var local = snapshot(failed: true)
         func makeStore() -> InboxStore {
-            let store = InboxStore(context: context, defaults: defaults,
+            let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
                 fetchPage: { _ in (.init(items: [], nextCursor: nil), false) }, fetchLocal: { local })
             store.prepare(serverURL: "https://example.com")
             return store
@@ -539,7 +544,7 @@ final class InboxTests: XCTestCase {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode(DaemonSyncStatus.self, from: encoder.encode(local))
         XCTAssertEqual(decoded.unavailableProjects, local.unavailableProjects)
-        let store = InboxStore(context: context, defaults: defaults,
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
             fetchPage: { _ in (.init(items: [], nextCursor: nil), false) }, fetchLocal: { local })
         store.prepare(serverURL: "https://example.com")
         await store.refresh()
@@ -572,7 +577,7 @@ final class InboxTests: XCTestCase {
     func testLocalProjectRecoveryActionsStayAtTheBottomWhenTheListEmpties() async throws {
         let context = context(), responses = Responses()
         responses.unavailable = true
-        let store = InboxStore(context: context, defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: try preferences(),
             fetchPage: { _ in (.init(items: [], nextCursor: nil), false) }, fetchLocal: {
                 var local = self.snapshot()
                 if responses.unavailable {
@@ -633,7 +638,7 @@ final class InboxTests: XCTestCase {
         var requests: [String?] = []
         let started = expectation(description: "Receipt started")
         var pending: CheckedContinuation<Void, Error>?
-        let store = InboxStore(context: context, defaults: defaults, fetchPage: { cursor in
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults, fetchPage: { cursor in
             requests.append(cursor)
             return (.init(items: [self.notification(cursor == nil ? "review:one" : "review:two", version: responses.version)],
                           nextCursor: cursor == nil ? "next" : nil), false)
@@ -663,7 +668,7 @@ final class InboxTests: XCTestCase {
         var pending: CheckedContinuation<(InboxPage, Bool), Error>?
         var calls = 0
         let page = InboxPage(items: [notification()], nextCursor: nil)
-        let store = InboxStore(context: context, defaults: defaults, fetchPage: { _ in
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults, fetchPage: { _ in
             calls += 1
             if calls == 2 {
                 return try await withCheckedThrowingContinuation { pending = $0; started.fulfill() }
@@ -686,7 +691,7 @@ final class InboxTests: XCTestCase {
             let context = context(), defaults = try preferences()
             let started = expectation(description: "Refresh started")
             var pending: CheckedContinuation<(InboxPage, Bool), Error>?
-            let store = InboxStore(context: context, defaults: defaults, fetchPage: { _ in
+            let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults, fetchPage: { _ in
                 try await withCheckedThrowingContinuation { pending = $0; started.fulfill() }
             }, fetchLocal: { self.snapshot(failed: true) })
             store.prepare(serverURL: "test")
@@ -711,7 +716,7 @@ final class InboxTests: XCTestCase {
             observedSelectedOrgResourceIds: [], observedOrgSelectionRevision: 0, authoritativeCommitId: "new",
             authoritativeRefEtag: nil, selectedOrgResourceIds: [], orgSelectionRevision: 0,
             generation: UUID(), local: nil, remote: nil)
-        let store = InboxStore(context: context, catalog: catalog, defaults: defaults,
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, catalog: catalog, defaults: defaults,
             fetchPage: { _ in (.init(items: [], nextCursor: nil), false) }, fetchLocal: { self.snapshot() })
         store.prepare(serverURL: "test")
         await store.refresh()
@@ -728,7 +733,7 @@ final class InboxTests: XCTestCase {
     func testOfflineReceiptIsQueuedAndFailedStatusProbeDoesNotInventNotifications() async throws {
         let context = context(), defaults = try preferences()
         let responses = Responses()
-        let store = InboxStore(context: context, defaults: defaults,
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
             fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), true) },
             fetchLocal: {
                 if responses.unavailable { throw URLError(.cannotConnectToHost) }
@@ -756,7 +761,7 @@ final class InboxTests: XCTestCase {
         var version = 1
         var sent: [InboxReceiptAction] = []
         func makeStore() -> InboxStore {
-            InboxStore(context: context, defaults: defaults,
+            InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
                 fetchPage: { _ in (.init(items: [self.notification(version: version)], nextCursor: nil), !online) },
                 fetchLocal: { self.snapshot() }, updateReceipt: { _, receipt in
                     guard online else { throw URLError(.notConnectedToInternet) }
@@ -795,7 +800,7 @@ final class InboxTests: XCTestCase {
         var attempts = 0
         var status = 404
         func makeStore() -> InboxStore {
-            InboxStore(context: context, defaults: defaults,
+            InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
                 fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
                 fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in
                     attempts += 1
@@ -824,7 +829,7 @@ final class InboxTests: XCTestCase {
         let started = expectation(description: "Receipt started")
         var reply: CheckedContinuation<Void, Error>?
         var sent: [InboxReceiptAction] = []
-        let store = InboxStore(context: context(), defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: try preferences(),
             fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { _, request in
                 sent.append(request.action)
@@ -852,7 +857,7 @@ final class InboxTests: XCTestCase {
         let context = context(), defaults = try preferences()
         let responses = Responses()
         var sends = 0
-        let store = InboxStore(context: context, defaults: defaults,
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context, defaults: defaults,
             fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
             fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in
                 guard responses.online else { throw URLError(.notConnectedToInternet) }
@@ -873,7 +878,7 @@ final class InboxTests: XCTestCase {
     func testInitialFailureIsNotAnEmptyInboxAndRefreshKeepsExistingContent() async throws {
         let responses = Responses()
         responses.unavailable = true
-        let store = InboxStore(context: context(), defaults: try preferences(),
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: try preferences(),
             fetchPage: { _ in
                 if responses.unavailable { throw ServerClientError.response(status: 500, message: "SECRET") }
                 return (.init(items: [self.notification()], nextCursor: nil), false)
@@ -892,4 +897,144 @@ final class InboxTests: XCTestCase {
         XCTAssertNil(store.errorMessage, "A background failure should not duplicate the window's connection state.")
     }
 
+    func testLegacyPendingReceiptsMoveToPrivateApplicationDataAndSurviveRelaunch() async throws {
+        let defaults = try preferences()
+        let key = "ClumsiesInbox.test.org.user"
+        let pending: [[String: Any]] = [["id": UUID().uuidString, "notificationId": "review:one", "version": 1, "action": "archive"]]
+        defaults.set(try JSONSerialization.data(withJSONObject: pending), forKey: key + ".pending")
+        defaults.set(Data("{}".utf8), forKey: key)
+        func makeStore() -> InboxStore {
+            InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: defaults,
+                fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
+                fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in throw URLError(.notConnectedToInternet) })
+        }
+        let store = makeStore()
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        XCTAssertTrue(try XCTUnwrap(store.items.first).isArchived)
+        XCTAssertNil(defaults.data(forKey: key))
+        XCTAssertNil(defaults.data(forKey: key + ".pending"))
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: receiptDirectory, includingPropertiesForKeys: nil).first)
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        let restarted = makeStore()
+        restarted.prepare(serverURL: "test")
+        await restarted.refresh()
+        XCTAssertTrue(try XCTUnwrap(restarted.items.first).isArchived)
+        XCTAssertNil(restarted.receiptError)
+    }
+
+    func testReceiptWriteFailureDoesNotAcknowledgeOrSendAndCanRecover() async throws {
+        var sends = 0
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: try preferences(),
+            fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
+            fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in sends += 1 })
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        let item = try XCTUnwrap(store.items.first)
+        try FileManager.default.removeItem(at: receiptDirectory)
+        try Data("blocked".utf8).write(to: receiptDirectory)
+        let failed = await store.acknowledge(item, action: .archive)
+        XCTAssertFalse(failed)
+        XCTAssertEqual(sends, 0)
+        XCTAssertFalse(try XCTUnwrap(store.items.first).isArchived)
+        XCTAssertNotNil(store.receiptError)
+        try FileManager.default.removeItem(at: receiptDirectory)
+        let recovered = await store.acknowledge(item, action: .archive)
+        XCTAssertTrue(recovered)
+        XCTAssertEqual(sends, 1)
+        XCTAssertNil(store.receiptError)
+    }
+
+    func testCorruptReceiptFileIsPreservedAndNeverOverwrittenByRefresh() async throws {
+        let defaults = try preferences()
+        var sends = 0
+        func makeStore() -> InboxStore {
+            InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: defaults,
+                fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
+                fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in sends += 1 })
+        }
+        let original = makeStore()
+        original.prepare(serverURL: "test")
+        await original.refresh()
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: receiptDirectory, includingPropertiesForKeys: nil).first)
+        let corrupt = Data("incomplete-json".utf8)
+        try corrupt.write(to: file)
+        let restarted = makeStore()
+        restarted.prepare(serverURL: "test")
+        await restarted.refresh()
+        let saved = await restarted.acknowledge(try XCTUnwrap(restarted.items.first), action: .read)
+        XCTAssertFalse(saved)
+        XCTAssertEqual(sends, 0)
+        XCTAssertNotNil(restarted.receiptError)
+        XCTAssertEqual(try Data(contentsOf: file), corrupt)
+    }
+
+    func testLegacyReceiptsRemainInPreferencesWhenMigrationCannotWrite() throws {
+        let defaults = try preferences()
+        let key = "ClumsiesInbox.test.org.user"
+        let legacy = Data("[]".utf8)
+        defaults.set(legacy, forKey: key + ".pending")
+        try FileManager.default.removeItem(at: receiptDirectory)
+        try Data("blocked".utf8).write(to: receiptDirectory)
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: defaults)
+        store.prepare(serverURL: "test")
+        XCTAssertNotNil(store.receiptError)
+        XCTAssertEqual(defaults.data(forKey: key + ".pending"), legacy)
+    }
+
+    func testPermanentRejectionRollsBackWhileReceiptStorageIsBlocked() async throws {
+        let defaults = try preferences()
+        let started = expectation(description: "Receipt sent")
+        var reply: CheckedContinuation<Void, Error>?
+        var sends = 0
+        func makeStore() -> InboxStore {
+            InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: defaults,
+                fetchPage: { _ in (.init(items: [self.notification()], nextCursor: nil), false) },
+                fetchLocal: { self.snapshot() }, updateReceipt: { _, _ in
+                    sends += 1
+                    try await withCheckedThrowingContinuation { reply = $0; started.fulfill() }
+                })
+        }
+        let store = makeStore()
+        store.prepare(serverURL: "test")
+        await store.refresh()
+        let item = try XCTUnwrap(store.items.first)
+        let change = Task { await store.acknowledge(item, action: .archive) }
+        await fulfillment(of: [started], timeout: 1)
+        let backup = receiptDirectory.appendingPathExtension("saved")
+        addTeardownBlock { try? FileManager.default.removeItem(at: backup) }
+        try FileManager.default.moveItem(at: receiptDirectory, to: backup)
+        try Data("blocked".utf8).write(to: receiptDirectory)
+        try XCTUnwrap(reply).resume(throwing: ServerClientError.response(status: 400, message: "invalid"))
+        let saved = await change.value
+        XCTAssertFalse(saved)
+        XCTAssertFalse(try XCTUnwrap(store.items.first).isArchived)
+        XCTAssertNotNil(store.receiptError)
+        await store.refresh()
+        XCTAssertEqual(sends, 1, "A rejected intent must not remain effective or repeat in this process.")
+        try FileManager.default.removeItem(at: receiptDirectory)
+        try FileManager.default.moveItem(at: backup, to: receiptDirectory)
+        await store.refresh()
+        let restarted = makeStore()
+        restarted.prepare(serverURL: "test")
+        await restarted.refresh()
+        XCTAssertEqual(sends, 1, "Recovery must persist the removal before relaunch.")
+        XCTAssertFalse(try XCTUnwrap(restarted.items.first).isArchived)
+    }
+
+    func testRefreshClearsAStorageErrorAfterTheDirectoryRecovers() async throws {
+        let store = InboxStore(receiptDirectory: receiptDirectory, context: context(), defaults: try preferences(),
+            fetchPage: { _ in (.init(items: [], nextCursor: nil), false) },
+            fetchLocal: { self.snapshot(failed: true) })
+        store.prepare(serverURL: "test")
+        try FileManager.default.removeItem(at: receiptDirectory)
+        try Data("blocked".utf8).write(to: receiptDirectory)
+        await store.refresh()
+        XCTAssertNotNil(store.receiptError)
+        try FileManager.default.removeItem(at: receiptDirectory)
+        await store.refresh()
+        XCTAssertNil(store.receiptError)
+        XCTAssertFalse(store.items.isEmpty)
+    }
 }

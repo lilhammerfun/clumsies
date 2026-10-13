@@ -30,126 +30,34 @@ struct EvaluationEvidenceDraft: Identifiable, Equatable, Sendable {
 
 @MainActor
 final class RetrievalDiagnosticsModel: ObservableObject {
-    @Published private(set) var runs: [RetrievalRun] = []
     @Published private(set) var selectedRunId: String?
     @Published private(set) var detail: RetrievalRunDetail?
     @Published private(set) var evidenceDrafts: [EvaluationEvidenceDraft] = []
     @Published private(set) var isLoading = false
-    @Published private(set) var isLoadingMore = false
     @Published private(set) var isMutating = false
     @Published var errorMessage: String?
-    @Published private(set) var pageError: String?
 
     private let daemon: DaemonXPCClient
-    private let fetchRuns: @MainActor (RetrievalRunListRequest) async throws -> RetrievalRunListResponse
-    private var listGeneration = UUID()
     private let fetchRun: @MainActor (String) async throws -> RetrievalRunDetail
-    private var projectId: String?
-    private(set) var nextCursor: String?
     private var selectionGeneration = UUID()
 
     init(
         daemon: DaemonXPCClient,
-        fetchRuns: (@MainActor (RetrievalRunListRequest) async throws -> RetrievalRunListResponse)? = nil,
         fetchRun: (@MainActor (String) async throws -> RetrievalRunDetail)? = nil
     ) {
         self.daemon = daemon
-        self.fetchRuns = fetchRuns ?? { try await daemon.listRetrievalRuns($0) }
         self.fetchRun = fetchRun ?? { try await daemon.retrievalRun($0) }
     }
 
-    func refreshInBackground() async {
-        guard !isLoading, !isLoadingMore, !isMutating,
-              evidenceDrafts == (detail?.evidence.map(EvaluationEvidenceDraft.init) ?? []) else { return }
-        await load(projectId: projectId, preservingEdits: true)
-    }
-
-    func load(projectId: String?, preservingEdits: Bool = false) async {
-        let originalEvidence = evidenceDrafts
-        let retainedCount = self.projectId == projectId ? runs.count : 0
-        if self.projectId != projectId {
-            runs = []
-            nextCursor = nil
-            selectedRunId = nil
-            detail = nil
-            evidenceDrafts = []
-        }
-        self.projectId = projectId
-        let generation = UUID()
-        selectionGeneration = generation
-        listGeneration = generation
-        isLoadingMore = false
-        pageError = nil
-        isLoading = true
-        errorMessage = nil
-        defer {
-            if selectionGeneration == generation {
-                isLoading = false
-            }
-        }
+    func refreshRunningSelection() async {
+        guard let runId = selectedRunId, detail?.run.status == .running,
+              !isLoading, !isMutating else { return }
+        let generation = selectionGeneration
         do {
-            var response = try await fetchRuns(
-                RetrievalRunListRequest(
-                    projectId: projectId,
-                    status: nil,
-                    cursor: nil,
-                    limit: 100
-                )
-            )
-            var refreshed = response.items
-            var seenCursors = Set<String>()
-            while refreshed.count < retainedCount, let cursor = response.nextCursor, seenCursors.insert(cursor).inserted {
-                try Task.checkCancellation()
-                response = try await fetchRuns(.init(projectId: projectId, status: nil, cursor: cursor, limit: 100))
-                refreshed.append(contentsOf: response.items)
-            }
-            guard selectionGeneration == generation, !Task.isCancelled,
-                  !preservingEdits || evidenceDrafts == originalEvidence else { return }
-            runs = refreshed
-            nextCursor = response.nextCursor
-            let selected = selectedRunId.flatMap { selected in
-                refreshed.first(where: { $0.runId == selected })?.runId
-            } ?? refreshed.first?.runId
-            if selectedRunId != selected {
-                detail = nil
-                evidenceDrafts = []
-            }
-            selectedRunId = selected
-            if let selected {
-                try await loadDetail(runId: selected, generation: generation, preservingEdits: preservingEdits)
-            } else {
-                detail = nil
-                evidenceDrafts = []
-            }
+            try await loadDetail(runId: runId, generation: generation)
         } catch {
             guard selectionGeneration == generation, !Task.isCancelled else { return }
-            errorMessage = runs.isEmpty || detail == nil ? error.actionMessage : error.backgroundMessage
-        }
-    }
-
-    func loadMore() async {
-        guard let cursor = nextCursor, !isLoadingMore, !isLoading else { return }
-        let generation = listGeneration
-        isLoadingMore = true
-        pageError = nil
-        defer { if listGeneration == generation { isLoadingMore = false } }
-        do {
-            let response = try await fetchRuns(
-                RetrievalRunListRequest(
-                    projectId: projectId,
-                    status: nil,
-                    cursor: cursor,
-                    limit: 100
-                )
-            )
-            try Task.checkCancellation()
-            guard listGeneration == generation else { return }
-            let existing = Set(runs.map(\.runId))
-            runs.append(contentsOf: response.items.filter { !existing.contains($0.runId) })
-            nextCursor = response.nextCursor
-        } catch {
-            guard listGeneration == generation, !Task.isCancelled else { return }
-            pageError = error.actionMessage
+            errorMessage = error.actionMessage
         }
     }
 
@@ -238,31 +146,18 @@ final class RetrievalDiagnosticsModel: ObservableObject {
         }
     }
 
-    func clearUnpinnedHistory() async {
-        await mutate {
-            _ = try await daemon.clearRetrievalRuns(projectId: projectId)
-            await load(projectId: projectId)
-        }
-    }
-
     func exportEvaluationSet() async throws -> ExportEvaluationSetResponse {
-        try await daemon.exportEvaluationSet(
-            projectId: runs.isEmpty ? detail?.run.projectId : projectId
-        )
+        guard let projectId = detail?.run.projectId else { throw CancellationError() }
+        return try await daemon.exportEvaluationSet(projectId: projectId)
     }
 
-    private func loadDetail(runId: String, generation: UUID, preservingEdits: Bool = false) async throws {
-        let originalEvidence = evidenceDrafts
+    private func loadDetail(runId: String, generation: UUID) async throws {
         let loaded = try await fetchRun(runId)
         guard selectionGeneration == generation,
               selectedRunId == loaded.run.runId,
-              !preservingEdits || evidenceDrafts == originalEvidence,
               !Task.isCancelled else { return }
         detail = loaded
         evidenceDrafts = loaded.evidence.map(EvaluationEvidenceDraft.init)
-        if let index = runs.firstIndex(where: { $0.runId == loaded.run.runId }) {
-            runs[index] = loaded.run
-        }
     }
 
     @discardableResult

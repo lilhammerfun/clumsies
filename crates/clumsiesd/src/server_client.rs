@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 
 use crate::DaemonError;
@@ -17,6 +18,7 @@ const SERVER_PROXY_MAX_PATH_BYTES: usize = 8 * 1024;
 
 const SERVER_RESPONSE_CACHE_MAX_ENTRIES: i64 = 512;
 const SERVER_RESPONSE_CACHE_MAX_LOGICAL_BYTES: i64 = 64 * 1024 * 1024;
+const SERVER_RESPONSE_CACHE_SCOPE: &str = "server_response_cache_credential_scope_v1";
 enum TokenRefreshOutcome {
     Refreshed(RuntimeProjectConfig),
     Superseded,
@@ -96,7 +98,30 @@ pub(crate) async fn execute_authenticated_server_request(
 ) -> Result<reqwest::Response, DaemonError> {
     validate_server_proxy_path(path)?;
     let snapshot = state.project_config_with_credentials_snapshot().await;
+    execute_authenticated_server_request_with_snapshot(state, method, path, headers, body, snapshot)
+        .await
+}
+
+/// Execute and, if needed, refresh one request under its captured session revision.
+///
+/// A session change prevents replay with another account's credentials. Denied
+/// responses and successful writes invalidate the matching session's fallback cache.
+///
+/// # Errors
+/// Returns credential, HTTP or refresh errors, or `sync_session_changed` when the
+/// captured session is superseded before its response can be consumed.
+pub(crate) async fn execute_authenticated_server_request_with_snapshot(
+    state: &DaemonState,
+    method: reqwest::Method,
+    path: &str,
+    headers: &BTreeMap<String, String>,
+    body: Option<Vec<u8>>,
+    snapshot: crate::state::RuntimeProjectConfigSnapshot,
+) -> Result<reqwest::Response, DaemonError> {
     let request_session_revision = snapshot.session_revision;
+    if state.project_config_snapshot().session_revision != request_session_revision {
+        return Err(state.server_request_session_error(request_session_revision));
+    }
     let config = snapshot.config;
     let access_token = config
         .access_token
@@ -115,28 +140,77 @@ pub(crate) async fn execute_authenticated_server_request(
         body.clone(),
     )
     .await?;
-    if response.status() != reqwest::StatusCode::UNAUTHORIZED || config.refresh_token.is_none() {
-        return Ok(response);
+    if state.project_config_snapshot().session_revision != request_session_revision {
+        return Err(
+            if method == reqwest::Method::GET
+                || response.status() == reqwest::StatusCode::UNAUTHORIZED
+            {
+                state.server_request_session_error(request_session_revision)
+            } else {
+                server_session_changed()
+            },
+        );
     }
-
-    let TokenRefreshOutcome::Refreshed(refreshed) =
-        refresh_server_tokens(state, &config, request_session_revision).await?
-    else {
-        return Ok(response);
+    if matches!(response.status().as_u16(), 401 | 403) {
+        // A denied resource cannot fall back to its old body if token refresh fails.
+        state
+            .invalidate_server_response_cache(request_session_revision)
+            .await;
+    }
+    let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED
+        && config.refresh_token.is_some()
+    {
+        match refresh_server_tokens(state, &config, request_session_revision).await? {
+            TokenRefreshOutcome::Refreshed(refreshed) => {
+                send_server_request(
+                    state,
+                    &refreshed.server_url,
+                    refreshed
+                        .access_token
+                        .as_deref()
+                        .expect("a refreshed session must contain an access token"),
+                    method.clone(),
+                    path,
+                    headers,
+                    body,
+                )
+                .await?
+            }
+            TokenRefreshOutcome::Superseded => {
+                return Err(state.server_request_session_error(request_session_revision));
+            }
+        }
+    } else {
+        response
     };
-    send_server_request(
-        state,
-        &refreshed.server_url,
-        refreshed
-            .access_token
-            .as_deref()
-            .expect("a refreshed session must contain an access token"),
-        method,
-        path,
-        headers,
-        body,
-    )
-    .await
+    if state.project_config_snapshot().session_revision != request_session_revision {
+        return Err(
+            if method == reqwest::Method::GET
+                || response.status() == reqwest::StatusCode::UNAUTHORIZED
+            {
+                state.server_request_session_error(request_session_revision)
+            } else {
+                server_session_changed()
+            },
+        );
+    }
+    if matches!(response.status().as_u16(), 401 | 403)
+        || (method != reqwest::Method::GET && response.status().is_success())
+    {
+        // shortcut: writes invalidate all reads; scope by resource if offline hit rate suffers.
+        state
+            .invalidate_server_response_cache(request_session_revision)
+            .await;
+    }
+    Ok(response)
+}
+
+/// Report that an authenticated response belongs to a superseded local session.
+pub(crate) fn server_session_changed() -> DaemonError {
+    DaemonError::State {
+        code: "sync_session_changed",
+        message: "The Server session changed while this request was running. A write may already have completed; do not automatically retry it.".to_owned(),
+    }
 }
 
 async fn send_server_request(
@@ -242,18 +316,24 @@ async fn refresh_server_tokens(
             || status == reqwest::StatusCode::UNAUTHORIZED
             || status == reqwest::StatusCode::FORBIDDEN
         {
-            state
+            let cleared = state
                 .clear_server_tokens_if_current(
                     session_revision,
                     &config.server_url,
                     stale_access_token,
                 )
                 .await?;
+            if !cleared {
+                return Ok(TokenRefreshOutcome::Superseded);
+            }
             // The original resource request lost its session, not its input validity.
             return Err(DaemonError::ServerResponse {
                 status: reqwest::StatusCode::UNAUTHORIZED.as_u16(),
                 body,
             });
+        }
+        if state.project_config_snapshot().session_revision != session_revision {
+            return Ok(TokenRefreshOutcome::Superseded);
         }
         return Err(DaemonError::ServerResponse {
             status: status.as_u16(),
@@ -278,6 +358,7 @@ async fn refresh_server_tokens(
         refreshed.credentials(),
     )
     .await?;
+    state.update_server_response_cache_scope(&refreshed).await;
     state.publish_project_config(refreshed.clone());
     Ok(TokenRefreshOutcome::Refreshed(refreshed))
 }
@@ -374,11 +455,103 @@ pub(crate) fn is_retryable_http_status(status: u16) -> bool {
     status == 408 || status == 429 || status >= 500
 }
 
+/// Admit only body-free GETs whose filtered headers match the stored representation.
+///
+/// Callers provide normalized proxy headers. Authentication routes and alternate
+/// accepted representations are excluded from persistent offline fallback.
+pub(crate) fn is_cacheable_server_request(
+    method: &reqwest::Method,
+    path: &str,
+    headers: &BTreeMap<String, String>,
+    has_body: bool,
+) -> bool {
+    let route = path.split('?').next().unwrap_or(path);
+    method == reqwest::Method::GET
+        && !has_body
+        && route != "/api/v1/auth"
+        && !route.starts_with("/api/v1/auth/")
+        && headers
+            .get("accept")
+            .is_none_or(|accept| matches!(accept.as_str(), "application/json" | "*/*"))
+}
+
+/// Respect `no-store` and reject response variants the fallback cache cannot distinguish.
+pub(crate) fn is_cacheable_server_response(headers: &reqwest::header::HeaderMap) -> bool {
+    !headers.get_all("cache-control").iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|directive| directive.trim().eq_ignore_ascii_case("no-store"))
+        })
+    }) && !headers.get_all("vary").iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value.split(',').any(|name| {
+                !matches!(
+                    name.trim().to_ascii_lowercase().as_str(),
+                    "accept-encoding" | "authorization"
+                )
+            })
+        })
+    })
+}
+
+/// Derive a credential-scoped cache marker without persisting the access token itself.
+///
+/// An unsigned session has no scope and cannot adopt an earlier authenticated cache.
+pub(crate) fn server_response_cache_scope(config: &RuntimeProjectConfig) -> Option<String> {
+    config.access_token.as_ref().map(|token| {
+        let mut hash = Sha256::new();
+        hash.update(config.server_url.as_bytes());
+        hash.update([0]);
+        hash.update(token.as_bytes());
+        hex::encode(hash.finalize())
+    })
+}
+
+/// Clear startup fallback rows unless their recorded credential scope still matches.
+///
+/// # Errors
+/// Returns database errors; callers must disable fallback if reconciliation fails.
+pub(crate) async fn reconcile_server_response_cache_scope(
+    pool: &SqlitePool,
+    config: &RuntimeProjectConfig,
+) -> Result<(), DaemonError> {
+    let expected = server_response_cache_scope(config);
+    let recorded = crate::load_meta_value(pool, SERVER_RESPONSE_CACHE_SCOPE).await?;
+    if expected.is_none() || recorded != expected {
+        clear_server_response_cache(pool).await?;
+    }
+    Ok(())
+}
+
+/// Commit the marker for a credential rotation within the current authenticated session.
+///
+/// The caller serializes cache writes and session transitions; this does not authorize
+/// another account to reuse old response rows or persist plaintext credentials.
+///
+/// # Errors
+/// Returns database errors without committing a partial marker update.
+pub(crate) async fn save_server_response_cache_scope(
+    pool: &SqlitePool,
+    config: &RuntimeProjectConfig,
+) -> Result<(), DaemonError> {
+    let mut transaction = pool.begin().await?;
+    crate::upsert_meta_value(
+        &mut transaction,
+        SERVER_RESPONSE_CACHE_SCOPE,
+        server_response_cache_scope(config).as_deref(),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 pub(crate) async fn save_cached_server_response(
     pool: &SqlitePool,
     server_url: &str,
     path: &str,
     response: &DaemonServerResponse,
+    credential_scope: Option<&str>,
 ) -> Result<(), DaemonError> {
     let headers_json = serde_json::to_string(&response.headers)?;
     let mut transaction = pool.begin().await?;
@@ -399,6 +572,12 @@ pub(crate) async fn save_cached_server_response(
     .bind(headers_json)
     .bind(&response.body)
     .execute(&mut *transaction)
+    .await?;
+    crate::upsert_meta_value(
+        &mut transaction,
+        SERVER_RESPONSE_CACHE_SCOPE,
+        credential_scope,
+    )
     .await?;
     prune_cached_server_responses(
         &mut transaction,
@@ -477,6 +656,11 @@ pub(crate) async fn load_cached_server_response(
 }
 
 pub(crate) async fn clear_server_response_cache(pool: &SqlitePool) -> Result<(), DaemonError> {
+    // Persist revocation even if deleting response rows subsequently fails.
+    sqlx::query("DELETE FROM daemon_meta WHERE key = $1")
+        .bind(SERVER_RESPONSE_CACHE_SCOPE)
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM server_response_cache")
         .execute(pool)
         .await?;
@@ -520,6 +704,128 @@ mod tests {
 
         assert!(validate_server_proxy_path(&oversized).is_err());
         assert!(validate_server_proxy_path("/api/v1/reviews?limit=100").is_ok());
+    }
+
+    #[test]
+    fn private_cache_excludes_credentials_and_representation_variants() {
+        for path in ["/api/v1/auth/credentials", "/api/v1/auth/methods?next=1"] {
+            assert!(!is_cacheable_server_request(
+                &reqwest::Method::GET,
+                path,
+                &BTreeMap::new(),
+                false
+            ));
+        }
+        assert!(is_cacheable_server_request(
+            &reqwest::Method::GET,
+            "/api/v1/me",
+            &BTreeMap::new(),
+            false
+        ));
+        assert!(!is_cacheable_server_request(
+            &reqwest::Method::GET,
+            "/api/v1/me",
+            &BTreeMap::new(),
+            true
+        ));
+        assert!(!is_cacheable_server_request(
+            &reqwest::Method::GET,
+            "/api/v1/me",
+            &BTreeMap::from([("accept".to_owned(), "text/html".to_owned())]),
+            false
+        ));
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("cache-control", "private, no-store".parse().unwrap());
+        assert!(!is_cacheable_server_response(&headers));
+        headers.clear();
+        headers.insert("vary", "*".parse().unwrap());
+        assert!(!is_cacheable_server_response(&headers));
+        headers.insert("vary", "accept-encoding, authorization".parse().unwrap());
+        assert!(is_cacheable_server_response(&headers));
+    }
+
+    #[tokio::test]
+    async fn response_cache_scope_retains_only_matching_credentials_and_survives_rotation() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::migrate_local_db(&pool).await.unwrap();
+        let mut config = RuntimeProjectConfig {
+            server_url: "https://cache.example.test".to_owned(),
+            project_id: None,
+            memory_guidelines_path: None,
+            access_token: Some("first-token".to_owned()),
+            refresh_token: None,
+        };
+        let response = DaemonServerResponse {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: "private-content".to_owned(),
+        };
+        let path = "/api/v1/me";
+        save_cached_server_response(
+            &pool,
+            &config.server_url,
+            path,
+            &response,
+            server_response_cache_scope(&config).as_deref(),
+        )
+        .await
+        .unwrap();
+        reconcile_server_response_cache_scope(&pool, &config)
+            .await
+            .unwrap();
+        assert!(
+            load_cached_server_response(&pool, &config.server_url, path)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        config.access_token = Some("rotated-token".to_owned());
+        save_server_response_cache_scope(&pool, &config)
+            .await
+            .unwrap();
+        reconcile_server_response_cache_scope(&pool, &config)
+            .await
+            .unwrap();
+        assert!(
+            load_cached_server_response(&pool, &config.server_url, path)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let scope = crate::load_meta_value(&pool, SERVER_RESPONSE_CACHE_SCOPE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!scope.contains("token"));
+
+        config.access_token = Some("another-account".to_owned());
+        reconcile_server_response_cache_scope(&pool, &config)
+            .await
+            .unwrap();
+        assert!(
+            load_cached_server_response(&pool, &config.server_url, path)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // Pre-upgrade rows have no credential marker and must not acquire the current identity.
+        save_cached_server_response(&pool, &config.server_url, path, &response, None)
+            .await
+            .unwrap();
+        reconcile_server_response_cache_scope(&pool, &config)
+            .await
+            .unwrap();
+        assert!(
+            load_cached_server_response(&pool, &config.server_url, path)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
     #[tokio::test]
     async fn response_cache_pruning_enforces_entry_and_utf8_byte_limits() {
