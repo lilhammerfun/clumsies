@@ -3,11 +3,15 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use serde::Serialize;
+use serde_json::{Value, json};
 use server::app::auth::dto::MeResponse;
 use server::app::bundle::dto::{
     PersonalBundleDetail, PersonalBundleRequest, PersonalBundleUpdateRequest,
 };
-use server::app::commit::dto::{CommitListResponse, CommitPayload, CommitStateResponse};
+use server::app::commit::dto::{
+    CommitListResponse, CommitPayload, CommitStateResponse, TreeEntry, TreeEntryKind,
+    TreeEntryScope, TreeEntrySource,
+};
 use server::app::draft::dto::{
     CreateDraftRebaseRequest, CreateDraftRequest, DraftDetail, DraftEventListResponse,
     DraftEventType, DraftFreshness, DraftListResponse, DraftOperationAction,
@@ -17,8 +21,8 @@ use server::app::draft::dto::{
     ReconciliationCandidateStatus, UpdateDraftRequest,
 };
 use server::app::memory::dto::{
-    MemoryDetail, MemoryListResponse, ProjectOrgSelection, ReplaceProjectOrgSelectionRequest,
-    ResourceScope,
+    MemoryDetail, MemoryListResponse, OrgMemorySource, ProjectOrgSelection,
+    ReplaceProjectOrgSelectionRequest, ResourceScope,
 };
 use server::app::project::dto::{
     CreateProjectRequest, Project, ProjectListResponse, UpdateProjectRequest,
@@ -30,6 +34,7 @@ use server::app::review::dto::{
     ReviewListResponse, ReviewMergeResult, ReviewStatus,
 };
 use server::dto::DeleteResult;
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 mod common;
@@ -784,9 +789,12 @@ async fn draft_review_merge_produces_org_and_carrier_project_commits() {
     assert!(
         contents.contains(&"# Org Reference\n\nUse project-specific context after shared context.")
     );
-    let selection = commit
-        .project_org_selection
-        .expect("project commit should include org selection");
+    let selection: ProjectOrgSelection = serde_json::from_value(
+        commit
+            .project_org_selection
+            .expect("project commit should include org selection"),
+    )
+    .expect("new snapshots retain the strict current metadata representation");
     assert_eq!(selection.memories.len(), 3);
     let selected_ids = selection
         .memories
@@ -4854,4 +4862,325 @@ async fn wait_for_advisory_lock_waiter(
     })
     .await
     .expect("draft operation did not wait for the selection advisory lock");
+}
+
+/// Archived snapshots use the writer's canonical entry encoding, including omitted defaults.
+#[derive(Serialize)]
+struct ArchivedSelectionTreeEntry<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    org_source: &'a Option<OrgMemorySource>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    is_directory: bool,
+    item_id: &'a str,
+    resource_kind: TreeEntryKind,
+    scope: TreeEntryScope,
+    project_id: Option<&'a str>,
+    path: Option<&'a str>,
+    blob_id: &'a str,
+    source: TreeEntrySource,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    description: &'a str,
+}
+
+/// Derive fixture identities from exactly the bytes used by the immutable object writer.
+fn snapshot_object_id(kind: &str, content: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(kind.as_bytes());
+    hash.update([0]);
+    hash.update(content);
+    hex::encode(hash.finalize())
+}
+
+/// Insert separate archived objects; do not rewrite any existing snapshot or business resource.
+async fn insert_archived_selection_snapshot(
+    pool: &sqlx::PgPool,
+    modern: &CommitPayload,
+    selection: &Value,
+) -> (String, String, String) {
+    let content = serde_json::to_string_pretty(selection).unwrap();
+    let blob_id = snapshot_object_id("blob", content.as_bytes());
+    let mut entries = modern.tree.entries.clone();
+    entries
+        .iter_mut()
+        .find(|entry| entry.kind == TreeEntryKind::ProjectOrgSelection)
+        .unwrap()
+        .blob_id = blob_id.clone();
+    let canonical = entries
+        .iter()
+        .map(|entry| ArchivedSelectionTreeEntry {
+            org_source: &entry.org_source,
+            is_directory: entry.is_directory,
+            item_id: &entry.id,
+            resource_kind: entry.kind,
+            scope: entry.scope,
+            project_id: entry.project_id.as_deref(),
+            path: entry.path.as_deref(),
+            blob_id: &entry.blob_id,
+            source: entry.source,
+            description: &entry.description,
+        })
+        .collect::<Vec<_>>();
+    let tree_id = snapshot_object_id("tree", &serde_json::to_vec(&canonical).unwrap());
+    let created_at = time::OffsetDateTime::now_utc();
+    let commit_id = snapshot_object_id(
+        "commit",
+        &serde_json::to_vec(&(
+            "project",
+            &modern.commit.org_id,
+            &modern.commit.project_id,
+            &tree_id,
+            Some(&modern.commit.commit_id),
+            modern.commit.version + 1,
+            created_at.unix_timestamp_nanos(),
+        ))
+        .unwrap(),
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO blobs (blob_id, content) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        .bind(&blob_id)
+        .bind(&content)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO trees (tree_id) VALUES ($1)")
+        .bind(&tree_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for entry in entries {
+        sqlx::query(
+            "INSERT INTO tree_entries (
+                tree_id, item_id, resource_kind, scope, project_id, path, blob_id, source,
+                description, org_source, is_directory
+             ) SELECT $1, item_id, resource_kind, scope, project_id, path, $2, source,
+                      description, org_source, is_directory
+               FROM tree_entries WHERE tree_id = $3 AND item_id = $4",
+        )
+        .bind(&tree_id)
+        .bind(&entry.blob_id)
+        .bind(&modern.tree.tree_id)
+        .bind(&entry.id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO commits (
+            commit_id, scope, org_id, project_id, tree_id, parent_commit_id, version, created_at
+         ) VALUES ($1, 'project', $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(&commit_id)
+    .bind(&modern.commit.org_id)
+    .bind(&modern.commit.project_id)
+    .bind(&tree_id)
+    .bind(&modern.commit.commit_id)
+    .bind(modern.commit.version + 1)
+    .bind(created_at)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    (commit_id, blob_id, content)
+}
+
+/// Capture every column of immutable objects, references, and proposal history in stable order.
+async fn snapshot_commit_business_tables(pool: &sqlx::PgPool) -> Value {
+    let mut tables = serde_json::Map::new();
+    for table in [
+        "blobs",
+        "trees",
+        "tree_entries",
+        "commits",
+        "refs",
+        "resources",
+        "project_org_selection_states",
+        "project_org_resource_selections",
+        "drafts",
+        "draft_operations",
+        "draft_events",
+        "draft_revisions",
+        "draft_reconciliation_candidates",
+        "draft_rebases",
+        "review_drafts",
+    ] {
+        let rows: sqlx::types::Json<Value> = sqlx::query_scalar(&format!(
+            "SELECT COALESCE(jsonb_agg(row ORDER BY row::text), '[]'::jsonb)
+             FROM (SELECT to_jsonb(t) AS row FROM {table} t) rows"
+        ))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        tables.insert(table.to_owned(), rows.0);
+    }
+    Value::Object(tables)
+}
+
+#[tokio::test]
+async fn archived_selection_http_download_preserves_objects_and_proposals() {
+    let postgres = common::migrated_postgres().await;
+    let pool = &postgres.pool;
+    let bootstrap = common::initialize_installation(
+        pool.clone(),
+        "Archived Memory",
+        "owner@example.com",
+        "Owner",
+        "oidc-subject-owner",
+        "Archived snapshots",
+    )
+    .await;
+    let principal = common::owner_principal(pool).await;
+    let memory_id = server::app::memory::create_org_context(
+        pool,
+        &principal,
+        "context/archive.md",
+        "# Immutable archived content",
+    )
+    .await
+    .unwrap();
+    server::app::memory::select_org_resource_for_project(
+        pool,
+        &principal,
+        &bootstrap.project_id,
+        &memory_id,
+    )
+    .await
+    .unwrap();
+    let head = server::app::commit::get_project_commit_state(
+        pool,
+        &principal,
+        &bootstrap.project_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .reference
+    .commit_id
+    .unwrap();
+    let (app, _) = common::authenticated_router(pool.clone()).await;
+    let modern: CommitPayload = get_json(app.clone(), &format!("/api/v1/commits/{head}")).await;
+    let current: ProjectOrgSelection =
+        serde_json::from_value(modern.project_org_selection.clone().unwrap()).unwrap();
+    assert_eq!(current.memories.len(), 1);
+    let resource = DraftResourceRef {
+        scope: ResourceScope::Project,
+        id: None,
+        path: Some("context/unpublished.md".to_owned()),
+    };
+    let draft = server::app::draft::create_draft(
+        pool,
+        &principal,
+        CreateDraftRequest {
+            daemon_installation_id: "daemon_archived_read".to_owned(),
+            project_id: bootstrap.project_id.clone(),
+            base_commit_id: Some(head.clone()),
+            title: "Keep an unpublished proposal".to_owned(),
+            description: Some("A Commit read must leave this proposal untouched".to_owned()),
+            resource: resource.clone(),
+            operations: vec![DraftOperationInput {
+                action: DraftOperationAction::Create,
+                resource,
+                content: Some(DraftResourceContent {
+                    org_source: None,
+                    is_directory: false,
+                    description: Some("Pending proposal".to_owned()),
+                    content: "# Unpublished proposal content".to_owned(),
+                }),
+                new_path: None,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!draft.operations.is_empty());
+
+    let mut legacy = modern.project_org_selection.clone().unwrap();
+    legacy["memories"][0]["updated_at"] = json!("2026-07-16 11:42:57.010248 +00:00:00");
+    assert!(serde_json::from_value::<ProjectOrgSelection>(legacy.clone()).is_err());
+    let (archived_id, selection_blob_id, raw_content) =
+        insert_archived_selection_snapshot(pool, &modern, &legacy).await;
+    let mut invalid_timestamp = legacy.clone();
+    invalid_timestamp["memories"][0]["updated_at"] = json!("2026-07-16 11:42:57.010248");
+    let (invalid_timestamp_id, _, _) =
+        insert_archived_selection_snapshot(pool, &modern, &invalid_timestamp).await;
+    let mut invalid_metadata = legacy.clone();
+    invalid_metadata["memories"][0]["status"] = json!("unknown");
+    let (invalid_metadata_id, _, _) =
+        insert_archived_selection_snapshot(pool, &modern, &invalid_metadata).await;
+    sqlx::query("UPDATE refs SET commit_id = $1 WHERE scope = 'project' AND project_id = $2")
+        .bind(&archived_id)
+        .bind(&bootstrap.project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let before = snapshot_commit_business_tables(pool).await;
+
+    for _ in 0..2 {
+        let archived: CommitPayload =
+            get_json(app.clone(), &format!("/api/v1/commits/{archived_id}")).await;
+        assert_eq!(archived.commit.commit_id, archived_id);
+        assert_eq!(
+            archived.commit.parent_commit_id.as_deref(),
+            Some(head.as_str())
+        );
+        assert_eq!(archived.project_org_selection.as_ref(), Some(&legacy));
+        let selection_entry: &TreeEntry = archived
+            .tree
+            .entries
+            .iter()
+            .find(|entry| entry.kind == TreeEntryKind::ProjectOrgSelection)
+            .unwrap();
+        assert_eq!(selection_entry.blob_id, selection_blob_id);
+        let blob = archived
+            .blobs
+            .iter()
+            .find(|blob| blob.blob_id == selection_blob_id)
+            .unwrap();
+        assert_eq!(blob.content, raw_content);
+        assert_eq!(
+            snapshot_object_id("blob", blob.content.as_bytes()),
+            blob.blob_id
+        );
+        assert_eq!(
+            archived.project_org_selection.unwrap(),
+            serde_json::from_str::<Value>(&blob.content).unwrap()
+        );
+        for blob in &archived.blobs {
+            assert_eq!(
+                snapshot_object_id("blob", blob.content.as_bytes()),
+                blob.blob_id
+            );
+        }
+        assert_eq!(snapshot_commit_business_tables(pool).await, before);
+    }
+    let current_json: Value = get_json(
+        app.clone(),
+        &format!("/api/v1/projects/{}/org-selections", bootstrap.project_id),
+    )
+    .await;
+    let current: ProjectOrgSelection = serde_json::from_value(current_json.clone()).unwrap();
+    assert_eq!(current.memories.len(), 1);
+    assert!(
+        current_json["memories"][0]["updated_at"]
+            .as_str()
+            .unwrap()
+            .contains('T')
+    );
+    for commit_id in [invalid_timestamp_id, invalid_metadata_id] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/commits/{commit_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: Value = decode_json(response).await;
+        assert_eq!(error["error"]["code"], "invalid_request");
+        assert_eq!(snapshot_commit_business_tables(pool).await, before);
+    }
+    assert_eq!(snapshot_commit_business_tables(pool).await, before);
+    postgres.shutdown().await;
 }

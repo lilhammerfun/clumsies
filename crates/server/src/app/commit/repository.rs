@@ -7,12 +7,14 @@ use crate::app::auth::AuthPrincipal;
 use crate::app::commit::dto::{
     Blob, Commit, CommitListResponse, CommitPayload, Ref, Tree, TreeEntry, TreeEntryKind,
 };
+use crate::app::memory::dto::ProjectOrgSelection;
 use crate::app::memory::model::object_id;
 use crate::error::ServerError;
 use crate::pagination::{PageInfo, page_info};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::BTreeMap;
-use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use time::{OffsetDateTime, UtcOffset};
 
 /// Persist a content-addressed payload once and return its stable identifier.
 ///
@@ -226,11 +228,7 @@ pub(crate) async fn load_commit_payload(
             description: row.try_get("description")?,
         });
         if kind == TreeEntryKind::ProjectOrgSelection {
-            project_org_selection = Some(serde_json::from_str(&content).map_err(|error| {
-                ServerError::InvalidRequest(format!(
-                    "commit project org selection is invalid: {error}"
-                ))
-            })?);
+            project_org_selection = Some(decode_project_org_selection(&content)?);
         }
         blobs
             .entry(blob_id.clone())
@@ -252,6 +250,45 @@ pub(crate) async fn load_commit_payload(
         blobs: blobs.into_values().collect(),
         project_org_selection,
     })
+}
+
+/// Validate an immutable selection without changing the JSON returned alongside its Blob.
+///
+/// # Errors
+/// Rejects invalid selection metadata and timestamps outside RFC3339 or the historical
+/// `time` human-readable format with its complete, explicit UTC offset.
+fn decode_project_org_selection(content: &str) -> Result<serde_json::Value, ServerError> {
+    let invalid = |error| {
+        ServerError::InvalidRequest(format!("commit project org selection is invalid: {error}"))
+    };
+    let selection: serde_json::Value = serde_json::from_str(content).map_err(invalid)?;
+    let mut validation = selection.clone();
+    if let Some(memories) = validation
+        .get_mut("memories")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for memory in memories {
+            let Some(updated_at) = memory.get_mut("updated_at") else {
+                continue;
+            };
+            let Some(timestamp) = updated_at.as_str() else {
+                continue;
+            };
+            if OffsetDateTime::parse(timestamp, &Rfc3339).is_ok() {
+                continue;
+            }
+            // Pre-RFC3339 snapshots used time's default serializer; only the validation
+            // copy changes because clients compare the returned JSON with the raw Blob.
+            if let Ok(timestamp) = serde_json::from_value::<OffsetDateTime>(updated_at.clone())
+                && timestamp.offset().whole_seconds().unsigned_abs() < 24 * 60 * 60
+                && let Ok(timestamp) = timestamp.to_offset(UtcOffset::UTC).format(&Rfc3339)
+            {
+                *updated_at = serde_json::Value::String(timestamp);
+            }
+        }
+    }
+    let _: ProjectOrgSelection = serde_json::from_value(validation).map_err(invalid)?;
+    Ok(selection)
 }
 
 /// Read the current project head using the caller's transaction.
@@ -710,4 +747,141 @@ pub(super) async fn org_snapshot_resources(
         .fetch_all(&mut **tx)
         .await?,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    /// Build strict modern metadata while varying only its stored timestamp representation.
+    fn selection(timestamps: &[Value]) -> Value {
+        json!({
+            "project_id": "prj_snapshot",
+            "revision": 7,
+            "memories": timestamps.iter().enumerate().map(|(index, timestamp)| json!({
+                "memory_id": format!("mem_{index}"),
+                "scope": "org",
+                "project_id": null,
+                "path": format!("context/{index}.md"),
+                "name": format!("Memory {index}"),
+                "description": "Archived organization memory",
+                "content_hash": "hash_snapshot",
+                "status": "active",
+                "updated_at": timestamp,
+            })).collect::<Vec<_>>()
+        })
+    }
+
+    #[test]
+    fn immutable_selection_keeps_modern_json_unchanged() {
+        let original = selection(&[
+            json!("2026-07-16T12:34:56.123456789+05:30"),
+            json!("2026-07-16T01:02:03-07:00"),
+        ]);
+        assert!(serde_json::from_value::<ProjectOrgSelection>(original.clone()).is_ok());
+        let content = serde_json::to_string_pretty(&original).unwrap();
+        assert_eq!(decode_project_org_selection(&content).unwrap(), original);
+    }
+
+    #[test]
+    fn immutable_selection_accepts_historical_offsets_and_nanoseconds_without_rewriting() {
+        let instant = OffsetDateTime::parse("2026-07-16T12:34:56.123456789Z", &Rfc3339).unwrap();
+        let timestamps = [
+            serde_json::to_value(instant.to_offset(UtcOffset::from_hms(5, 30, 45).unwrap()))
+                .unwrap(),
+            serde_json::to_value(instant.to_offset(UtcOffset::from_hms(-7, 0, -9).unwrap()))
+                .unwrap(),
+            json!("2026-07-16T12:34:56.123456789Z"),
+            json!("2026-07-16 11:42:57.010248 +00:00:00"),
+        ];
+        for timestamp in &timestamps[..2] {
+            let parsed: OffsetDateTime = serde_json::from_value(timestamp.clone()).unwrap();
+            assert_eq!(
+                parsed.unix_timestamp_nanos(),
+                instant.unix_timestamp_nanos()
+            );
+        }
+        let original = selection(&timestamps);
+        assert!(serde_json::from_value::<ProjectOrgSelection>(original.clone()).is_err());
+        let content = serde_json::to_string_pretty(&original).unwrap();
+        assert_eq!(decode_project_org_selection(&content).unwrap(), original);
+        assert_eq!(serde_json::from_str::<Value>(&content).unwrap(), original);
+    }
+
+    #[test]
+    fn immutable_selection_rejects_incomplete_or_non_string_timestamps() {
+        for timestamp in [
+            json!("2026-07-16 12:34:56.123456789"),
+            json!("2026-07-16 12:34:56.123456789 +05:30"),
+            json!("2026-07-16 12:34:56.123456789 +25:00:00"),
+            json!("2026-02-30 12:34:56.0 +00:00:00"),
+            json!("2026-07-16T12:34:56"),
+            json!("invalid timestamp"),
+            json!(0),
+            json!([2026, 197, 12, 34, 56, 123456789, 0, 0, 0]),
+            Value::Null,
+        ] {
+            let content = serde_json::to_string(&selection(&[timestamp])).unwrap();
+            assert!(decode_project_org_selection(&content).is_err(), "{content}");
+        }
+    }
+
+    #[test]
+    fn immutable_selection_openapi_keeps_current_metadata_contract() {
+        let document: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(include_str!("../../../openapi/clumsies.public.v1.yaml"))
+                .unwrap();
+        let schemas = &document["components"]["schemas"];
+        assert_eq!(
+            schemas["CommitPayload"]["properties"]["project_org_selection"]["oneOf"][0]["$ref"]
+                .as_str(),
+            Some("#/components/schemas/CommitProjectOrgSelection")
+        );
+        let modern = &schemas["MemoryMeta"];
+        let archived = &schemas["CommitSelectionMemoryMeta"];
+        assert_eq!(modern["required"], archived["required"]);
+        let mut modern_fields = modern["properties"].as_mapping().unwrap().clone();
+        let mut archived_fields = archived["properties"].as_mapping().unwrap().clone();
+        let timestamp_key = serde_yaml_ng::Value::String("updated_at".to_owned());
+        modern_fields.remove(&timestamp_key);
+        archived_fields.remove(&timestamp_key);
+        assert_eq!(modern_fields, archived_fields);
+        assert_eq!(
+            modern["properties"]["updated_at"]["format"].as_str(),
+            Some("date-time")
+        );
+        let timestamp = &archived["properties"]["updated_at"];
+        assert!(timestamp["oneOf"].is_null());
+        assert_eq!(timestamp["anyOf"].as_sequence().unwrap().len(), 2);
+        assert_eq!(timestamp["anyOf"][0]["format"].as_str(), Some("date-time"));
+        assert_eq!(
+            timestamp["anyOf"][1]["pattern"].as_str(),
+            Some(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{1,9} [+-]\d{2}:\d{2}:\d{2}$")
+        );
+    }
+
+    #[test]
+    fn immutable_selection_keeps_strict_metadata_validation() {
+        let original = selection(&[json!("2026-07-16 12:34:56.123456789 +05:30:45")]);
+        for (field, value) in [
+            ("name", json!(42)),
+            ("status", json!("unknown")),
+            ("scope", json!("unknown")),
+            ("content_hash", Value::Null),
+        ] {
+            let mut invalid = original.clone();
+            invalid["memories"][0][field] = value;
+            assert!(decode_project_org_selection(&invalid.to_string()).is_err());
+        }
+        let mut missing = original.clone();
+        missing["memories"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("memory_id");
+        assert!(decode_project_org_selection(&missing.to_string()).is_err());
+        let mut invalid_revision = original;
+        invalid_revision["revision"] = json!("7");
+        assert!(decode_project_org_selection(&invalid_revision.to_string()).is_err());
+    }
 }

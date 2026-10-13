@@ -1,6 +1,5 @@
 //! Request and response data for commit resources.
 
-use crate::app::memory::dto::ProjectOrgSelection;
 use crate::pagination::PageInfo;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -165,8 +164,8 @@ pub struct CommitPayload {
     pub tree: Tree,
     /// Payloads referenced by the snapshot's tree entries.
     pub blobs: Vec<Blob>,
-    /// Organization resources incorporated into the project's effective snapshot.
-    pub project_org_selection: Option<ProjectOrgSelection>,
+    /// Validated configuration JSON preserved exactly as represented by its immutable Blob.
+    pub project_org_selection: Option<serde_json::Value>,
 }
 
 /// Ordered snapshot history with collection pagination metadata.
