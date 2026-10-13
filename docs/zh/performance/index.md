@@ -1,9 +1,15 @@
-# 端到端延迟优化
+# 性能与可观测性
 
-本节记录 Server、网络、daemon 与 macOS 边界上的性能模型、
-实现改动与带日期的证据。
+开发和运维人员可从这里选择指标设计、现场排障、跨层计时模型和性能验证证据。
 
-## 阅读顺序
+## 可观测性与排障
+
+- [可观测性设计方案](/zh/performance/observability-plan)：定义采集架构、四信号口径、数据状态、看板与告警，以及旧面板迁移和验收。
+- [可观测性运维排障指南](/zh/performance/observability-runbook)：按异常时间、吞吐量与延迟，定位接口、同步、索引、检索或证据链故障。
+
+## 计时模型与验证证据
+
+[HTTP 本地负载测试报告](/zh/performance/observability-load-report)记录项目元数据接口的六组固定负载、完整操作与客户端排队耗时、埋点一致性，以及可复现的原始证据。
 
 1. [延迟模型与诊断](/zh/performance/latency-model)
 2. [服务端热路径](/zh/performance/server-hot-path)
