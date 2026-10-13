@@ -168,8 +168,18 @@ mod tests {
             .with_writer(std::fs::File::create(&path).unwrap())
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
-        let app = instrument(Router::new().route("/probe", axum::routing::post(|| async { "ok" })));
+        let app = instrument(
+            Router::new()
+                .route("/probe", axum::routing::post(|| async { "ok" }))
+                .route(
+                    "/failure",
+                    axum::routing::get(|| async {
+                        crate::http::HttpError::internal("SECRET_ERROR")
+                    }),
+                ),
+        );
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -182,6 +192,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.headers()["x-request-id"], "req_proxy");
+        let failure = app
+            .oneshot(
+                Request::builder()
+                    .uri("/failure")
+                    .header("x-request-id", "req_failure")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            failure.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
         let logs = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(path).unwrap();
         for expected in [
@@ -189,6 +213,9 @@ mod tests {
             "http request completed",
             "req_client",
             "req_proxy",
+            "req_failure",
+            "http_error",
+            "internal_error",
         ] {
             assert!(logs.contains(expected), "missing {expected}: {logs}");
         }
