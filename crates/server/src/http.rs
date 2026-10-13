@@ -215,6 +215,7 @@ impl IntoResponse for HttpError {
             ),
         };
         let request_id = crate::telemetry::current_request_id();
+        tracing::warn!(event = "http_error", %request_id, status = status.as_u16(), error_code = code, "http request failed");
         let mut response = (
             status,
             Json(json!({

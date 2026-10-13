@@ -252,6 +252,7 @@ impl DaemonState {
         credential_store: Arc<dyn CredentialStore>,
         search_models: Arc<dyn search::models::SearchModels>,
     ) -> Result<Self, DaemonError> {
+        crate::performance::initialize();
         prepare_directories(&config)?;
         let pool = connect_local_db(&config.local_db_path()).await?;
         migrate_local_db(&pool).await?;
@@ -1367,6 +1368,7 @@ impl DaemonState {
                 ready: schema_version == CURRENT_LOCAL_SCHEMA_VERSION,
                 schema_version,
             },
+            performance: crate::performance::snapshot(),
         }
     }
 
@@ -2242,9 +2244,15 @@ impl DaemonState {
         retry_transient_failures: bool,
         project_id: Option<&str>,
     ) -> Result<(), DaemonError> {
-        let _sync_guard = self.inner.sync_lock.lock().await;
+        let cycle = crate::performance::start("sync_cycle");
+        let _sync_guard =
+            crate::performance::wait("sync_lock_wait", self.inner.sync_lock.lock()).await;
+        let execution = crate::performance::start("sync_execute");
+        let mut outcome = "converged";
+        let mut successful_channels = 0;
         let result = async {
             if !self.project_config().server_readiness().ready {
+                outcome = "skipped";
                 return Ok(());
             }
             if let Err(error) = project_access::refresh(self).await {
@@ -2269,12 +2277,16 @@ impl DaemonState {
                     self.pull_draft_events().await?;
                     if queue_converged {
                         upsert_meta_timestamp(&self.inner.pool, &last_success_key).await?;
+                    } else {
+                        outcome = "partial";
                     }
                     Ok::<(), DaemonError>(())
                 }
                 .await;
                 if let Err(error) = draft_result {
                     first_error = Some(error);
+                } else {
+                    successful_channels += 1;
                 }
             }
             if sync_commits {
@@ -2282,10 +2294,13 @@ impl DaemonState {
                     Some(project_id) => commit_sync::run_for_project(self, project_id).await,
                     None => commit_sync::run(self).await,
                 };
-                if let Err(error) = commit_result
-                    && first_error.is_none()
-                {
-                    first_error = Some(error);
+                match commit_result {
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                    Ok(()) => {
+                        successful_channels += 1;
+                    }
                 }
             }
             if sync_drafts
@@ -2309,6 +2324,16 @@ impl DaemonState {
                 tracing::warn!("cached Commit history cleanup is pending: {error}");
             }
         }
+        if result.is_err() {
+            outcome = if successful_channels > 0 {
+                "partial"
+            } else {
+                "failed"
+            };
+        }
+        let execution_us = execution.finish(outcome);
+        let elapsed_us = cycle.finish(outcome);
+        tracing::info!(event = "sync_cycle_completed", request_id = %crate::diagnostics::request_id(), outcome, elapsed_us, execution_us);
         result
     }
 }

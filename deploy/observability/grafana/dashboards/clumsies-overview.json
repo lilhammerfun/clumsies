@@ -13,7 +13,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "Find the affected site, then open API or website details. Infrastructure is shared.",
+  "description": "Business routes exclude /metrics and health. New business enter/terminate/in-flight metrics share this scope. Legacy in-flight is all routes including probes and this scrape; it cannot explain business backlog. Center monitoring does not cover local client health.",
   "links": [
     {
       "title": "Overview",
@@ -32,9 +32,25 @@
       "targetBlank": false
     },
     {
-      "title": "Website traffic",
+      "title": "Entrance and websites",
       "type": "link",
       "url": "/d/clumsies-web/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Infrastructure and operations",
+      "type": "link",
+      "url": "/d/clumsies-infrastructure/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Product activity · API bottom section",
+      "type": "link",
+      "url": "/d/clumsies-api/view",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false
@@ -42,10 +58,10 @@
   ],
   "panels": [
     {
-      "id": 1,
-      "title": "Public endpoint availability",
-      "type": "timeseries",
-      "description": "",
+      "id": 20,
+      "title": "Firing fault alerts · selected interval end",
+      "type": "stat",
+      "description": "Watchdog is a delivery heartbeat, excluded here. Zero alerts requires healthy collection; follow infrastructure and Prometheus Alerts for details.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -53,13 +69,576 @@
       "gridPos": {
         "x": 0,
         "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(ALERTS{alertstate=\"firing\",alertname!=\"Watchdog\"}) or vector(0)",
+          "legendFormat": "Fault alerts",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection",
+          "links": [
+            {
+              "title": "Inspect alerts and delivery",
+              "url": "/d/clumsies-infrastructure/view?${__url_time_range}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 21,
+      "title": "Data confidence · selected interval end",
+      "type": "stat",
+      "description": "Unknown or stale data is not success. Legacy target scope cannot detect removed targets. Snapshot values are valid only after a successful attempt no older than 15 minutes. Current evidence requires host and database collection ages from 0 to 900 seconds. Future timestamps are invalid; recorded values remain unchanged.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 18,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(clumsies_observability_target_health)",
+          "legendFormat": "Expected targets (1 up / 0 down / -1 missing)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "min(up) unless on() clumsies_observability_target_health",
+          "legendFormat": "Legacy: discovered targets only",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "C",
+          "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "DB snapshot: 1 success / 0 failed / -1 stale missing / -2 invalid time",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "D",
+          "expr": "(((0 * clumsies_observability_collection_timestamp_seconds + 1) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "Host collection: 1 fresh / -1 stale missing / -2 invalid time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Stale / missing",
+                  "color": "red"
+                },
+                "0": {
+                  "text": "Down / failed",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Healthy",
+                  "color": "green"
+                },
+                "-2": {
+                  "text": "Invalid future timestamp",
+                  "color": "red"
+                }
+              }
+            }
+          ],
+          "links": [
+            {
+              "title": "Inspect collection",
+              "url": "/d/clumsies-infrastructure/view?${__url_time_range}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 22,
+      "title": "Business requests / second",
+      "type": "timeseries",
+      "description": "Business routes exclude /metrics and health. New business enter/terminate/in-flight metrics share this scope. Legacy in-flight is all routes including probes and this scrape; it cannot explain business backlog. Center monitoring does not cover local client health.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Handler responses",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(sum(rate(clumsies_http_business_requests_started_total{job=\"server\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Entered · new telemetry",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "(sum(rate(clumsies_http_business_requests_terminated_total{job=\"server\",outcome=\"cancelled_or_aborted\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Cancelled / aborted · new telemetry",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "Unavailable / no samples — check collection",
+          "links": [
+            {
+              "title": "Inspect API routes",
+              "url": "/d/clumsies-api/view?${__url_time_range}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "title": "Business samples · 5m",
+      "type": "timeseries",
+      "description": "Extrapolated completed-response count; not exact logs or logical client operations. Read beside latency and errors. Classified successful and failed distributions have their own sample counts; legacy mixed samples remain separate.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 4,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "All response samples",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Successful response samples",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Legacy mixed samples",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "title": "Handler latency · 5m",
+      "type": "timeseries",
+      "description": "Successful 2xx/3xx handler responses; excludes body transfer. Legacy route-only histograms appear separately as mixed results, never as success latency. All estimates use rolling 5-minute buckets; read the sample count. Missing collection is unknown, idle traffic has no latency sample.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
         "w": 12,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "probe_success{job=\"blackbox-public\"}",
+          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Successful p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Successful p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Legacy mixed p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "D",
+          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Legacy mixed p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unavailable / no samples — check collection",
+          "links": [
+            {
+              "title": "Inspect API latency",
+              "url": "/d/clumsies-api/view?${__url_time_range}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "title": "Business 5xx ratio · 5m",
+      "type": "timeseries",
+      "description": "Same request population as throughput. No traffic is no sample; missing scrape is unknown. New schema counts every actual 5xx class; legacy fallback counts the existing exact-status whitelist and may classify other codes as other.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(((sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"5xx\"}[5m])) or 0 * sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m]))) / (sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])) > 0) * 100) or (((sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status=~\"5..\"}[5m])) or 0 * sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m]))) / (sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m])) > 0) * 100) unless on() sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "5xx %",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "title": "Business 5xx responses · 5m",
+      "type": "timeseries",
+      "description": "Read count beside ratio; isolated failures matter at low traffic. New schema counts every actual 5xx class; legacy fallback counts the existing exact-status whitelist and may classify other codes as other.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 11,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(((sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"5xx\"}[5m])) or 0 * sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])))) or (((sum(increase(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status=~\"5..\"}[5m])) or 0 * sum(increase(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m])))) unless on() sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "5xx responses",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "title": "Business in-flight requests",
+      "type": "timeseries",
+      "description": "Business routes exclude /metrics and health. Enter/terminate/in-flight metrics share this scope. When business metrics have no samples, the all-route compatibility gauge includes probes and this scrape. Absence alone does not prove an unsupported version; this gauge cannot explain business backlog. Center monitoring does not cover local client health.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 11,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(clumsies_http_business_requests_in_flight{job=\"server\"})) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Business handlers",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(clumsies_http_requests_in_flight{job=\"server\"} unless on() clumsies_http_business_requests_in_flight{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Compatibility all routes · no business samples",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 28,
+      "title": "Server pool usage · shared across routes",
+      "type": "timeseries",
+      "description": "Concurrent approximate snapshots, not atomic. Pool acquisition detail is limited to review create/merge transactions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 11,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(clumsies_db_pool_connections{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "{{state}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(clumsies_db_pool_max_connections{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Configured maximum",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection",
+          "links": [
+            {
+              "title": "Inspect database and pool",
+              "url": "/d/clumsies-infrastructure/view?${__url_time_range}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 1,
+      "title": "Public endpoint availability",
+      "type": "timeseries",
+      "description": "The App probe requires HTTP 200 and JSON status=ok; static-site probes follow HTTPS redirects. 0 means probe failure, 1 success; missing scrapes are unknown. A failure may mean a dependency is not ready, not only network unreachability.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "probe_success{job=\"blackbox-public\"} and on(job,instance) (up{job=\"blackbox-public\"} == 1)",
           "legendFormat": "{{instance}}",
           "datasource": {
             "type": "prometheus",
@@ -95,14 +674,14 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 0,
+        "y": 17,
         "w": 12,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m]))",
+          "expr": "(sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "{{host}}",
           "datasource": {
             "type": "prometheus",
@@ -145,14 +724,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 7,
+        "y": 24,
         "w": 12,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\",code=~\"5..\"}[5m])) or 0 * sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m]))) / (sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m])) > 0) * 100",
+          "expr": "((sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\",code=~\"5..\"}[5m])) or 0 * sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m]))) / (sum by(host)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m])) > 0) * 100) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "{{host}}",
           "datasource": {
             "type": "prometheus",
@@ -195,14 +774,14 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 7,
+        "y": 24,
         "w": 12,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,host) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m]))) and (sum by (host)(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m])) > 0)",
+          "expr": "(histogram_quantile(0.95, sum by (le,host) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m]))) and (sum by (host)(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=~\"app\\\\.clumsies\\\\.ai|docs\\\\.clumsies\\\\.ai|clumsies\\\\.ai|www\\\\.clumsies\\\\.ai\"}[5m])) > 0)) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "{{host}}",
           "datasource": {
             "type": "prometheus",
@@ -233,645 +812,6 @@
           "mode": "multi"
         }
       }
-    },
-    {
-      "id": 15,
-      "title": "Log delivery retries / drops · 5m",
-      "type": "timeseries",
-      "description": "Missing data is not healthy. Check Alloy/Loki scrape status. These counters detect transport failures, not every possible missing source log.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 14,
-        "w": 12,
-        "h": 7
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(increase(loki_write_batch_retries_total{job=\"alloy\"}[5m]))",
-          "legendFormat": "Retries",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "B",
-          "expr": "sum(increase(loki_write_dropped_entries_total{job=\"alloy\"}[5m]))",
-          "legendFormat": "Dropped entries",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "No samples"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 16,
-      "title": "Log entries delivered / second",
-      "type": "timeseries",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 14,
-        "w": 12,
-        "h": 7
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(loki_write_sent_entries_total{job=\"alloy\"}[5m]))",
-          "legendFormat": "Entries/s",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "No samples"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 100,
-      "type": "row",
-      "title": "Shared infrastructure",
-      "collapsed": true,
-      "gridPos": {
-        "x": 0,
-        "y": 21,
-        "w": 24,
-        "h": 1
-      },
-      "panels": [
-        {
-          "id": 5,
-          "title": "Backup age",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 0,
-            "y": 22,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "(time() - clumsies_backup_last_success_timestamp_seconds) / 3600",
-              "legendFormat": "Backup age",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "h",
-              "decimals": null,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 20
-                  },
-                  {
-                    "color": "red",
-                    "value": 26
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 6,
-          "title": "Certificate days left",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 12,
-            "y": 22,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "min((probe_ssl_earliest_cert_expiry - time()) / 86400)",
-              "legendFormat": "Certificate days left",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "none",
-              "decimals": 1,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "red",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 14
-                  },
-                  {
-                    "color": "green",
-                    "value": 30
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 7,
-          "title": "Disk free /",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 0,
-            "y": 29,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "min(node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100",
-              "legendFormat": "Disk free /",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percent",
-              "decimals": null,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "red",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 15
-                  },
-                  {
-                    "color": "green",
-                    "value": 30
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 8,
-          "title": "Host CPU",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 12,
-            "y": 29,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
-              "legendFormat": "cpu",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percent",
-              "custom": {
-                "lineWidth": 2,
-                "fillOpacity": 8,
-                "stacking": {
-                  "mode": "none"
-                },
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 9,
-          "title": "Host memory used",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 0,
-            "y": 36,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-              "legendFormat": "memory",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percent",
-              "custom": {
-                "lineWidth": 2,
-                "fillOpacity": 8,
-                "stacking": {
-                  "mode": "none"
-                },
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 10,
-          "title": "Container CPU",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 12,
-            "y": 36,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"clumsies-.*\"}[5m]))",
-              "legendFormat": "{{name}}",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percent",
-              "custom": {
-                "lineWidth": 2,
-                "fillOpacity": 8,
-                "stacking": {
-                  "mode": "none"
-                },
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 11,
-          "title": "Container memory",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 0,
-            "y": 43,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (name) (container_memory_working_set_bytes{name=~\"clumsies-.*\"})",
-              "legendFormat": "{{name}}",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "bytes",
-              "custom": {
-                "lineWidth": 2,
-                "fillOpacity": 8,
-                "stacking": {
-                  "mode": "none"
-                },
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 12,
-          "title": "PostgreSQL connections",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 12,
-            "y": 43,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum(pg_stat_database_numbackends)",
-              "legendFormat": "connections",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": null,
-              "custom": {
-                "lineWidth": 2,
-                "fillOpacity": 8,
-                "stacking": {
-                  "mode": "none"
-                },
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 13,
-          "title": "Longest running query",
-          "type": "timeseries",
-          "description": "Active queries in the application database only, excluding this collector and idle-in-transaction sessions.",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 0,
-            "y": 50,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "clumsies_db_longest_query_seconds",
-              "legendFormat": "seconds",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "s",
-              "custom": {
-                "lineWidth": 2,
-                "fillOpacity": 8,
-                "stacking": {
-                  "mode": "none"
-                },
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "id": 14,
-          "title": "Scrape targets up",
-          "type": "timeseries",
-          "description": "",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "gridPos": {
-            "x": 12,
-            "y": 50,
-            "w": 12,
-            "h": 7
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (job) (up)",
-              "legendFormat": "{{job}}",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": null,
-              "custom": {
-                "lineWidth": 2,
-                "fillOpacity": 8,
-                "stacking": {
-                  "mode": "none"
-                },
-                "showPoints": "never"
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom"
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        }
-      ]
     }
   ],
   "templating": {

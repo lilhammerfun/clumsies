@@ -1,0 +1,1536 @@
+{
+  "uid": "clumsies-infrastructure",
+  "title": "Clumsies Infrastructure and Operations",
+  "tags": [
+    "clumsies",
+    "en"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "description": "Shared dependencies, resources, evidence delivery and recovery. Use the same time window as the abnormal request; snapshot age and collection confidence come first.",
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/clumsies-overview/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Business API",
+      "type": "link",
+      "url": "/d/clumsies-api/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Entrance and websites",
+      "type": "link",
+      "url": "/d/clumsies-web/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Infrastructure and operations",
+      "type": "link",
+      "url": "/d/clumsies-infrastructure/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Product activity · API bottom section",
+      "type": "link",
+      "url": "/d/clumsies-api/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Expected scrape targets · 1 up / 0 down / -1 missing",
+      "type": "table",
+      "description": "Expected inventory is evaluated by Prometheus rules. Before those rules load, only discovered targets can be shown. Empty data is unknown, never healthy.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_observability_target_health or on(job,instance) up",
+          "legendFormat": "{{job}} · {{instance}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Missing",
+                  "color": "red"
+                },
+                "0": {
+                  "text": "Down / failed",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 2,
+      "title": "Database reachability and snapshot confidence",
+      "type": "stat",
+      "description": "Exporter scrape success is distinct from PostgreSQL reachability. Snapshot confidence requires success and age <=15 minutes; stale/missing snapshots are -1, never green. Current evidence requires host and database collection ages from 0 to 900 seconds. Future timestamps are invalid; recorded values remain unchanged.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pg_up{job=\"postgres\"}",
+          "legendFormat": "PostgreSQL reachable",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "DB snapshot: 1 success / 0 failed / -1 stale missing / -2 invalid time",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Stale / missing",
+                  "color": "red"
+                },
+                "0": {
+                  "text": "Down / failed",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Healthy",
+                  "color": "green"
+                },
+                "-2": {
+                  "text": "Invalid future timestamp",
+                  "color": "red"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Collection age · seconds",
+      "type": "stat",
+      "description": "Database snapshots older than 15 minutes are invalid for current decisions. Ages must be nonnegative; future collection timestamps are invalid.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(((time() - clumsies_database_collection_timestamp_seconds) / 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0))",
+          "legendFormat": "Database snapshot",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "(((time() - clumsies_observability_collection_timestamp_seconds) / 1) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0))) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))",
+          "legendFormat": "Host collector",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unavailable / no samples — check collection",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid future timestamp",
+                  "color": "red"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Server connection pool",
+      "type": "timeseries",
+      "description": "Shared across routes. Used/idle/open/max are approximate concurrent snapshots; acquisition telemetry below covers only review create/merge transactions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(clumsies_db_pool_connections{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "{{state}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(clumsies_db_pool_size{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Open",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "(clumsies_db_pool_max_connections{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Configured max",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "noValue": "No samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "PostgreSQL connections",
+      "type": "timeseries",
+      "description": "Compare database total capacity with the Server pool limit; increasing a pool may worsen database contention.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(pg_stat_database_numbackends)",
+          "legendFormat": "Current",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "max(pg_settings_max_connections)",
+          "legendFormat": "Configured max",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Pool acquire latency · review transactions only",
+      "type": "timeseries",
+      "description": "Includes waiting, validation and opening a connection, excludes BEGIN/transaction execution. Limited coverage; absent data is unsupported or idle, not zero wait.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(histogram_quantile(0.95,sum by(le,operation,outcome)(rate(clumsies_db_pool_acquire_duration_seconds_bucket{job=\"server\",operation=~\"review_create|review_merge\"}[5m]))) and on(operation,outcome) (sum by(operation,outcome)(increase(clumsies_db_pool_acquire_duration_seconds_count{job=\"server\",operation=~\"review_create|review_merge\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "{{operation}} · {{outcome}} p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Pool acquisitions / second · review transactions only",
+      "type": "timeseries",
+      "description": "Acquired, timeout, error and cancelled/aborted results; limited to instrumented review transactions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum by(operation,outcome)(rate(clumsies_db_pool_acquires_total{job=\"server\",operation=~\"review_create|review_merge\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "{{operation}} · {{outcome}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Acquisitions in progress · review transactions only",
+      "type": "timeseries",
+      "description": "Not a pure queue length: may include validating or opening connections.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(clumsies_db_pool_acquires_in_flight{job=\"server\",operation=~\"review_create|review_merge\"}) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "{{operation}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Longest running query",
+      "type": "timeseries",
+      "description": "Active queries in the application database only, excluding this collector and idle-in-transaction sessions. Five-minute snapshot, valid only after successful fresh collection; it can miss short lock/query waits.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_db_longest_query_seconds and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900)))",
+          "legendFormat": "seconds",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          },
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Host CPU",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "cpu",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          },
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Host memory used",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 27,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+          "legendFormat": "memory",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          },
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Container CPU · cores",
+      "type": "timeseries",
+      "description": "CPU seconds per second = used cores; 0.5 means half a core.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"clumsies-.*\"}[5m]))",
+          "legendFormat": "{{name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          },
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Container memory",
+      "type": "timeseries",
+      "description": "Working set bytes. No configured memory limit is not unlimited host capacity; a fixed 2GiB alert is an operational reminder.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 34,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (name) (container_memory_working_set_bytes{name=~\"clumsies-.*\"})",
+          "legendFormat": "{{name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          },
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Persistent filesystem free space",
+      "type": "timeseries",
+      "description": "Check root and the mounts that hold PostgreSQL, Loki and Prometheus data; compare I/O evidence before attributing request latency to disk.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_filesystem_avail_bytes{job=\"node\",fstype!~\"tmpfs|overlay|squashfs\",mountpoint!~\"/run.*|/sys.*|/proc.*\"} / node_filesystem_size_bytes{job=\"node\",fstype!~\"tmpfs|overlay|squashfs\",mountpoint!~\"/run.*|/sys.*|/proc.*\"} * 100",
+          "legendFormat": "{{mountpoint}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 15
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          },
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Active fault alerts",
+      "type": "table",
+      "description": "Open Prometheus Alerts for expressions and Alertmanager for delivery/silences. Dependency faults remain visible here.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 41,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ALERTS{alertstate=\"firing\",alertname!=\"Watchdog\"}",
+          "legendFormat": "{{alertname}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 16,
+      "title": "Backup age",
+      "type": "timeseries",
+      "description": "Last known successful backup age; the last success persists across failed attempts. Missing means never successful or unavailable, not zero age. Check the latest task state and collector age. Age requires host collection age 0–900 seconds and a non-future success timestamp. The raw success timestamp stays visible as a recorded fact, not current health.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(((time() - clumsies_backup_last_success_timestamp_seconds) / 3600) and on(job,instance) (((time() - clumsies_backup_last_success_timestamp_seconds) >= 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_backup_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_backup_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))",
+          "legendFormat": "Backup age",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "clumsies_backup_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Recorded success timestamp · raw"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 20
+              },
+              {
+                "color": "red",
+                "value": 26
+              }
+            ]
+          },
+          "noValue": "Unknown age / invalid collection / missing",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid future timestamp",
+                  "color": "red"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#8e8e8e"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": []
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "title": "Restore drill · last success age",
+      "type": "timeseries",
+      "description": "Existing reminder: no successful drill for 8 days. Last success persists across failures; task state is shown separately. This is not measured RTO. Age requires host collection age 0–900 seconds and a non-future success timestamp. The raw success timestamp stays visible as a recorded fact, not current health.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(((time() - clumsies_restore_drill_last_success_timestamp_seconds) / 86400) and on(job,instance) (((time() - clumsies_restore_drill_last_success_timestamp_seconds) >= 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_restore_drill_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_restore_drill_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))",
+          "legendFormat": "Days since successful drill",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "clumsies_restore_drill_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Recorded success timestamp · raw"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "d",
+          "noValue": "Unknown age / invalid collection / missing",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid future timestamp",
+                  "color": "red"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#8e8e8e"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": []
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "title": "Backup / restore latest task state",
+      "type": "table",
+      "description": "Success, failed, never, missing or running; inspect the matching service/timer. Host sampling must be fresh with nonnegative age. A present future exit timestamp makes the result untrustworthy. Startup failure can lack an exit timestamp and remains a known failed result; no completed attempt is not success.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(clumsies_unit_last_exit_state unless on(unit,job,instance) ((time() - clumsies_unit_last_exit_timestamp_seconds) < 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))",
+          "legendFormat": "{{unit}} · {{state}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "expr": "((clumsies_unit_last_exit_ok unless on(unit,job,instance) clumsies_unit_last_exit_state) unless on(unit,job,instance) ((time() - clumsies_unit_last_exit_timestamp_seconds) < 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))",
+          "legendFormat": "Legacy last-exit result",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 19,
+      "title": "Certificate days left",
+      "type": "timeseries",
+      "description": "Per endpoint; investigate the specific certificate and renewal before the 14-day warning.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 55,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(probe_ssl_earliest_cert_expiry{job=\"blackbox-public\"} - time()) / 86400",
+          "legendFormat": "{{instance}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 14
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          },
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "title": "Log delivery retries / drops · 5m",
+      "type": "timeseries",
+      "description": "Missing data is not healthy. Check Alloy/Loki scrape status. These counters detect transport failures, not every possible missing source log.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(loki_write_batch_retries_total{job=\"alloy\"}[5m]))",
+          "legendFormat": "Retries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(loki_write_dropped_entries_total{job=\"alloy\"}[5m]))",
+          "legendFormat": "Dropped entries",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Log entries delivered / second",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 69,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(loki_write_sent_entries_total{job=\"alloy\"}[5m]))",
+          "legendFormat": "Entries/s",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Alertmanager notification results · 5m",
+      "type": "timeseries",
+      "description": "Counter events measure attempted integrations; receipt of a Watchdog email checks delivery to the inbox. Same-host monitoring cannot independently report host loss.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 62,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(integration)(increase(alertmanager_notifications_total{job=\"alertmanager\"}[5m]))",
+          "legendFormat": "Attempts · {{integration}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by(integration)(increase(alertmanager_notifications_failed_total{job=\"alertmanager\"}[5m]))",
+          "legendFormat": "Failed · {{integration}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "title": "Notification heartbeat and reachability",
+      "type": "timeseries",
+      "description": "Watchdog firing is expected, not application failure. It does not detect missing daily mail automatically; whole-host failure needs an independent external observer.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 69,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"alertmanager\"}",
+          "legendFormat": "Alertmanager scrape",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "ALERTS{alertname=\"Watchdog\",alertstate=\"firing\"}",
+          "legendFormat": "Watchdog always firing",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "text",
+      "title": "Operational next steps",
+      "options": {
+        "mode": "markdown",
+        "content": "[Prometheus Alerts](http://localhost:9090/alerts) · [Alertmanager](http://localhost:9093/#/alerts)\n\nUse the monitoring SSH tunnel for these links. Collection: inspect the metrics service/timer and textfile age. Database: correlate pool acquisition with transaction/lock evidence before resizing. Backup/restore: inspect the latest service result and preserve the last successful timestamp. Logs: check source discovery, retries and dropped entries. Notification failures: inspect Alertmanager and SMTP; do not trigger production failures to validate it.\n\nRelease events and local client diagnostics remain separate evidence; a green Server does not prove client synchronization or search health."
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 24,
+        "h": 7
+      }
+    },
+    {
+      "id": 25,
+      "title": "Observed Server version",
+      "type": "table",
+      "description": "Version observed at the selected interval end; correlate performance with the actual release record. Version labels belong to this information metric, not every request series.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 83,
+        "w": 12,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_build_info{job=\"server\"}",
+          "legendFormat": "{{version}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable / no samples — check collection"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 26,
+      "title": "Last known successful release · snapshot",
+      "type": "stat",
+      "description": "Five-minute host snapshot, not a full deployment event history or revision mapping. Do not infer unobserved deployments; inspect the release record and collector freshness. The raw timestamp is neutral; separate confidence requires host collection age 0–900 seconds and a non-future release timestamp. Invalid time does not mean a healthy release.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 83,
+        "w": 12,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clumsies_release_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Recorded successful release timestamp · raw",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "(((0 * clumsies_release_last_success_timestamp_seconds + 1) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) >= 0) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_release_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "Timestamp confidence"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "noValue": "Unavailable / no samples — check collection",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-2": {
+                        "text": "Invalid future timestamp",
+                        "color": "red"
+                      },
+                      "-1": {
+                        "text": "Unknown / stale / missing",
+                        "color": "red"
+                      },
+                      "1": {
+                        "text": "Recorded time valid",
+                        "color": "green"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  }
+}

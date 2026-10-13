@@ -40,47 +40,109 @@ def get(url):
 # Evaluate shipped PromQL rather than copies of its intended behavior.
 api = json.loads((root / 'grafana/dashboards/clumsies-api.json').read_text())
 web = json.loads((root / 'grafana/dashboards/clumsies-web.json').read_text())
-series = []
+overview = json.loads((root / 'grafana/dashboards/clumsies-overview.json').read_text())
+infrastructure = json.loads((root / 'grafana/dashboards/clumsies-infrastructure.json').read_text())
+
+
+def panel(dashboard, id):
+    return next(p for top in dashboard['panels'] for p in [top] + top.get('panels', []) if p['id'] == id)
+
+
+def expand(expr, route='.*', method='.*', site='docs.clumsies.ai', request_id=''):
+    return expr.replace('$route', route).replace('$method', method).replace('$site', site).replace('${route:regex}', route).replace('${method:regex}', method).replace('${request_id:doublequote}', json.dumps(request_id))
+
+
+series = [{'series': 'up{job="server"}', 'values': '1x10'}, {'series': 'up{job="caddy"}', 'values': '1x10'}]
 for host, slow in [('app.clumsies.ai', False), ('docs.clumsies.ai', True)]:
     for handler in ['subroute', 'file_server']:
         for bound in ['0.1', '1.0', '2.5', '5.0', '+Inf']:
             n = 0 if slow and bound in ['0.1', '1.0', '2.5'] else 10
             series.append({'series': f'caddy_http_request_duration_seconds_bucket{{job="caddy",handler="{handler}",host="{host}",le="{bound}"}}', 'values': f'0+{n}x10'})
         series.append({'series': f'caddy_http_request_duration_seconds_count{{job="caddy",handler="{handler}",host="{host}"}}', 'values': '0+10x10'})
+legacy = list(series)
 for route, n in [('/api/v1/me', 10), ('/metrics', 1000), ('/api/v1/admin/health', 1000), ('/idle', 0)]:
     for bound in ['0.1', '1.0', '+Inf']:
-        series.append({'series': f'clumsies_http_request_duration_seconds_bucket{{job="server",route="{route}",le="{bound}"}}', 'values': f'0+{n}x10'})
-    series.append({'series': f'clumsies_http_request_duration_seconds_count{{job="server",route="{route}"}}', 'values': f'0+{n}x10'})
+        legacy.append({'series': f'clumsies_http_request_duration_seconds_bucket{{job="server",route="{route}",le="{bound}"}}', 'values': f'0+{n}x10'})
+    legacy.append({'series': f'clumsies_http_request_duration_seconds_count{{job="server",route="{route}"}}', 'values': f'0+{n}x10'})
+    legacy.append({'series': f'clumsies_http_requests_total{{job="server",route="{route}",status="200"}}', 'values': f'0+{n}x10'})
+legacy.append({'series': 'clumsies_http_requests_in_flight{job="server"}', 'values': '4x10'})
 checks = []
 
 
-def expect(expr, value):
+def expect(checks, expr, value):
     checks.append({'expr': expr, 'eval_time': '10m', 'exp_samples': [{'labels': '{}', 'value': value}]})
 
 
-latency = web['panels'][0]['targets'][2]['expr']
-expect(latency.replace('$site', 'docs.clumsies.ai'), 4.975)
-expect(latency.replace('$site', 'app.clumsies.ai'), 0.099)
-expect(web['panels'][1]['targets'][0]['expr'].replace('$site', 'docs.clumsies.ai'), 50)
-expect(api['panels'][1]['targets'][0]['expr'].replace('$route', '.*'), 50)
-checks.append({'expr': api['panels'][0]['targets'][2]['expr'].replace('$route', '/idle'), 'eval_time': '10m', 'exp_samples': []})
-# Evaluate every Prometheus panel expression as well, including folded panels.
-# An empty intersection makes the expected result independent of fixture values.
+latency = panel(web, 1)['targets'][2]['expr']
+expect(checks, expand(latency, site='docs.clumsies.ai'), 4.975)
+expect(checks, expand(latency, site='app.clumsies.ai'), 0.099)
+expect(checks, expand(panel(web, 2)['targets'][0]['expr']), 50)
+expect(checks, expand(panel(api, 2)['targets'][0]['expr']), 50)
+legacy_tail = next(t['expr'] for t in panel(api, 1)['targets'] if t['legendFormat'] == 'Legacy mixed p99')
+success_tail = next(t['expr'] for t in panel(api, 1)['targets'] if t['legendFormat'] == 'Successful p99')
+expect(checks, expand(legacy_tail), 0.099)
+checks.append({'expr': expand(success_tail), 'eval_time': '10m', 'exp_samples': []})
+checks.append({'expr': expand(legacy_tail, route='/idle'), 'eval_time': '10m', 'exp_samples': []})
+expect(checks, 'sum(' + panel(overview, 27)['targets'][1]['expr'] + ')', 4)
+expect(checks, panel(overview, 21)['targets'][2]['expr'], -1)
+# Every actual query must parse, including folded products and new infrastructure.
 for path in (root / 'grafana/dashboards').glob('*.json'):
     if '.zh.' in path.name:
         continue
     dashboard = json.loads(path.read_text())
-    panels = dashboard['panels'] + [child for panel in dashboard['panels'] for child in panel.get('panels', [])]
-    for panel in panels:
-        if panel.get('datasource', {}).get('type') != 'prometheus':
-            continue
-        for target in panel['targets']:
-            expr = target['expr'].replace('$route', '.*').replace('$site', 'docs.clumsies.ai')
-            checks.append({'expr': f'({expr}) and on() (vector(0) > 0)', 'eval_time': '10m', 'exp_samples': []})
-
+    for top in dashboard['panels']:
+        for p in [top] + top.get('panels', []):
+            if p.get('datasource', {}).get('type') != 'prometheus':
+                continue
+            for t in p['targets']:
+                checks.append({'expr': f'({expand(t["expr"])}) and on() (vector(0) > 0)', 'eval_time': '10m', 'exp_samples': []})
+new_series = list(series)
+for method, status, status_class, n in [('GET', '200', '2xx', 10), ('GET', '599', '5xx', 2), ('POST', '200', '2xx', 20)]:
+    for bound in ['0.1', '1.0', '+Inf']:
+        value = n if status_class == '2xx' or bound == '+Inf' else 0
+        new_series.append({'series': f'clumsies_http_request_duration_seconds_bucket{{job="server",route="/api/v1/me",method="{method}",status_class="{status_class}",le="{bound}"}}', 'values': f'0+{value}x10'})
+    new_series.append({'series': f'clumsies_http_request_duration_seconds_count{{job="server",route="/api/v1/me",method="{method}",status_class="{status_class}"}}', 'values': f'0+{n}x10'})
+    new_series.append({'series': f'clumsies_http_requests_total{{job="server",route="/api/v1/me",method="{method}",status="{status}"}}', 'values': f'0+{n}x10'})
+new_series += [
+    {'series': 'clumsies_http_business_requests_in_flight{job="server",route="/api/v1/me",method="GET"}', 'values': '2x10'},
+    {'series': 'clumsies_http_requests_in_flight{job="server"}', 'values': '100x10'},
+    {'series': 'clumsies_http_business_requests_started_total{job="server",route="/api/v1/me",method="GET"}', 'values': '0+14x10'},
+    {'series': 'clumsies_http_business_requests_terminated_total{job="server",route="/api/v1/me",method="GET",outcome="response"}', 'values': '0+12x10'},
+    {'series': 'clumsies_http_business_requests_terminated_total{job="server",route="/api/v1/me",method="GET",outcome="cancelled_or_aborted"}', 'values': '0+2x10'},
+]
+for operation, n in [('review_create', 10), ('other_query', 1000)]:
+    for bound in ['0.1', '1.0', '+Inf']:
+        count = n if operation == 'review_create' or bound != '0.1' else 0
+        new_series.append({'series': f'clumsies_db_pool_acquire_duration_seconds_bucket{{job="server",operation="{operation}",outcome="acquired",le="{bound}"}}', 'values': f'0+{count}x10'})
+    new_series.append({'series': f'clumsies_db_pool_acquire_duration_seconds_count{{job="server",operation="{operation}",outcome="acquired"}}', 'values': f'0+{n}x10'})
+    new_series.append({'series': f'clumsies_db_pool_acquires_total{{job="server",operation="{operation}",outcome="acquired"}}', 'values': f'0+{n}x10'})
+    new_series.append({'series': f'clumsies_db_pool_acquires_in_flight{{job="server",operation="{operation}"}}', 'values': ('2' if operation == 'review_create' else '100') + 'x10'})
+new_checks = []
+expect(new_checks, 'sum(' + panel(infrastructure, 6)['targets'][0]['expr'] + ')', 0.095)
+expect(new_checks, 'sum(' + panel(infrastructure, 7)['targets'][0]['expr'] + ')', 10 / 60)
+expect(new_checks, 'sum(' + panel(infrastructure, 8)['targets'][0]['expr'] + ')', 2)
+expect(new_checks, expand(success_tail, method='GET'), 0.099)
+expect(new_checks, expand(panel(api, 2)['targets'][0]['expr'], method='GET'), 60)
+expect(new_checks, expand(panel(api, 2)['targets'][1]['expr'], method='GET'), 50)
+expect(new_checks, expand(panel(api, 2)['targets'][0]['expr'], method='POST'), 100)
+expect(new_checks, expand(panel(api, 20)['targets'][0]['expr'], method='GET'), 100 * 2 / 12)
+expect(new_checks, expand(panel(api, 22)['targets'][0]['expr'], method='GET'), 10)
+expect(new_checks, 'sum(' + panel(overview, 27)['targets'][0]['expr'] + ')', 2)
+new_checks.append({'expr': panel(overview, 27)['targets'][1]['expr'], 'eval_time': '10m', 'exp_samples': []})
+new_checks.append({'expr': expand(legacy_tail), 'eval_time': '10m', 'exp_samples': []})
+# A failed scrape must not leave the five-minute histogram looking current.
+down = [dict(s, values='0x10') if s['series'].startswith('up{job="server"') else s for s in new_series]
+down_checks = [{'expr': expand(t['expr']), 'eval_time': '10m', 'exp_samples': []}
+               for id in (1, 2, 3, 4, 9, 20, 22, 23, 24) for t in panel(api, id)['targets']]
+down_checks += [{'expr': t['expr'], 'eval_time': '10m', 'exp_samples': []}
+                for id in (4, 6, 7, 8) for t in panel(infrastructure, id)['targets']]
 with tempfile.TemporaryDirectory() as temp:
     f = Path(temp) / 'queries.json'
-    f.write_text(json.dumps({'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': series, 'promql_expr_test': checks}]}))
+    f.write_text(json.dumps({'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [
+        {'name': 'legacy schema remains readable and mixed', 'interval': '1m', 'input_series': legacy, 'promql_expr_test': checks},
+        {'name': 'classified methods failures and business concurrency', 'interval': '1m', 'input_series': new_series, 'promql_expr_test': new_checks},
+        {'name': 'unhealthy scrape is not current success', 'interval': '1m', 'input_series': down, 'promql_expr_test': down_checks},
+    ]}))
     f.chmod(0o644)
     docker('run', '--rm', '--network', 'none', '-v', f'{f}:/tests.json:ro', '--entrypoint', '/bin/promtool', 'prom/prometheus:latest', 'test', 'rules', '/tests.json')
 
@@ -127,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
   request_id=self.headers.get("X-Request-ID")
   elapsed=1200 if self.path.startswith("/slow") else 2
   if elapsed==1200: time.sleep(1.2)
-  print(json.dumps({"fields":{"message":"http request completed","duration_ms":elapsed,"status":200},"span":{"route":"/slow" if elapsed==1200 else "/api/v1/me","request_id":request_id}}),flush=True)
+  print(json.dumps({"fields":{"message":"http request completed","duration_ms":elapsed,"status":200},"span":{"route":"/slow" if elapsed==1200 else "/api/v1/me","request_id":request_id,"client_request_id":self.headers.get("X-Clumsies-Request-ID","missing")}}),flush=True)
   self.send_response(200);self.send_header("X-Request-ID",request_id or "missing");self.end_headers();self.wfile.write(b"ok")
  def log_message(self,*args): pass
 ThreadingHTTPServer(("0.0.0.0",8080),Handler).serve_forever()
@@ -145,8 +207,13 @@ ThreadingHTTPServer(("0.0.0.0",8080),Handler).serve_forever()
         collector = start('alloy', 'grafana/alloy:latest', 'run', '--server.http.listen-addr=0.0.0.0:12345', '/etc/alloy/config.alloy', mounts=[(temp / 'config.alloy', '/etc/alloy/config.alloy'), (Path('/var/run/docker.sock'), '/var/run/docker.sock')], ports=[12345])
         wait_for(lambda: get(address(collector, 12345) + '/-/ready'), 'Alloy readiness')
         ids = {}
+        client_ids = {}
         for host, path in [('app.clumsies.ai', '/api/v1/me'), ('app.clumsies.ai', '/slow'), ('docs.clumsies.ai', '/large.bin'), ('clumsies.ai', '/friendly-page'), ('www.clumsies.ai', '/')]:
-            req = urllib.request.Request(edge_url + path + '?token=do-not-log', headers={'Host': host, 'Authorization': 'Bearer do-not-log', 'Cookie': 'secret=do-not-log'})
+            headers = {'Host': host, 'Authorization': 'Bearer do-not-log', 'Cookie': 'secret=do-not-log'}
+            if path == '/slow':
+                client_ids[path + host] = 'client_' + uuid.uuid4().hex
+                headers['X-Clumsies-Request-ID'] = client_ids[path + host]
+            req = urllib.request.Request(edge_url + path + '?token=do-not-log', headers=headers)
             # Do not follow the www redirect to the public internet.
             class NoRedirect(urllib.request.HTTPRedirectHandler):
                 def redirect_request(self, *args):
@@ -186,8 +253,8 @@ ThreadingHTTPServer(("0.0.0.0",8080),Handler).serve_forever()
             url = loki_url + '/loki/api/v1/query_range?' + urllib.parse.urlencode({'query': expr, 'limit': 1000})
             return json.loads(get(url))['data']['result']
 
-        slow_server = api['panels'][4]['targets'][0]['expr'].replace('${route:regex}', '.*')
-        slow_site = web['panels'][4]['targets'][0]['expr'].replace('$site', 'docs.clumsies.ai')
+        slow_server = expand(panel(api, 5)['targets'][0]['expr'])
+        slow_site = expand(panel(web, 5)['targets'][0]['expr'])
         wait_for(lambda: query(slow_server), 'backend slow request in Loki')
         wait_for(lambda: query(slow_site), 'website slow request in Loki')
         derived = (root / 'grafana/provisioning/datasources/loki.yml').read_text()
@@ -196,14 +263,22 @@ ThreadingHTTPServer(("0.0.0.0",8080),Handler).serve_forever()
         # A derived request link must find both edge and backend, without joining unrelated requests.
         request_id = ids['/slowapp.clumsies.ai']
         def correlated():
-            result = query('{service=~"caddy|server"} |= ' + json.dumps(request_id))
+            result = query(expand(panel(api, 7)['targets'][0]['expr'], request_id=request_id))
             return result if {x['stream']['service'] for x in result} == {'caddy', 'server'} else None
 
         wait_for(correlated, 'request correlation across both services')
+        assert query(expand(panel(api, 7)['targets'][0]['expr'])) == []  # Empty ID must not scan all logs.
+        assert query(expand(panel(api, 7)['targets'][0]['expr'], request_id=request_id[:-1])) == []
+        assert query(expand(panel(api, 7)['targets'][0]['expr'], request_id='missing')) == []
+        client_id = client_ids['/slowapp.clumsies.ai']
+        client_logs = query(expand(panel(api, 7)['targets'][0]['expr'], request_id=client_id))
+        assert {entry['stream']['service'] for entry in client_logs} == {'server'}
+        assert all(json.loads(line)['span']['request_id'] == request_id for entry in client_logs for _, line in entry['values'])
+        assert query(expand(panel(api, 7)['targets'][0]['expr'], request_id=client_id[:-1])) == []
         for dashboard in (api, web):
-            for panel in dashboard['panels']:
-                if panel['type'] == 'logs':
-                    expr = panel['targets'][0]['expr'].replace('${route:regex}', '.*').replace('${request_id:doublequote}', json.dumps(request_id)).replace('$site', 'docs.clumsies.ai')
+            for log_panel in dashboard['panels']:
+                if log_panel['type'] == 'logs':
+                    expr = expand(log_panel['targets'][0]['expr'], request_id=request_id)
                     query(expr)  # Execute every shipped LogQL query against real Loki.
         collector_metrics = get(address(collector, 12345) + '/metrics').decode()
         assert 'loki_write_sent_entries_total' in collector_metrics

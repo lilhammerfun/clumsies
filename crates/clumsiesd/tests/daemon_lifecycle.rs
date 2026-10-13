@@ -2080,6 +2080,8 @@ async fn draft_operation_is_written_to_local_queue_and_visible_in_sync_status() 
     let status = service.sync_status().await.unwrap();
     assert_eq!(status.pending_operation_count, 1);
     assert_eq!(status.failed_operation_count, 0);
+    assert!(status.oldest_pending_operation_at.is_some());
+    assert!(status.oldest_failed_operation_at.is_none());
     assert_eq!(status.draft_sync.state, SyncState::Queued);
     assert_eq!(status.draft_sync.server_cursor, None);
     assert_eq!(status.draft_sync.last_attempt_at, None);
@@ -4962,15 +4964,77 @@ async fn global_commit_sync_records_failure_and_success_per_project() {
             .contains("injected project A failure")
     );
     assert!(project_a.last_attempt_at.is_some());
+    assert!(project_a.last_checked_success_at.is_none());
     assert_eq!(project_b.state, SyncState::Idle);
     assert!(project_b.last_error.is_none());
     assert!(project_b.last_attempt_at.is_some());
     assert!(project_b.last_success_at.is_some());
+    assert!(project_b.last_checked_success_at.is_some());
     assert!(project_b.last_attempt_at <= project_b.last_success_at);
     assert_eq!(
         state.sync_status().await.unwrap().commit_sync.state,
         SyncState::Failed
     );
+}
+
+#[tokio::test]
+async fn cancelled_commit_sync_clears_running_scope() {
+    let probe = ScopedCommitSyncProbeState {
+        project_requests: Arc::new(Mutex::new(Vec::new())),
+        started: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    };
+    let app = Router::new()
+        .route(
+            "/api/v1/projects/{project_id}/commit-state",
+            get(blocking_scoped_project_commit_state),
+        )
+        .route("/api/v1/me", get(bindings_identity))
+        .route("/api/v1/org/commit-state", get(empty_org_commit_state))
+        .with_state(probe.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    config.project.project_id = Some("prj_a".to_owned());
+    let (state, _) = common::initialize_authenticated_daemon(config, "test-token", None).await;
+    let retry_state = state.clone();
+    let retry = tokio::spawn(async move {
+        retry_state
+            .project_retry_sync(DaemonProjectSyncRetryRequest {
+                project_id: "prj_a".to_owned(),
+                channel: SyncRetryChannel::Commits,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), probe.started.notified())
+        .await
+        .expect("scoped Commit check must start");
+    let syncing = state
+        .project_sync_status(DaemonProjectSyncStatusRequest {
+            project_id: "prj_a".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(syncing.commit_sync.state, SyncState::Syncing);
+    retry.abort();
+    assert!(retry.await.unwrap_err().is_cancelled());
+    let cancelled = state
+        .project_sync_status(DaemonProjectSyncStatusRequest {
+            project_id: "prj_a".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_ne!(cancelled.commit_sync.state, SyncState::Syncing);
+    assert!(cancelled.commit_sync.last_checked_success_at.is_none());
+    probe.release.notify_one();
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]

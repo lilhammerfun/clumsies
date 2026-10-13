@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 # Exercise the assembled package in an independent user home and persistent daemon root.
 set -euo pipefail
+# Performance observations vary; installation identity and readiness must stay equal.
+compare_health_identity() {
+  python3 - "$1" "$2" "$3" <<'PYTHON'
+import json,sys
+from pathlib import Path
+first=json.loads(Path(sys.argv[1]).read_text())
+second=json.loads(Path(sys.argv[2]).read_text())
+first_performance=first.pop("performance",None)
+second_performance=second.pop("performance",None)
+assert first==second, "Daemon identity, version, database or readiness changed"
+if sys.argv[3]=="reuse" and first_performance is not None and second_performance is not None:
+    assert first_performance["process_id"]==second_performance["process_id"], "Resident was not reused"
+PYTHON
+}
 [[ $# == 1 ]] || { echo 'Usage: test-linux-package.sh PACKAGE.tar.gz' >&2; exit 64; }
 test_root=$(mktemp -d)
 export HOME="$test_root/home"
@@ -22,13 +36,13 @@ package=$(find "$test_root/package" -mindepth 1 -maxdepth 1 -type d)
 bash --noprofile --rcfile "$HOME/.bashrc" -ic 'command -v clumsies && clumsies --version'
 "$cli" --json daemon start > "$test_root/started.json"
 "$cli" --json daemon start > "$test_root/reused.json"
-cmp "$test_root/started.json" "$test_root/reused.json"
+compare_health_identity "$test_root/started.json" "$test_root/reused.json" reuse
 printf 'retained draft and binding proof\n' > "$CLUMSIES_DAEMON_ROOT/retained-work"
 "$package/install.sh"
 [[ -s "$CLUMSIES_DAEMON_ROOT/local.db" ]]
 [[ $(cat "$CLUMSIES_DAEMON_ROOT/retained-work") == 'retained draft and binding proof' ]]
 "$cli" --json daemon start > "$test_root/upgraded.json"
-cmp "$test_root/started.json" "$test_root/upgraded.json"
+compare_health_identity "$test_root/started.json" "$test_root/upgraded.json" upgrade
 "$cli" daemon stop
 # A corrupt package must leave both installed executables intact.
 before=$(sha256sum "$cli" "$CLUMSIES_INSTALL_ROOT/runtime/clumsiesd")

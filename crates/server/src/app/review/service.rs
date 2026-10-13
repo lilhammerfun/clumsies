@@ -37,7 +37,7 @@ use crate::app::review::dto::{
 use crate::error::ServerError;
 use crate::identity::prefixed_id;
 use sha2::{Digest, Sha256};
-use sqlx::{Postgres, Transaction};
+use sqlx::{Acquire, Postgres, Transaction};
 use std::collections::BTreeSet;
 
 /// Lock the shared reference and reviewed proposals before authoring a whole-review update.
@@ -307,10 +307,12 @@ pub async fn create_review(
             "a review must not contain duplicate drafts".to_owned(),
         ));
     }
-    let mut tx = pool.begin().await?;
+    let mut connection = crate::metrics::acquire_review_connection(pool, "review_create").await?;
+    let mut tx = connection.begin().await?;
     draft::ensure_drafts_authored_by(&mut tx, author_user_id, &draft_ids).await?;
     let outcome = create_review_in_tx(&mut tx, author_user_id, expected_ref, request).await?;
     tx.commit().await?;
+    drop(connection);
     outcome.into_result()
 }
 
@@ -507,7 +509,8 @@ pub async fn create_review_merge(
     let actor_user_id = &principal.user_id;
     ensure_review_member(pool, principal, review_id).await?;
 
-    let mut tx = pool.begin().await?;
+    let mut connection = crate::metrics::acquire_review_connection(pool, "review_merge").await?;
+    let mut tx = connection.begin().await?;
     ensure_review_admin(&mut tx, principal, review_id).await?;
     let outcome = create_review_merge_in_tx(
         &mut tx,
@@ -518,6 +521,7 @@ pub async fn create_review_merge(
     )
     .await?;
     tx.commit().await?;
+    drop(connection);
     let merge = match outcome {
         CommitOutcome::Success(merge) => merge,
         CommitOutcome::Failure(error) => return Err(error),

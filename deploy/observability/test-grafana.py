@@ -20,6 +20,9 @@ config = json.loads(subprocess.check_output([
 expected = {json.loads(p.read_text())['uid']: json.loads(p.read_text())['title']
             for p in (root / 'grafana/dashboards').glob('*.json')}
 
+assert len(expected) == 8
+assert {"clumsies-overview", "clumsies-api", "clumsies-web", "clumsies-infrastructure"} <= expected.keys()
+
 
 def check(provisioning, missing_directories):
     name = 'clumsies-grafana-test-' + uuid.uuid4().hex[:10]
@@ -64,6 +67,11 @@ def check(provisioning, missing_directories):
             assert any('/provisioning/alerting' in line and 'no such file or directory' in line for line in errors), errors
         else:
             assert not errors, '\n'.join(errors)
+    except Exception:
+        # Preserve startup evidence before this disposable fixture is removed.
+        subprocess.run(['docker', 'inspect', '--format', '{{json .State}}', name], check=False)
+        subprocess.run(['docker', 'logs', '--tail', '100', name], check=False)
+        raise
     finally:
         subprocess.run(['docker', 'rm', '-f', '-v', name], check=True, stdout=subprocess.DEVNULL)
 

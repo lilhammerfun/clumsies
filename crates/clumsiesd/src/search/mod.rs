@@ -209,6 +209,12 @@ pub struct SearchIndexStatus {
     pub model_status: SearchModelStatus,
     pub model_downloaded_bytes: Option<u64>,
     pub model_total_bytes: Option<u64>,
+    /// Trusted current backlog start; None includes legacy backlogs with unknown age.
+    #[serde(default)]
+    pub pending_since: Option<String>,
+    /// Last committed head publication; independent of retry and mutation timestamps.
+    #[serde(default)]
+    pub published_at: Option<String>,
     pub build_state: Option<String>,
     pub desired_sequence: Option<i64>,
     pub completed_sequence: Option<i64>,
@@ -501,6 +507,7 @@ pub(crate) async fn activate_memory(
     state: &DaemonState,
     request: ActivateMemoryRequest,
 ) -> Result<ActivateMemoryResponse, DaemonError> {
+    crate::performance::observe("activate", async {
     let query = request.query.trim();
     if request.project_id.trim().is_empty() || query.is_empty() {
         return Err(DaemonError::InvalidRequest(
@@ -514,7 +521,10 @@ pub(crate) async fn activate_memory(
         super::retrieval_history::activation_state_fingerprint(request.state.as_deref());
     let run_id =
         match super::retrieval_history::start_run(state, &project_id, &query, &fingerprint).await {
-            Ok(run_id) => Some(run_id),
+            Ok(run_id) => {
+                tracing::info!(event = "retrieval_run_started", request_id = %crate::diagnostics::request_id(), %run_id);
+                Some(run_id)
+            },
             Err(error) => {
                 tracing::error!("failed to start Retrieval Run recording: {error}");
                 None
@@ -536,10 +546,10 @@ pub(crate) async fn activate_memory(
 
             failure_stage = "index_head";
             let started = Instant::now();
-            let _query_guard = state.inner.search_lock.lock().await;
+            let _query_guard = crate::performance::wait("search_lock_wait", state.inner.search_lock.lock()).await;
             // Pin the active storage location until every index query completes;
             // a concurrent storage move cannot remove the selected SQLite file.
-            let _storage_guard = state.inner.storage_access.read().await;
+            let _storage_guard = crate::performance::wait("storage_read_wait", state.inner.storage_access.read()).await;
             // Preserve the public pre-index contract. A Project without a synced
             // Ref or usable installed generation must report that condition
             // before storage/index creation or model scheduling can mask it.
@@ -674,7 +684,9 @@ pub(crate) async fn activate_memory(
             }
         }
     }
+    tracing::info!(event = "retrieval_completed", request_id = %crate::diagnostics::request_id(), elapsed_us = elapsed_us(total_started), outcome = if result.is_ok() { "success" } else { "failed" });
     result
+    }).await
 }
 
 async fn indexed_corpus(
@@ -870,6 +882,8 @@ pub(crate) async fn search_index_status(
         model_status,
         model_downloaded_bytes,
         model_total_bytes,
+        pending_since: job.as_ref().and_then(|job| job.pending_since.clone()),
+        published_at: job.as_ref().and_then(|job| job.published_at.clone()),
         build_state: job.as_ref().map(|job| job.state.clone()),
         desired_sequence: job.as_ref().map(|job| job.desired_sequence),
         completed_sequence: job.as_ref().map(|job| job.completed_sequence),
@@ -1153,18 +1167,25 @@ pub(super) fn sha256(value: &str) -> String {
 
 pub(super) async fn run_model_work<T: Send + 'static>(
     state: &DaemonState,
+    operation_kind: &'static str,
     operation: impl FnOnce() -> Result<T, SearchFailure> + Send + 'static,
 ) -> Result<T, DaemonError> {
-    let permit = state
-        .inner
-        .search_model_gate
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| SearchFailure::failed("search model inference gate closed"))?;
+    let permit = crate::performance::observe(
+        "model_gate_wait",
+        state.inner.search_model_gate.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| SearchFailure::failed("search model inference gate closed"))?;
+    let request_id = crate::diagnostics::request_id();
+    let queue = crate::performance::start("model_blocking_queue");
     tokio::task::spawn_blocking(move || {
+        let queue_us = queue.finish("success");
         let _permit = permit;
-        operation()
+        let execution = crate::performance::start(operation_kind);
+        let result = operation();
+        let execution_us = execution.finish_result(&result);
+        tracing::info!(event = "model_work_completed", %request_id, operation = operation_kind, queue_us, execution_us, outcome = if result.is_ok() { "success" } else { "failed" });
+        result
     })
     .await
     .map_err(|error| {
@@ -1802,6 +1823,40 @@ mod tests {
         .await
         .unwrap();
         (temp, state)
+    }
+
+    #[tokio::test]
+    async fn cancelling_model_caller_keeps_the_permit_until_blocking_work_finishes() {
+        let (_temp, state) = test_state_with_models(Arc::new(DeterministicModels)).await;
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, wait_for_release) = std::sync::mpsc::channel();
+        let task = tokio::spawn({
+            let state = state.clone();
+            async move {
+                run_model_work(&state, "model_embedding", move || {
+                    entered.send(()).unwrap();
+                    wait_for_release.recv().unwrap();
+                    Ok(())
+                })
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(5), started)
+            .await
+            .unwrap()
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(state.inner.search_model_gate.available_permits(), 0);
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while state.inner.search_model_gate.available_permits() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(state.inner.search_model_gate.available_permits(), 1);
     }
 
     #[tokio::test]

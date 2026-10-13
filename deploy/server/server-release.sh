@@ -203,6 +203,7 @@ require_environment() {
 
   [[ -f "$COMPOSE_FILE" ]] || die "missing $COMPOSE_FILE"
   [[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE"
+  command -v python3 >/dev/null || die "Python 3 is required to validate readiness JSON"
   compose_version="$(docker compose version --short 2>/dev/null || true)"
   compose_major="${compose_version%%.*}"
   [[ "$compose_major" =~ ^[0-9]+$ && "$compose_major" -ge 2 ]] ||
@@ -239,6 +240,16 @@ public_origin() {
   printf '%s\n' "$origin"
 }
 
+# Readiness must inspect dependency state; a reachable handler can return HTTP 200 while down.
+health_response_ready() {
+  python3 -c 'import json, sys
+try:
+    value = json.load(sys.stdin)
+except (ValueError, TypeError):
+    sys.exit(1)
+sys.exit(0 if isinstance(value, dict) and value.get("status") == "ok" else 1)'
+}
+
 # Reach the public origin through the local edge instead of this host's
 # resolver. A stale resolver cache (for example while an installation moves to
 # another host) would otherwise fail the probe against a healthy Server and
@@ -252,14 +263,14 @@ local_edge_healthy() {
   port="${port#:}"
   curl --fail --silent --show-error --max-time 8 \
     --resolve "$host:${port:-443}:127.0.0.1" \
-    "$origin/api/v1/admin/health" >/dev/null 2>&1
+    "$origin/api/v1/admin/health" 2>/dev/null | health_response_ready
 }
 
 public_dns_reaches_host() {
   local origin="$1"
 
   curl --fail --silent --show-error --max-time 8 \
-    "$origin/api/v1/admin/health" >/dev/null 2>&1
+    "$origin/api/v1/admin/health" 2>/dev/null | health_response_ready
 }
 
 wait_public_health() {
@@ -660,31 +671,55 @@ verify_backup_with_image() (
   local attempt
   local table_count
   local migration_count
+  local server_state
+  local network_attempted=0
+  local postgres_attempted=0
+  local server_attempted=0
 
   [[ "$purpose" =~ ^[a-z0-9-]+$ ]] || die "invalid verification purpose"
   validate_backup_archive "$backup" || die "backup archive validation failed"
-  docker image inspect "$image" >/dev/null
-  suffix="$(date -u +%Y%m%d%H%M%S)-$$"
+  docker image inspect "$image" >/dev/null || die "verification image is unavailable"
+  suffix="$(date -u +%Y%m%d%H%M%S)" || die "could not identify the isolated verification"
+  suffix="$suffix-$$"
   network="clumsies-$purpose-$suffix"
   postgres_container="clumsies-$purpose-postgres-$suffix"
   server_container="clumsies-$purpose-server-$suffix"
-  password="$(openssl rand -hex 24)"
+  password="$(openssl rand -hex 24)" || die "could not generate the isolated database password"
 
   # Invoked by the EXIT trap for this isolated subshell.
   # shellcheck disable=SC2317,SC2329
   cleanup() {
-    docker stop --time "$SERVER_STOP_TIMEOUT_SECONDS" \
-      "$server_container" >/dev/null 2>&1 || true
-    docker rm --force "$server_container" "$postgres_container" >/dev/null 2>&1 || true
-    docker network rm "$network" >/dev/null 2>&1 || true
+    local result=$?
+    local cleanup_failed=0
+    trap - EXIT
+    if ((server_attempted)); then
+      docker stop --time "$SERVER_STOP_TIMEOUT_SECONDS" \
+        "$server_container" >/dev/null 2>&1 || true
+      docker rm --force --volumes "$server_container" >/dev/null 2>&1 || cleanup_failed=1
+    fi
+    if ((postgres_attempted)); then
+      # The official PostgreSQL image uses an anonymous data volume. Remove only
+      # this uniquely named fixture's anonymous volumes, including restored data.
+      docker rm --force --volumes "$postgres_container" >/dev/null 2>&1 || cleanup_failed=1
+    fi
+    if ((network_attempted)); then
+      docker network rm "$network" >/dev/null 2>&1 || cleanup_failed=1
+    fi
+    if ((cleanup_failed)); then
+      log "isolated verification cleanup failed"
+      result=1
+    fi
+    exit "$result"
   }
   trap cleanup EXIT
 
-  docker network create "$network" >/dev/null
+  network_attempted=1
+  docker network create "$network" >/dev/null || die "could not create the isolated verification network"
+  postgres_attempted=1
   docker run --detach --name "$postgres_container" --network "$network" \
     --env POSTGRES_PASSWORD="$password" \
     --env POSTGRES_DB=clumsies_restore \
-    postgres:16-alpine >/dev/null
+    postgres:16-alpine >/dev/null || die "could not start restore PostgreSQL"
 
   for ((attempt = 1; attempt <= 60; attempt += 1)); do
     # The official image briefly exposes an initialization server and then
@@ -701,20 +736,23 @@ verify_backup_with_image() (
 
   docker exec -i "$postgres_container" \
     pg_restore -U postgres -d clumsies_restore --exit-on-error \
-    --no-owner --no-privileges <"$backup"
+    --no-owner --no-privileges <"$backup" || die "backup restoration failed"
 
+  server_attempted=1
   docker run --detach --name "$server_container" --network "$network" \
     --env-file "$ENV_FILE" \
     --env "DATABASE_URL=postgres://postgres:$password@$postgres_container:5432/clumsies_restore" \
     --env CLUMSIES_SERVER_ADDR=0.0.0.0:8080 \
-    "$image" >/dev/null
+    "$image" >/dev/null || die "could not start the restored Server"
 
   for ((attempt = 1; attempt <= 90; attempt += 1)); do
-    if docker exec "$server_container" curl --fail --silent \
-      http://127.0.0.1:8080/api/v1/admin/health >/dev/null 2>&1; then
+    if docker exec "$server_container" curl --fail --silent --max-time 5 \
+      http://127.0.0.1:8080/api/v1/admin/health 2>/dev/null | health_response_ready; then
       break
     fi
-    if [[ "$(docker inspect "$server_container" --format '{{.State.Status}}')" == exited ]]; then
+    server_state="$(docker inspect "$server_container" --format '{{.State.Status}}')" ||
+      die "could not inspect the restored Server"
+    if [[ "$server_state" == exited ]]; then
       docker logs "$server_container" >&2
       die "restored Server exited"
     fi
@@ -724,9 +762,11 @@ verify_backup_with_image() (
 
   table_count="$(docker exec "$postgres_container" psql -At -U postgres \
     -d clumsies_restore -c \
-    "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'public';")"
+    "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'public';")" ||
+    die "could not verify restored table inventory"
   migration_count="$(docker exec "$postgres_container" psql -At -U postgres \
-    -d clumsies_restore -c 'SELECT count(*) FROM _sqlx_migrations;')"
+    -d clumsies_restore -c 'SELECT count(*) FROM _sqlx_migrations;')" ||
+    die "could not verify restored migration inventory"
   stop_isolated_server "$server_container" ||
     die "$purpose Server did not stop cleanly"
   log "$purpose healthy: backup=$backup tables=$table_count migrations=$migration_count image=$image"
@@ -742,7 +782,19 @@ restore_drill() {
     backup="$BACKUP_DIR/$backup"
   fi
   image="$(current_image)"
-  verify_backup_with_image "$backup" "$image" restore-drill
+  local receipt
+  verify_backup_with_image "$backup" "$image" restore-drill || return 1
+  receipt="$(mktemp "$BACKUP_DIR/.restore-drill-last-success.XXXXXX")" || return 1
+  date -u +%s >"$receipt" || {
+    rm -f -- "$receipt"
+    log "could not write the restore success receipt"
+    return 1
+  }
+  mv "$receipt" "$BACKUP_DIR/.restore-drill-last-success" || {
+    rm -f -- "$receipt"
+    log "could not publish the restore success receipt"
+    return 1
+  }
 }
 
 preflight() {
