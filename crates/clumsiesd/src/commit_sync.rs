@@ -1,3 +1,5 @@
+//! Commit synchronization, validated Ref checks, and atomic local generation publication.
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -12,6 +14,8 @@ use super::*;
 
 const META_COMMIT_SYNC_LAST_ATTEMPT_AT: &str = "commit_sync_last_attempt_at";
 const META_COMMIT_SYNC_LAST_SUCCESS_AT: &str = "commit_sync_last_success_at";
+/// Last validated remote check, distinct from local Ref installation.
+const META_COMMIT_SYNC_LAST_CHECKED_SUCCESS_AT: &str = "commit_sync_last_checked_success_at";
 const META_COMMIT_SYNC_LAST_ERROR: &str = "commit_sync_last_error";
 const MAIN_REF: &str = "refs/heads/main";
 const EMPTY_GENERATION: &str = "ref-none";
@@ -243,6 +247,7 @@ async fn run_scoped(state: &DaemonState, project_id: Option<&str>) -> Result<(),
         .commit_sync_run_scope
         .write()
         .expect("commit sync scope rwlock poisoned") = CommitSyncRunScope::new(project_id);
+    let scope = CommitRunScopeGuard { state };
     let last_attempt_key = commit_sync_meta_key(META_COMMIT_SYNC_LAST_ATTEMPT_AT, project_id);
     let last_error_key = commit_sync_meta_key(META_COMMIT_SYNC_LAST_ERROR, project_id);
     let result = async {
@@ -300,12 +305,26 @@ async fn run_scoped(state: &DaemonState, project_id: Option<&str>) -> Result<(),
         outcome.into_result()
     }
     .await;
-    *state
-        .inner
-        .commit_sync_run_scope
-        .write()
-        .expect("commit sync scope rwlock poisoned") = CommitSyncRunScope::Idle;
+    drop(scope);
     result
+}
+
+/// Clear the transient running scope on completion, cancellation, and unwinding.
+struct CommitRunScopeGuard<'a> {
+    /// State owning the scope; the caller holds the synchronization mutex for its lifetime.
+    state: &'a DaemonState,
+}
+
+impl Drop for CommitRunScopeGuard<'_> {
+    fn drop(&mut self) {
+        match self.state.inner.commit_sync_run_scope.write() {
+            Ok(mut scope) => *scope = CommitSyncRunScope::Idle,
+            Err(_) => tracing::error!(
+                event = "sync_scope_unavailable",
+                "Commit sync scope cannot be cleared"
+            ),
+        }
+    }
 }
 
 /// Record a failed identity preflight without treating it as an empty project list.
@@ -393,6 +412,11 @@ async fn status_scoped(
         state: state_value,
         server_cursor,
         last_attempt_at,
+        last_checked_success_at: load_meta_value(
+            &state.inner.pool,
+            &commit_sync_meta_key(META_COMMIT_SYNC_LAST_CHECKED_SUCCESS_AT, scoped_project_id),
+        )
+        .await?,
         last_success_at,
         last_error: config_error.or_else(|| {
             last_error.map(|message| ApiError {
@@ -673,19 +697,23 @@ async fn sync_refs(state: &DaemonState, project_ids: BTreeSet<String>) -> Commit
         MAX_CONCURRENT_PROJECT_STATE_REQUESTS,
     ));
     let mut project_tasks = tokio::task::JoinSet::new();
+    let cycle_request_id = crate::diagnostics::request_id();
     for project_id in ready_project_ids {
         let state = state.clone();
         let project_gate = project_gate.clone();
-        project_tasks.spawn(async move {
-            let result = async {
-                let _permit = project_gate.acquire_owned().await.map_err(|_| {
-                    DaemonError::Server("Project Commit-state request gate closed".to_owned())
-                })?;
-                fetch_project_ref(&state, &project_id).await
-            }
-            .await;
-            (project_id, result)
-        });
+        project_tasks.spawn(crate::diagnostics::REQUEST_ID.scope(
+            cycle_request_id.clone(),
+            async move {
+                let result = async {
+                    let _permit = project_gate.acquire_owned().await.map_err(|_| {
+                        DaemonError::Server("Project Commit-state request gate closed".to_owned())
+                    })?;
+                    fetch_project_ref(&state, &project_id).await
+                }
+                .await;
+                (project_id, result)
+            },
+        ));
     }
 
     let mut projects = BTreeMap::new();
@@ -824,23 +852,53 @@ async fn fetch_project_ref(
     state: &DaemonState,
     project_id: &str,
 ) -> Result<(ServerCommitState, String), DaemonError> {
-    let local_project_commit =
-        load_ref_commit(&state.inner.pool, &project_ref_key(project_id)).await?;
-    let (project_state, project_etag) = fetch_commit_state(
-        state,
-        &format!("/api/v1/projects/{project_id}/commit-state"),
-        local_project_commit.as_deref(),
-    )
-    .await?;
-    validate_commit_state(
-        &project_state,
-        &project_etag,
-        ServerCommitScope::Project,
-        Some(project_id),
-        local_project_commit.as_deref(),
-    )?;
+    let observation = crate::performance::start("commit_check");
+    let result = async {
+        let local_project_commit =
+            load_ref_commit(&state.inner.pool, &project_ref_key(project_id)).await?;
+        let (project_state, project_etag) = fetch_commit_state(
+            state,
+            &format!("/api/v1/projects/{project_id}/commit-state"),
+            local_project_commit.as_deref(),
+        )
+        .await?;
+        validate_commit_state(
+            &project_state,
+            &project_etag,
+            ServerCommitScope::Project,
+            Some(project_id),
+            local_project_commit.as_deref(),
+        )?;
 
-    Ok((project_state, project_etag))
+        Ok((project_state, project_etag))
+    }
+    .await;
+    let trusted = result.as_ref().ok().is_some_and(|(remote, _)| {
+        crate::project_access::current(state)
+            .is_some_and(|access| access.org_id == remote.reference.org_id)
+    });
+    if trusted {
+        let record = crate::performance::observe(
+            "commit_check_record",
+            upsert_meta_timestamp(
+                &state.inner.pool,
+                &commit_sync_meta_key(META_COMMIT_SYNC_LAST_CHECKED_SUCCESS_AT, Some(project_id)),
+            ),
+        )
+        .await;
+        if let Err(error) = record {
+            tracing::warn!(event = "commit_check_record_failed", request_id = %crate::diagnostics::request_id(), kind = crate::diagnostics::error_kind(&error));
+        }
+    }
+    let outcome = match &result {
+        Ok(_) if !trusted => "superseded",
+        Ok((remote, _)) if remote.update_available => "updated",
+        Ok(_) => "no_change",
+        Err(_) => "failed",
+    };
+    let elapsed_us = observation.finish(outcome);
+    tracing::info!(event = "commit_check_completed", request_id = %crate::diagnostics::request_id(), project_id, outcome, elapsed_us);
+    result
 }
 
 async fn ensure_active_draft_base_commits(
@@ -943,87 +1001,108 @@ async fn install_ref(
     etag: &str,
     materialized_project_id: Option<&str>,
 ) -> Result<(), DaemonError> {
-    let remote_commit_id = commit_state.reference.commit_id.as_deref();
-    if let Some(commit_id) = remote_commit_id {
-        validate_cache_component("commit_id", commit_id)?;
-        let commit_cached = cached_commit_exists(&state.inner.pool, commit_id).await?;
-        let generation_ready = match materialized_project_id {
-            Some(project_id) => {
+    let observation = crate::performance::start("commit_install");
+    let mut changed = false;
+    let result = async {
+        let remote_commit_id = commit_state.reference.commit_id.as_deref();
+        if let Some(commit_id) = remote_commit_id {
+            validate_cache_component("commit_id", commit_id)?;
+            let commit_cached = cached_commit_exists(&state.inner.pool, commit_id).await?;
+            let generation_ready = match materialized_project_id {
+                Some(project_id) => {
+                    let storage = super::project_storage::resolve_active(state, project_id).await?;
+                    let root = storage.generation_path(commit_id);
+                    if root.exists() {
+                        verify_generation_ref(&root, project_id, Some(commit_id))?;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                None => true,
+            };
+            if commit_cached && generation_ready {
+                let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+                changed = upsert_ref(&mut tx, &commit_state.reference, etag).await?;
+                tx.commit().await?;
+                state.inner.search_index_notify.notify_one();
+                return Ok(());
+            }
+
+            let payload: ServerCommitPayload = crate::performance::observe(
+                "commit_download",
+                get_server_json(state, &format!("/api/v1/commits/{commit_id}")),
+            )
+            .await?;
+            let validation = crate::performance::start("commit_validate");
+            let validation_result = validate_commit_payload(&payload, commit_state);
+            validation.finish_result(&validation_result);
+            validation_result?;
+            let mut installed_location_revision = None;
+            if let Some(project_id) = materialized_project_id {
                 let storage = super::project_storage::resolve_active(state, project_id).await?;
-                let root = storage.generation_path(commit_id);
-                if root.exists() {
-                    verify_generation_ref(&root, project_id, Some(commit_id))?;
-                    true
-                } else {
-                    false
+                installed_location_revision = Some(storage.location_revision);
+                let managed_root = storage.managed_root;
+                let project_id = project_id.to_owned();
+                let materialized_payload = payload.clone();
+                tokio::task::spawn_blocking(move || {
+                    ensure_project_generation(&managed_root, &project_id, &materialized_payload)
+                })
+                .await
+                .map_err(|error| {
+                    DaemonError::Server(format!("Commit materialization task failed: {error}"))
+                })??;
+            }
+
+            let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+            if let (Some(project_id), Some(expected_revision)) =
+                (materialized_project_id, installed_location_revision)
+            {
+                let storage = super::project_storage::resolve_active(state, project_id).await?;
+                if storage.location_revision != expected_revision {
+                    return Err(DaemonError::State {
+                        code: "storage_move_conflict",
+                        message:
+                            "Project storage changed while a Commit generation was being installed"
+                                .to_owned(),
+                    });
                 }
             }
-            None => true,
-        };
-        if commit_cached && generation_ready {
-            let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
-            upsert_ref(&mut tx, &commit_state.reference, etag).await?;
+            cache_commit_payload(&mut tx, &payload).await?;
+            changed = upsert_ref(&mut tx, &commit_state.reference, etag).await?;
             tx.commit().await?;
             state.inner.search_index_notify.notify_one();
-            return Ok(());
-        }
-
-        let payload: ServerCommitPayload =
-            get_server_json(state, &format!("/api/v1/commits/{commit_id}")).await?;
-        validate_commit_payload(&payload, commit_state)?;
-        let mut installed_location_revision = None;
-        if let Some(project_id) = materialized_project_id {
-            let storage = super::project_storage::resolve_active(state, project_id).await?;
-            installed_location_revision = Some(storage.location_revision);
-            let managed_root = storage.managed_root;
-            let project_id = project_id.to_owned();
-            let materialized_payload = payload.clone();
-            tokio::task::spawn_blocking(move || {
-                ensure_project_generation(&managed_root, &project_id, &materialized_payload)
-            })
-            .await
-            .map_err(|error| {
-                DaemonError::Server(format!("Commit materialization task failed: {error}"))
-            })??;
-        }
-
-        let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
-        if let (Some(project_id), Some(expected_revision)) =
-            (materialized_project_id, installed_location_revision)
-        {
-            let storage = super::project_storage::resolve_active(state, project_id).await?;
-            if storage.location_revision != expected_revision {
-                return Err(DaemonError::State {
-                    code: "storage_move_conflict",
-                    message:
-                        "Project storage changed while a Commit generation was being installed"
-                            .to_owned(),
-                });
+        } else {
+            if let Some(project_id) = materialized_project_id {
+                let storage = super::project_storage::resolve_active(state, project_id).await?;
+                let managed_root = storage.managed_root;
+                let project_id = project_id.to_owned();
+                tokio::task::spawn_blocking(move || {
+                    ensure_empty_generation(&managed_root, &project_id)
+                })
+                .await
+                .map_err(|error| {
+                    DaemonError::Server(format!("Commit materialization task failed: {error}"))
+                })??;
             }
+            let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
+            changed = upsert_ref(&mut tx, &commit_state.reference, etag).await?;
+            tx.commit().await?;
+            state.inner.search_index_notify.notify_one();
         }
-        cache_commit_payload(&mut tx, &payload).await?;
-        upsert_ref(&mut tx, &commit_state.reference, etag).await?;
-        tx.commit().await?;
-        state.inner.search_index_notify.notify_one();
-    } else {
-        if let Some(project_id) = materialized_project_id {
-            let storage = super::project_storage::resolve_active(state, project_id).await?;
-            let managed_root = storage.managed_root;
-            let project_id = project_id.to_owned();
-            tokio::task::spawn_blocking(move || {
-                ensure_empty_generation(&managed_root, &project_id)
-            })
-            .await
-            .map_err(|error| {
-                DaemonError::Server(format!("Commit materialization task failed: {error}"))
-            })??;
-        }
-        let mut tx = state.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
-        upsert_ref(&mut tx, &commit_state.reference, etag).await?;
-        tx.commit().await?;
-        state.inner.search_index_notify.notify_one();
+        Ok(())
     }
-    Ok(())
+    .await;
+    let outcome = if result.is_err() {
+        "failed"
+    } else if changed {
+        "updated"
+    } else {
+        "no_change"
+    };
+    let elapsed_us = observation.finish(outcome);
+    tracing::info!(event = "commit_install_completed", request_id = %crate::diagnostics::request_id(), outcome, elapsed_us);
+    result
 }
 
 pub(super) async fn verify_current_project_generation_at(
@@ -1383,7 +1462,7 @@ async fn upsert_ref(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     reference: &ServerRef,
     etag: &str,
-) -> Result<(), DaemonError> {
+) -> Result<bool, DaemonError> {
     let key = match reference.scope {
         ServerCommitScope::Org => org_ref_key(&reference.org_id),
         ServerCommitScope::Project => {
@@ -1474,7 +1553,7 @@ async fn upsert_ref(
             }
         }
     }
-    Ok(())
+    Ok(ref_changed)
 }
 
 async fn refresh_upstream_resource_changes(

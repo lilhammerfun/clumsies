@@ -17,6 +17,8 @@ pub mod sign_in;
 pub use dashboard::{DashboardRetrievalRequest, DashboardRetrievalStatistics};
 mod ipc;
 mod migration;
+mod performance;
+pub use performance::{OperationPerformance, PerformanceDistribution, PerformanceSnapshot};
 mod project_access;
 mod project_storage;
 pub use project_access::UnavailableProject;

@@ -87,6 +87,40 @@ final class ClientDiagnosticsTests: XCTestCase {
         XCTAssertTrue(content.contains("xpc_"))
     }
 
+    func testPerformanceContractAndExportPreserveCountersAndLegacyAbsence() throws {
+        let legacy = Data("""
+        {"daemon_version":"0.20.7","agent_runtime":{"protocol_revision":1,"build_id":"test"},"server_url":"http://127.0.0.1","project_id":null,"daemon_installation_id":"test","log_dir":"/private/tmp/test","local_db":{"path":"local.db","ready":true,"schema_version":1}}
+        """.utf8)
+        XCTAssertNil(try JSONCoding.decoder().decode(DaemonHealth.self, from: legacy).performance)
+        let snapshot = try JSONCoding.decoder().decode(DaemonPerformanceSnapshot.self, from: Data("""
+        {"process_id":42,"collection_started_at":"2026-10-13T00:00:00Z","snapshot_at":"2026-10-13T00:00:01Z","collection_elapsed_ms":1000,"bucket_upper_bounds_ms":[5,10],"operations":{"model_gate_wait":{"started":2,"in_flight":0,"outcomes":{"success":{"count":1,"total_us":8000,"buckets":[0,1]},"interrupted":{"count":1,"total_us":2000,"buckets":[1,1]}}}}}
+        """.utf8))
+        XCTAssertEqual(snapshot.operations["model_gate_wait"]?.outcomes["success"]?.buckets, [0, 1])
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appending(path: "export")
+        try ClientDiagnostics.export(to: destination, appDirectory: directory, daemonDirectory: directory, metadata: [:], performance: snapshot)
+        let exported = try Data(contentsOf: destination.appending(path: "performance.json"))
+        XCTAssertEqual(try JSONCoding.decoder().decode(DaemonPerformanceSnapshot.self, from: exported), snapshot)
+        let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: destination.appending(path: "manifest.json"))) as? [String: String]
+        XCTAssertEqual(manifest?["performance.json"], "included; process-scoped counters")
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: exported) as? [String: Any])
+        for field in ["query", "project_id", "request_id", "content", "token"] { XCTAssertNil(fields[field]) }
+    }
+
+    func testSyncTimingFieldsDecodeWhenPresentAndRemainOptionalForLegacy() throws {
+        let legacy = Data("""
+        {"unavailable_projects":[],"draft_sync":{"state":"idle"},"commit_sync":{"state":"idle"},"pending_operation_count":0,"failed_operation_count":0,"behind_draft_count":0,"reconciliation_conflict_count":0}
+        """.utf8)
+        let old = try JSONCoding.decoder().decode(DaemonSyncStatus.self, from: legacy)
+        XCTAssertNil(old.oldestPendingOperationAt)
+        XCTAssertNil(old.commitSync.lastCheckedSuccessAt)
+        let channel = try JSONCoding.decoder().decode(DaemonSyncChannelStatus.self, from: Data("""
+        {"state":"idle","last_checked_success_at":"2026-10-13T00:00:00Z","last_success_at":"2026-10-12T00:00:00Z"}
+        """.utf8))
+        XCTAssertNotEqual(channel.lastCheckedSuccessAt, channel.lastSuccessAt)
+    }
+
     func testRotationAndExportIncludeOnlyBoundedLogsAndManifest() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

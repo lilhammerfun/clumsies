@@ -18,7 +18,7 @@ enum DiagnosticsExport {
                     metadata["daemon_version"] = health?.daemonVersion ?? "unavailable"
                     metadata["daemon_build"] = health?.agentRuntime.buildId ?? "unavailable"
                     let daemonDirectory = health.map { URL(fileURLWithPath: $0.logDir) } ?? ClumsiesIdentifiers.daemonLogDirectoryURL
-                    try ClientDiagnostics.export(to: destination, appDirectory: ClumsiesIdentifiers.daemonLogDirectoryURL, daemonDirectory: daemonDirectory, metadata: metadata)
+                    try ClientDiagnostics.export(to: destination, appDirectory: ClumsiesIdentifiers.daemonLogDirectoryURL, daemonDirectory: daemonDirectory, metadata: metadata, performance: health?.performance)
                     NSWorkspace.shared.activateFileViewerSelecting([destination])
                 } catch {
                     ClientDiagnostics.record("diagnostic_export_failed", ClientDiagnostics.failureFields(error))

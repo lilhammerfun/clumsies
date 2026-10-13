@@ -88,22 +88,28 @@ pub(super) async fn query_index(
     if rows.is_empty() {
         *failure_stage = "assembly";
         let started = std::time::Instant::now();
-        let response = activation_response(revision_id, &mut [], &rows, previous_state)?;
+        let response = crate::performance::observe("assembly", async {
+            activation_response(revision_id, &mut [], &rows, previous_state)
+        })
+        .await?;
         completion.latencies.assembly_us = elapsed_us(started);
         return Ok(response);
     }
 
     *failure_stage = "bm25";
     let started = std::time::Instant::now();
-    let lexical = lexical_ranks(pool, revision_id, query, &rows).await?;
+    let lexical =
+        crate::performance::observe("bm25", lexical_ranks(pool, revision_id, query, &rows)).await?;
     completion.latencies.bm25_us = elapsed_us(started);
 
     *failure_stage = "embedding";
     let started = std::time::Instant::now();
     let query_owned = query.to_owned();
     let models = state.inner.search_models.clone();
-    let query_vector =
-        super::run_model_work(state, move || models.embed_query(&query_owned)).await?;
+    let query_vector = super::run_model_work(state, "model_embedding", move || {
+        models.embed_query(&query_owned)
+    })
+    .await?;
     completion.latencies.embedding_us = elapsed_us(started);
     if query_vector.len() != state.inner.search_models.dimensions()
         || !super::index::valid_normalized_vector(&query_vector)
@@ -113,12 +119,15 @@ pub(super) async fn query_index(
 
     *failure_stage = "vector";
     let started = std::time::Instant::now();
-    let vector = vector_ranks(&rows, &query_vector);
+    let vector =
+        crate::performance::wait("vector", async { vector_ranks(&rows, &query_vector) }).await;
     completion.latencies.vector_us = elapsed_us(started);
 
     *failure_stage = "rrf";
     let started = std::time::Instant::now();
-    let mut candidates = rrf_candidates(&rows, &lexical, &vector);
+    let mut candidates =
+        crate::performance::wait("fusion", async { rrf_candidates(&rows, &lexical, &vector) })
+            .await;
     completion.latencies.rrf_us = elapsed_us(started);
     completion.candidates = candidates.iter().map(retrieval_candidate_input).collect();
 
@@ -140,8 +149,10 @@ pub(super) async fn query_index(
             .collect::<Vec<_>>();
         let query_owned = query.to_owned();
         let models = state.inner.search_models.clone();
-        let scores =
-            super::run_model_work(state, move || models.rerank(&query_owned, &documents)).await?;
+        let scores = super::run_model_work(state, "model_rerank", move || {
+            models.rerank(&query_owned, &documents)
+        })
+        .await?;
         completion.latencies.rerank_us = elapsed_us(started);
         if scores.len() != rerank_count {
             return Err(SearchFailure::failed(
@@ -185,7 +196,10 @@ pub(super) async fn query_index(
     *failure_stage = "assembly";
     let started = std::time::Instant::now();
     apply_fragment_budget(&mut candidates);
-    let response = activation_response(revision_id, &mut candidates, &rows, previous_state)?;
+    let response = crate::performance::observe("assembly", async {
+        activation_response(revision_id, &mut candidates, &rows, previous_state)
+    })
+    .await?;
     completion.latencies.assembly_us = elapsed_us(started);
     completion.returned_token_count = candidates
         .iter()

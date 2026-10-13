@@ -1,3 +1,5 @@
+//! Authenticated Server transport, safe protocol diagnostics, and local response caching.
+
 use std::collections::BTreeMap;
 
 use serde::Serialize;
@@ -29,32 +31,38 @@ where
     T: Serialize + ?Sized,
     R: DeserializeOwned,
 {
-    let mut headers = BTreeMap::new();
-    headers.insert("content-type".to_owned(), "application/json".to_owned());
-    let response = execute_authenticated_server_request(
-        state,
-        reqwest::Method::POST,
-        path,
-        &headers,
-        Some(serde_json::to_vec(request)?),
-    )
-    .await?;
-    decode_server_json(response).await
+    crate::performance::observe("http_json", async {
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_owned(), "application/json".to_owned());
+        let response = execute_authenticated_server_request(
+            state,
+            reqwest::Method::POST,
+            path,
+            &headers,
+            Some(serde_json::to_vec(request)?),
+        )
+        .await?;
+        decode_server_json(response).await
+    })
+    .await
 }
 
 pub(crate) async fn get_server_json<R>(state: &DaemonState, path: &str) -> Result<R, DaemonError>
 where
     R: DeserializeOwned,
 {
-    let response = execute_authenticated_server_request(
-        state,
-        reqwest::Method::GET,
-        path,
-        &BTreeMap::new(),
-        None,
-    )
-    .await?;
-    decode_server_json(response).await
+    crate::performance::observe("http_json", async {
+        let response = execute_authenticated_server_request(
+            state,
+            reqwest::Method::GET,
+            path,
+            &BTreeMap::new(),
+            None,
+        )
+        .await?;
+        decode_server_json(response).await
+    })
+    .await
 }
 
 pub(crate) async fn delete_server_json(
@@ -62,13 +70,21 @@ pub(crate) async fn delete_server_json(
     path: &str,
     expected_version: i64,
 ) -> Result<(), DaemonError> {
-    let mut headers = BTreeMap::new();
-    headers.insert("if-match".to_owned(), expected_version.to_string());
-    let response =
-        execute_authenticated_server_request(state, reqwest::Method::DELETE, path, &headers, None)
-            .await?;
-    ensure_server_success(response).await?;
-    Ok(())
+    crate::performance::observe("http_json", async {
+        let mut headers = BTreeMap::new();
+        headers.insert("if-match".to_owned(), expected_version.to_string());
+        let response = execute_authenticated_server_request(
+            state,
+            reqwest::Method::DELETE,
+            path,
+            &headers,
+            None,
+        )
+        .await?;
+        ensure_server_success(response).await?;
+        Ok(())
+    })
+    .await
 }
 
 pub(crate) async fn execute_authenticated_server_request(
@@ -270,11 +286,14 @@ pub(crate) async fn decode_server_json<R>(response: reqwest::Response) -> Result
 where
     R: DeserializeOwned,
 {
-    let response = ensure_server_success(response).await?;
-    response
-        .json::<R>()
-        .await
-        .map_err(|error| crate::diagnostics::http_error(error, "decode"))
+    crate::performance::observe("http_decode", async {
+        let response = ensure_server_success(response).await?;
+        response
+            .json::<R>()
+            .await
+            .map_err(|error| crate::diagnostics::http_error(error, "decode"))
+    })
+    .await
 }
 
 pub(crate) async fn ensure_server_success(

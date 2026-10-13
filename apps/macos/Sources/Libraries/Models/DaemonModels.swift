@@ -327,6 +327,29 @@ struct DaemonHealth: Codable, Equatable, Sendable {
     let daemonInstallationId: String
     let logDir: String
     let localDb: DaemonLocalDatabaseStatus
+    var performance: DaemonPerformanceSnapshot? = nil
+}
+
+/// Process-scoped diagnostic counters; absent on older daemons or unavailable collection.
+struct DaemonPerformanceSnapshot: Codable, Equatable, Sendable {
+    let processId: UInt32
+    let collectionStartedAt: String
+    let snapshotAt: String
+    let collectionElapsedMs: UInt64
+    let bucketUpperBoundsMs: [UInt64]
+    let operations: [String: DaemonOperationPerformance]
+}
+
+struct DaemonOperationPerformance: Codable, Equatable, Sendable {
+    let started: UInt64
+    let inFlight: UInt64
+    let outcomes: [String: DaemonPerformanceDistribution]
+}
+
+struct DaemonPerformanceDistribution: Codable, Equatable, Sendable {
+    let count: UInt64
+    let totalUs: UInt64
+    let buckets: [UInt64]
 }
 
 struct AgentRuntimeIdentity: Codable, Equatable, Sendable {
@@ -357,12 +380,15 @@ struct DaemonSyncStatus: Codable, Equatable, Sendable {
     let commitSync: DaemonSyncChannelStatus
     let pendingOperationCount: Int
     let failedOperationCount: Int
+    var oldestPendingOperationAt: String? = nil
+    var oldestFailedOperationAt: String? = nil
     let behindDraftCount: Int
     let reconciliationConflictCount: Int
     let lastSuccessAt: String?
 }
 
 struct DaemonSyncChannelStatus: Codable, Equatable, Sendable {
+    var lastCheckedSuccessAt: String? = nil
     let state: String
     let serverCursor: String?
     let lastAttemptAt: String?
