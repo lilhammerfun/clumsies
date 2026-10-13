@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::sqlite::{
+    SqliteAutoVacuum, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::{Connection, Row, SqlitePool};
 use uuid::Uuid;
 
@@ -70,6 +72,8 @@ pub(crate) async fn connect_local_db(path: &Path) -> Result<SqlitePool, DaemonEr
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
+        // Every connection must request the same mode before any later VACUUM.
+        .auto_vacuum(SqliteAutoVacuum::Incremental)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
         // Unsynchronized Drafts and queued operations must survive power loss.
@@ -537,6 +541,7 @@ pub(crate) async fn maintenance_connection(
         .connect_options()
         .as_ref()
         .clone()
+        .auto_vacuum(SqliteAutoVacuum::Incremental)
         .busy_timeout(Duration::ZERO);
     Ok(sqlx::SqliteConnection::connect_with(&options).await?)
 }
@@ -2404,6 +2409,22 @@ pub(crate) async fn migrate_local_schema_39_to_40(pool: &SqlitePool) -> Result<(
 mod tests {
     use super::*;
 
+    async fn connect_legacy_none_db(path: &Path) -> SqlitePool {
+        SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true)
+                    .auto_vacuum(SqliteAutoVacuum::None)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .busy_timeout(Duration::from_secs(5))
+                    .synchronous(SqliteSynchronous::Full),
+            )
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn schema_36_offline_upgrade_preserves_old_base_and_ordered_partial_draft() {
         use serde_json::json;
@@ -3224,7 +3245,7 @@ mod tests {
     async fn first_vacuum_conversion_does_not_leave_a_database_sized_wal() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("local.db");
-        let pool = connect_local_db(&path).await.unwrap();
+        let pool = connect_legacy_none_db(&path).await;
         migrate_local_db(&pool).await.unwrap();
         sqlx::query("CREATE TABLE sample (id INTEGER PRIMARY KEY, body BLOB)")
             .execute(&pool)
@@ -3234,6 +3255,15 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
         prepare_local_db_incremental_vacuum(&pool).await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT length(body) FROM sample")
@@ -3253,9 +3283,8 @@ mod tests {
     #[tokio::test]
     async fn schema_43_preserves_operation_order_and_constraints_through_vacuum() {
         let root = tempfile::tempdir().unwrap();
-        let pool = connect_local_db(&root.path().join("local.db"))
-            .await
-            .unwrap();
+        let path = root.path().join("local.db");
+        let pool = connect_legacy_none_db(&path).await;
         migrate_local_db(&pool).await.unwrap();
         // Build the previous installed schema, whose business ordering used the
         // implicit rowid. Sparse rows expose VACUUM's old renumbering behavior.
@@ -3308,9 +3337,52 @@ mod tests {
             .fetch_all(&pool)
             .await
             .unwrap();
+        pool.close().await;
+        let pool = connect_local_db(&path).await.unwrap();
         migrate_local_db(&pool).await.unwrap();
+        // Pin every other pool connection before conversion. A random later
+        // checkout must not VACUUM using the previous connection-local mode.
+        let mut preexisting_connections = Vec::new();
+        for _ in 0..4 {
+            let mut connection = pool.acquire().await.unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                    .fetch_one(&mut *connection)
+                    .await
+                    .unwrap(),
+                0
+            );
+            preexisting_connections.push(connection);
+        }
         prepare_local_db_incremental_vacuum(&pool).await.unwrap();
         prepare_local_db_incremental_vacuum(&pool).await.unwrap();
+        for connection in &mut preexisting_connections {
+            sqlx::query("VACUUM")
+                .execute(&mut **connection)
+                .await
+                .unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                    .fetch_one(&mut **connection)
+                    .await
+                    .unwrap(),
+                2
+            );
+        }
+        drop(preexisting_connections);
+        let mut maintenance = maintenance_connection(&pool).await.unwrap();
+        sqlx::query("VACUUM")
+            .execute(&mut maintenance)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&mut maintenance)
+                .await
+                .unwrap(),
+            2
+        );
+        maintenance.close().await.unwrap();
         sqlx::query("VACUUM").execute(&pool).await.unwrap();
         let after: Vec<OperationRow> = sqlx::query_as(read_operations)
             .fetch_all(&pool)

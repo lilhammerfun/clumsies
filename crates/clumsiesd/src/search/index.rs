@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::sqlite::{
+    SqliteAutoVacuum, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, Transaction};
 
 use super::chunker::build_units;
@@ -58,6 +60,7 @@ pub(crate) async fn connect_project_index(path: &Path) -> Result<SqlitePool, Dae
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
+        .auto_vacuum(SqliteAutoVacuum::Incremental)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
         .synchronous(SqliteSynchronous::Normal);
@@ -1802,6 +1805,8 @@ mod tests {
 
     #[tokio::test]
     async fn disk_index_reclamation_preserves_current_head_and_content() {
+        use sqlx::Connection;
+
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("search.sqlite");
         let pool = connect_project_index(&path).await.unwrap();
@@ -1841,6 +1846,27 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        pool.close().await;
+        // Model an actual pre-upgrade NONE-mode index with its complete data,
+        // rather than assuming a newly created index still uses the old mode.
+        let mut legacy = sqlx::SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(&path)
+                .auto_vacuum(SqliteAutoVacuum::None)
+                .journal_mode(SqliteJournalMode::Wal),
+        )
+        .await
+        .unwrap();
+        sqlx::query("VACUUM").execute(&mut legacy).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&mut legacy)
+                .await
+                .unwrap(),
+            0
+        );
+        legacy.close().await.unwrap();
+        let pool = connect_project_index(&path).await.unwrap();
         sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .fetch_all(&pool)
             .await
