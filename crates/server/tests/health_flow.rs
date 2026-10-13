@@ -93,6 +93,8 @@ async fn metrics_endpoint_keeps_scrape_contract_without_a_database_connection() 
             .to_vec(),
     )
     .unwrap();
-    assert!(text.contains("clumsies_http_requests_total{route=\"/metrics\",status=\"200\"} 2"));
-    assert!(text.contains("clumsies_http_request_duration_seconds_count{route=\"/metrics\"} 2"));
+    assert!(text.contains(
+        "clumsies_http_requests_total{method=\"GET\",route=\"/metrics\",status=\"200\"} 2"
+    ));
+    assert!(text.contains("clumsies_http_request_duration_seconds_count{method=\"GET\",route=\"/metrics\",status_class=\"2xx\"} 2"));
 }
