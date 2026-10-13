@@ -1,6 +1,6 @@
 {
   "uid": "clumsies-web-zh",
-  "title": "Clumsies 入口与网站访问",
+  "title": "Clumsies 网站访问",
   "tags": [
     "clumsies",
     "zh"
@@ -13,10 +13,10 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "按站点观察入口请求处理，不是浏览器加载。App 入口 p95 目标低于1秒；其它站点分别调查，当前包含探针。",
+  "description": "站点请求量、入口延迟与访问日志。",
   "links": [
     {
-      "title": "运行总览",
+      "title": "总览",
       "type": "link",
       "url": "/d/clumsies-overview-zh/view",
       "includeVars": false,
@@ -24,7 +24,7 @@
       "targetBlank": false
     },
     {
-      "title": "业务 API",
+      "title": "API",
       "type": "link",
       "url": "/d/clumsies-api-zh/view",
       "includeVars": false,
@@ -32,7 +32,7 @@
       "targetBlank": false
     },
     {
-      "title": "入口与网站访问",
+      "title": "网站访问",
       "type": "link",
       "url": "/d/clumsies-web-zh/view",
       "includeVars": false,
@@ -40,7 +40,7 @@
       "targetBlank": false
     },
     {
-      "title": "基础设施与运行保障",
+      "title": "基础设施",
       "type": "link",
       "url": "/d/clumsies-infrastructure-zh/view",
       "includeVars": false,
@@ -48,9 +48,9 @@
       "targetBlank": false
     },
     {
-      "title": "产品活动 · API 底部折叠区",
+      "title": "请求关联",
       "type": "link",
-      "url": "/d/clumsies-api-zh/view",
+      "url": "/d/clumsies-api-zh/view?viewPanel=7",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false
@@ -59,15 +59,15 @@
   "panels": [
     {
       "id": 1,
-      "title": "入口延迟 · 5 分钟",
+      "title": "入口响应延迟",
       "type": "timeseries",
-      "description": "过去 5 分钟直方图估算值，不是最大值或某条请求的耗时。结合样本量阅读；无样本不代表零延迟。 每次请求只统计一个 HTTPS 站点处理层。包含可用性探针，不含自动 HTTP→HTTPS 跳转；不是浏览器页面加载时间。站点标签从部署后开始，历史混合数据不回填。",
+      "description": "HTTPS 入口处理耗时的5分钟直方图分位数。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
+        "x": 12,
         "y": 0,
         "w": 12,
         "h": 7
@@ -104,7 +104,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "无样本"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -120,24 +120,24 @@
     },
     {
       "id": 2,
-      "title": "观测请求量 · 5 分钟",
+      "title": "请求样本量",
       "type": "timeseries",
-      "description": "五分钟窗口外推请求数，不是精确日志条数。结合直方图估计阅读；低样本下长尾不稳定。",
+      "description": "5分钟窗口的入口请求样本外推量。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 0,
-        "w": 12,
+        "w": 4,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
           "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "观测请求量 · 5 分钟",
+          "legendFormat": "请求",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -147,7 +147,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "无样本"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -163,24 +163,24 @@
     },
     {
       "id": 3,
-      "title": "每秒请求 · 按状态码",
+      "title": "请求吞吐量",
       "type": "timeseries",
-      "description": "",
+      "description": "HTTPS 入口请求速率，按 HTTP 状态码分类。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 7,
-        "w": 12,
+        "y": 0,
+        "w": 8,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
           "expr": "(sum(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "全部请求 / 秒",
+          "legendFormat": "总量",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -189,7 +189,7 @@
         {
           "refId": "B",
           "expr": "(sum by(code)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "{{code}}",
+          "legendFormat": "HTTP {{code}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -199,9 +199,22 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "noValue": "无样本"
+          "noValue": "无数据"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP other"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "其它响应"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -215,24 +228,24 @@
     },
     {
       "id": 4,
-      "title": "超过 1 秒的请求 · 5 分钟",
+      "title": "慢请求数量",
       "type": "timeseries",
-      "description": "排查阈值，不是 SLO；包含探针请求。",
+      "description": "5分钟窗口内入口耗时超过1秒的请求外推量。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 0,
         "y": 7,
-        "w": 12,
-        "h": 7
+        "w": 24,
+        "h": 6
       },
       "targets": [
         {
           "refId": "A",
           "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) - sum(increase(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\",le=~\"1|1[.]0\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "超过 1 秒的请求 · 5 分钟",
+          "legendFormat": "请求",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -242,7 +255,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "无样本"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -258,16 +271,16 @@
     },
     {
       "id": 5,
-      "title": "站点慢请求 > 1 秒",
+      "title": "入口慢请求",
       "type": "logs",
-      "description": "duration 单位为毫秒。展开查看原始路径、状态、响应大小和请求编号；Related request logs 可查看完整关联记录。",
+      "description": "入口耗时超过1秒的请求，保留路径、状态与请求 ID。",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
         "x": 0,
-        "y": 14,
+        "y": 13,
         "w": 24,
         "h": 9
       },
@@ -285,7 +298,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "无样本"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -300,16 +313,16 @@
     },
     {
       "id": 6,
-      "title": "站点访问日志",
+      "title": "访问日志",
       "type": "logs",
-      "description": "",
+      "description": "所选站点的入口访问记录。",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
         "x": 0,
-        "y": 23,
+        "y": 22,
         "w": 24,
         "h": 9
       },
@@ -327,7 +340,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "无样本"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -338,21 +351,6 @@
         "enableLogDetails": true,
         "dedupStrategy": "none",
         "showLabels": false
-      }
-    },
-    {
-      "id": 7,
-      "type": "text",
-      "title": "请求关联",
-      "options": {
-        "mode": "markdown",
-        "content": "展开日志并打开 **Related request logs**，或[打开统一请求视图](/d/clumsies-api-zh/view?from=${__from}&to=${__to}&var-request_id=${request_id:percentencode}&viewPanel=7)。先输入请求 ID；留空不返回日志。静态请求没有后端记录。"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 32,
-        "w": 24,
-        "h": 4
       }
     }
   ],
@@ -391,17 +389,6 @@
         ],
         "multi": false,
         "includeAll": false
-      },
-      {
-        "name": "request_id",
-        "label": "请求编号",
-        "type": "textbox",
-        "query": "",
-        "current": {
-          "text": "",
-          "value": ""
-        },
-        "options": []
       }
     ]
   }

@@ -77,14 +77,17 @@ latency = panel(web, 1)['targets'][2]['expr']
 expect(checks, expand(latency, site='docs.clumsies.ai'), 4.975)
 expect(checks, expand(latency, site='app.clumsies.ai'), 0.099)
 expect(checks, expand(panel(web, 2)['targets'][0]['expr']), 50)
-expect(checks, expand(panel(api, 2)['targets'][0]['expr']), 50)
-legacy_tail = next(t['expr'] for t in panel(api, 1)['targets'] if t['legendFormat'] == 'Legacy mixed p99')
-success_tail = next(t['expr'] for t in panel(api, 1)['targets'] if t['legendFormat'] == 'Successful p99')
-expect(checks, expand(legacy_tail), 0.099)
-checks.append({'expr': expand(success_tail), 'eval_time': '10m', 'exp_samples': []})
-checks.append({'expr': expand(legacy_tail, route='/idle'), 'eval_time': '10m', 'exp_samples': []})
-expect(checks, 'sum(' + panel(overview, 27)['targets'][1]['expr'] + ')', 4)
-expect(checks, panel(overview, 21)['targets'][2]['expr'], -1)
+success_tail = next(t['expr'] for t in panel(api, 1)['targets'] if 'histogram_quantile(0.99,' in t['expr'])
+# Unclassified history must not enter present-contract throughput, latency or concurrency.
+for id in (1, 2, 3, 4, 9, 20, 22, 23, 24):
+    checks += [{'expr': expand(t['expr']), 'eval_time': '10m', 'exp_samples': []}
+               for t in panel(api, id)['targets']]
+checks += [{'expr': expand(t['expr']), 'eval_time': '10m', 'exp_samples': []}
+           for id in (22, 23, 24, 25, 26, 27) for t in panel(overview, id)['targets']]
+checks.append({'expr': '(' + panel(overview, 21)['targets'][0]['expr'] + ') == 1',
+               'eval_time': '10m', 'exp_samples': []})
+expect(checks, next(t['expr'] for t in panel(overview, 21)['targets']
+                    if 'clumsies_database_collection_success' in t['expr']), -1)
 # Every actual query must parse, including folded products and new infrastructure.
 for path in (root / 'grafana/dashboards').glob('*.json'):
     if '.zh.' in path.name:
@@ -117,6 +120,16 @@ for operation, n in [('review_create', 10), ('other_query', 1000)]:
     new_series.append({'series': f'clumsies_db_pool_acquire_duration_seconds_count{{job="server",operation="{operation}",outcome="acquired"}}', 'values': f'0+{n}x10'})
     new_series.append({'series': f'clumsies_db_pool_acquires_total{{job="server",operation="{operation}",outcome="acquired"}}', 'values': f'0+{n}x10'})
     new_series.append({'series': f'clumsies_db_pool_acquires_in_flight{{job="server",operation="{operation}"}}', 'values': ('2' if operation == 'review_create' else '100') + 'x10'})
+# Health and metrics traffic has the current schema but remains outside business scope.
+for route in ('/metrics', '/api/v1/admin/health'):
+    for bound in ('0.1', '1.0', '+Inf'):
+        new_series.append({'series': f'clumsies_http_request_duration_seconds_bucket{{job="server",route="{route}",method="GET",status_class="2xx",le="{bound}"}}', 'values': '0+1000x10'})
+    new_series.append({'series': f'clumsies_http_request_duration_seconds_count{{job="server",route="{route}",method="GET",status_class="2xx"}}', 'values': '0+1000x10'})
+    new_series.append({'series': f'clumsies_http_requests_total{{job="server",route="{route}",method="GET",status="200"}}', 'values': '0+1000x10'})
+for bound in ('0.1', '1.0', '+Inf'):
+    new_series.append({'series': f'clumsies_http_request_duration_seconds_bucket{{job="server",route="/idle",method="GET",status_class="2xx",le="{bound}"}}', 'values': '0x10'})
+new_series.append({'series': 'clumsies_http_request_duration_seconds_count{job="server",route="/idle",method="GET",status_class="2xx"}', 'values': '0x10'})
+new_series.append({'series': 'clumsies_http_requests_total{job="server",route="/idle",method="GET",status="200"}', 'values': '0x10'})
 new_checks = []
 expect(new_checks, 'sum(' + panel(infrastructure, 6)['targets'][0]['expr'] + ')', 0.095)
 expect(new_checks, 'sum(' + panel(infrastructure, 7)['targets'][0]['expr'] + ')', 10 / 60)
@@ -128,8 +141,23 @@ expect(new_checks, expand(panel(api, 2)['targets'][0]['expr'], method='POST'), 1
 expect(new_checks, expand(panel(api, 20)['targets'][0]['expr'], method='GET'), 100 * 2 / 12)
 expect(new_checks, expand(panel(api, 22)['targets'][0]['expr'], method='GET'), 10)
 expect(new_checks, 'sum(' + panel(overview, 27)['targets'][0]['expr'] + ')', 2)
-new_checks.append({'expr': panel(overview, 27)['targets'][1]['expr'], 'eval_time': '10m', 'exp_samples': []})
-new_checks.append({'expr': expand(legacy_tail), 'eval_time': '10m', 'exp_samples': []})
+new_checks.append({'expr': expand(success_tail, route='/idle'), 'eval_time': '10m', 'exp_samples': []})
+expect(new_checks, expand(panel(api, 2)['targets'][0]['expr'], route='/idle'), 0)
+# Coexisting unclassified history cannot inflate current samples or introduce extra series.
+mixed = list({item['series']: item for item in legacy + new_series}.values())
+# Large, fast error traffic must not reduce the successful latency distribution.
+fast_failures = []
+for item in new_series:
+    changed = dict(item)
+    labels = item['series']
+    if 'route="/api/v1/me"' in labels and 'method="GET"' in labels:
+        if 'status_class="2xx"' in labels and 'le="0.1"' in labels:
+            changed['values'] = '0x10'
+        elif 'status_class="5xx"' in labels or 'status="599"' in labels:
+            changed['values'] = '0+200x10'
+    fast_failures.append(changed)
+fast_checks = []
+expect(fast_checks, expand(success_tail, method='GET'), 0.991)
 # A failed scrape must not leave the five-minute histogram looking current.
 down = [dict(s, values='0x10') if s['series'].startswith('up{job="server"') else s for s in new_series]
 down_checks = [{'expr': expand(t['expr']), 'eval_time': '10m', 'exp_samples': []}
@@ -139,8 +167,10 @@ down_checks += [{'expr': t['expr'], 'eval_time': '10m', 'exp_samples': []}
 with tempfile.TemporaryDirectory() as temp:
     f = Path(temp) / 'queries.json'
     f.write_text(json.dumps({'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [
-        {'name': 'legacy schema remains readable and mixed', 'interval': '1m', 'input_series': legacy, 'promql_expr_test': checks},
+        {'name': 'unclassified history is excluded', 'interval': '1m', 'input_series': legacy, 'promql_expr_test': checks},
         {'name': 'classified methods failures and business concurrency', 'interval': '1m', 'input_series': new_series, 'promql_expr_test': new_checks},
+        {'name': 'current schema is isolated from historical series', 'interval': '1m', 'input_series': mixed, 'promql_expr_test': new_checks},
+        {'name': 'fast failures do not improve successful latency', 'interval': '1m', 'input_series': fast_failures, 'promql_expr_test': fast_checks},
         {'name': 'unhealthy scrape is not current success', 'interval': '1m', 'input_series': down, 'promql_expr_test': down_checks},
     ]}))
     f.chmod(0o644)

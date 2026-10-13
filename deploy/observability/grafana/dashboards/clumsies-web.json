@@ -1,6 +1,6 @@
 {
   "uid": "clumsies-web",
-  "title": "Clumsies Entrance and Websites",
+  "title": "Clumsies Website Traffic",
   "tags": [
     "clumsies",
     "en"
@@ -13,7 +13,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "Entrance request handling by site, not browser load. App entrance p95 objective is <1s; investigate other sites independently. Includes synthetic probes.",
+  "description": "Site traffic, entrance latency and access logs.",
   "links": [
     {
       "title": "Overview",
@@ -24,7 +24,7 @@
       "targetBlank": false
     },
     {
-      "title": "Business API",
+      "title": "API",
       "type": "link",
       "url": "/d/clumsies-api/view",
       "includeVars": false,
@@ -32,7 +32,7 @@
       "targetBlank": false
     },
     {
-      "title": "Entrance and websites",
+      "title": "Websites",
       "type": "link",
       "url": "/d/clumsies-web/view",
       "includeVars": false,
@@ -40,7 +40,7 @@
       "targetBlank": false
     },
     {
-      "title": "Infrastructure and operations",
+      "title": "Infrastructure",
       "type": "link",
       "url": "/d/clumsies-infrastructure/view",
       "includeVars": false,
@@ -48,9 +48,9 @@
       "targetBlank": false
     },
     {
-      "title": "Product activity · API bottom section",
+      "title": "Request correlation",
       "type": "link",
-      "url": "/d/clumsies-api/view",
+      "url": "/d/clumsies-api/view?viewPanel=7",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false
@@ -59,15 +59,15 @@
   "panels": [
     {
       "id": 1,
-      "title": "Entrance latency · 5m",
+      "title": "Entrance response latency",
       "type": "timeseries",
-      "description": "Rolling 5-minute histogram estimate, not the maximum or a single request. Read alongside the sample count. Empty means no samples, not zero latency. One HTTPS site handler per request. Includes availability probes; excludes automatic HTTP→HTTPS redirects. Measures server-side response handling, not browser page load. Host labels start at deployment; old all-site history is not backfilled.",
+      "description": "Five-minute histogram quantiles of HTTPS entrance handling duration.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
+        "x": 12,
         "y": 0,
         "w": 12,
         "h": 7
@@ -104,7 +104,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -120,24 +120,24 @@
     },
     {
       "id": 2,
-      "title": "Requests observed · 5m",
+      "title": "Request samples",
       "type": "timeseries",
-      "description": "Extrapolated five-minute request count, not an exact log count. Read beside histogram estimates; few samples make tail percentiles unstable.",
+      "description": "Extrapolated entrance request samples over five minutes.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 0,
-        "w": 12,
+        "w": 4,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
           "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "Requests observed · 5m",
+          "legendFormat": "Requests",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -147,7 +147,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -163,24 +163,24 @@
     },
     {
       "id": 3,
-      "title": "Requests by status / second",
+      "title": "Request throughput",
       "type": "timeseries",
-      "description": "",
+      "description": "HTTPS entrance request rate grouped by HTTP status.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 7,
-        "w": 12,
+        "y": 0,
+        "w": 8,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
           "expr": "(sum(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "All requests / second",
+          "legendFormat": "All",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -189,7 +189,7 @@
         {
           "refId": "B",
           "expr": "(sum by(code)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "{{code}}",
+          "legendFormat": "HTTP {{code}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -199,9 +199,22 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP other"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Other responses"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -215,24 +228,24 @@
     },
     {
       "id": 4,
-      "title": "Requests over 1s · 5m",
+      "title": "Slow requests",
       "type": "timeseries",
-      "description": "Investigation threshold, not an SLO. Includes synthetic probes.",
+      "description": "Extrapolated entrance requests exceeding one second over five minutes.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 0,
         "y": 7,
-        "w": 12,
-        "h": 7
+        "w": 24,
+        "h": 6
       },
       "targets": [
         {
           "refId": "A",
           "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) - sum(increase(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\",le=~\"1|1[.]0\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
-          "legendFormat": "Requests over 1s · 5m",
+          "legendFormat": "Requests",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -242,7 +255,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -258,16 +271,16 @@
     },
     {
       "id": 5,
-      "title": "Slow site requests > 1s",
+      "title": "Slow entrance requests",
       "type": "logs",
-      "description": "Duration is milliseconds. Expand the log for original path, status, size and request ID. Open Related request logs for the full request.",
+      "description": "Entrance requests exceeding one second, retaining path, status and request ID.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
         "x": 0,
-        "y": 14,
+        "y": 13,
         "w": 24,
         "h": 9
       },
@@ -285,7 +298,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -300,16 +313,16 @@
     },
     {
       "id": 6,
-      "title": "Site access log",
+      "title": "Access logs",
       "type": "logs",
-      "description": "",
+      "description": "Entrance access records for the selected site.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
         "x": 0,
-        "y": 23,
+        "y": 22,
         "w": 24,
         "h": 9
       },
@@ -327,7 +340,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -338,21 +351,6 @@
         "enableLogDetails": true,
         "dedupStrategy": "none",
         "showLabels": false
-      }
-    },
-    {
-      "id": 7,
-      "type": "text",
-      "title": "Request correlation",
-      "options": {
-        "mode": "markdown",
-        "content": "Expand a log and open **Related request logs**, or [open the shared request view](/d/clumsies-api/view?from=${__from}&to=${__to}&var-request_id=${request_id:percentencode}&viewPanel=7). Enter an ID; empty IDs return no logs. Static requests have no backend counterpart."
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 32,
-        "w": 24,
-        "h": 4
       }
     }
   ],
@@ -391,17 +389,6 @@
         ],
         "multi": false,
         "includeAll": false
-      },
-      {
-        "name": "request_id",
-        "label": "Request ID",
-        "type": "textbox",
-        "query": "",
-        "current": {
-          "text": "",
-          "value": ""
-        },
-        "options": []
       }
     ]
   }

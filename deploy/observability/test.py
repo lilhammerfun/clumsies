@@ -110,7 +110,9 @@ infra_panels = {p["id"]: p for p in all_panels(infrastructure)}
 overview = json.loads((root / "grafana/dashboards/clumsies-overview.json").read_text())
 confidence = next(p for p in all_panels(overview) if p["id"] == 21)
 db_confidence = next(t["expr"] for t in confidence["targets"] if "clumsies_database_collection_success" in t["expr"])
-host_confidence = next(t["expr"] for t in confidence["targets"] if t["refId"] == "D")
+host_confidence = next(t["expr"] for t in confidence["targets"]
+                       if "clumsies_observability_collection_timestamp_seconds" in t["expr"]
+                       and "clumsies_database_collection_success" not in t["expr"])
 api_age = next(p for p in all_panels(api_dashboard) if p["id"] == 102)["targets"][0]["expr"]
 for name, changed, expectations in (
     ("future database collection", {"clumsies_database_collection_timestamp_seconds": "25200x360"},
@@ -139,20 +141,19 @@ for name, changed, expectations in (
     invalid_snapshots.append({"name": name, "interval": "1m",
         "input_series": [{"series": metric, "values": values} for metric, values in changed_series.items()],
         "promql_expr_test": query_checks})
-# systemd startup failure (for example Result=resources) can be known without an exit receipt.
-for legacy in (False, True):
+# A known startup failure remains visible without an exit receipt; an unclassified result stays unknown.
+for has_state in (False, True):
     startup = {metric: values for metric, values in series.items()
                if not metric.startswith("clumsies_unit_last_exit")}
     startup['clumsies_unit_last_exit_ok{unit="clumsies-backup.service"}'] = "0x360"
-    if not legacy:
+    if has_state:
         startup['clumsies_unit_last_exit_state{unit="clumsies-backup.service",state="failed"}'] = "1x360"
-    invalid_snapshots.append({"name": "known startup failure without exit timestamp" + (" legacy" if legacy else ""),
+    invalid_snapshots.append({"name": "known startup failure" if has_state else "unavailable task state",
         "interval": "1m", "input_series": [{"series": metric, "values": values} for metric, values in startup.items()],
         "promql_expr_test": [
-            {"expr": infra_panels[18]["targets"][0]["expr"], "eval_time": "6h", "exp_samples": [] if legacy else
-             [{"labels": '{__name__="clumsies_unit_last_exit_state",unit="clumsies-backup.service",state="failed"}', "value": 1}]},
-            {"expr": infra_panels[18]["targets"][1]["expr"], "eval_time": "6h", "exp_samples": [] if not legacy else
-             [{"labels": '{__name__="clumsies_unit_last_exit_ok",unit="clumsies-backup.service"}', "value": 0}]},
+            {"expr": infra_panels[18]["targets"][0]["expr"], "eval_time": "6h", "exp_samples":
+             [{"labels": '{__name__="clumsies_unit_last_exit_state",unit="clumsies-backup.service",state="failed"}', "value": 1}]
+             if has_state else []},
         ]})
 # Boundary equality is trusted, stale host collection suppresses current operational results.
 for expr, value in ((db_confidence, 1), (host_confidence, 1), (api_age, 0),
@@ -169,13 +170,13 @@ stale_host["clumsies_observability_collection_timestamp_seconds"] = "0x360"
 invalid_snapshots.append({"name": "stale host collection", "interval": "1m",
     "input_series": [{"series": metric, "values": values} for metric, values in stale_host.items()],
     "promql_expr_test": [{"expr": expr, "eval_time": "6h", "exp_samples": []}
-        for expr in expressions + [infra_panels[16]["targets"][0]["expr"],
-                                   infra_panels[17]["targets"][0]["expr"],
-                                   infra_panels[18]["targets"][0]["expr"]]]})
+        for expr in expressions + [infra_panels[18]["targets"][0]["expr"]]] +
+        [{"expr": infra_panels[id]["targets"][0]["expr"], "eval_time": "6h",
+          "exp_samples": [{"labels": "{}", "value": -1}]} for id in (16, 17)]})
 for dashboard in dashboards:
     assert {link["title"] for link in dashboard["links"]}
     assert any("infrastructure" in link["url"] for link in dashboard["links"])
-    assert all(link.get("keepTime") for link in dashboard["links"])
+    assert all(link.get("keepTime") for link in dashboard["links"] if link["url"].startswith("/d/"))
 with tempfile.TemporaryDirectory() as directory:
     test_file = Path(directory) / "dashboards.test.json"
     test_file.write_text(json.dumps({"evaluation_interval": "1m", "tests": [{
