@@ -120,7 +120,7 @@ pub(crate) async fn execute_authenticated_server_request_with_snapshot(
 ) -> Result<reqwest::Response, DaemonError> {
     let request_session_revision = snapshot.session_revision;
     if state.project_config_snapshot().session_revision != request_session_revision {
-        return Err(server_session_changed());
+        return Err(state.server_request_session_error(request_session_revision));
     }
     let config = snapshot.config;
     let access_token = config
@@ -140,6 +140,23 @@ pub(crate) async fn execute_authenticated_server_request_with_snapshot(
         body.clone(),
     )
     .await?;
+    if state.project_config_snapshot().session_revision != request_session_revision {
+        return Err(
+            if method == reqwest::Method::GET
+                || response.status() == reqwest::StatusCode::UNAUTHORIZED
+            {
+                state.server_request_session_error(request_session_revision)
+            } else {
+                server_session_changed()
+            },
+        );
+    }
+    if matches!(response.status().as_u16(), 401 | 403) {
+        // A denied resource cannot fall back to its old body if token refresh fails.
+        state
+            .invalidate_server_response_cache(request_session_revision)
+            .await;
+    }
     let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED
         && config.refresh_token.is_some()
     {
@@ -159,13 +176,23 @@ pub(crate) async fn execute_authenticated_server_request_with_snapshot(
                 )
                 .await?
             }
-            TokenRefreshOutcome::Superseded => return Err(server_session_changed()),
+            TokenRefreshOutcome::Superseded => {
+                return Err(state.server_request_session_error(request_session_revision));
+            }
         }
     } else {
         response
     };
     if state.project_config_snapshot().session_revision != request_session_revision {
-        return Err(server_session_changed());
+        return Err(
+            if method == reqwest::Method::GET
+                || response.status() == reqwest::StatusCode::UNAUTHORIZED
+            {
+                state.server_request_session_error(request_session_revision)
+            } else {
+                server_session_changed()
+            },
+        );
     }
     if matches!(response.status().as_u16(), 401 | 403)
         || (method != reqwest::Method::GET && response.status().is_success())
@@ -289,18 +316,24 @@ async fn refresh_server_tokens(
             || status == reqwest::StatusCode::UNAUTHORIZED
             || status == reqwest::StatusCode::FORBIDDEN
         {
-            state
+            let cleared = state
                 .clear_server_tokens_if_current(
                     session_revision,
                     &config.server_url,
                     stale_access_token,
                 )
                 .await?;
+            if !cleared {
+                return Ok(TokenRefreshOutcome::Superseded);
+            }
             // The original resource request lost its session, not its input validity.
             return Err(DaemonError::ServerResponse {
                 status: reqwest::StatusCode::UNAUTHORIZED.as_u16(),
                 body,
             });
+        }
+        if state.project_config_snapshot().session_revision != session_revision {
+            return Ok(TokenRefreshOutcome::Superseded);
         }
         return Err(DaemonError::ServerResponse {
             status: status.as_u16(),

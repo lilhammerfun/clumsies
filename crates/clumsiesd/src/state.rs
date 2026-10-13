@@ -48,6 +48,8 @@ pub(crate) struct RuntimeProjectConfigSnapshot {
 struct RuntimeProjectConfigState {
     config: RuntimeProjectConfig,
     session_revision: u64,
+    /// Only a rejected refresh can mark the exact prior revision as expired.
+    expired_session_revision: Option<u64>,
 }
 
 type ServerResponseCacheKey = (String, String);
@@ -187,7 +189,12 @@ impl DaemonInner {
         }
     }
 
-    fn publish_project_config(&self, project_config: RuntimeProjectConfig, new_session: bool) {
+    fn publish_project_config(
+        &self,
+        project_config: RuntimeProjectConfig,
+        new_session: bool,
+        expired_session_revision: Option<u64>,
+    ) {
         let mut state = self
             .project_config
             .write()
@@ -197,19 +204,25 @@ impl DaemonInner {
                 .session_revision
                 .checked_add(1)
                 .expect("Server session revision exhausted");
+            state.expired_session_revision = expired_session_revision;
         }
         state.config = project_config;
     }
 }
 
 impl ServerResponseCacheTransition<'_> {
-    fn publish(mut self, project_config: RuntimeProjectConfig) {
+    fn publish(
+        mut self,
+        project_config: RuntimeProjectConfig,
+        expired_session_revision: Option<u64>,
+    ) {
         let mut cache = self
             .inner
             .server_response_cache
             .lock()
             .expect("server response cache mutex poisoned");
-        self.inner.publish_project_config(project_config, true);
+        self.inner
+            .publish_project_config(project_config, true, expired_session_revision);
         cache.invalidate();
         self.published = true;
     }
@@ -292,6 +305,7 @@ impl DaemonState {
                 project_config: RwLock::new(RuntimeProjectConfigState {
                     config: project_config,
                     session_revision: 0,
+                    expired_session_revision: None,
                 }),
                 project_config_mutation: Mutex::new(()),
                 credential_store,
@@ -361,7 +375,8 @@ impl DaemonState {
     }
 
     pub(crate) fn publish_project_config(&self, project_config: RuntimeProjectConfig) {
-        self.inner.publish_project_config(project_config, false);
+        self.inner
+            .publish_project_config(project_config, false, None);
     }
 
     #[cfg(test)]
@@ -416,7 +431,7 @@ impl DaemonState {
         let mut recovered = current.config;
         recovered.access_token = Some(credentials.access_token);
         recovered.refresh_token = credentials.refresh_token;
-        transition.publish(recovered);
+        transition.publish(recovered, None);
         tracing::info!("recovered Server session from the credential store");
         self.project_config_snapshot()
     }
@@ -458,7 +473,7 @@ impl DaemonState {
             }
             return Err(error);
         }
-        transition.publish(project_config);
+        transition.publish(project_config, None);
         if let Err(error) = queue_retrying_operations(&self.inner.pool).await {
             tracing::warn!(
                 "failed to requeue retrying draft operations after project config commit: {error}"
@@ -487,8 +502,29 @@ impl DaemonState {
         let mut project_config = current.config;
         project_config.access_token = None;
         project_config.refresh_token = None;
-        transition.publish(project_config);
+        transition.publish(project_config, Some(expected_session_revision));
         Ok(true)
+    }
+
+    /// Preserve an actionable authentication error only for an explicitly expired revision.
+    /// Account replacement or explicit sign-out must still suppress the old request's error.
+    pub(crate) fn server_request_session_error(
+        &self,
+        expected_session_revision: u64,
+    ) -> DaemonError {
+        let config = self
+            .inner
+            .project_config
+            .read()
+            .expect("project config rwlock poisoned");
+        if config.expired_session_revision == Some(expected_session_revision) {
+            DaemonError::ServerResponse {
+                status: reqwest::StatusCode::UNAUTHORIZED.as_u16(),
+                body: "Server session expired; sign in again".to_owned(),
+            }
+        } else {
+            server_client::server_session_changed()
+        }
     }
 
     /// Clear a selection removed from the current live membership list.
@@ -896,7 +932,7 @@ impl DaemonState {
             cacheable.then(|| self.start_server_response_cache_request(&request.path, &snapshot));
         let response = match server_client::execute_authenticated_server_request_with_snapshot(
             self,
-            method,
+            method.clone(),
             &request.path,
             &headers,
             request.body.map(String::into_bytes),
@@ -964,7 +1000,11 @@ impl DaemonState {
             body,
         };
         if self.project_config_snapshot().session_revision != request_session_revision {
-            return Err(server_client::server_session_changed());
+            return Err(if method == reqwest::Method::GET || status == 401 {
+                self.server_request_session_error(request_session_revision)
+            } else {
+                server_client::server_session_changed()
+            });
         }
         if cacheable && response.body.len() > SERVER_RESPONSE_CACHE_MAX_BODY_BYTES {
             self.invalidate_server_response_cache(request_session_revision)

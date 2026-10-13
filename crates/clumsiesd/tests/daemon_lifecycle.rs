@@ -6143,6 +6143,274 @@ async fn concurrent_unauthorized_requests_share_a_same_session_refresh() {
 }
 
 #[tokio::test]
+async fn concurrent_expired_gets_preserve_authentication_failure_and_pending_work() {
+    for refresh_status in [400, 401, 403] {
+        let probe = RefreshProbeState::default();
+        probe.allow_stale.store(true, Ordering::Release);
+        probe
+            .refresh_status
+            .store(refresh_status, Ordering::Release);
+        let app = Router::new()
+            .route("/api/v1/refresh-probe", get(refresh_probe_request))
+            .route("/api/v1/auth/token", post(refresh_probe_token))
+            .with_state(probe.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let root = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::for_root(root.path());
+        config.project.server_url = format!("http://{address}");
+        let (state, credentials) = common::initialize_authenticated_daemon(
+            config,
+            "stale-token",
+            Some("initial-refresh-token".to_owned()),
+        )
+        .await;
+        let draft = state
+            .store_draft_operation(DaemonDraftOperationRequest {
+                draft_id: None,
+                base_commit_id: None,
+                project_id: "prj_expiry".to_owned(),
+                scope: DaemonDraftScope::Org,
+                resource: DaemonDraftResourceKind::Memory,
+                op: DaemonDraftOperation {
+                    create: Some(DaemonCreateDraftOperation {
+                        path: "pending.md".to_owned(),
+                        content: context_content("Unsynced text retained"),
+                        description: None,
+                    }),
+                    update: None,
+                    rename: None,
+                    delete: None,
+                    discard: None,
+                },
+                source: Some(DaemonDraftOperationSource::Desktop),
+            })
+            .await
+            .unwrap();
+        let request = DaemonServerRequest {
+            method: "GET".to_owned(),
+            path: "/api/v1/refresh-probe".to_owned(),
+            headers: BTreeMap::new(),
+            body: None,
+        };
+        let cached = state.server_request(request.clone()).await.unwrap();
+        wait_for_server_response_cache(&state, &request.path, &cached.body).await;
+        probe.allow_stale.store(false, Ordering::Release);
+        let service = DaemonIpcService::new(state.clone());
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let service = service.clone();
+            let payload = serde_json::to_value(&request).unwrap();
+            requests.push(tokio::spawn(async move {
+                service
+                    .dispatch(DaemonIpcRequest::new("server_request", payload))
+                    .await
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(2), probe.refresh_started.notified())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), probe.both_stale.notified())
+            .await
+            .unwrap();
+        probe.release_refresh.notify_one();
+        for request in requests {
+            let response = tokio::time::timeout(Duration::from_secs(2), request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                !response.ok,
+                "a rejected GET must not return the old cached body"
+            );
+            let error = response.error.unwrap();
+            assert_eq!(
+                error.details["status"], 401,
+                "CLI login advice requires the structured authentication status"
+            );
+            assert_ne!(error.code, "sync_session_changed");
+        }
+        assert_eq!(probe.refresh_requests.load(Ordering::Acquire), 1);
+        assert!(credentials.credentials().is_none());
+        let detail = state.get_draft(&draft.draft_id).await.unwrap();
+        assert_eq!(detail.draft.pending_operation_count, 1);
+        assert_eq!(
+            detail.operations[0]
+                .operation
+                .create
+                .as_ref()
+                .unwrap()
+                .content
+                .content,
+            "Unsynced text retained"
+        );
+        let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM server_response_cache")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        pool.close().await;
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn denied_refresh_cannot_expire_a_replacement_or_explicitly_signed_out_session() {
+    for signed_out in [false, true] {
+        let probe = RefreshProbeState::default();
+        probe.refresh_status.store(401, Ordering::Release);
+        let app = Router::new()
+            .route("/api/v1/refresh-probe", get(refresh_probe_request))
+            .route("/api/v1/auth/token", post(refresh_probe_token))
+            .with_state(probe.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let root = tempfile::tempdir().unwrap();
+        let mut config = DaemonConfig::for_root(root.path());
+        config.project.server_url = format!("http://{address}");
+        let (state, credentials) = common::initialize_authenticated_daemon(
+            config,
+            "stale-token",
+            Some("initial-refresh-token".to_owned()),
+        )
+        .await;
+        let request = DaemonServerRequest {
+            method: "GET".to_owned(),
+            path: "/api/v1/refresh-probe".to_owned(),
+            headers: BTreeMap::new(),
+            body: None,
+        };
+        let old = tokio::spawn({
+            let state = state.clone();
+            let request = request.clone();
+            async move { state.server_request(request).await }
+        });
+        tokio::time::timeout(Duration::from_secs(2), probe.refresh_started.notified())
+            .await
+            .unwrap();
+        state
+            .replace_project_config(DaemonProjectConfigUpdateRequest {
+                server_url: format!("http://{address}"),
+                project_id: None,
+                memory_guidelines_path: None,
+                access_token: (!signed_out).then(|| "replacement-token".to_owned()),
+                refresh_token: (!signed_out).then(|| "replacement-refresh-token".to_owned()),
+            })
+            .await
+            .unwrap();
+        let replacement = if signed_out {
+            None
+        } else {
+            let response = state.server_request(request.clone()).await.unwrap();
+            wait_for_server_response_cache(&state, &request.path, &response.body).await;
+            Some(response)
+        };
+        probe.release_refresh.notify_one();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), old)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(DaemonError::State {
+                code: "sync_session_changed",
+                ..
+            })
+        ));
+        assert_eq!(probe.refresh_requests.load(Ordering::Acquire), 1);
+        assert_eq!(probe.fresh_requests.load(Ordering::Acquire), 0);
+        server.abort();
+        if let Some(replacement) = replacement {
+            assert_eq!(
+                credentials.credentials().unwrap().access_token,
+                "replacement-token"
+            );
+            let offline = state.server_request(request).await.unwrap();
+            assert_eq!(
+                offline.body, replacement.body,
+                "an old denial must not invalidate the replacement account's cache"
+            );
+            assert_eq!(
+                offline.headers.get("x-clumsies-cache").map(String::as_str),
+                Some("stale")
+            );
+            assert_eq!(probe.replacement_requests.load(Ordering::Acquire), 1);
+        } else {
+            assert!(credentials.credentials().is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn unauthorized_get_cannot_reuse_cache_when_refresh_is_temporarily_unavailable() {
+    let probe = RefreshProbeState::default();
+    probe.allow_stale.store(true, Ordering::Release);
+    probe.refresh_status.store(503, Ordering::Release);
+    let app = Router::new()
+        .route("/api/v1/refresh-probe", get(refresh_probe_request))
+        .route("/api/v1/auth/token", post(refresh_probe_token))
+        .with_state(probe.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let root = tempfile::tempdir().unwrap();
+    let mut config = DaemonConfig::for_root(root.path());
+    config.project.server_url = format!("http://{address}");
+    let (state, credentials) = common::initialize_authenticated_daemon(
+        config,
+        "stale-token",
+        Some("initial-refresh-token".to_owned()),
+    )
+    .await;
+    let request = DaemonServerRequest {
+        method: "GET".to_owned(),
+        path: "/api/v1/refresh-probe".to_owned(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    let live = state.server_request(request.clone()).await.unwrap();
+    wait_for_server_response_cache(&state, &request.path, &live.body).await;
+    probe.allow_stale.store(false, Ordering::Release);
+    let denied = tokio::spawn({
+        let state = state.clone();
+        async move { state.server_request(request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(2), probe.refresh_started.notified())
+        .await
+        .unwrap();
+    probe.release_refresh.notify_one();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), denied)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(DaemonError::ServerResponse { status: 503, .. })
+    ));
+    assert_eq!(
+        credentials.credentials().unwrap().access_token,
+        "stale-token"
+    );
+    let pool = sqlx::SqlitePool::connect(&state.local_db_path().display().to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM server_response_cache")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    pool.close().await;
+    server.abort();
+}
+
+#[tokio::test]
 async fn request_is_not_replayed_after_same_server_session_replacement_during_refresh() {
     let old_probe = RefreshProbeState::default();
     let old_app = Router::new()
@@ -7483,6 +7751,8 @@ struct RefreshProbeState {
     both_stale: Arc<Notify>,
     refresh_started: Arc<Notify>,
     release_refresh: Arc<Notify>,
+    allow_stale: Arc<AtomicBool>,
+    refresh_status: Arc<AtomicUsize>,
 }
 
 fn refresh_probe_server_request() -> DaemonServerRequest {
@@ -7502,6 +7772,9 @@ async fn refresh_probe_request(
 
     match proxy_header_value(&headers, "authorization").as_deref() {
         Some("Bearer stale-token") => {
+            if state.allow_stale.load(Ordering::Acquire) {
+                return Json(json!({ "authorized": true })).into_response();
+            }
             if state.stale_requests.fetch_add(1, Ordering::AcqRel) == 1 {
                 state.both_stale.notify_one();
             }
@@ -7529,14 +7802,24 @@ async fn refresh_probe_request(
 
 async fn refresh_probe_token(
     axum::extract::State(state): axum::extract::State<RefreshProbeState>,
-) -> Json<serde_json::Value> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
     state.refresh_requests.fetch_add(1, Ordering::AcqRel);
     state.refresh_started.notify_one();
     state.release_refresh.notified().await;
+    let status = state.refresh_status.load(Ordering::Acquire);
+    if status != 0 {
+        return (
+            axum::http::StatusCode::from_u16(status as u16).unwrap(),
+            Json(json!({ "error": "refresh rejected" })),
+        )
+            .into_response();
+    }
     Json(json!({
         "access_token": "fresh-token",
         "refresh_token": "rotated-refresh-token"
     }))
+    .into_response()
 }
 
 #[derive(Clone)]
