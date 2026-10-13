@@ -533,7 +533,22 @@ struct DirectoryIdentity {
 }
 
 pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
-    global::migrate(pool).await?;
+    migrate_for_schema(pool, None).await
+}
+
+/// Install repository and host adapter journals with an optional schema checkpoint.
+///
+/// One immediate writer transaction commits the DDL and checkpoint together;
+/// existing installation records and filesystem recovery operations are preserved.
+///
+/// # Errors
+/// Returns database errors without committing a partial adapter-schema upgrade.
+pub(crate) async fn migrate_for_schema(
+    pool: &SqlitePool,
+    target: Option<i64>,
+) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    global::migrate_in_tx(&mut tx).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS project_agent_adapters (
             server_url TEXT NOT NULL,
@@ -550,7 +565,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
                 ON DELETE CASCADE
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     // The retired Zig client used helper-oriented manifest keys. Rewrite the
     // daemon-owned compact JSON once so the active type has only runtime
@@ -563,20 +578,20 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
                  '\"helper_binary_path\":', '\"runtime_binary_path\":')
          WHERE manifest_json LIKE '%\"helper_binary_%'",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "UPDATE project_agent_adapters
          SET manifest_json = json_set(manifest_json, '$.delivery', 'legacy_files')
          WHERE json_type(manifest_json, '$.delivery') IS NULL",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_project_agent_adapters_project
          ON project_agent_adapters (server_url, project_id)",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS adapter_fs_ops (
@@ -594,7 +609,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             UNIQUE (server_url, workspace_root, adapter)
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "UPDATE adapter_fs_ops
@@ -602,8 +617,12 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
          WHERE manifest_json IS NOT NULL
            AND json_type(manifest_json, '$.delivery') IS NULL",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    if let Some(target) = target {
+        crate::migration::stamp_schema_version_in_tx(&mut tx, target).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -879,13 +898,10 @@ async fn persist_prepared_adapter_fs_op(
     }
 
     // The prepared row is the durability barrier before any host file can
-    // change. The rest of the central database uses WAL/NORMAL for throughput,
-    // so temporarily strengthen only this pool connection to FULL.
+    // change. All central-database connections use WAL/FULL, including this
+    // journal transaction and subsequent Draft writes on the same connection.
     let mut connection = pool.acquire().await?;
-    sqlx::query("PRAGMA synchronous = FULL")
-        .execute(&mut *connection)
-        .await?;
-    let persist_result = async {
+    async {
         let workspace = operation.workspace_root.display().to_string();
         let mut tx = (*connection).begin_with("BEGIN IMMEDIATE").await?;
         let binding_project: Option<String> = sqlx::query_scalar(
@@ -949,15 +965,7 @@ async fn persist_prepared_adapter_fs_op(
         tx.commit().await?;
         Ok(())
     }
-    .await;
-    let restore_result = sqlx::query("PRAGMA synchronous = NORMAL")
-        .execute(&mut *connection)
-        .await;
-    match (persist_result, restore_result) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error.into()),
-        (Ok(()), Ok(_)) => Ok(()),
-    }
+    .await
 }
 
 fn prepared_adapter_fs_op_from_row(
@@ -5619,9 +5627,7 @@ name: legacy
 
     #[cfg(unix)]
     async fn journal_test_pool(workspace: &Path) -> (SqlitePool, String, String, String) {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
+        let pool = crate::migration::connect_local_db(&workspace.join("journal-test.db"))
             .await
             .unwrap();
         sqlx::query(
@@ -5920,6 +5926,39 @@ name: legacy
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn adapter_journal_preserves_full_durability_on_success_and_failure() {
+        let workspace = tempfile::tempdir().unwrap();
+        let (pool, server_url, workspace_root, project_id) =
+            journal_test_pool(workspace.path()).await;
+        let operation =
+            journal_test_install_operation(server_url, Path::new(&workspace_root), project_id);
+        persist_prepared_adapter_fs_op(&pool, &operation)
+            .await
+            .unwrap();
+        assert!(
+            persist_prepared_adapter_fs_op(&pool, &operation)
+                .await
+                .is_err()
+        );
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            connections.push(pool.acquire().await.unwrap());
+        }
+        for connection in &mut connections {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("PRAGMA synchronous")
+                    .fetch_one(&mut **connection)
+                    .await
+                    .unwrap(),
+                2
+            );
+        }
+        drop(connections);
+        pool.close().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn prepared_adapter_journal_recovers_a_mid_batch_process_crash() {
         let workspace = tempfile::tempdir().unwrap();
         let (pool, server_url, workspace_root, project_id) =
@@ -5935,8 +5974,8 @@ name: legacy
                 .fetch_one(&pool)
                 .await
                 .unwrap(),
-            1,
-            "the dedicated FULL journal barrier must restore normal pool operation"
+            2,
+            "journal preparation must preserve central FULL durability"
         );
 
         apply_journal_change_cas(&operation, 0, &operation.changes[0]).unwrap();

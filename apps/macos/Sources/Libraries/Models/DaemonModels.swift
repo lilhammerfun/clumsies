@@ -54,6 +54,17 @@ struct DaemonProjectSelection: Codable, Sendable {
     let projectId: String
 }
 
+struct DaemonCommitBasePinRequest: Codable, Sendable {
+    let commitId: String
+    let pinId: String?
+}
+
+struct DaemonCommitBasePinResponse: Codable, Sendable {
+    let pinId: String
+    let commitId: String
+    let lockPath: String
+}
+
 struct DaemonProjectBindingListRequest: Codable, Sendable {
     let projectId: String
 }
@@ -152,15 +163,6 @@ enum ProjectAgentAdapterDelivery: String, Codable, Sendable {
 
 struct DaemonProjectAgentAdapterListRequest: Codable, Sendable {
     let projectId: String
-}
-
-struct DaemonProjectAgentAdapterInstallRequest: Codable, Sendable {
-    let projectId: String
-    let workspaceRoot: String
-    let adapter: ProjectAgentAdapterKind
-    let runtimeBinaryPath: String
-    let hostBinaryPath: String?
-    let expectedRevision: Int?
 }
 
 struct DaemonProjectAgentAdapterRemoveRequest: Codable, Sendable {
@@ -537,6 +539,7 @@ struct DaemonDraftOperationRequest: Codable, Sendable {
     let resource: DaemonResourceKind
     let op: DaemonDraftOperation
     let source: DaemonDraftOperationSource
+    var baseCommitCaptured = false
 }
 
 struct DaemonDraftOperationResponse: Codable, Sendable {
@@ -704,20 +707,8 @@ enum RetrievalDeltaAction: String, Codable, CaseIterable, Hashable, Sendable {
     }
 }
 
-struct RetrievalRunListRequest: Codable, Sendable {
-    let projectId: String?
-    let status: RetrievalRunStatus?
-    let cursor: String?
-    let limit: Int?
-}
-
 struct RetrievalRunRequest: Codable, Sendable {
     let runId: String
-}
-
-struct RetrievalRunListResponse: Codable, Sendable {
-    let items: [RetrievalRun]
-    let nextCursor: String?
 }
 
 struct RetrievalStageLatencies: Codable, Equatable, Sendable {
@@ -893,14 +884,6 @@ struct EvaluationCaseDetail: Codable, Sendable {
     let evidence: [EvaluationEvidence]
     let evidenceSuggestions: [EvaluationEvidenceSuggestion]
     let report: RetrievalBenchmarkReport?
-}
-
-struct ClearRetrievalRunsRequest: Codable, Sendable {
-    let projectId: String?
-}
-
-struct ClearRetrievalRunsResponse: Codable, Sendable {
-    let deletedRunCount: UInt64
 }
 
 struct ExportEvaluationSetRequest: Codable, Sendable {

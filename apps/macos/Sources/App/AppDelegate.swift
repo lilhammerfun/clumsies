@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             let didSave = await store.flushPendingChanges()
             isFlushingForTermination = false
-            let canTerminate = finishTermination(allowed: didSave)
+            let canTerminate = finishTermination(allowed: didSave && !store.hasPendingChanges)
             if !canTerminate {
                 presentMainWindow()
             }

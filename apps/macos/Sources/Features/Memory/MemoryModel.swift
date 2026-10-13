@@ -13,8 +13,12 @@ final class MemoryModel: ObservableObject {
     private let projects: ProjectService
     private let reconciliation: DraftReconciliationService
     private let sessions: DocumentSessions
+    private let createDrafts: @Sendable (DaemonCreateMemoryDraftsRequest) async throws -> [DaemonDraftOperationResponse]
+    private let readDraft: @Sendable (String) async throws -> DaemonDraftDetail
 
-    init(catalog: MemoryCatalog, context: WorkspaceContext, edits: DraftStore, feedback: WorkspaceFeedback, navigation: WorkspaceNavigation, projects: ProjectService, reconciliation: DraftReconciliationService, sessions: DocumentSessions) {
+    init(catalog: MemoryCatalog, context: WorkspaceContext, edits: DraftStore, feedback: WorkspaceFeedback, navigation: WorkspaceNavigation, projects: ProjectService, reconciliation: DraftReconciliationService, sessions: DocumentSessions,
+         createDrafts: (@Sendable (DaemonCreateMemoryDraftsRequest) async throws -> [DaemonDraftOperationResponse])? = nil,
+         loadDraft: (@Sendable (String) async throws -> DaemonDraftDetail)? = nil) {
         self.catalog = catalog
         self.context = context
         self.edits = edits
@@ -23,6 +27,9 @@ final class MemoryModel: ObservableObject {
         self.projects = projects
         self.reconciliation = reconciliation
         self.sessions = sessions
+        let daemon = context.daemon
+        self.createDrafts = createDrafts ?? { try await daemon.createMemoryDrafts($0) }
+        self.readDraft = loadDraft ?? { try await daemon.draft($0) }
     }
 
     @Published var isExportingMemory = false
@@ -78,7 +85,8 @@ final class MemoryModel: ObservableObject {
         return MemoryTreeProjection.items(
             resources: catalog.resources, drafts: edits.drafts,
             activeProjectId: context.activeProjectId,
-            selectedOrgResourceIds: context.activeProject?.selectedOrgResourceIds ?? []
+            selectedOrgResourceIds: context.activeProject?.selectedOrgResourceIds ?? [],
+            editBasePin: context.activeProject?.baseCommitPin
         )
     }
 
@@ -346,10 +354,12 @@ final class MemoryModel: ObservableObject {
         return current
     }
 
-    private func createMemoryGuidelines(_ setup: MemoryGuidelinesSetup) async throws -> String {
+    func createMemoryGuidelines(_ setup: MemoryGuidelinesSetup) async throws -> String {
         let generation = context.workspaceReloadGeneration
+        let authority = context.authorityGeneration
         return try await edits.withDraftMutation {
-            guard generation == self.context.workspaceReloadGeneration,
+            try self.context.ensureAuthority(authority)
+            guard self.context.phase == .ready, generation == self.context.workspaceReloadGeneration,
                   self.context.activeProjectId == setup.projectId,
                   self.edits.canCreateMemory(kind: .context, scope: .project) else { throw CancellationError() }
             let occupiedPaths = setup.occupiedPaths.union(
@@ -357,21 +367,30 @@ final class MemoryModel: ObservableObject {
             )
             let documents = try MemoryGuidelines.defaultDocuments(occupiedPaths: occupiedPaths)
             for document in documents { try self.edits.validate(kind: .context, document: document) }
-            let responses = try await self.context.daemon.createMemoryDrafts(.init(
+            let responses = try await self.createDrafts(.init(
                 projectId: setup.projectId,
                 baseCommitId: self.context.projects.first { $0.id == setup.projectId }?.refCommitId,
                 operations: documents.map {
                     .create(path: $0.path, content: self.edits.daemonContent(kind: .context, document: $0), description: nil)
                 }
             ))
-            guard generation == self.context.workspaceReloadGeneration,
+            try self.context.ensureAuthority(authority)
+            guard self.context.phase == .ready, generation == self.context.workspaceReloadGeneration,
                   self.context.activeProjectId == setup.projectId else { throw CancellationError() }
-            let daemon = self.context.daemon
-            let details = try await concurrentMap(responses) { try await daemon.draft($0.draftId) }
-            guard generation == self.context.workspaceReloadGeneration,
+            let readDraft = self.readDraft
+            let details = try await concurrentMap(responses) { try await readDraft($0.draftId) }
+            try self.context.ensureAuthority(authority)
+            guard self.context.phase == .ready, generation == self.context.workspaceReloadGeneration,
                   self.context.activeProjectId == setup.projectId,
                   let guideline = responses.first else { throw CancellationError() }
-            let created = details.map { WorkspaceLoader.mapDraft($0, resources: self.catalog.resources) }
+            let loader = context.loader
+            let resources = catalog.resources
+            let created = try await loader.loadMappedDrafts(details, resources: resources)
+            try self.context.ensureAuthority(authority)
+            guard generation == self.context.workspaceReloadGeneration,
+                  self.context.phase == .ready,
+                  !self.context.isSwitchingMemoryContext,
+                  self.context.activeProjectId == setup.projectId else { throw CancellationError() }
             let createdIds = Set(created.map(\.id))
             self.edits.drafts = self.edits.drafts.filter { !createdIds.contains($0.id) } + created
             self.navigation.selectedItemId = guideline.draftId
@@ -403,6 +422,8 @@ final class MemoryModel: ObservableObject {
               sessions.synchronizingDocumentSessions.insert(key).inserted else { return }
 
         let generation = UUID()
+        sessions.documentBasePins[key] = [item.editBasePin, item.resource?.baseCommitPin, item.draft?.baseCommitPin,
+            context.activeProject?.baseCommitPin].compactMap { $0 }
         sessions.documentSynchronizationGenerations[key] = generation
         if behindDraft != nil {
             openDocumentForSync(item)
@@ -509,7 +530,8 @@ final class MemoryModel: ObservableObject {
             authoritativeCommitId: snapshot.authoritativeCommitId,
             authoritativeRefEtag: snapshot.authoritativeRefEtag,
             selectedOrgResourceIds: snapshot.selectedOrgResourceIds,
-            orgSelectionRevision: snapshot.orgSelectionRevision
+            orgSelectionRevision: snapshot.orgSelectionRevision,
+            baseCommitPin: snapshot.authoritativeBasePin
         )
         sessions.endDocumentSynchronization(key, generation: generation)
     }

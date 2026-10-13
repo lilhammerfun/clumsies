@@ -8,14 +8,21 @@ final class DraftReconciliationService: ObservableObject {
     private let edits: DraftStore
     private let refresh: DaemonSyncService
     private let sessions: DocumentSessions
+    private let readDraft: @Sendable (String) async throws -> DaemonDraftDetail
+    private let retryDraftSync: @MainActor (String) async -> SyncRetryOutcome
     var onReconciled: (() async -> Void)?
 
-    init(catalog: MemoryCatalog, context: WorkspaceContext, edits: DraftStore, refresh: DaemonSyncService, sessions: DocumentSessions) {
+    init(catalog: MemoryCatalog, context: WorkspaceContext, edits: DraftStore, refresh: DaemonSyncService, sessions: DocumentSessions,
+         loadDraft: (@Sendable (String) async throws -> DaemonDraftDetail)? = nil,
+         retryDraftSync: (@MainActor (String) async -> SyncRetryOutcome)? = nil) {
         self.catalog = catalog
         self.context = context
         self.edits = edits
         self.refresh = refresh
         self.sessions = sessions
+        let daemon = context.daemon
+        readDraft = loadDraft ?? { try await daemon.draft($0) }
+        self.retryDraftSync = retryDraftSync ?? { await refresh.retrySync(channel: "drafts", projectId: $0) }
     }
 
     nonisolated static func draftUploadBarrierDecision(
@@ -40,6 +47,8 @@ final class DraftReconciliationService: ObservableObject {
         itemId: String,
         draft: LocalDraft
     ) async throws -> LocalDraft {
+        let authority = context.authorityGeneration
+        let workspaceGeneration = context.workspaceReloadGeneration
         let sessionKey = MemoryDocumentSessionKey(
             projectId: draft.projectId,
             itemId: itemId
@@ -54,8 +63,23 @@ final class DraftReconciliationService: ObservableObject {
         var requiresPostRetryCheck = false
         while clock.now < deadline || requiresPostRetryCheck {
             requiresPostRetryCheck = false
-            try Task.checkCancellation()
-            let detail = try await context.daemon.draft(draft.id)
+            try context.ensureAuthority(authority)
+            guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else {
+                throw CancellationError()
+            }
+            let detail: DaemonDraftDetail
+            do { detail = try await readDraft(draft.id) }
+            catch {
+                try context.ensureAuthority(authority)
+                guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else {
+                    throw CancellationError()
+                }
+                throw error
+            }
+            try context.ensureAuthority(authority)
+            guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else {
+                throw CancellationError()
+            }
             let failure = detail.operations.reversed().first {
                 $0.syncStatus == .failed
             }?.lastError
@@ -70,10 +94,11 @@ final class DraftReconciliationService: ObservableObject {
                 throw DocumentSyncError.draftUploadFailed(message)
             case .wait:
                 if !requestedRetry {
-                    let outcome = await refresh.retrySync(
-                        channel: "drafts",
-                        projectId: draft.projectId
-                    )
+                    let outcome = await retryDraftSync(draft.projectId)
+                    try context.ensureAuthority(authority)
+                    guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else {
+                        throw CancellationError()
+                    }
                     if case .failed(let message) = outcome {
                         throw DocumentSyncError.draftUploadFailed(message)
                     }
@@ -91,10 +116,32 @@ final class DraftReconciliationService: ObservableObject {
                     requiresPostRetryCheck = true
                     continue
                 }
-                let mapped = WorkspaceLoader.mapDraft(detail, resources: catalog.resources)
+                let mapped: LocalDraft
+                do { mapped = try await context.loader.loadMappedDraft(detail, resources: catalog.resources) }
+                catch {
+                    try context.ensureAuthority(authority)
+                    guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else {
+                        throw CancellationError()
+                    }
+                    throw error
+                }
+                try context.ensureAuthority(authority)
+                guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else {
+                    throw CancellationError()
+                }
+                if edits.pendingDocumentSaves[sessionKey] != nil {
+                    try await edits.flushDocumentSave(sessionKey)
+                    requestedRetry = false
+                    requiresPostRetryCheck = true
+                    continue
+                }
                 return mapped
             }
             try await Task.sleep(for: .milliseconds(150))
+        }
+        try context.ensureAuthority(authority)
+        guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else {
+            throw CancellationError()
         }
         throw DocumentSyncError.draftUploadTimedOut
     }

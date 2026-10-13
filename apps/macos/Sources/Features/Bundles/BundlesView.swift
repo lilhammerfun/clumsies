@@ -175,7 +175,7 @@ private struct BundleEditor: View {
             }
         }
         .formStyle(.grouped)
-        .disabled(workspaceContext.phase != .ready)
+        .disabled(workspaceContext.phase != .ready || workspaceContext.isSigningOut)
         .sheet(isPresented: $showsResourcePicker) {
             BundleResourcePicker(resources: selectableResources, selection: $resourceIds)
         }

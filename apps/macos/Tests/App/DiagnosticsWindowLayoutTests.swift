@@ -30,14 +30,6 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
         }
     }
 
-    func testReadableRunListWidthIsAHardMinimum() {
-        XCTAssertEqual(
-            RetrievalDiagnosticsLayout.runListMinimumWidth,
-            RetrievalDiagnosticsLayout.runListIdealWidth
-        )
-        XCTAssertGreaterThanOrEqual(RetrievalDiagnosticsLayout.runListMinimumWidth, 360)
-    }
-
     func testEvidenceReviewExposesOnlyOneContextualPrimaryAction() {
         XCTAssertEqual(
             RetrievalEvidenceReviewAction(
@@ -134,7 +126,6 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
         XCTAssertEqual(model.selectedRunId, "second")
         XCTAssertEqual(model.detail?.run.runId, "second")
         XCTAssertFalse(model.isLoading)
-        XCTAssertTrue(model.runs.isEmpty)
 
         let third = Task { await model.select(runId: "third") }
         await fulfillment(of: [thirdStarted], timeout: 1)
@@ -171,72 +162,38 @@ final class DiagnosticsWindowLayoutTests: XCTestCase {
         XCTAssertFalse(model.isLoading)
     }
 
-    func testHistoryFailureKeepsContentAndDoesNotAttachOldDetailToANewSelection() async throws {
-        let first = try retrievalDetail(runId: "first"), second = try retrievalDetail(runId: "second")
-        var attempt = 0
-        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(serviceName: "unused"), fetchRuns: { _ in
-            attempt += 1
-            if attempt == 2 { throw URLError(.notConnectedToInternet) }
-            return .init(items: [attempt == 1 ? first.run : second.run], nextCursor: nil)
-        }, fetchRun: { id in
-            if id == "second" { throw ServerClientError.response(status: 404, message: "SECRET") }
-            return first
-        })
-        await model.load(projectId: "project")
-        await model.load(projectId: "project")
-        XCTAssertEqual(model.runs.map(\.runId), ["first"])
-        XCTAssertEqual(model.detail?.run.runId, "first")
-        XCTAssertNil(model.errorMessage)
-        await model.load(projectId: "project")
-        XCTAssertEqual(model.selectedRunId, "second")
-        XCTAssertNil(model.detail, "A deleted new selection must not display another run's detail.")
-        XCTAssertEqual(model.errorMessage, ClientFailure.missing.message)
-    }
-
-    func testBackgroundRefreshKeepsPagesAndDoesNotOverwriteEvidenceEditedDuringRead() async throws {
-        let first = try retrievalDetail(runId: "first"), second = try retrievalDetail(runId: "second")
-        let started = expectation(description: "Background read")
-        var blocked = false
-        var pending: CheckedContinuation<RetrievalRunListResponse, Never>?
-        let model = RetrievalDiagnosticsModel(daemon: DaemonXPCClient(serviceName: "unused"), fetchRuns: { request in
-            if blocked && request.cursor == nil {
-                return await withCheckedContinuation { pending = $0; started.fulfill() }
+    func testRunningSelectedRetrievalRefreshesUntilTerminalThenStops() async throws {
+        let running = try retrievalDetail(runId: "pending", status: "running")
+        let succeeded = try retrievalDetail(runId: "pending")
+        var calls = 0
+        let model = RetrievalDiagnosticsModel(
+            daemon: DaemonXPCClient(serviceName: "test.pending.unused"),
+            fetchRun: { _ in
+                calls += 1
+                return calls == 1 ? running : succeeded
             }
-            return .init(items: [request.cursor == nil ? first.run : second.run],
-                         nextCursor: request.cursor == nil ? "page-2" : nil)
-        }, fetchRun: { $0 == "first" ? first : second })
-        await model.load(projectId: "project")
-        await model.loadMore()
-        await model.select(runId: "second")
-        await model.refreshInBackground()
-        XCTAssertEqual(model.runs.map(\.runId), ["first", "second"])
-        XCTAssertEqual(model.selectedRunId, "second")
-        blocked = true
-        let refresh = Task { await model.refreshInBackground() }
-        await fulfillment(of: [started], timeout: 1)
-        let suggestion = EvaluationEvidenceSuggestion(resourceId: "resource", unitKey: "unit", path: "memory.md",
-            headingPath: [], evidenceExcerpt: "fixture", modelRelevance: nil,
-            likelyFailureStage: .assembly, exclusionReason: .tokenBudget)
-        model.setEvidenceSelected(true, suggestion: suggestion)
-        pending?.resume(returning: .init(items: [first.run, second.run], nextCursor: nil))
-        await refresh.value
-        XCTAssertTrue(model.isEvidenceSelected(suggestion))
-        XCTAssertEqual(model.selectedRunId, "second")
-        await model.refreshInBackground() // Must defer while evidence is dirty, not start another read.
-        XCTAssertFalse(model.isLoading)
+        )
+        await model.select(runId: "pending")
+        XCTAssertEqual(model.detail?.run.status, .running)
+        await model.refreshRunningSelection()
+        XCTAssertEqual(model.detail?.run.status, .succeeded)
+        XCTAssertEqual(model.detail?.candidates.count, 1)
+        await model.refreshRunningSelection()
+        XCTAssertEqual(calls, 2)
     }
 
     private func retrievalDetail(
         runId: String,
         selected: Bool = true,
         rank: Int? = nil,
-        exactRank: Int? = nil
+        exactRank: Int? = nil,
+        status: String = "succeeded"
     ) throws -> RetrievalRunDetail {
         let json = """
         {
           "run": {
             "run_id": "\(runId)", "project_id": "project-1", "query": "验证 macOS 更新按钮和 appcast 清单，检查发布流程与签名验证。",
-            "activation_state_fingerprint": "state", "status": "succeeded",
+            "activation_state_fingerprint": "state", "status": "\(status)",
             "resource_count": 1, "unit_count": 1,
             "latencies": {
               "effective_memory_us": 1, "index_ensure_us": 1, "bm25_us": 1,

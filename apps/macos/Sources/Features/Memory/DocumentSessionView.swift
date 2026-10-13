@@ -31,11 +31,15 @@ struct DocumentSessionView: View {
     var body: some View {
         documentContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .pageFeedback(item.draft?.baseCommitAvailable == false ? DocumentDiffError.baselineUnavailable.localizedDescription : nil)
         .onChange(of: item.document) { _, latest in
-            self.model.adoptAuthoritativeDocument(latest)
+            self.model.adoptAuthoritativeDocument(latest, item: self.item)
         }
         .onChange(of: memoryCatalog.documentContentGeneration(for: item.id)) { _, _ in
-            self.model.adoptAuthoritativeDocument(self.item.document)
+            self.model.adoptAuthoritativeDocument(self.item.document, item: self.item)
+        }
+        .onChange(of: item.editBasePin) { _, _ in
+            self.model.adoptAuthoritativeDocument(self.item.document, item: self.item)
         }
         .onChange(of: workspaceNavigation.pendingDocumentCommand) { _, command in
             self.handleDocumentCommand(command)
@@ -93,7 +97,9 @@ struct DocumentSessionView: View {
             } else {
                 self.editor
                     .disabled(
-                        !self.draftStore.canEditMemory(self.item)
+                        self.model.suppressesSaving
+                            || self.workspaceContext.isSigningOut
+                            || !self.draftStore.canEditMemory(self.item)
                             || self.workspaceContext.isSwitchingMemoryContext
                             || self.documentSessions.isSynchronizingDocument(self.item.id)
                     )
@@ -212,7 +218,9 @@ struct DocumentSessionView: View {
         Binding(
             get: { self.model.document.body },
             set: { nextBody in
-                guard nextBody != self.model.document.body else { return }
+                guard !self.model.suppressesSaving,
+                      !self.workspaceContext.isSigningOut,
+                      nextBody != self.model.document.body else { return }
                 var nextDocument = self.model.document
                 nextDocument.body = nextBody
                 self.model.document = nextDocument

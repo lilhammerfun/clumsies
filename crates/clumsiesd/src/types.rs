@@ -364,16 +364,6 @@ pub enum SyncRetryChannel {
     All,
 }
 
-impl SyncRetryChannel {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Drafts => "drafts",
-            Self::Commits => "commits",
-            Self::All => "all",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DaemonRetryResponse {
     pub retry_id: String,

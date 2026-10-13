@@ -245,6 +245,11 @@ pub(crate) fn start_worker(state: &DaemonState) -> JoinHandle<()> {
         if let Err(error) = seed_cached_projects(&state.inner.pool).await {
             tracing::warn!("failed to seed background search index jobs: {error}");
         }
+        // Upgrade existing on-disk indexes during resident startup, before
+        // serving scheduler jobs, using the same query/storage pin as pruning.
+        if let Err(error) = maintain_cached_indexes(&state).await {
+            tracing::warn!("existing project search index reclamation is pending: {error}");
+        }
         let mut interval = tokio::time::interval(IDLE_POLL_INTERVAL);
         loop {
             let retry_delay = match next_failed_retry_delay(&state.inner.pool).await {
@@ -305,6 +310,28 @@ pub(crate) fn start_worker(state: &DaemonState) -> JoinHandle<()> {
             }
         }
     })
+}
+
+/// Reclaim old revisions of existing project indexes when the worker starts.
+///
+/// Per-project cleanup takes the search mutex before the storage read barrier;
+/// failures are logged so one unavailable volume cannot block other projects.
+///
+/// # Errors
+/// Returns database errors while enumerating persisted active projects. Individual
+/// project maintenance failures preserve their active head and do not escape here.
+pub(super) async fn maintain_cached_indexes(state: &DaemonState) -> Result<(), DaemonError> {
+    let projects = sqlx::query_scalar::<_, String>(
+        "SELECT project_id FROM search_index_jobs WHERE active_revision IS NOT NULL",
+    )
+    .fetch_all(&state.inner.pool)
+    .await?;
+    for project_id in projects {
+        if let Err(error) = prune_old_revisions(state, &project_id).await {
+            tracing::warn!(%project_id, "existing search index maintenance failed: {error}");
+        }
+    }
+    Ok(())
 }
 
 async fn persist_failed_job(pool: &SqlitePool, job: &ClaimedJob, error: &DaemonError) {

@@ -1,12 +1,20 @@
+//! Persist bounded retrieval history while preserving frozen evaluation snapshots.
+//!
+//! Recording and maintenance share a history mutex. Accepted writes finish beyond
+//! a caller's deadline; weak maintenance workers release the daemon between batches.
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use tokio::sync::oneshot;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{Row, Sqlite, SqlitePool, Transaction};
+use sqlx::{Connection, Row, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use super::{DaemonError, DaemonState, MemoryKind, SourceLocator, SourceScope};
@@ -15,6 +23,790 @@ pub(crate) const RETRIEVAL_RUN_RETENTION_PER_PROJECT: i64 = 500;
 const RETRIEVAL_EXCERPT_CHARS: usize = 1_200;
 const EVALUATION_FIXTURE_VERSION: u32 = 2;
 const EVALUATION_SUGGESTION_LIMIT: usize = 5;
+// Match the IPC payload ceiling without introducing another product setting.
+const HISTORY_MAX_BYTES: usize = 64 * 1024 * 1024;
+const HISTORY_MAX_JOBS: usize = 4;
+const HISTORY_STORAGE_MAX_BYTES: usize = 512 * 1024 * 1024;
+const HISTORY_BACKFILL_BATCH: i64 = 128;
+
+#[derive(Default)]
+/// Bound accepted recording work and coalesce unfinished maintenance plans.
+///
+/// Protected by the daemon's synchronous work mutex, not the asynchronous history
+/// mutex. Deferred plans survive a worker exit and are retried by the next event.
+pub(crate) struct HistoryWorkState {
+    accepted_jobs: usize,
+    accepted_bytes: usize,
+    maintenance_requested: bool,
+    maintenance_running: bool,
+    startup_requested: bool,
+    pending_run_ids: BTreeSet<String>,
+    cleanup_requested: bool,
+    reclaim_requested: bool,
+}
+
+/// Schedule startup backfill, retention and physical reclamation without blocking startup.
+///
+/// Work is coalesced with terminal runs. The worker owns only a weak daemon reference
+/// while idle, and leaves a deferred plan pending when bounded retries are exhausted.
+pub(crate) fn request_startup_maintenance(state: &DaemonState) {
+    request_maintenance(state, None, true, true);
+}
+
+/// Merge one maintenance request and start at most one worker for this daemon instance.
+///
+/// The worker releases its strong daemon reference between batches and retries.
+fn request_maintenance(state: &DaemonState, run_id: Option<&str>, cleanup: bool, reclaim: bool) {
+    let mut work = state.inner.retrieval_history_work.lock().unwrap();
+    work.maintenance_requested = true;
+    work.startup_requested |= run_id.is_none() && cleanup;
+    if let Some(run_id) = run_id {
+        work.pending_run_ids.insert(run_id.to_owned());
+    }
+    work.cleanup_requested |= cleanup;
+    work.reclaim_requested |= reclaim;
+    if work.maintenance_running {
+        return;
+    }
+    work.maintenance_running = true;
+    drop(work);
+    let weak = std::sync::Arc::downgrade(&state.inner);
+    tokio::spawn(async move {
+        // Merge a burst of terminal runs and let first foreground writes go
+        // first. No strong daemon reference is retained during this wait.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let mut busy_attempts = 0_u32;
+        loop {
+            let Some(inner) = weak.upgrade() else { return };
+            if std::sync::Arc::strong_count(&inner) == 1 {
+                return;
+            }
+            let state = DaemonState { inner };
+            let (startup, run_ids, cleanup, reclaim) = {
+                let mut work = state.inner.retrieval_history_work.lock().unwrap();
+                if !work.maintenance_requested {
+                    work.maintenance_running = false;
+                    return;
+                }
+                work.maintenance_requested = false;
+                (
+                    std::mem::take(&mut work.startup_requested),
+                    std::mem::take(&mut work.pending_run_ids),
+                    std::mem::take(&mut work.cleanup_requested),
+                    std::mem::take(&mut work.reclaim_requested),
+                )
+            };
+            let result = maintain_history_batch(&state, startup, &run_ids, cleanup, reclaim).await;
+            let mut retry_delay = None;
+            let mut retry_cleanup = cleanup;
+            let mut retry_reclaim = reclaim;
+            let mut deferred = false;
+            let repeat = match result {
+                Ok(more) => {
+                    busy_attempts = 0;
+                    more
+                }
+                Err(error) => {
+                    tracing::warn!("retrieval history maintenance is pending: {error}");
+                    let busy = matches!(&error, DaemonError::Sqlx(sqlx::Error::Database(db))
+                        if matches!(db.code().as_deref(), Some("5" | "6" | "261" | "262" | "517")))
+                        || matches!(
+                            &error,
+                            DaemonError::State {
+                                code: "local_db_reclamation_deferred",
+                                ..
+                            }
+                        );
+                    if busy && busy_attempts < 3 {
+                        busy_attempts += 1;
+                        // A previous pruning/GC step may already have committed.
+                        retry_cleanup = true;
+                        retry_reclaim = true;
+                        retry_delay = Some(std::time::Duration::from_millis(
+                            250 * u64::from(busy_attempts),
+                        ));
+                        true
+                    } else {
+                        deferred = true;
+                        // Some earlier steps may already have committed.
+                        retry_cleanup = true;
+                        retry_reclaim = true;
+                        false
+                    }
+                }
+            };
+            if repeat || deferred {
+                let mut work = state.inner.retrieval_history_work.lock().unwrap();
+                work.maintenance_requested = true;
+                work.startup_requested |= startup;
+                work.pending_run_ids.extend(run_ids);
+                work.cleanup_requested |= retry_cleanup;
+                work.reclaim_requested |= retry_reclaim;
+                if deferred {
+                    // Preserve the unfinished plan for the next event without
+                    // keeping an idle retry task or retrying a corrupt row forever.
+                    work.maintenance_running = false;
+                    return;
+                }
+            }
+            // Only the bounded batch owns its history guard. In-process
+            // restart can release the old instance between batches/retries.
+            drop(state);
+            if let Some(delay) = retry_delay {
+                tokio::time::sleep(delay).await;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+}
+
+/// Run one bounded backfill or retention plan under the history mutex.
+///
+/// Evaluation-backed runs and their snapshots remain retained. Physical compaction
+/// follows committed logical work and yields to foreground database activity.
+///
+/// # Errors
+/// Returns storage, integrity or deferred-maintenance errors. Earlier logical steps
+/// may already have committed; the worker preserves the remaining plan for retry.
+async fn maintain_history_batch(
+    state: &DaemonState,
+    startup: bool,
+    run_ids: &BTreeSet<String>,
+    mut cleanup: bool,
+    mut reclaim: bool,
+) -> Result<bool, DaemonError> {
+    let _history = state.inner.retrieval_history_lock.lock().await;
+    if backfill_history_texts(&state.inner.pool).await? {
+        return Ok(true);
+    }
+    let mut projects = BTreeSet::new();
+    if startup {
+        projects.extend(
+            sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT project_id FROM retrieval_runs WHERE status != 'running'",
+            )
+            .fetch_all(&state.inner.pool)
+            .await?,
+        );
+    } else {
+        for run_id in run_ids {
+            projects.extend(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT project_id FROM retrieval_runs WHERE run_id = $1",
+                )
+                .bind(run_id)
+                .fetch_optional(&state.inner.pool)
+                .await?,
+            );
+        }
+    }
+    for project_id in projects {
+        let deleted = prune_runs(state, &project_id).await?;
+        cleanup |= deleted;
+        reclaim |= deleted;
+    }
+    if cleanup {
+        reclaim |= garbage_collect_blobs(state).await? != 0;
+        reclaim |= garbage_collect_texts(&state.inner.pool).await? != 0;
+    }
+    let idle = state
+        .inner
+        .retrieval_history_work
+        .lock()
+        .unwrap()
+        .accepted_jobs
+        == 0;
+    if idle {
+        compact_history_texts_once(&state.inner.pool).await?;
+    }
+    if reclaim {
+        crate::migration::reclaim_local_db_pages(&state.inner.pool).await?;
+    }
+    Ok(false)
+}
+
+/// Add nullable shared-text references without clearing any historical text.
+///
+/// DDL and the compaction marker commit together under an immediate writer
+/// transaction. Old cells remain readable until their own backfill batch commits.
+///
+/// # Errors
+/// Returns database errors without committing a partial reference-schema change.
+async fn migrate_history_texts(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS retrieval_history_texts (
+            text_hash TEXT PRIMARY KEY,
+            text TEXT NOT NULL,
+            byte_length BIGINT NOT NULL CHECK (byte_length >= 0)
+         )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    for (table, column, key) in [
+        (
+            "retrieval_run_resources",
+            "content_preview_hash",
+            "resource_id",
+        ),
+        (
+            "retrieval_run_candidates",
+            "evidence_excerpt_hash",
+            "unit_key",
+        ),
+    ] {
+        let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(&mut *tx)
+            .await?;
+        if !columns
+            .iter()
+            .any(|row| row.get::<String, _>("name") == column)
+        {
+            sqlx::query(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} TEXT
+                                REFERENCES retrieval_history_texts(text_hash)"
+            ))
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(&format!(
+            "CREATE INDEX IF NOT EXISTS idx_{table}_text
+                            ON {table} ({column})"
+        ))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "CREATE INDEX IF NOT EXISTS idx_{table}_legacy_text
+                            ON {table} (run_id, {key}) WHERE {column} IS NULL"
+        ))
+        .execute(&mut *tx)
+        .await?;
+    }
+    let populated: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM retrieval_run_resources)
+             OR EXISTS(SELECT 1 FROM retrieval_run_candidates)",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    // Fresh histories have no discarded legacy cells to compact. Populated
+    // old databases, even fully linked ones without a marker, still require it.
+    let has_meta: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='daemon_meta')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if has_meta {
+        sqlx::query(
+            "INSERT INTO daemon_meta (key,value)
+            VALUES ('retrieval_history_texts_compacted_v1',$1) ON CONFLICT(key) DO NOTHING",
+        )
+        .bind(if populated { "pending" } else { "1" })
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Store exact text once and verify any existing content-address collision.
+///
+/// The caller owns the transaction that will link this text to its historical row.
+///
+/// # Errors
+/// Returns database, length or integrity errors before the caller may clear old text.
+async fn store_history_text(
+    tx: &mut Transaction<'_, Sqlite>,
+    text: &str,
+) -> Result<String, DaemonError> {
+    let hash = content_hash(text);
+    sqlx::query(
+        "INSERT INTO retrieval_history_texts (text_hash, text, byte_length)
+                 VALUES ($1, $2, $3) ON CONFLICT(text_hash) DO NOTHING",
+    )
+    .bind(&hash)
+    .bind(text)
+    .bind(usize_to_i64(text.len(), "history text bytes")?)
+    .execute(&mut **tx)
+    .await?;
+    let (stored, bytes): (String, i64) = sqlx::query_as(
+        "SELECT text, byte_length FROM retrieval_history_texts WHERE text_hash = $1",
+    )
+    .bind(&hash)
+    .fetch_one(&mut **tx)
+    .await?;
+    if stored != text || bytes != text.len() as i64 {
+        return Err(history_corrupt(
+            "Shared historical text has conflicting content",
+        ));
+    }
+    Ok(hash)
+}
+
+/// Link a bounded set of legacy text cells and clear their duplicate bytes atomically.
+///
+/// Call under the history mutex. Nullable references are replay markers: a failure
+/// leaves each affected legacy cell readable, and successful batches can be resumed.
+///
+/// # Errors
+/// Returns database or integrity errors, rolling back the entire current batch.
+async fn backfill_history_texts(pool: &SqlitePool) -> Result<bool, DaemonError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut converted = 0;
+    for (table, raw, reference, key) in [
+        (
+            "retrieval_run_resources",
+            "content_preview",
+            "content_preview_hash",
+            "resource_id",
+        ),
+        (
+            "retrieval_run_candidates",
+            "evidence_excerpt",
+            "evidence_excerpt_hash",
+            "unit_key",
+        ),
+    ] {
+        let rows = sqlx::query(&format!(
+            "SELECT run_id, {key} AS identity, {raw} AS original FROM {table}
+             WHERE {reference} IS NULL LIMIT $1",
+        ))
+        .bind(HISTORY_BACKFILL_BATCH)
+        .fetch_all(&mut *tx)
+        .await?;
+        converted += rows.len();
+        for row in rows {
+            let original: String = row.try_get("original")?;
+            let hash = store_history_text(&mut tx, &original).await?;
+            let updated = sqlx::query(&format!(
+                "UPDATE {table} SET {reference} = $3, {raw} = ''
+                 WHERE run_id = $1 AND {key} = $2 AND {reference} IS NULL AND {raw} = $4",
+            ))
+            .bind(row.try_get::<String, _>("run_id")?)
+            .bind(row.try_get::<String, _>("identity")?)
+            .bind(&hash)
+            .bind(&original)
+            .execute(&mut *tx)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(history_corrupt("Historical text changed during conversion"));
+            }
+        }
+    }
+    if converted != 0 {
+        let has_meta: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='daemon_meta')",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_meta {
+            sqlx::query(
+                "INSERT INTO daemon_meta (key,value)
+                VALUES ('retrieval_history_texts_compacted_v1','pending')
+                ON CONFLICT(key) DO UPDATE SET value='pending'",
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(converted != 0)
+}
+
+/// Read a legacy cell or verify the checksum and length of its shared replacement.
+///
+/// # Errors
+/// Returns row-decoding errors or corruption when a linked text is missing or changed.
+fn read_history_text(
+    row: &sqlx::sqlite::SqliteRow,
+    raw: &str,
+    reference: &str,
+) -> Result<String, DaemonError> {
+    let Some(hash) = row.try_get::<Option<String>, _>(reference)? else {
+        return Ok(row.try_get(raw)?);
+    };
+    let text: Option<String> = row.try_get("shared_text")?;
+    let bytes: Option<i64> = row.try_get("shared_byte_length")?;
+    let text = text.ok_or_else(|| history_corrupt("Historical shared text is missing"))?;
+    if content_hash(&text) != hash || bytes != Some(text.len() as i64) {
+        return Err(history_corrupt(
+            "Historical shared text checksum does not match",
+        ));
+    }
+    Ok(text)
+}
+
+/// Delete shared text only when no persisted resource or candidate references it.
+///
+/// Call under the history mutex to exclude concurrent recording and backfill.
+///
+/// # Errors
+/// Returns database errors; the single delete statement is atomic.
+async fn garbage_collect_texts(pool: &SqlitePool) -> Result<u64, DaemonError> {
+    let deleted = sqlx::query(
+        "DELETE FROM retrieval_history_texts
+                 WHERE NOT EXISTS (SELECT 1 FROM retrieval_run_resources r
+                                   WHERE r.content_preview_hash = text_hash)
+                   AND NOT EXISTS (SELECT 1 FROM retrieval_run_candidates c
+                                   WHERE c.evidence_excerpt_hash = text_hash)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(deleted.rows_affected())
+}
+
+/// Reclaim legacy duplicate-text pages and durably checkpoint compaction progress.
+///
+/// Call under the history mutex after backfill completes. A private nonblocking
+/// connection preserves a completed-VACUUM marker if WAL truncation must be retried.
+///
+/// # Errors
+/// Returns database, close or deferred-checkpoint errors; stored history remains valid
+/// and a later maintenance event resumes the unfinished compaction stage.
+async fn compact_history_texts_once(pool: &SqlitePool) -> Result<(), DaemonError> {
+    let done: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM daemon_meta WHERE key = 'retrieval_history_texts_compacted_v1'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if done.as_deref() == Some("1") {
+        return Ok(());
+    }
+    // Clearing legacy cells requires one full compaction. Maintenance uses a
+    // nonblocking private connection; foreground readers/writers win a conflict.
+    let mut connection = crate::migration::maintenance_connection(pool).await?;
+    let result = async {
+        if done.as_deref() != Some("vacuum_done") {
+            crate::migration::checkpoint_maintenance(&mut connection).await?;
+            sqlx::query("VACUUM").execute(&mut connection).await?;
+            // If a reader appears before the post-VACUUM checkpoint, retry
+            // only that checkpoint rather than rewriting the database again.
+            sqlx::query(
+                "INSERT INTO daemon_meta (key,value)
+                VALUES ('retrieval_history_texts_compacted_v1','vacuum_done')
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            )
+            .execute(&mut connection)
+            .await?;
+        }
+        crate::migration::checkpoint_maintenance(&mut connection).await?;
+        sqlx::query(
+            "INSERT INTO daemon_meta (key,value)
+            VALUES ('retrieval_history_texts_compacted_v1','1')
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )
+        .execute(&mut connection)
+        .await?;
+        Ok::<_, DaemonError>(())
+    }
+    .await;
+    let closed = connection.close().await;
+    result?;
+    closed?;
+    Ok(())
+}
+
+/// Account retained snapshot allocations before accepting bounded background work.
+///
+/// # Errors
+/// Returns a capacity error when allocation accounting overflows or exceeds 64 MiB.
+fn completion_bytes(completion: &RetrievalRunCompletion) -> Result<usize, DaemonError> {
+    // Bound retained heap allocations, including spare capacity, rather than
+    // estimating only the serialized content length.
+    let mut bytes = std::mem::size_of::<RetrievalRunCompletion>();
+    let mut add = |value: usize| {
+        bytes = bytes
+            .checked_add(value)
+            .filter(|size| *size <= HISTORY_MAX_BYTES)
+            .ok_or_else(|| history_capacity("Retrieval Run snapshot exceeds 64 MiB"))?;
+        Ok::<_, DaemonError>(())
+    };
+    add(completion
+        .resources
+        .capacity()
+        .saturating_mul(std::mem::size_of::<RetrievalCorpusResourceInput>()))?;
+    add(completion
+        .candidates
+        .capacity()
+        .saturating_mul(std::mem::size_of::<RetrievalCandidateInput>()))?;
+    for resource in &completion.resources {
+        for text in [
+            &resource.resource_id,
+            &resource.path,
+            &resource.title,
+            &resource.content,
+            &resource.content_hash,
+        ] {
+            add(text.capacity())?;
+        }
+        for text in [
+            &resource.source_commit_id,
+            &resource.draft_id,
+            &resource.draft_revision,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            add(text.capacity())?;
+        }
+    }
+    for candidate in &completion.candidates {
+        for text in [
+            &candidate.unit_key,
+            &candidate.resource_id,
+            &candidate.path,
+            &candidate.content_hash,
+            &candidate.resource_content_hash,
+            &candidate.evidence_excerpt,
+        ] {
+            add(text.capacity())?;
+        }
+        let SourceLocator::MarkdownSpan { heading_path, .. } = &candidate.locator;
+        for headings in [&candidate.heading_path, heading_path] {
+            add(headings
+                .capacity()
+                .saturating_mul(std::mem::size_of::<String>()))?;
+            for heading in headings {
+                add(heading.capacity())?;
+            }
+        }
+    }
+    for text in [
+        &completion.effective_hash,
+        &completion.index_revision,
+        &completion.parser_version,
+        &completion.chunker_version,
+        &completion.model_revision,
+        &completion.ranking_profile,
+        &completion.error_stage,
+        &completion.error_code,
+        &completion.error_summary,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        add(text.capacity())?;
+    }
+    Ok(bytes)
+}
+
+/// Deduplicated ordinary-history usage; evaluation-protected snapshots are excluded.
+struct HistoryStorageUsage {
+    bytes: usize,
+    texts: BTreeSet<String>,
+    blobs: BTreeSet<String>,
+}
+
+/// Measure persisted ordinary-history content while distinguishing evaluation roots.
+///
+/// # Errors
+/// Returns database, row-decoding, capacity or invalid-length errors; no history changes.
+async fn ordinary_history_storage_usage(
+    pool: &SqlitePool,
+) -> Result<HistoryStorageUsage, DaemonError> {
+    // Conservative row/index overhead plus UTF-8 metadata bytes. Protected
+    // evaluation snapshots are persistent business records, outside this cap.
+    let metadata: i64 = sqlx::query_scalar(
+        "WITH ordinary AS (
+            SELECT r.* FROM retrieval_runs r WHERE NOT EXISTS
+                (SELECT 1 FROM evaluation_cases e WHERE e.source_run_id = r.run_id)
+         ) SELECT
+         COALESCE((SELECT sum(1024 + length(CAST(
+             query || activation_state_fingerprint || COALESCE(effective_hash,'') ||
+             COALESCE(index_revision,'') || COALESCE(parser_version,'') ||
+             COALESCE(chunker_version,'') || COALESCE(model_revision,'') ||
+             COALESCE(ranking_profile,'') || COALESCE(error_summary,'') AS BLOB))) FROM ordinary),0) +
+         COALESCE((SELECT sum(512 + length(CAST(
+             r.resource_id || r.path || r.title || r.content_hash || r.content_preview ||
+             COALESCE(r.source_commit_id,'') || COALESCE(r.draft_id,'') ||
+             COALESCE(r.draft_revision,'') AS BLOB)))
+             FROM retrieval_run_resources r JOIN ordinary o USING(run_id)),0) +
+         COALESCE((SELECT sum(1024 + length(CAST(
+             c.unit_key || c.resource_id || c.path || c.heading_path_json || c.locator_json ||
+             c.content_hash || c.resource_content_hash || c.evidence_excerpt AS BLOB)))
+             FROM retrieval_run_candidates c JOIN ordinary o USING(run_id)),0)",
+    ).fetch_one(pool).await?;
+    let mut bytes = usize::try_from(metadata)
+        .map_err(|_| history_capacity("Historical metadata exceeds its supported range"))?;
+    let text_rows = sqlx::query(
+        "WITH refs AS (
+            SELECT r.content_preview_hash AS hash, CASE WHEN e.case_id IS NULL THEN 0 ELSE 1 END AS protected
+            FROM retrieval_run_resources r LEFT JOIN evaluation_cases e ON e.source_run_id = r.run_id
+            WHERE r.content_preview_hash IS NOT NULL
+            UNION ALL
+            SELECT c.evidence_excerpt_hash, CASE WHEN e.case_id IS NULL THEN 0 ELSE 1 END
+            FROM retrieval_run_candidates c LEFT JOIN evaluation_cases e ON e.source_run_id = c.run_id
+            WHERE c.evidence_excerpt_hash IS NOT NULL
+         ) SELECT t.text_hash, t.byte_length, max(refs.protected) AS protected
+           FROM refs JOIN retrieval_history_texts t ON t.text_hash = refs.hash GROUP BY t.text_hash",
+    ).fetch_all(pool).await?;
+    let mut texts = BTreeSet::new();
+    for row in text_rows {
+        texts.insert(row.try_get("text_hash")?);
+        if row.try_get::<i64, _>("protected")? == 0 {
+            let length: i64 = row.try_get("byte_length")?;
+            bytes = bytes
+                .saturating_add(
+                    usize::try_from(length)
+                        .map_err(|_| history_corrupt("Negative historical text length"))?,
+                )
+                .saturating_add(192);
+        }
+    }
+    let blob_rows = sqlx::query(
+        "WITH refs AS (
+            SELECT r.content_hash AS hash, CASE WHEN e.case_id IS NULL THEN 0 ELSE 1 END AS protected
+            FROM retrieval_run_resources r LEFT JOIN evaluation_cases e ON e.source_run_id = r.run_id
+            UNION ALL
+            SELECT content_hash, 1 FROM evaluation_corpus_resources
+         ) SELECT b.content_hash, b.byte_length, max(refs.protected) AS protected
+           FROM refs JOIN retrieval_corpus_blobs b ON b.content_hash = refs.hash GROUP BY b.content_hash",
+    ).fetch_all(pool).await?;
+    let mut blobs = BTreeSet::new();
+    for row in blob_rows {
+        blobs.insert(row.try_get("content_hash")?);
+        if row.try_get::<i64, _>("protected")? == 0 {
+            let length: i64 = row.try_get("byte_length")?;
+            bytes = bytes
+                .saturating_add(
+                    usize::try_from(length)
+                        .map_err(|_| history_corrupt("Negative historical blob length"))?,
+                )
+                .saturating_add(192);
+        }
+    }
+    Ok(HistoryStorageUsage {
+        bytes,
+        texts,
+        blobs,
+    })
+}
+
+/// Estimate a snapshot's new retained content without charging shared content twice.
+///
+/// # Errors
+/// Returns capacity errors when retained snapshot allocations exceed their supported limit.
+fn snapshot_storage_growth(
+    usage: &HistoryStorageUsage,
+    completion: &RetrievalRunCompletion,
+) -> Result<(usize, usize), DaemonError> {
+    let mut new_texts = BTreeMap::new();
+    let mut new_blobs = BTreeMap::new();
+    for resource in &completion.resources {
+        let preview = truncate_excerpt(&resource.content);
+        new_texts.insert(content_hash(&preview), preview.len());
+        new_blobs.insert(resource.content_hash.clone(), resource.content.len());
+    }
+    for candidate in &completion.candidates {
+        let excerpt = truncate_excerpt(&candidate.evidence_excerpt);
+        new_texts.insert(content_hash(&excerpt), excerpt.len());
+    }
+    let content_bytes = new_texts
+        .into_iter()
+        .filter(|(hash, _)| !usage.texts.contains(hash))
+        .chain(
+            new_blobs
+                .into_iter()
+                .filter(|(hash, _)| !usage.blobs.contains(hash)),
+        )
+        .fold(0_usize, |total, (_, length)| {
+            total.saturating_add(length).saturating_add(192)
+        });
+    let mut metadata = completion_bytes(completion)?;
+    for resource in &completion.resources {
+        metadata = metadata.saturating_sub(resource.content.capacity());
+    }
+    for candidate in &completion.candidates {
+        metadata = metadata.saturating_sub(candidate.evidence_excerpt.capacity());
+    }
+    metadata = metadata
+        .saturating_add(completion.resources.len().saturating_mul(512))
+        .saturating_add(completion.candidates.len().saturating_mul(1024));
+    Ok((content_bytes, content_bytes.saturating_add(metadata)))
+}
+
+/// Reject new ordinary snapshots beyond the disk budget while preserving existing history.
+///
+/// # Errors
+/// Returns database, integrity or capacity errors before Blob or row persistence begins.
+async fn enforce_snapshot_storage_budget(
+    pool: &SqlitePool,
+    completion: &RetrievalRunCompletion,
+) -> Result<(), DaemonError> {
+    let usage = ordinary_history_storage_usage(pool).await?;
+    let (_, growth) = snapshot_storage_growth(&usage, completion)?;
+    if usage.bytes.saturating_add(growth) > HISTORY_STORAGE_MAX_BYTES {
+        return Err(history_capacity(
+            "Ordinary Retrieval Run snapshots exceed the 512 MiB storage budget; existing history and evaluations are preserved",
+        ));
+    }
+    Ok(())
+}
+
+/// Report bounded recording/storage exhaustion without expiring existing business history.
+fn history_capacity(message: &str) -> DaemonError {
+    DaemonError::State {
+        code: "retrieval_history_capacity",
+        message: message.to_owned(),
+    }
+}
+
+/// Accept at most four jobs and 64 MiB, then let the writer own recording to completion.
+///
+/// The caller's receiver or deadline does not cancel accepted persistence. The job
+/// keeps the history mutex through Blob I/O and database commit before acknowledgment.
+///
+/// # Errors
+/// Returns capacity errors without scheduling work when either queue limit is exceeded.
+fn enqueue_completion(
+    state: &DaemonState,
+    run_id: &str,
+    completion: RetrievalRunCompletion,
+) -> Result<oneshot::Receiver<Result<(), DaemonError>>, DaemonError> {
+    let bytes = completion_bytes(&completion)?;
+    let mut work = state.inner.retrieval_history_work.lock().unwrap();
+    if work.accepted_jobs >= HISTORY_MAX_JOBS
+        || work.accepted_bytes.saturating_add(bytes) > HISTORY_MAX_BYTES
+    {
+        return Err(history_capacity(
+            "Retrieval Run recording queue is full (4 jobs / 64 MiB)",
+        ));
+    }
+    work.accepted_jobs += 1;
+    work.accepted_bytes += bytes;
+    drop(work);
+    let weak = std::sync::Arc::downgrade(&state.inner);
+    let run_id = run_id.to_owned();
+    let (send, receive) = oneshot::channel();
+    tokio::spawn(async move {
+        let Some(inner) = weak.upgrade() else { return };
+        let state = DaemonState { inner };
+        // This task, rather than the request future, owns the history lock.
+        // A caller's deadline cannot release it while blocking blob I/O runs.
+        let result = persist_completion(&state, &run_id, completion).await;
+        if let Err(error) = &result
+            && let Err(record_error) = record_persistence_failure(&state, &run_id, error).await
+        {
+            tracing::error!("failed to record Retrieval Run persistence failure: {record_error}");
+        }
+        {
+            let mut work = state.inner.retrieval_history_work.lock().unwrap();
+            work.accepted_jobs -= 1;
+            work.accepted_bytes -= bytes;
+        }
+        let needs_cleanup = result.as_ref().is_err_and(|error| {
+            !matches!(
+                error,
+                DaemonError::State {
+                    code: "retrieval_history_capacity",
+                    ..
+                }
+            )
+        });
+        let _ = send.send(result);
+        request_maintenance(&state, Some(&run_id), needs_cleanup, needs_cleanup);
+    });
+    Ok(receive)
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -485,6 +1277,15 @@ struct EvaluationFixtureResource {
 }
 
 pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
+    migrate_tables(pool).await?;
+    migrate_history_texts(pool).await
+}
+
+/// Ensure the replayable history/evaluation table set exists during bootstrap or upgrade.
+///
+/// # Errors
+/// Returns database errors; already created tables are retained for the next startup.
+async fn migrate_tables(pool: &SqlitePool) -> Result<(), DaemonError> {
     for statement in [
         "CREATE TABLE IF NOT EXISTS retrieval_runs (
             run_id TEXT PRIMARY KEY,
@@ -628,12 +1429,13 @@ pub(super) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
 }
 
 pub(super) async fn migrate_schema_17_to_18(pool: &SqlitePool) -> Result<(), DaemonError> {
-    migrate(pool).await?;
+    // Keep the historical table shape until later global rebuilds complete.
+    migrate_tables(pool).await?;
     let mut tx = pool.begin().await?;
     for statement in [
         "DROP INDEX IF EXISTS idx_evaluation_cases_project_created",
-        "DROP TABLE evaluation_evidence",
-        "DROP TABLE evaluation_cases",
+        "ALTER TABLE evaluation_evidence RENAME TO evaluation_evidence_v17",
+        "ALTER TABLE evaluation_cases RENAME TO evaluation_cases_v17",
         "CREATE TABLE evaluation_cases (
             case_id TEXT PRIMARY KEY,
             source_run_id TEXT NOT NULL UNIQUE,
@@ -642,6 +1444,7 @@ pub(super) async fn migrate_schema_17_to_18(pool: &SqlitePool) -> Result<(), Dae
             query TEXT NOT NULL,
             query_category TEXT,
             notes TEXT,
+            legacy_status TEXT,
             judgment_version BIGINT NOT NULL DEFAULT 1 CHECK (judgment_version > 0),
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -660,18 +1463,42 @@ pub(super) async fn migrate_schema_17_to_18(pool: &SqlitePool) -> Result<(), Dae
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             UNIQUE (case_id, resource_id, unit_key, missed)
         )",
-        "INSERT INTO daemon_meta (key, value)
-         VALUES ('schema_version', '18')
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        "INSERT INTO evaluation_cases (
+            case_id, source_run_id, corpus_id, project_id, query, legacy_status,
+            judgment_version, created_at, updated_at
+         ) SELECT case_id, source_run_id, corpus_id, project_id, query, status,
+                  version, created_at, updated_at FROM evaluation_cases_v17",
+        "INSERT INTO evaluation_judgments (
+            judgment_id, case_id, resource_id, unit_key, relevance, missed,
+            evidence_excerpt, created_at
+         ) SELECT evidence_id, case_id, resource_id, unit_key, 3, 0,
+                  evidence_excerpt, created_at FROM evaluation_evidence_v17",
+        "DROP TABLE evaluation_evidence_v17",
+        "DROP TABLE evaluation_cases_v17",
     ] {
         sqlx::query(statement).execute(&mut *tx).await?;
     }
+    crate::migration::stamp_schema_version_in_tx(&mut tx, 18).await?;
     tx.commit().await?;
     Ok(())
 }
 
+/// Project graded judgments into confirmed evidence while retiring every original field/row.
+///
+/// Duplicate positive judgments have a deterministic current projection; negative,
+/// missed and annotated originals remain in the retired tables. Projection, retirement
+/// and the version checkpoint commit in the same immediate writer transaction.
+///
+/// # Errors
+/// Returns database errors, including archive-name conflicts; all original history and
+/// the prior schema version remain intact when any migration statement fails.
 pub(super) async fn migrate_schema_18_to_19(pool: &SqlitePool) -> Result<(), DaemonError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let has_legacy_status = sqlx::query("PRAGMA table_info(evaluation_cases)")
+        .fetch_all(&mut *tx)
+        .await?
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "legacy_status");
     for statement in [
         "DROP INDEX IF EXISTS idx_evaluation_cases_project_created",
         "ALTER TABLE evaluation_cases RENAME TO evaluation_cases_v18",
@@ -730,16 +1557,33 @@ pub(super) async fn migrate_schema_18_to_19(pool: &SqlitePool) -> Result<(), Dae
             unit_key,
             evidence_excerpt,
             created_at
-         FROM evaluation_judgments_v18
-         WHERE relevance > 0",
-        "DROP TABLE evaluation_judgments_v18",
-        "DROP TABLE evaluation_cases_v18",
-        "INSERT INTO daemon_meta (key, value)
-         VALUES ('schema_version', '19')
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+         FROM (
+             SELECT judgment_id, case_id, resource_id, unit_key, evidence_excerpt, created_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY case_id, resource_id, unit_key
+                        ORDER BY missed ASC, relevance DESC, created_at ASC, judgment_id ASC
+                    ) AS evidence_order
+             FROM evaluation_judgments_v18
+             WHERE relevance > 0
+         ) WHERE evidence_order = 1",
+        // The current confirmed-evidence projection has no graded judgments
+        // or notes. Preserve every original field/row in retired tables,
+        // including negative and missed judgments omitted from that projection.
+        "ALTER TABLE evaluation_judgments_v18 RENAME TO retired_evaluation_judgments_v18",
+        "ALTER TABLE evaluation_cases_v18 RENAME TO retired_evaluation_cases_v18",
     ] {
+        let preserved_status = statement.replace(
+            "CASE WHEN EXISTS (",
+            "CASE WHEN old.legacy_status IS NOT NULL THEN old.legacy_status WHEN EXISTS (",
+        );
+        let statement = if has_legacy_status {
+            preserved_status.as_str()
+        } else {
+            statement
+        };
         sqlx::query(statement).execute(&mut *tx).await?;
     }
+    crate::migration::stamp_schema_version_in_tx(&mut tx, 19).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -798,14 +1642,65 @@ pub(crate) async fn start_run(
     Ok(run_id)
 }
 
+#[cfg(test)]
 pub(crate) async fn finish_run(
     state: &DaemonState,
     run_id: &str,
     completion: RetrievalRunCompletion,
 ) -> Result<(), DaemonError> {
+    finish_run_before(
+        state,
+        run_id,
+        completion,
+        Instant::now() + std::time::Duration::from_secs(60),
+    )
+    .await
+}
+
+/// Record a terminal snapshot within the caller's remaining activation deadline.
+///
+/// Accepted recording continues if acknowledgment misses the deadline; completion
+/// failures are also recorded asynchronously rather than leaving a running marker.
+///
+/// # Errors
+/// Returns capacity, persistence or writer-channel errors received before the deadline.
+pub(crate) async fn finish_run_before(
+    state: &DaemonState,
+    run_id: &str,
+    completion: RetrievalRunCompletion,
+    deadline: Instant,
+) -> Result<(), DaemonError> {
+    let receive = enqueue_completion(state, run_id, completion)?;
+    match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), receive).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(history_corrupt(
+            "Retrieval Run writer stopped before acknowledgment",
+        )),
+        Err(_) => {
+            // Accepted work remains bounded and owns its lock until commit.
+            tracing::warn!(%run_id, "Retrieval Run recording continues after activation deadline");
+            Ok(())
+        }
+    }
+}
+
+/// Persist verified snapshot Blobs and terminal rows while owning the history mutex.
+///
+/// Resource/candidate rows and terminal status commit together. Blob files are
+/// published first; a failed transaction can leave only unreferenced files for GC.
+///
+/// # Errors
+/// Returns budget, Blob, integrity or database errors without a partial row snapshot.
+async fn persist_completion(
+    state: &DaemonState,
+    run_id: &str,
+    mut completion: RetrievalRunCompletion,
+) -> Result<(), DaemonError> {
     let _history = state.inner.retrieval_history_lock.lock().await;
+    enforce_snapshot_storage_budget(&state.inner.pool, &completion).await?;
     let persistence_started = std::time::Instant::now();
-    persist_run_blobs(state, &completion.resources).await?;
+    completion.resources =
+        persist_run_blobs(state, std::mem::take(&mut completion.resources)).await?;
     let mut tx = state.inner.pool.begin().await?;
     insert_run_resources(&mut tx, run_id, &completion.resources).await?;
     insert_run_candidates(&mut tx, run_id, &completion.candidates).await?;
@@ -889,11 +1784,6 @@ pub(crate) async fn finish_run(
         )));
     }
     tx.commit().await?;
-    prune_runs(
-        state,
-        &completion_project_id(&state.inner.pool, run_id).await?,
-    )
-    .await?;
     Ok(())
 }
 
@@ -930,6 +1820,7 @@ pub(crate) async fn finish_deadline_run(
             "Retrieval Run {run_id} is missing or already terminal"
         )));
     }
+    request_maintenance(state, Some(run_id), false, false);
     Ok(())
 }
 
@@ -938,19 +1829,33 @@ pub(crate) async fn record_persistence_failure(
     run_id: &str,
     error: &DaemonError,
 ) -> Result<(), DaemonError> {
+    let code = match error {
+        DaemonError::State {
+            code: "retrieval_history_capacity",
+            ..
+        } => "retrieval_history_capacity",
+        _ => "retrieval_history_persistence_failed",
+    };
     sqlx::query(
         "UPDATE retrieval_runs
          SET status = 'failed',
              error_stage = 'persistence',
-             error_code = 'retrieval_history_persistence_failed',
+             error_code = $3,
              error_summary = $2,
              completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE run_id = $1 AND status = 'running'",
     )
     .bind(run_id)
     .bind(truncate_excerpt(&error.to_string()))
+    .bind(code)
     .execute(&state.inner.pool)
     .await?;
+    request_maintenance(
+        state,
+        Some(run_id),
+        code != "retrieval_history_capacity",
+        false,
+    );
     Ok(())
 }
 
@@ -960,11 +1865,13 @@ async fn insert_run_resources(
     resources: &[RetrievalCorpusResourceInput],
 ) -> Result<(), DaemonError> {
     for (index, resource) in resources.iter().enumerate() {
+        let preview_hash = store_history_text(tx, &truncate_excerpt(&resource.content)).await?;
         sqlx::query(
             "INSERT INTO retrieval_run_resources (
                 run_id, resource_order, resource_id, scope, kind, path, title,
-                content_hash, content_preview, source_commit_id, draft_id, draft_revision
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                content_hash, content_preview, source_commit_id, draft_id, draft_revision,
+                content_preview_hash
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', $9, $10, $11, $12)",
         )
         .bind(run_id)
         .bind(usize_to_i64(index, "resource_order")?)
@@ -974,10 +1881,10 @@ async fn insert_run_resources(
         .bind(&resource.path)
         .bind(&resource.title)
         .bind(&resource.content_hash)
-        .bind(truncate_excerpt(&resource.content))
         .bind(&resource.source_commit_id)
         .bind(&resource.draft_id)
         .bind(&resource.draft_revision)
+        .bind(preview_hash)
         .execute(&mut **tx)
         .await?;
     }
@@ -990,6 +1897,8 @@ async fn insert_run_candidates(
     candidates: &[RetrievalCandidateInput],
 ) -> Result<(), DaemonError> {
     for (index, candidate) in candidates.iter().enumerate() {
+        let excerpt_hash =
+            store_history_text(tx, &truncate_excerpt(&candidate.evidence_excerpt)).await?;
         sqlx::query(
             "INSERT INTO retrieval_run_candidates (
                 run_id, candidate_order, unit_key, resource_id, scope, kind, path,
@@ -997,11 +1906,12 @@ async fn insert_run_candidates(
                 token_count, evidence_excerpt,
                 exact_rank, bm25_rank, bm25_score, vector_rank, vector_score,
                 rrf_rank, rrf_score, reranker_rank, reranker_logit,
-                reranker_relevance, final_rank, selected, exclusion_reason, delta_action
+                reranker_relevance, final_rank, selected, exclusion_reason, delta_action,
+                evidence_excerpt_hash
              ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                $23, $24, $25, $26, $27
+                $23, $24, $25, $26, $27, $28
              )",
         )
         .bind(run_id)
@@ -1016,7 +1926,7 @@ async fn insert_run_candidates(
         .bind(&candidate.content_hash)
         .bind(&candidate.resource_content_hash)
         .bind(usize_to_i64(candidate.token_count, "token_count")?)
-        .bind(truncate_excerpt(&candidate.evidence_excerpt))
+        .bind("")
         .bind(optional_usize_to_i64(candidate.exact_rank, "exact_rank")?)
         .bind(optional_usize_to_i64(candidate.bm25_rank, "bm25_rank")?)
         .bind(candidate.bm25_score.map(f64::from))
@@ -1036,6 +1946,7 @@ async fn insert_run_candidates(
         ))
         .bind(candidate.exclusion_reason.as_str())
         .bind(candidate.delta_action.map(RetrievalDeltaAction::as_str))
+        .bind(excerpt_hash)
         .execute(&mut **tx)
         .await?;
     }
@@ -1044,45 +1955,43 @@ async fn insert_run_candidates(
 
 async fn persist_run_blobs(
     state: &DaemonState,
-    resources: &[RetrievalCorpusResourceInput],
-) -> Result<(), DaemonError> {
-    for resource in resources {
-        let computed_hash = content_hash(&resource.content);
-        if computed_hash != resource.content_hash {
-            return Err(history_corrupt(format!(
-                "Resource {} content hash does not match its Retrieval Run corpus",
-                resource.resource_id
-            )));
+    resources: Vec<RetrievalCorpusResourceInput>,
+) -> Result<Vec<RetrievalCorpusResourceInput>, DaemonError> {
+    let root = state.inner.config.root_dir.clone();
+    let resources = tokio::task::spawn_blocking(move || -> Result<_, DaemonError> {
+        for resource in &resources {
+            if content_hash(&resource.content) != resource.content_hash {
+                return Err(history_corrupt(
+                    "Resource hash does not match its Retrieval Run corpus",
+                ));
+            }
+            let path = corpus_blob_path(&root, &resource.content_hash)?;
+            let content = resource.content.as_bytes();
+            let existing_matches = match fs::read(&path) {
+                Ok(existing) => existing == content,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            };
+            if !existing_matches {
+                super::project_storage::write_private_file(&path, content)?;
+            }
         }
-        let path = corpus_blob_path(&state.inner.config.root_dir, &resource.content_hash)?;
-        let content = resource.content.as_bytes();
-        let existing_matches = match fs::read(&path) {
-            Ok(existing) => existing == content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(error.into()),
-        };
-        if !existing_matches {
-            super::project_storage::write_private_file(&path, content)?;
-        }
+        Ok(resources)
+    })
+    .await
+    .map_err(|error| history_corrupt(format!("Retrieval corpus writer stopped: {error}")))??;
+    for resource in &resources {
         sqlx::query(
             "INSERT INTO retrieval_corpus_blobs (content_hash, byte_length)
              VALUES ($1, $2)
              ON CONFLICT(content_hash) DO UPDATE SET byte_length = excluded.byte_length",
         )
         .bind(&resource.content_hash)
-        .bind(usize_to_i64(content.len(), "blob byte length")?)
+        .bind(usize_to_i64(resource.content.len(), "blob byte length")?)
         .execute(&state.inner.pool)
         .await?;
     }
-    Ok(())
-}
-
-async fn completion_project_id(pool: &SqlitePool, run_id: &str) -> Result<String, DaemonError> {
-    sqlx::query_scalar("SELECT project_id FROM retrieval_runs WHERE run_id = $1")
-        .bind(run_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| DaemonError::NotFound(format!("Retrieval Run {run_id}")))
+    Ok(resources)
 }
 
 pub(super) async fn list_retrieval_runs(
@@ -1165,13 +2074,17 @@ pub(crate) async fn load_recall_fragment_content(
         return Err(DaemonError::NotFound(format!("Retrieval Run {run_id}")));
     }
 
-    let row =
-        sqlx::query("SELECT * FROM retrieval_run_candidates WHERE run_id = $1 AND unit_key = $2")
-            .bind(run_id)
-            .bind(unit_key)
-            .fetch_optional(&state.inner.pool)
-            .await?
-            .ok_or_else(|| DaemonError::NotFound(format!("Retrieval candidate {unit_key}")))?;
+    let row = sqlx::query(
+        "SELECT c.*, t.text AS shared_text, t.byte_length AS shared_byte_length
+                      FROM retrieval_run_candidates c
+                      LEFT JOIN retrieval_history_texts t ON t.text_hash = c.evidence_excerpt_hash
+                      WHERE c.run_id = $1 AND c.unit_key = $2",
+    )
+    .bind(run_id)
+    .bind(unit_key)
+    .fetch_optional(&state.inner.pool)
+    .await?
+    .ok_or_else(|| DaemonError::NotFound(format!("Retrieval candidate {unit_key}")))?;
     let candidate = candidate_from_row(row)?;
     if !candidate.selected {
         return Err(DaemonError::InvalidRequest(format!(
@@ -1293,10 +2206,11 @@ async fn load_candidates(
     run_id: &str,
 ) -> Result<Vec<RetrievalCandidate>, DaemonError> {
     let rows = sqlx::query(
-        "SELECT *
-         FROM retrieval_run_candidates
-         WHERE run_id = $1
-         ORDER BY candidate_order",
+        "SELECT c.*, t.text AS shared_text, t.byte_length AS shared_byte_length
+         FROM retrieval_run_candidates c
+         LEFT JOIN retrieval_history_texts t ON t.text_hash = c.evidence_excerpt_hash
+         WHERE c.run_id = $1
+         ORDER BY c.candidate_order",
     )
     .bind(run_id)
     .fetch_all(pool)
@@ -1377,7 +2291,7 @@ fn candidate_from_row(row: sqlx::sqlite::SqliteRow) -> Result<RetrievalCandidate
         content_hash: row.try_get("content_hash")?,
         resource_content_hash: row.try_get("resource_content_hash")?,
         token_count: non_negative_u64(row.try_get("token_count")?, "token_count")?,
-        evidence_excerpt: row.try_get("evidence_excerpt")?,
+        evidence_excerpt: read_history_text(&row, "evidence_excerpt", "evidence_excerpt_hash")?,
         exact_rank: optional_non_negative_u64(row.try_get("exact_rank")?, "exact_rank")?,
         bm25_rank: optional_non_negative_u64(row.try_get("bm25_rank")?, "bm25_rank")?,
         bm25_score: row.try_get("bm25_score")?,
@@ -1582,7 +2496,7 @@ pub(super) async fn clear_retrieval_runs(
         "SELECT r.run_id
          FROM retrieval_runs r
          LEFT JOIN evaluation_cases e ON e.source_run_id = r.run_id
-         WHERE e.case_id IS NULL
+         WHERE e.case_id IS NULL AND r.status != 'running'
            AND ($1 IS NULL OR r.project_id = $1)",
     )
     .bind(request.project_id.as_deref())
@@ -1590,6 +2504,8 @@ pub(super) async fn clear_retrieval_runs(
     .await?;
     delete_runs(&state.inner.pool, &run_ids).await?;
     garbage_collect_blobs(state).await?;
+    garbage_collect_texts(&state.inner.pool).await?;
+    request_maintenance(state, None, false, !run_ids.is_empty());
     Ok(ClearRetrievalRunsResponse {
         deleted_run_count: run_ids.len() as u64,
     })
@@ -1661,11 +2577,11 @@ async fn load_run_resource_rows(
     run_id: &str,
 ) -> Result<Vec<RunResourceRow>, DaemonError> {
     let rows = sqlx::query(
-        "SELECT resource_order, resource_id, scope, kind, path, title, content_hash,
-                content_preview, source_commit_id, draft_id, draft_revision
-         FROM retrieval_run_resources
-         WHERE run_id = $1
-         ORDER BY resource_order",
+        "SELECT r.*, t.text AS shared_text, t.byte_length AS shared_byte_length
+         FROM retrieval_run_resources r
+         LEFT JOIN retrieval_history_texts t ON t.text_hash = r.content_preview_hash
+         WHERE r.run_id = $1
+         ORDER BY r.resource_order",
     )
     .bind(run_id)
     .fetch_all(pool)
@@ -1680,7 +2596,11 @@ async fn load_run_resource_rows(
                 path: row.try_get("path")?,
                 title: row.try_get("title")?,
                 content_hash: row.try_get("content_hash")?,
-                content_preview: row.try_get("content_preview")?,
+                content_preview: read_history_text(
+                    &row,
+                    "content_preview",
+                    "content_preview_hash",
+                )?,
                 source_commit_id: row.try_get("source_commit_id")?,
                 draft_id: row.try_get("draft_id")?,
                 draft_revision: row.try_get("draft_revision")?,
@@ -2170,12 +3090,18 @@ fn evidence_id(case_id: &str, resource_id: &str, unit_key: Option<&str>) -> Stri
     format!("evidence_{}", hex::encode(hasher.finalize()))
 }
 
-async fn prune_runs(state: &DaemonState, project_id: &str) -> Result<(), DaemonError> {
+/// Retain the newest ordinary terminal runs and every evaluation-backed run.
+///
+/// The caller holds the history mutex; running activations are never expired here.
+///
+/// # Errors
+/// Returns database errors; each deletion batch rolls back with its dependent rows.
+async fn prune_runs(state: &DaemonState, project_id: &str) -> Result<bool, DaemonError> {
     let stale = sqlx::query_scalar::<_, String>(
         "SELECT r.run_id
          FROM retrieval_runs r
          LEFT JOIN evaluation_cases e ON e.source_run_id = r.run_id
-         WHERE r.project_id = $1 AND e.case_id IS NULL
+         WHERE r.project_id = $1 AND e.case_id IS NULL AND r.status != 'running'
          ORDER BY r.created_at DESC, r.run_id DESC
          LIMIT -1 OFFSET $2",
     )
@@ -2184,7 +3110,7 @@ async fn prune_runs(state: &DaemonState, project_id: &str) -> Result<(), DaemonE
     .fetch_all(&state.inner.pool)
     .await?;
     delete_runs(&state.inner.pool, &stale).await?;
-    garbage_collect_blobs(state).await
+    Ok(!stale.is_empty())
 }
 
 async fn delete_runs(pool: &SqlitePool, run_ids: &[String]) -> Result<(), DaemonError> {
@@ -2216,7 +3142,15 @@ async fn delete_runs(pool: &SqlitePool, run_ids: &[String]) -> Result<(), Daemon
     Ok(())
 }
 
-async fn garbage_collect_blobs(state: &DaemonState) -> Result<(), DaemonError> {
+/// Remove corpus files and metadata only after their history/evaluation references vanish.
+///
+/// Call under the history mutex. File deletion precedes metadata deletion; an
+/// interrupted orphan cleanup is safe to resume and cannot delete referenced corpora.
+///
+/// # Errors
+/// Returns database or file errors; completed orphan deletions remain completed.
+async fn garbage_collect_blobs(state: &DaemonState) -> Result<usize, DaemonError> {
+    let mut removed = 0;
     let referenced = sqlx::query_scalar::<_, String>(
         "SELECT content_hash FROM retrieval_run_resources
          UNION
@@ -2233,18 +3167,23 @@ async fn garbage_collect_blobs(state: &DaemonState) -> Result<(), DaemonError> {
         if referenced.contains(&content_hash) {
             continue;
         }
+        removed += 1;
         let path = corpus_blob_path(&state.inner.config.root_dir, &content_hash)?;
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
+        tokio::task::spawn_blocking(move || -> Result<(), DaemonError> {
+            match fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            }
+        })
+        .await
+        .map_err(|error| history_corrupt(format!("Corpus GC stopped: {error}")))??;
         sqlx::query("DELETE FROM retrieval_corpus_blobs WHERE content_hash = $1")
             .bind(content_hash)
             .execute(&state.inner.pool)
             .await?;
     }
-    Ok(())
+    Ok(removed)
 }
 
 fn corpus_blob_path(root: &Path, content_hash: &str) -> Result<PathBuf, DaemonError> {
@@ -2723,6 +3662,1003 @@ mod tests {
         );
         assert_eq!(out_of_scope.scope_violation, 1.0);
         assert_eq!(out_of_scope.stale_result, 0.0);
+    }
+
+    async fn history_state(root: &Path) -> DaemonState {
+        let state = DaemonState::initialize_with_credential_store(
+            DaemonConfig::for_root(root.join("daemon")),
+            Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        wait_for_history_idle(&state).await;
+        state
+    }
+
+    async fn wait_for_history_idle(state: &DaemonState) {
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                let idle = {
+                    let work = state.inner.retrieval_history_work.lock().unwrap();
+                    work.accepted_jobs == 0 && !work.maintenance_running
+                };
+                if idle {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("history writer must finish bounded work");
+    }
+
+    fn snapshot(content: String) -> RetrievalRunCompletion {
+        let hash = content_hash(&content);
+        RetrievalRunCompletion {
+            effective_hash: Some("effective-frozen".to_owned()),
+            resources: vec![RetrievalCorpusResourceInput {
+                resource_id: "memory-1".to_owned(),
+                scope: SourceScope::Project,
+                kind: MemoryKind::Memory,
+                path: "memory/frozen.md".to_owned(),
+                title: "Frozen".to_owned(),
+                content,
+                content_hash: hash.clone(),
+                source_commit_id: Some("commit-frozen".to_owned()),
+                draft_id: None,
+                draft_revision: None,
+            }],
+            candidates: vec![RetrievalCandidateInput {
+                unit_key: "memory-1/description".to_owned(),
+                resource_id: "memory-1".to_owned(),
+                scope: SourceScope::Project,
+                kind: MemoryKind::Memory,
+                path: "memory/frozen.md".to_owned(),
+                heading_path: vec!["标题".to_owned()],
+                locator: SourceLocator::MarkdownSpan {
+                    start_byte: 0,
+                    end_byte: 0,
+                    heading_path: vec!["标题".to_owned()],
+                },
+                content_hash: content_hash("合成简介：保留而非从正文重建"),
+                resource_content_hash: hash,
+                token_count: 8,
+                evidence_excerpt: "合成简介：保留而非从正文重建".to_owned(),
+                exact_rank: None,
+                bm25_rank: Some(1),
+                bm25_score: Some(0.5),
+                vector_rank: Some(2),
+                vector_score: Some(0.75),
+                rrf_rank: Some(1),
+                rrf_score: Some(0.1),
+                reranker_rank: Some(1),
+                reranker_logit: Some(1.0),
+                reranker_relevance: Some(0.8),
+                final_rank: Some(1),
+                exclusion_reason: RetrievalExclusionReason::Selected,
+                delta_action: Some(RetrievalDeltaAction::Add),
+            }],
+            unit_count: 1,
+            returned_fragment_count: 1,
+            ..RetrievalRunCompletion::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_maintenance_does_not_pin_an_instance_or_checkpoint_foreground_readers() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let marker: String = sqlx::query_scalar(
+            "SELECT value FROM daemon_meta
+            WHERE key='retrieval_history_texts_compacted_v1'",
+        )
+        .fetch_one(&state.inner.pool)
+        .await
+        .unwrap();
+        assert_eq!(marker, "1");
+        let mut reader = state.inner.pool.begin().await.unwrap();
+        sqlx::query("SELECT count(*) FROM retrieval_runs")
+            .fetch_one(&mut *reader)
+            .await
+            .unwrap();
+        let run = start_run(&state, "project", "new", "fingerprint")
+            .await
+            .unwrap();
+        let started = Instant::now();
+        finish_run(&state, &run, snapshot("body".to_owned()))
+            .await
+            .unwrap();
+        wait_for_history_idle(&state).await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "ordinary completion must not wait for a 5-second checkpoint behind a reader"
+        );
+        reader.rollback().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while std::sync::Arc::strong_count(&state.inner) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("idle tasks must release their strong instance references");
+        request_startup_maintenance(&state);
+        assert_eq!(
+            std::sync::Arc::strong_count(&state.inner),
+            1,
+            "coalescing must retain only a weak instance reference"
+        );
+        let weak = std::sync::Arc::downgrade(&state.inner);
+        drop(state);
+        assert!(weak.upgrade().is_none());
+        let restarted = DaemonState::initialize_with_credential_store(
+            DaemonConfig::for_root(root.path().join("daemon")),
+            Arc::new(NoCredentials),
+        )
+        .await
+        .unwrap();
+        wait_for_history_idle(&restarted).await;
+        assert_eq!(
+            load_candidates(&restarted.inner.pool, &run)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn linked_history_without_marker_still_compacts_and_busy_maintenance_is_nonblocking() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let run = start_run(&state, "project", "old", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(&state, &run, snapshot("old body".to_owned()))
+            .await
+            .unwrap();
+        wait_for_history_idle(&state).await;
+        let _history = state.inner.retrieval_history_lock.lock().await;
+        sqlx::query("DELETE FROM daemon_meta WHERE key='retrieval_history_texts_compacted_v1'")
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        migrate_history_texts(&state.inner.pool).await.unwrap();
+        let marker: String = sqlx::query_scalar(
+            "SELECT value FROM daemon_meta
+            WHERE key='retrieval_history_texts_compacted_v1'",
+        )
+        .fetch_one(&state.inner.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            marker, "pending",
+            "linked old rows are not proof of completed compaction"
+        );
+        let mut reader = state.inner.pool.begin().await.unwrap();
+        sqlx::query("SELECT count(*) FROM retrieval_runs")
+            .fetch_one(&mut *reader)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE retrieval_runs SET query = query || '' WHERE run_id=$1")
+            .bind(&run)
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        let started = Instant::now();
+        assert!(matches!(
+            compact_history_texts_once(&state.inner.pool).await,
+            Err(DaemonError::State {
+                code: "local_db_reclamation_deferred",
+                ..
+            })
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+            .fetch_one(&state.inner.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            busy_timeout, 5_000,
+            "maintenance must not alter business connection policy"
+        );
+        reader.rollback().await.unwrap();
+        compact_history_texts_once(&state.inner.pool).await.unwrap();
+        let marker: String = sqlx::query_scalar(
+            "SELECT value FROM daemon_meta
+            WHERE key='retrieval_history_texts_compacted_v1'",
+        )
+        .fetch_one(&state.inner.pool)
+        .await
+        .unwrap();
+        assert_eq!(marker, "1");
+        assert_eq!(
+            load_candidates(&state.inner.pool, &run)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_reader_retry_keeps_a_project_plan_for_the_next_projects_terminal_run() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let first = start_run(&state, "project-a", "old", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(&state, &first, snapshot("old body".to_owned()))
+            .await
+            .unwrap();
+        wait_for_history_idle(&state).await;
+        let mut reader = state.inner.pool.begin().await.unwrap();
+        sqlx::query("SELECT count(*) FROM retrieval_runs")
+            .fetch_one(&mut *reader)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE daemon_meta SET value='pending'
+            WHERE key='retrieval_history_texts_compacted_v1'",
+        )
+        .execute(&state.inner.pool)
+        .await
+        .unwrap();
+        request_maintenance(&state, Some(&first), true, true);
+        wait_for_history_idle(&state).await;
+        {
+            let work = state.inner.retrieval_history_work.lock().unwrap();
+            assert!(work.maintenance_requested && !work.maintenance_running);
+            assert!(work.pending_run_ids.contains(&first));
+            assert!(work.cleanup_requested && work.reclaim_requested);
+        }
+        let marker: String = sqlx::query_scalar(
+            "SELECT value FROM daemon_meta
+            WHERE key='retrieval_history_texts_compacted_v1'",
+        )
+        .fetch_one(&state.inner.pool)
+        .await
+        .unwrap();
+        assert_eq!(marker, "pending");
+        reader.rollback().await.unwrap();
+        let next = start_run(&state, "project-b", "next", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(&state, &next, snapshot("next body".to_owned()))
+            .await
+            .unwrap();
+        wait_for_history_idle(&state).await;
+        let marker: String = sqlx::query_scalar(
+            "SELECT value FROM daemon_meta
+            WHERE key='retrieval_history_texts_compacted_v1'",
+        )
+        .fetch_one(&state.inner.pool)
+        .await
+        .unwrap();
+        assert_eq!(marker, "1");
+        assert_eq!(
+            load_candidates(&state.inner.pool, &first)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            load_candidates(&state.inner.pool, &next)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let work = state.inner.retrieval_history_work.lock().unwrap();
+        assert!(!work.maintenance_requested && work.pending_run_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deferred_checkpoint_is_retried_even_after_incremental_vacuum_frees_every_page() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let text = "x".repeat(8 * 1024 * 1024);
+        sqlx::query("INSERT INTO retrieval_history_texts VALUES ($1,$2,$3)")
+            .bind(content_hash(&text))
+            .bind(&text)
+            .bind(text.len() as i64)
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        crate::migration::reclaim_local_db_pages(&state.inner.pool)
+            .await
+            .unwrap();
+        let mut reader = state.inner.pool.begin().await.unwrap();
+        sqlx::query("SELECT count(*) FROM retrieval_history_texts")
+            .fetch_one(&mut *reader)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM retrieval_history_texts")
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        let mut free = 1;
+        for _ in 0..4 {
+            assert!(matches!(
+                crate::migration::reclaim_local_db_pages(&state.inner.pool).await,
+                Err(DaemonError::State {
+                    code: "local_db_reclamation_deferred",
+                    ..
+                })
+            ));
+            free = sqlx::query_scalar::<_, i64>("PRAGMA freelist_count")
+                .fetch_one(&state.inner.pool)
+                .await
+                .unwrap();
+            if free == 0 {
+                break;
+            }
+        }
+        assert_eq!(free, 0);
+        let wal = state.local_db_path().with_extension("db-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 4 * 1024 * 1024);
+        request_maintenance(&state, None, false, true);
+        wait_for_history_idle(&state).await;
+        {
+            let work = state.inner.retrieval_history_work.lock().unwrap();
+            assert!(work.maintenance_requested && work.reclaim_requested);
+            assert!(!work.maintenance_running);
+        }
+        reader.rollback().await.unwrap();
+        let next = start_run(&state, "next-project", "next", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(&state, &next, snapshot("next body".to_owned()))
+            .await
+            .unwrap();
+        wait_for_history_idle(&state).await;
+        assert!(std::fs::metadata(&wal).map_or(0, |m| m.len()) < 4 * 1024 * 1024);
+        assert_eq!(
+            load_candidates(&state.inner.pool, &next)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_history_text_backfill_preserves_api_and_evaluation_snapshots() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let run = start_run(&state, "project", "旧查询", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(
+            &state,
+            &run,
+            snapshot(format!("正文、空行\n\n{}", "多字节".repeat(500))),
+        )
+        .await
+        .unwrap();
+        wait_for_history_idle(&state).await;
+        let _history = state.inner.retrieval_history_lock.lock().await;
+        // Reproduce old raw storage without relying on any historical blob files.
+        for (table, raw, reference) in [
+            (
+                "retrieval_run_resources",
+                "content_preview",
+                "content_preview_hash",
+            ),
+            (
+                "retrieval_run_candidates",
+                "evidence_excerpt",
+                "evidence_excerpt_hash",
+            ),
+        ] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET {raw} = (SELECT text
+                FROM retrieval_history_texts WHERE text_hash = {reference}), {reference} = NULL"
+            ))
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        }
+        let before =
+            serde_json::to_value(load_run_detail(&state.inner.pool, &run).await.unwrap()).unwrap();
+        let resources_before = serde_json::to_value(
+            load_run_resource_rows(&state.inner.pool, &run)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        while backfill_history_texts(&state.inner.pool).await.unwrap() {}
+        let after =
+            serde_json::to_value(load_run_detail(&state.inner.pool, &run).await.unwrap()).unwrap();
+        let resources_after = serde_json::to_value(
+            load_run_resource_rows(&state.inner.pool, &run)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(resources_before, resources_after);
+        let raw_bytes: i64 = sqlx::query_scalar(
+            "SELECT
+            (SELECT sum(length(content_preview)) FROM retrieval_run_resources) +
+            (SELECT sum(length(evidence_excerpt)) FROM retrieval_run_candidates)",
+        )
+        .fetch_one(&state.inner.pool)
+        .await
+        .unwrap();
+        assert_eq!(raw_bytes, 0);
+        drop(_history);
+        let case = create_evaluation_case(
+            &state,
+            CreateEvaluationCaseRequest {
+                run_id: run.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let corpus = load_corpus_resources(&state.inner.pool, &case.evaluation_case.corpus_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            corpus[0].preview,
+            resources_before[0]["content_preview"].as_str().unwrap()
+        );
+        let (_, text, _) =
+            load_recall_fragment_content(&state, "project", &run, "memory-1/description")
+                .await
+                .unwrap();
+        assert_eq!(text, "合成简介：保留而非从正文重建");
+        resolve_evaluation_case(
+            &state,
+            ResolveEvaluationCaseRequest {
+                case_id: case.evaluation_case.case_id.clone(),
+                expected_version: 1,
+                evidence: vec![EvaluationEvidenceInput {
+                    resource_id: "memory-1".to_owned(),
+                    unit_key: Some("memory-1/description".to_owned()),
+                }],
+                none_matched: false,
+            },
+        )
+        .await
+        .unwrap();
+        let exported = export_evaluation_set(
+            &state,
+            ExportEvaluationSetRequest {
+                project_id: None,
+                case_ids: vec![case.evaluation_case.case_id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(&exported.fixture_json).unwrap();
+        assert_eq!(
+            fixture["cases"][0]["resources"][0]["content"],
+            format!("正文、空行\n\n{}", "多字节".repeat(500))
+        );
+        assert_eq!(fixture["cases"][0]["evidence"][0]["evidence_excerpt"], text);
+        clear_retrieval_runs(
+            &state,
+            ClearRetrievalRunsRequest {
+                project_id: Some("project".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            load_candidates(&state.inner.pool, &run)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            load_corpus_resources(&state.inner.pool, &case.evaluation_case.corpus_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let again = export_evaluation_set(
+            &state,
+            ExportEvaluationSetRequest {
+                project_id: None,
+                case_ids: vec![case.evaluation_case.case_id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        let again: serde_json::Value = serde_json::from_str(&again.fixture_json).unwrap();
+        assert_eq!(fixture["cases"], again["cases"]);
+        wait_for_history_idle(&state).await;
+    }
+
+    #[tokio::test]
+    async fn shared_text_collision_rolls_back_without_clearing_legacy_text() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO retrieval_run_resources
+            (run_id, resource_order, resource_id, scope, kind, path, title,
+             content_hash, content_preview) VALUES ('old',0,'resource','project','memory',
+             'memory.md','Title','sha256:body','原文')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO retrieval_history_texts VALUES ($1,'corrupt',7)")
+            .bind(content_hash("原文"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(backfill_history_texts(&pool).await.is_err());
+        let preserved: (String, Option<String>) = sqlx::query_as(
+            "SELECT content_preview, content_preview_hash FROM retrieval_run_resources",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(preserved, ("原文".to_owned(), None));
+    }
+
+    #[tokio::test]
+    async fn recording_queue_bounds_jobs_and_keeps_accepted_work_after_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let _history = state.inner.retrieval_history_lock.lock().await;
+        let first = start_run(&state, "project", "deadline", "fingerprint")
+            .await
+            .unwrap();
+        finish_run_before(&state, &first, snapshot("body".to_owned()), Instant::now())
+            .await
+            .unwrap();
+        let mut acknowledgments = Vec::new();
+        for _ in 1..HISTORY_MAX_JOBS {
+            let run = start_run(&state, "project", "queued", "fingerprint")
+                .await
+                .unwrap();
+            acknowledgments
+                .push(enqueue_completion(&state, &run, RetrievalRunCompletion::default()).unwrap());
+        }
+        let rejected = start_run(&state, "project", "rejected", "fingerprint")
+            .await
+            .unwrap();
+        let error =
+            enqueue_completion(&state, &rejected, RetrievalRunCompletion::default()).unwrap_err();
+        record_persistence_failure(&state, &rejected, &error)
+            .await
+            .unwrap();
+        assert_eq!(
+            load_run(&state.inner.pool, &first).await.unwrap().status,
+            RetrievalRunStatus::Running
+        );
+        assert_eq!(
+            load_run(&state.inner.pool, &rejected)
+                .await
+                .unwrap()
+                .error_code
+                .as_deref(),
+            Some("retrieval_history_capacity")
+        );
+        drop(_history);
+        for receive in acknowledgments {
+            receive.await.unwrap().unwrap();
+        }
+        wait_for_history_idle(&state).await;
+        assert_eq!(
+            load_run(&state.inner.pool, &first).await.unwrap().status,
+            RetrievalRunStatus::Succeeded
+        );
+        assert_eq!(
+            load_candidates(&state.inner.pool, &first)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn recording_capacity_counts_short_strings_and_empty_vector_spare_capacity() {
+        let mut short = String::with_capacity(HISTORY_MAX_BYTES);
+        short.push('x');
+        assert!(completion_bytes(&snapshot(short)).is_err());
+        let completion = RetrievalRunCompletion {
+            candidates: Vec::with_capacity(
+                HISTORY_MAX_BYTES / std::mem::size_of::<RetrievalCandidateInput>() + 1,
+            ),
+            ..RetrievalRunCompletion::default()
+        };
+        assert!(completion_bytes(&completion).is_err());
+    }
+
+    #[tokio::test]
+    async fn recording_queue_rejects_single_and_aggregate_oversized_snapshots() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let _history = state.inner.retrieval_history_lock.lock().await;
+        let large = snapshot("x".repeat(HISTORY_MAX_BYTES));
+        assert!(matches!(
+            completion_bytes(&large),
+            Err(DaemonError::State {
+                code: "retrieval_history_capacity",
+                ..
+            })
+        ));
+        drop(large);
+        let run = start_run(&state, "project", "large", "fingerprint")
+            .await
+            .unwrap();
+        let receive =
+            enqueue_completion(&state, &run, snapshot("x".repeat(40 * 1024 * 1024))).unwrap();
+        assert!(matches!(
+            enqueue_completion(&state, "rejected", snapshot("y".repeat(25 * 1024 * 1024))),
+            Err(DaemonError::State {
+                code: "retrieval_history_capacity",
+                ..
+            })
+        ));
+        drop(_history);
+        receive.await.unwrap().unwrap();
+        wait_for_history_idle(&state).await;
+    }
+
+    #[tokio::test]
+    async fn startup_maintenance_bounds_failed_runs_and_never_expires_evaluations() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let protected = start_run(&state, "project", "protected", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(
+            &state,
+            &protected,
+            snapshot("frozen business snapshot".to_owned()),
+        )
+        .await
+        .unwrap();
+        wait_for_history_idle(&state).await;
+        let case = create_evaluation_case(
+            &state,
+            CreateEvaluationCaseRequest {
+                run_id: protected.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let running = start_run(&state, "project", "accepted", "fingerprint")
+            .await
+            .unwrap();
+        for number in 0..501 {
+            sqlx::query(
+                "INSERT INTO retrieval_runs
+                (run_id,project_id,query,activation_state_fingerprint,status)
+                VALUES ($1,'project','failure','fingerprint','failed')",
+            )
+            .bind(format!("failed_{number:04}"))
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        }
+        request_startup_maintenance(&state);
+        wait_for_history_idle(&state).await;
+        let retained: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM retrieval_runs WHERE status='failed'")
+                .fetch_one(&state.inner.pool)
+                .await
+                .unwrap();
+        assert_eq!(retained, RETRIEVAL_RUN_RETENTION_PER_PROJECT);
+        assert_eq!(
+            load_run(&state.inner.pool, &running).await.unwrap().status,
+            RetrievalRunStatus::Running
+        );
+        assert_eq!(
+            load_candidates(&state.inner.pool, &protected)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            load_corpus_resources(&state.inner.pool, &case.evaluation_case.corpus_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        finish_deadline_run(&state, &running, "index", 60_000_000)
+            .await
+            .unwrap();
+        wait_for_history_idle(&state).await;
+        let failed: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM retrieval_runs WHERE status='failed'")
+                .fetch_one(&state.inner.pool)
+                .await
+                .unwrap();
+        assert_eq!(failed, RETRIEVAL_RUN_RETENTION_PER_PROJECT);
+    }
+
+    #[tokio::test]
+    async fn storage_budget_deduplicates_content_and_preserves_oversized_history_and_evaluations() {
+        let root = tempfile::tempdir().unwrap();
+        let state = history_state(root.path()).await;
+        let prior = start_run(&state, "project", "prior", "fingerprint")
+            .await
+            .unwrap();
+        let same = snapshot("frozen old snapshot".to_owned());
+        finish_run(&state, &prior, same.clone()).await.unwrap();
+        wait_for_history_idle(&state).await;
+        let usage = ordinary_history_storage_usage(&state.inner.pool)
+            .await
+            .unwrap();
+        assert_eq!(snapshot_storage_growth(&usage, &same).unwrap().0, 0);
+        let duplicate = start_run(&state, "project", "repeat", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(&state, &duplicate, same.clone()).await.unwrap();
+        wait_for_history_idle(&state).await;
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM retrieval_corpus_blobs")
+                .fetch_one(&state.inner.pool)
+                .await
+                .unwrap(),
+            1
+        );
+        // Represent a previously retained large corpus without allocating a
+        // half-gigabyte fixture. The budget must not delete that older data.
+        sqlx::query("UPDATE retrieval_corpus_blobs SET byte_length = $1")
+            .bind(HISTORY_STORAGE_MAX_BYTES as i64)
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        let rejected = start_run(&state, "project", "new snapshot", "fingerprint")
+            .await
+            .unwrap();
+        assert!(matches!(
+            finish_run(&state, &rejected, snapshot("new body".to_owned())).await,
+            Err(DaemonError::State {
+                code: "retrieval_history_capacity",
+                ..
+            })
+        ));
+        wait_for_history_idle(&state).await;
+        assert_eq!(
+            load_run(&state.inner.pool, &rejected)
+                .await
+                .unwrap()
+                .error_code
+                .as_deref(),
+            Some("retrieval_history_capacity")
+        );
+        assert_eq!(
+            load_candidates(&state.inner.pool, &prior)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            load_candidates(&state.inner.pool, &duplicate)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            load_run_resource_rows(&state.inner.pool, &rejected)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let case = create_evaluation_case(
+            &state,
+            CreateEvaluationCaseRequest {
+                run_id: prior.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let protected = ordinary_history_storage_usage(&state.inner.pool)
+            .await
+            .unwrap();
+        assert!(protected.bytes < HISTORY_STORAGE_MAX_BYTES);
+        let accepted = start_run(&state, "project", "after evaluation pin", "fingerprint")
+            .await
+            .unwrap();
+        finish_run(&state, &accepted, snapshot("new body".to_owned()))
+            .await
+            .unwrap();
+        wait_for_history_idle(&state).await;
+        assert_eq!(
+            load_candidates(&state.inner.pool, &prior)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            load_corpus_resources(&state.inner.pool, &case.evaluation_case.corpus_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT byte_length FROM retrieval_corpus_blobs WHERE content_hash=$1"
+            )
+            .bind(&same.resources[0].content_hash)
+            .fetch_one(&state.inner.pool)
+            .await
+            .unwrap(),
+            HISTORY_STORAGE_MAX_BYTES as i64
+        );
+    }
+
+    #[tokio::test]
+    async fn schema_18_retirement_failure_rolls_back_projection_and_version() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for statement in [
+            "CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            "INSERT INTO daemon_meta VALUES ('schema_version', '18')",
+            "CREATE TABLE evaluation_cases (
+                case_id TEXT PRIMARY KEY, source_run_id TEXT NOT NULL UNIQUE, corpus_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, query TEXT NOT NULL, query_category TEXT, notes TEXT,
+                judgment_version BIGINT NOT NULL CHECK (judgment_version > 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+            "CREATE TABLE evaluation_judgments (
+                judgment_id TEXT PRIMARY KEY, case_id TEXT NOT NULL, resource_id TEXT NOT NULL, unit_key TEXT,
+                relevance BIGINT NOT NULL CHECK (relevance BETWEEN 0 AND 3), missed INTEGER NOT NULL CHECK (missed IN (0, 1)),
+                evidence_excerpt TEXT NOT NULL, notes TEXT, created_at TEXT NOT NULL,
+                UNIQUE (case_id, resource_id, unit_key, missed))",
+            "INSERT INTO evaluation_cases VALUES ('case', 'run', 'corpus', 'project', 'original query', 'category', 'original case notes', 7, 'created', 'updated')",
+            "INSERT INTO evaluation_judgments VALUES ('judgment', 'case', 'resource', 'unit', 2, 0, 'original excerpt', 'original graded notes', 'created')",
+            // Fail only after both new projections have already been written.
+            "CREATE TABLE retired_evaluation_judgments_v18 (sentinel TEXT)",
+            "INSERT INTO retired_evaluation_judgments_v18 VALUES ('keep existing archive')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        let cases: Vec<String> = sqlx::query_scalar(
+            "SELECT json_array(case_id, source_run_id, corpus_id, project_id, query,
+                               query_category, notes, judgment_version, created_at, updated_at)
+             FROM evaluation_cases",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let judgments: Vec<String> = sqlx::query_scalar(
+            "SELECT json_array(judgment_id, case_id, resource_id, unit_key, relevance,
+                               missed, evidence_excerpt, notes, created_at)
+             FROM evaluation_judgments",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(migrate_schema_18_to_19(&pool).await.is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM daemon_meta WHERE key='schema_version'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "18"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT json_array(case_id, source_run_id, corpus_id, project_id, query,
+                                   query_category, notes, judgment_version, created_at, updated_at)
+                 FROM evaluation_cases",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap(),
+            cases
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT json_array(judgment_id, case_id, resource_id, unit_key, relevance,
+                                   missed, evidence_excerpt, notes, created_at)
+                 FROM evaluation_judgments",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap(),
+            judgments
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sqlite_master
+                WHERE name IN ('evaluation_cases_v18', 'evaluation_judgments_v18',
+                               'evaluation_evidence', 'retired_evaluation_cases_v18')"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT sentinel FROM retired_evaluation_judgments_v18"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "keep existing archive"
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn legacy_evaluation_migrations_preserve_cases_evidence_versions_and_no_match() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        migrate(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE daemon_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, status, version) in [
+            ("evidence", "ready", 7),
+            ("none", "ready", 11),
+            ("draft", "draft", 3),
+        ] {
+            sqlx::query("INSERT INTO evaluation_cases
+                (case_id,source_run_id,corpus_id,project_id,query,status,version,created_at,updated_at)
+                VALUES ($1,$1,'corpus','project','旧查询',$2,$3,'created','updated')")
+                .bind(id).bind(status).bind(version).execute(&pool).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO evaluation_evidence
+            (evidence_id,case_id,resource_id,unit_key,evidence_excerpt,created_at)
+            VALUES ('evidence-id','evidence','resource','unit','旧合成摘录','original-time')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let before_cases: Vec<(String,String,i64,String,String)> = sqlx::query_as(
+            "SELECT case_id,status,version,created_at,updated_at FROM evaluation_cases ORDER BY case_id",
+        ).fetch_all(&pool).await.unwrap();
+        let before_evidence: Vec<(String,String,String,String,String,String)> = sqlx::query_as(
+            "SELECT evidence_id,case_id,resource_id,unit_key,evidence_excerpt,created_at FROM evaluation_evidence",
+        ).fetch_all(&pool).await.unwrap();
+        migrate_schema_17_to_18(&pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM daemon_meta WHERE key='schema_version'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "18"
+        );
+        migrate_schema_18_to_19(&pool).await.unwrap();
+        assert_eq!(before_cases, sqlx::query_as::<_,(String,String,i64,String,String)>(
+            "SELECT case_id,status,version,created_at,updated_at FROM evaluation_cases ORDER BY case_id",
+        ).fetch_all(&pool).await.unwrap());
+        assert_eq!(before_evidence, sqlx::query_as::<_,(String,String,String,String,String,String)>(
+            "SELECT evidence_id,case_id,resource_id,unit_key,evidence_excerpt,created_at FROM evaluation_evidence",
+        ).fetch_all(&pool).await.unwrap());
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM daemon_meta WHERE key='schema_version'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "19"
+        );
     }
 
     fn candidate(resource_id: &str, resource_content_hash: &str) -> RetrievalCandidate {

@@ -5,11 +5,13 @@ struct PendingDocumentSave {
     let item: MemoryListItem
     let document: EditableMemoryDocument
     let generation: UUID
+    var baseCommitId: String? = nil
 }
 
 @MainActor
 final class DraftStore: ObservableObject {
     private let writeDraft: @Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse
+    private let readDraft: @Sendable (String) async throws -> DaemonDraftDetail
     private let catalog: MemoryCatalog
     private let context: WorkspaceContext
     private let feedback: WorkspaceFeedback
@@ -21,7 +23,8 @@ final class DraftStore: ObservableObject {
 
     init(
         catalog: MemoryCatalog, context: WorkspaceContext, feedback: WorkspaceFeedback, sessions: DocumentSessions,
-        storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil
+        storeDraft: (@Sendable (DaemonDraftOperationRequest) async throws -> DaemonDraftOperationResponse)? = nil,
+        loadDraft: (@Sendable (String) async throws -> DaemonDraftDetail)? = nil
     ) {
         self.catalog = catalog
         self.context = context
@@ -29,6 +32,7 @@ final class DraftStore: ObservableObject {
         self.sessions = sessions
         let daemon = context.daemon
         writeDraft = storeDraft ?? { try await daemon.store($0) }
+        readDraft = loadDraft ?? { try await daemon.draft($0) }
     }
 
     @Published var drafts: [LocalDraft] = []
@@ -51,6 +55,7 @@ final class DraftStore: ObservableObject {
     /// Project resources are editable; Org references become Project adaptations.
     func canEditMemory(_ item: MemoryListItem) -> Bool {
         guard context.phase == .ready else { return false }
+        guard item.draft?.baseCommitAvailable != false else { return false }
         let projectContextId = item.projectContextId
             ?? (item.scope == .project ? item.projectId : nil)
         guard let projectContextId,
@@ -70,7 +75,8 @@ final class DraftStore: ObservableObject {
         return pendingDocumentSaves[key]?.document
     }
 
-    func stageDocumentSave(_ item: MemoryListItem, document: EditableMemoryDocument) {
+    func stageDocumentSave(_ item: MemoryListItem, document: EditableMemoryDocument,
+                           capturedBaseCommitId: String?? = nil) {
         guard context.phase == .ready, !context.isSigningOut else { return }
         guard canEditMemory(item) else {
             feedback.errorMessage = String(localized: "You do not have permission to edit this memory.")
@@ -89,7 +95,17 @@ final class DraftStore: ObservableObject {
             return
         }
         let generation = UUID()
-        pendingDocumentSaves[key] = .init(item: item, document: document, generation: generation)
+        let baseCommitId: String?
+        if let capturedBaseCommitId { baseCommitId = capturedBaseCommitId }
+        else if let draft = item.draft { baseCommitId = draft.baseCommitId }
+        else if let resource = item.resource, resource.scope == .project {
+            baseCommitId = resource.refCommitId
+        } else {
+            baseCommitId = item.editBasePin?.commitId
+                ?? context.projects.first { $0.id == key.projectId }?.refCommitId
+        }
+        pendingDocumentSaves[key] = .init(item: item, document: document, generation: generation,
+            baseCommitId: baseCommitId)
         documentSaveTasks[key]?.cancel()
         documentSaveTasks[key] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
@@ -112,7 +128,8 @@ final class DraftStore: ObservableObject {
             document: pending.document,
             allowingDuringSynchronization: true,
             pendingSaveKey: key,
-            pendingSaveGeneration: pending.generation
+            pendingSaveGeneration: pending.generation,
+            capturedBaseCommitId: .some(pending.baseCommitId)
         )
     }
 
@@ -142,7 +159,7 @@ final class DraftStore: ObservableObject {
             for key in Array(pendingDocumentSaves.keys) {
                 try await flushDocumentSave(key)
             }
-            return true
+            return !hasPendingChanges
         } catch {
             feedback.errorMessage = error.actionMessage
             return false
@@ -154,8 +171,10 @@ final class DraftStore: ObservableObject {
         document: EditableMemoryDocument,
         allowingDuringSynchronization: Bool = false,
         pendingSaveKey: MemoryDocumentSessionKey? = nil,
-        pendingSaveGeneration: UUID? = nil
+        pendingSaveGeneration: UUID? = nil,
+        capturedBaseCommitId: String?? = nil
     ) async throws {
+        defer { withExtendedLifetime(item) {} }
         let flushesSelectionMutation = pendingSaveKey != nil
             && item.projectContextId.map(sessions.projectOrgSelectionMutatingIds.contains) == true
         guard canEditMemory(item) || flushesSelectionMutation else {
@@ -185,25 +204,27 @@ final class DraftStore: ObservableObject {
             guard let projectId = draftCarrierProjectId(for: item, currentDraft: draft) else {
                 throw WorkspaceLoadError.noProjects
             }
-            if item.draft != nil, draft == nil {
-                self.finishPendingDocumentSaveIfCurrent(
-                    key: pendingSaveKey,
-                    generation: pendingSaveGeneration
-                )
-                return
+            if let openedDraft = item.draft,
+               !self.drafts.contains(where: {
+                   $0.id == openedDraft.id && [.open, .submitted].contains($0.status)
+               }) {
+                throw DocumentSyncError.checkoutNoLongerCurrent
             }
             if draft?.isDeletion == true {
-                self.finishPendingDocumentSaveIfCurrent(
-                    key: pendingSaveKey,
-                    generation: pendingSaveGeneration
-                )
-                return
+                throw DocumentSyncError.checkoutNoLongerCurrent
             }
             let draftId = draft?.id
             let projectRefCommitId = self.context.projects.first { $0.id == projectId }?.refCommitId
             let publicationScope = draft?.scope ?? .project
-            let baseCommitId = draft?.baseCommitId
-                ?? (publicationScope == .org ? self.catalog.orgRefCommitId : projectRefCommitId)
+            let baseCommitId: String?
+            if let capturedBaseCommitId { baseCommitId = capturedBaseCommitId }
+            else if let draft { baseCommitId = draft.baseCommitId }
+            else if let resource, resource.scope == .project {
+                baseCommitId = resource.refCommitId
+            } else {
+                baseCommitId = item.editBasePin?.commitId
+                    ?? (publicationScope == .org ? self.catalog.orgRefCommitId : projectRefCommitId)
+            }
             var response: DaemonDraftOperationResponse?
 
             if let resource, document.path != (draft?.document.path ?? resource.document.path) {
@@ -215,7 +236,8 @@ final class DraftStore: ObservableObject {
                         scope: (draft?.scope ?? .project) == .org ? .org : .project,
                         resource: item.kind.daemonKind,
                         op: .rename(id: resource.id, newPath: document.path, description: nil),
-                        source: .desktop
+                        source: .desktop,
+                        baseCommitCaptured: true
                     )
                 )
             }
@@ -243,7 +265,8 @@ final class DraftStore: ObservableObject {
                     scope: (draft?.scope ?? .project) == .org ? .org : .project,
                     resource: item.kind.daemonKind,
                     op: operation,
-                    source: .desktop
+                    source: .desktop,
+                    baseCommitCaptured: true
                 )
             )
             if let response {
@@ -347,7 +370,8 @@ final class DraftStore: ObservableObject {
                 pending.document,
                 to: newPath
             ),
-            generation: pending.generation
+            generation: pending.generation,
+            baseCommitId: pending.baseCommitId
         )
     }
 
@@ -387,9 +411,14 @@ final class DraftStore: ObservableObject {
             feedback.errorMessage = DocumentSyncError.mutationWhileSynchronizing.localizedDescription
             return false
         }
-        cancelDocumentSave(item)
         guard let projectId = draftCarrierProjectId(for: item, currentDraft: item.draft),
               let targetId = item.resource?.id ?? item.draft?.targetId else { return false }
+        let saveKey = sessions.documentSessionKey(for: item)
+        let pendingGeneration = saveKey.flatMap { pendingDocumentSaves[$0]?.generation }
+        if let saveKey {
+            documentSaveTasks[saveKey]?.cancel()
+            documentSaveTasks[saveKey] = nil
+        }
         do {
             try await withDraftMutation {
                 guard self.sessions.synchronizationItemId(for: item) == nil else {
@@ -407,6 +436,7 @@ final class DraftStore: ObservableObject {
                         source: .desktop
                     )
                 )
+                self.finishPendingDocumentSaveIfCurrent(key: saveKey, generation: pendingGeneration)
                 try await self.refreshDraft(response.draftId)
             }
             return true
@@ -422,15 +452,18 @@ final class DraftStore: ObservableObject {
             feedback.errorMessage = DocumentSyncError.mutationWhileSynchronizing.localizedDescription
             return false
         }
-        cancelDocumentSave(
-            .init(projectId: draft.projectId, itemId: draft.targetId ?? draft.id)
-        )
+        let saveKey = MemoryDocumentSessionKey(projectId: draft.projectId, itemId: draft.targetId ?? draft.id)
+        let pendingGeneration = pendingDocumentSaves[saveKey]?.generation
+        documentSaveTasks[saveKey]?.cancel()
+        documentSaveTasks[saveKey] = nil
         do {
             try await withDraftMutation {
                 guard self.sessions.synchronizationItemId(for: draft) == nil else {
                     throw DocumentSyncError.mutationWhileSynchronizing
                 }
-                guard self.drafts.contains(where: { $0.id == draft.id }) else { return }
+                guard self.drafts.contains(where: { $0.id == draft.id }) else {
+                    throw DocumentSyncError.checkoutNoLongerCurrent
+                }
                 _ = try await self.storeDraft(
                     .init(
                         draftId: draft.id,
@@ -442,6 +475,7 @@ final class DraftStore: ObservableObject {
                         source: .desktop
                     )
                 )
+                self.finishPendingDocumentSaveIfCurrent(key: saveKey, generation: pendingGeneration)
                 self.drafts.removeAll { $0.id == draft.id }
                 self.documentsChanged.send()
                 self.didDiscardDocument.send()
@@ -526,7 +560,8 @@ final class DraftStore: ObservableObject {
                 pending.item,
                 document: pending.document,
                 pendingSaveKey: key,
-                pendingSaveGeneration: generation
+                pendingSaveGeneration: generation,
+                capturedBaseCommitId: .some(pending.baseCommitId)
             )
         } catch where error.isUserCancellation {
             return
@@ -539,8 +574,14 @@ final class DraftStore: ObservableObject {
     }
 
     func refreshDraft(_ draftId: String) async throws {
-        let detail = try await context.daemon.draft(draftId)
-        let mapped = WorkspaceLoader.mapDraft(detail, resources: catalog.resources)
+        let authority = context.authorityGeneration
+        let generation = context.workspaceReloadGeneration
+        let detail = try await readDraft(draftId)
+        let mapped = try await context.loader.loadMappedDraft(detail, resources: catalog.resources)
+        try context.ensureAuthority(authority)
+        guard context.workspaceReloadGeneration == generation, context.phase == .ready else {
+            throw CancellationError()
+        }
         if let index = drafts.firstIndex(where: { $0.id == mapped.id }) {
             drafts[index] = mapped
         } else {
@@ -553,6 +594,7 @@ final class DraftStore: ObservableObject {
         projectId: String,
         workspaceGeneration: UUID
     ) async throws {
+        let authority = context.authorityGeneration
         let projectDrafts = drafts.filter { $0.projectId == projectId }
         let originalById = Dictionary(
             projectDrafts.map { ($0.id, $0) },
@@ -560,20 +602,18 @@ final class DraftStore: ObservableObject {
         )
         let targetIds = Set(projectDrafts.compactMap(\.targetId))
         let baselines = catalog.resources.filter { targetIds.contains($0.id) && !$0.contentLoaded }
-        let loader = WorkspaceLoader(daemon: context.daemon, bootstrap: context.bootstrap, server: context.server)
+        let loader = context.loader
         let loadedBaselines = try await concurrentMap(baselines) { try await loader.loadContent(for: $0) }
-        guard context.workspaceReloadGeneration == workspaceGeneration else { return }
+        try context.ensureAuthority(authority)
+        guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else { return }
         for loaded in loadedBaselines {
             catalog.installLoadedResourceIfCurrent(loaded)
         }
         let resourceSnapshot = catalog.resources
-        let mapped = try await concurrentMap(projectDrafts) { draft in
-            WorkspaceLoader.mapDraft(
-                try await self.context.daemon.draft(draft.id),
-                resources: resourceSnapshot
-            )
-        }
-        guard context.workspaceReloadGeneration == workspaceGeneration else { return }
+        let details = try await concurrentMap(projectDrafts) { try await self.context.daemon.draft($0.id) }
+        let mapped = try await loader.loadMappedDrafts(details, resources: resourceSnapshot)
+        try context.ensureAuthority(authority)
+        guard context.workspaceReloadGeneration == workspaceGeneration, context.phase == .ready else { return }
         for candidate in mapped {
             guard let original = originalById[candidate.id],
                   let index = drafts.firstIndex(where: { $0.id == candidate.id }),
@@ -633,6 +673,7 @@ final class DraftStore: ObservableObject {
         includeFailed: Bool,
         generation: UUID
     ) async {
+        let authority = context.authorityGeneration
         guard context.workspaceReloadGeneration == generation,
               context.phase == .ready,
               !Task.isCancelled else {
@@ -647,14 +688,14 @@ final class DraftStore: ObservableObject {
         } catch where error.isUserCancellation {
             return
         } catch {
-            guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
+            guard context.authorityGeneration == authority, context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
                 String(localized: "Couldn’t refresh Drafts. \(error.userFacingMessage)")
             )
             return
         }
 
-        guard context.workspaceReloadGeneration == generation, context.phase == .ready, !Task.isCancelled else {
+        guard context.authorityGeneration == authority, context.workspaceReloadGeneration == generation, context.phase == .ready, !Task.isCancelled else {
             return
         }
         let plan = Self.draftInventoryPlan(
@@ -688,13 +729,13 @@ final class DraftStore: ObservableObject {
         )
         let targetIds = Set(summaries.compactMap(\.targetId))
         let baselines = catalog.resources.filter { targetIds.contains($0.id) && !$0.contentLoaded }
-        let loader = WorkspaceLoader(daemon: context.daemon, bootstrap: context.bootstrap, server: context.server)
+        let loader = context.loader
 
         do {
             let loadedBaselines = try await concurrentMap(baselines) {
                 try await loader.loadContent(for: $0)
             }
-            guard context.workspaceReloadGeneration == generation,
+            guard context.authorityGeneration == authority, context.workspaceReloadGeneration == generation,
                   context.phase == .ready,
                   !Task.isCancelled else {
                 return
@@ -705,7 +746,7 @@ final class DraftStore: ObservableObject {
         } catch where error.isUserCancellation {
             return
         } catch {
-            guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
+            guard context.authorityGeneration == authority, context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
                 String(localized: "Couldn’t refresh Draft source files. \(error.userFacingMessage)")
             )
@@ -715,23 +756,19 @@ final class DraftStore: ObservableObject {
         let resourceSnapshot = catalog.resources
         let mappedDrafts: [LocalDraft]
         do {
-            mappedDrafts = try await concurrentMap(summaries) { summary in
-                WorkspaceLoader.mapDraft(
-                    try await self.context.daemon.draft(summary.draftId),
-                    resources: resourceSnapshot
-                )
-            }
+            let details = try await concurrentMap(summaries) { try await self.context.daemon.draft($0.draftId) }
+            mappedDrafts = try await loader.loadMappedDrafts(details, resources: resourceSnapshot)
         } catch where error.isUserCancellation {
             return
         } catch {
-            guard context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
+            guard context.authorityGeneration == authority, context.workspaceReloadGeneration == generation, context.phase == .ready else { return }
             draftInventoryLoadState = .failed(
                 String(localized: "Couldn’t refresh Draft details. \(error.userFacingMessage)")
             )
             return
         }
 
-        guard context.workspaceReloadGeneration == generation, context.phase == .ready, !Task.isCancelled else {
+        guard context.authorityGeneration == authority, context.workspaceReloadGeneration == generation, context.phase == .ready, !Task.isCancelled else {
             return
         }
         for mapped in mappedDrafts {

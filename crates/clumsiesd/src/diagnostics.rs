@@ -140,6 +140,17 @@ pub(crate) fn worker_result<T>(
     }
 }
 
+/// Bound launchd's fallback streams before a failed resident start can append again.
+///
+/// # Errors
+/// Returns a log open or retention failure; callers retain stderr diagnostics.
+pub fn bound_launchd_output(log_dir: &Path) -> io::Result<()> {
+    for name in ["clumsiesd.out.log", "clumsiesd.err.log"] {
+        RotatingLog::new(&log_dir.join(name))?;
+    }
+    Ok(())
+}
+
 /// Four files of at most 4 MiB each, including the active file. One resident writer.
 /// ponytail: synchronous local writes; use a bounded writer queue if logging blocks request work.
 pub struct RotatingLog {
@@ -291,6 +302,24 @@ mod tests {
         assert!(!logs.contains("SECRET_BODY"));
         assert_eq!(failures.0, 0);
         assert!(logs.contains("os_code"));
+    }
+
+    #[test]
+    fn launchd_output_keeps_recent_diagnostics_and_bounds_restart_growth() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("clumsiesd.err.log");
+        let limit = 4 * 1024 * 1024;
+        std::fs::write(&path, vec![b'x'; limit + 4096]).unwrap();
+        let mut launchd_stream = OpenOptions::new().append(true).open(&path).unwrap();
+        bound_launchd_output(root.path()).unwrap();
+        launchd_stream.write_all(b"startup failure\n").unwrap();
+        drop(launchd_stream);
+        bound_launchd_output(root.path()).unwrap();
+        let previous = std::fs::read(path.with_extension("log.1")).unwrap();
+        assert!(previous.ends_with(b"startup failure\n"));
+        for entry in std::fs::read_dir(root.path()).unwrap() {
+            assert!(entry.unwrap().metadata().unwrap().len() <= limit as u64);
+        }
     }
 
     #[test]

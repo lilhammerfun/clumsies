@@ -27,6 +27,7 @@ final class DocumentSessions: ObservableObject {
 
     var documentReconciliationResolutions:
         [MemoryDocumentSessionKey: DraftResolution] = [:]
+    var documentBasePins: [MemoryDocumentSessionKey: [CommitBasePin]] = [:]
 
     /// Review reconciliation has no open document session, but it still must
     /// exclude a daemon Project-context switch while a candidate/rebase is in flight.
@@ -45,6 +46,7 @@ final class DocumentSessions: ObservableObject {
         documentReconciliationResolutions.removeValue(forKey: key)
         synchronizingDocumentSessions.remove(key)
         documentSynchronizationGenerations.removeValue(forKey: key)
+        documentBasePins.removeValue(forKey: key)
         didFinish.send(key)
     }
 
@@ -111,6 +113,7 @@ final class DocumentSessions: ObservableObject {
         documentSynchronizationTasks.removeValue(forKey: key)
         synchronizingDocumentSessions.remove(key)
         documentSynchronizationGenerations.removeValue(forKey: key)
+        documentBasePins.removeValue(forKey: key)
     }
 
     nonisolated static func canStartDocumentSynchronization(
@@ -151,6 +154,7 @@ final class DocumentSessions: ObservableObject {
         documentReconciliationResolutions.removeValue(forKey: key)
         synchronizingDocumentSessions.remove(key)
         documentSynchronizationGenerations.removeValue(forKey: key)
+        documentBasePins.removeValue(forKey: key)
     }
 
     func resetDocumentTasks() {
@@ -160,6 +164,7 @@ final class DocumentSessions: ObservableObject {
         documentReconciliationResolutions.removeAll()
         synchronizingDocumentSessions.removeAll()
         documentSynchronizationGenerations.removeAll()
+        documentBasePins.removeAll()
     }
 
     func resetAuthority() {

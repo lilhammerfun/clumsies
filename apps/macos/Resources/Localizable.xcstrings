@@ -6557,18 +6557,18 @@
         }
       }
     },
-    "Drafts and settings are preserved. Commit generations and the search index will be rebuilt.": {
+    "This clears the Project’s downloaded memories and search index. Connect to the server to rebuild them. Drafts, settings, retrieval history and evaluations are kept.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Drafts and settings are preserved. Commit generations and the search index will be rebuilt."
+            "value": "This clears the Project’s downloaded memories and search index. Connect to the server to rebuild them. Drafts, settings, retrieval history and evaluations are kept."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "草稿和设置将予以保留。提交数据和搜索索引将重新构建。"
+            "value": "这将清除项目下载的记忆副本和搜索索引，需要连接服务器才能重建。草稿、设置、检索历史和评估资料会保留。"
           }
         }
       }

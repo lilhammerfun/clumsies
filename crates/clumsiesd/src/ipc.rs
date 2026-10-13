@@ -1,9 +1,10 @@
 use crate::{
     ActivateMemoryRequest, ActivateMemoryResponse, AgentRuntimeIdentity, ClearRetrievalRunsRequest,
     ClearRetrievalRunsResponse, CreateEvaluationCaseRequest, DaemonCodexPluginRequest,
-    DaemonCodexPluginStatus, DaemonDraftDetail, DaemonDraftDetailRequest, DaemonDraftListQuery,
-    DaemonDraftListResponse, DaemonDraftOperationRequest, DaemonDraftOperationResponse,
-    DaemonError, DaemonHealth, DaemonIpcRequest, DaemonIpcResponse, DaemonIpcService,
+    DaemonCodexPluginStatus, DaemonCommitBasePin, DaemonCommitBasePinRequest, DaemonDraftDetail,
+    DaemonDraftDetailRequest, DaemonDraftListQuery, DaemonDraftListResponse,
+    DaemonDraftOperationRequest, DaemonDraftOperationResponse, DaemonError, DaemonHealth,
+    DaemonIpcRequest, DaemonIpcResponse, DaemonIpcService,
     DaemonLegacyAgentAdapterInspectionRequest, DaemonLegacyAgentAdapterInspectionResponse,
     DaemonProjectAgentAdapter, DaemonProjectAgentAdapterInstallRequest,
     DaemonProjectAgentAdapterListRequest, DaemonProjectAgentAdapterListResponse,
@@ -295,6 +296,24 @@ impl DaemonIpcClient {
     ) -> Result<DaemonProjectCheckout, DaemonError> {
         self.call(DaemonIpcRequest::new(
             "project_checkout",
+            serde_json::to_value(request)?,
+        ))?
+        .into_payload()
+    }
+
+    /// Issue or acknowledge a document Base lease through the resident daemon.
+    ///
+    /// The caller must hold a shared lock on the returned file before acknowledgment
+    /// and keep that lock while using the captured Base.
+    ///
+    /// # Errors
+    /// Returns request/response encoding, transport or daemon validation/storage errors.
+    pub fn retain_commit_base(
+        &self,
+        request: DaemonCommitBasePinRequest,
+    ) -> Result<DaemonCommitBasePin, DaemonError> {
+        self.call(DaemonIpcRequest::new(
+            "retain_commit_base",
             serde_json::to_value(request)?,
         ))?
         .into_payload()

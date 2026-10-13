@@ -42,6 +42,7 @@ enum MemorySyncPlan {
         authoritativeOrgRefCommitId: String? = nil,
         authoritativeOrgResponseIsStale: Bool = false,
         provisionalResourceIds: Set<String> = [],
+        authoritativeBasePin: CommitBasePin? = nil,
         generation: UUID = UUID()
     ) -> [String: StaleResourceSyncSnapshot]? {
         // A cursor mismatch has no direction information. Only a fresh Server
@@ -154,7 +155,8 @@ enum MemorySyncPlan {
                             path: resource.path,
                             body: resource.content.content
                         ),
-                        orgSource: resource.content.orgSource
+                        orgSource: resource.content.orgSource,
+                        baseCommitPin: authoritativeBasePin
                     )
                 )
             },
@@ -179,7 +181,8 @@ enum MemorySyncPlan {
                     title: authority.document.title,
                     path: authority.document.path,
                     body: checkoutResource.content.content
-                )
+                ),
+                baseCommitPin: authority.baseCommitPin
             )
         }
         let projectRemoteIds = Set(checkoutResources.map(\.resourceId))
@@ -211,7 +214,8 @@ enum MemorySyncPlan {
                 orgSelectionRevision: checkout.orgSelectionRevision,
                 generation: generation,
                 local: local,
-                remote: remote
+                remote: remote,
+                authoritativeBasePin: authoritativeBasePin
             )
         }
         return result
@@ -257,4 +261,5 @@ struct StaleResourceSyncSnapshot: Equatable, Sendable {
     let generation: UUID
     let local: MemoryResource?
     let remote: MemoryResource?
+    var authoritativeBasePin: CommitBasePin? = nil
 }

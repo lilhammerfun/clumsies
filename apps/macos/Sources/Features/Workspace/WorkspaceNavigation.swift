@@ -37,7 +37,8 @@ final class WorkspaceNavigation: ObservableObject {
         MemoryTreeProjection.items(
             resources: catalog.resources, drafts: edits.drafts,
             activeProjectId: context.activeProjectId,
-            selectedOrgResourceIds: context.activeProject?.selectedOrgResourceIds ?? []
+            selectedOrgResourceIds: context.activeProject?.selectedOrgResourceIds ?? [],
+            editBasePin: context.activeProject?.baseCommitPin
         )
     }
 
@@ -405,7 +406,8 @@ final class WorkspaceNavigation: ObservableObject {
                 inherited: resource.scope == .org
                     && tabProject != nil
                     && (tabProject?.selectedOrgResourceIds.contains(resource.id) ?? false),
-                projectContextId: tab.projectId
+                projectContextId: tab.projectId,
+                editBasePin: tabProject?.baseCommitPin
             )
         }
         if let draft = MemoryTreeProjection.memoryTabDraft(
@@ -419,7 +421,8 @@ final class WorkspaceNavigation: ObservableObject {
                 resource: resource,
                 draft: draft,
                 inherited: false,
-                projectContextId: tab.projectId
+                projectContextId: tab.projectId,
+                editBasePin: context.projects.first { $0.id == tab.projectId }?.baseCommitPin
             )
         }
         return nil

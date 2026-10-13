@@ -141,7 +141,6 @@ pub(crate) struct FastEmbedSearchModels {
     cache_dir: PathBuf,
     embedding: Mutex<Option<TextEmbedding>>,
     reranker: Mutex<Option<TextRerank>>,
-    last_error: Mutex<Option<String>>,
     revision: Mutex<Option<String>>,
     preparation_lock: Mutex<()>,
     preparation_status: Arc<Mutex<SearchModelRuntimeStatus>>,
@@ -153,7 +152,6 @@ impl FastEmbedSearchModels {
             cache_dir,
             embedding: Mutex::new(None),
             reranker: Mutex::new(None),
-            last_error: Mutex::new(None),
             revision: Mutex::new(None),
             preparation_lock: Mutex::new(()),
             preparation_status: Arc::new(Mutex::new(SearchModelRuntimeStatus::Missing)),
@@ -186,15 +184,6 @@ impl FastEmbedSearchModels {
             .as_mut()
             .ok_or_else(|| SearchFailure::model("reranker model is not prepared"))?;
         operation(model)
-    }
-
-    fn record_error(&self, error: &SearchFailure) {
-        if let Ok(mut guard) = self.last_error.lock() {
-            *guard = Some(error.message.clone());
-        }
-        if let Ok(mut status) = self.preparation_status.lock() {
-            *status = SearchModelRuntimeStatus::Failed;
-        }
     }
 
     fn artifact_root(&self) -> PathBuf {
@@ -282,9 +271,6 @@ impl FastEmbedSearchModels {
             .revision
             .lock()
             .map_err(|_| SearchFailure::model("model revision lock is poisoned"))? = Some(revision);
-        if let Ok(mut guard) = self.last_error.lock() {
-            *guard = None;
-        }
         if let Ok(mut status) = self.preparation_status.lock() {
             *status = SearchModelRuntimeStatus::Ready;
         }
@@ -319,7 +305,9 @@ impl SearchModels for FastEmbedSearchModels {
         match self.prepare_inner() {
             Ok(()) => Ok(()),
             Err(error) => {
-                self.record_error(&error);
+                if let Ok(mut status) = self.preparation_status.lock() {
+                    *status = SearchModelRuntimeStatus::Failed;
+                }
                 Err(error)
             }
         }
@@ -511,19 +499,26 @@ fn prepare_artifacts(
                 .filter(|path| verify_artifact(path, artifact).is_ok());
             let path = match cached {
                 Some(path) => path,
-                None => api_repo
-                    .download_with_progress(
-                        artifact.path,
-                        ModelDownloadProgress::new(status.clone(), completed_bytes, total_bytes),
-                    )
-                    .map_err(|error| {
-                        SearchFailure::model(format!(
-                            "failed to download {}@{} {}: {error}",
-                            manifest.repository, manifest.revision, artifact.path
-                        ))
-                    })?,
+                None => {
+                    let path = api_repo
+                        .download_with_progress(
+                            artifact.path,
+                            ModelDownloadProgress::new(
+                                status.clone(),
+                                completed_bytes,
+                                total_bytes,
+                            ),
+                        )
+                        .map_err(|error| {
+                            SearchFailure::model(format!(
+                                "failed to download {}@{} {}: {error}",
+                                manifest.repository, manifest.revision, artifact.path
+                            ))
+                        })?;
+                    verify_artifact(&path, artifact)?;
+                    path
+                }
             };
-            verify_artifact(&path, artifact)?;
             completed_bytes = completed_bytes.saturating_add(artifact.size);
             set_preparation_progress(&status, completed_bytes, total_bytes);
             paths.insert(artifact_key(manifest.repository, artifact.path), path);

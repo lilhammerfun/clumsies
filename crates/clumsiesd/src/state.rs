@@ -67,6 +67,7 @@ struct ServerResponseCacheRequest {
     inner: Arc<DaemonInner>,
     key: ServerResponseCacheKey,
     revision: u64,
+    session_revision: u64,
 }
 
 struct ServerResponseCacheTransition<'a> {
@@ -101,6 +102,7 @@ struct ServerResponseCacheState {
     pending: BTreeMap<ServerResponseCacheKey, PendingServerResponseCacheWrite>,
     active: Option<(ServerResponseCacheKey, u64)>,
     worker_running: bool,
+    disabled: bool,
 }
 
 impl ServerResponseCacheState {
@@ -165,6 +167,7 @@ pub(crate) struct DaemonInner {
     pub(crate) search_index_notify: Notify,
     pub(crate) search_lock: Mutex<()>,
     pub(crate) retrieval_history_lock: Mutex<()>,
+    pub(crate) retrieval_history_work: std::sync::Mutex<retrieval_history::HistoryWorkState>,
     pub(crate) draft_mutation_lock: Mutex<()>,
     pub(crate) local_setup_lock: Mutex<()>,
     /// Activity discovery snapshots and selected-session paging cache.
@@ -268,6 +271,18 @@ impl DaemonState {
             load_startup_credentials(credential_store.clone(), STARTUP_CREDENTIAL_LOAD_TIMEOUT)
                 .await;
         let project_config = load_project_config(&pool, &config.project, credentials).await?;
+        let cache_disabled = match server_client::reconcile_server_response_cache_scope(
+            &pool,
+            &project_config,
+        )
+        .await
+        {
+            Ok(()) => false,
+            Err(error) => {
+                tracing::warn!("Server response cache disabled during startup: {error}");
+                true
+            }
+        };
         let http = build_http_client(HTTP_CONNECT_TIMEOUT, HTTP_REQUEST_TIMEOUT)?;
 
         let state = Self {
@@ -287,7 +302,10 @@ impl DaemonState {
                 project_access: RwLock::new(None),
                 commit_sync_run_scope: RwLock::new(commit_sync::CommitSyncRunScope::Idle),
                 token_refresh: Mutex::new(()),
-                server_response_cache: std::sync::Mutex::new(ServerResponseCacheState::default()),
+                server_response_cache: std::sync::Mutex::new(ServerResponseCacheState {
+                    disabled: cache_disabled,
+                    ..ServerResponseCacheState::default()
+                }),
                 server_response_cache_write: Mutex::new(()),
                 credential_recovery: Mutex::new(CredentialRecovery::default()),
                 search_models,
@@ -295,12 +313,28 @@ impl DaemonState {
                 search_index_notify: Notify::new(),
                 search_lock: Mutex::new(()),
                 retrieval_history_lock: Mutex::new(()),
+                retrieval_history_work: std::sync::Mutex::new(Default::default()),
                 draft_mutation_lock: Mutex::new(()),
                 local_setup_lock: Mutex::new(()),
                 recall_cache: Mutex::new(recall::RecallCache::default()),
                 storage_access: tokio::sync::RwLock::new(()),
             }),
         };
+        {
+            let _sync_guard = state.inner.sync_lock.lock().await;
+            let _mutation_guard = state.inner.draft_mutation_lock.lock().await;
+            let _storage_guard = state.inner.storage_access.write().await;
+            if let Err(error) =
+                crate::commit_retention::prune_cached_commits_under_storage_guard(&state).await
+            {
+                tracing::warn!("cached Commit history cleanup is pending: {error}");
+            }
+        }
+        if let Err(error) = migration::prepare_local_db_incremental_vacuum(&state.inner.pool).await
+        {
+            tracing::warn!("local database space reclamation is pending: {error}");
+        }
+        retrieval_history::request_startup_maintenance(&state);
         project_storage::resume_pending_moves(&state);
         Ok(state)
     }
@@ -849,29 +883,35 @@ impl DaemonState {
             ));
         }
         let headers = filter_proxy_request_headers(request.headers);
-        let cacheable = method == reqwest::Method::GET;
+        let cacheable = server_client::is_cacheable_server_request(
+            &method,
+            &request.path,
+            &headers,
+            request.body.is_some(),
+        );
+        let snapshot = self.project_config_with_credentials_snapshot().await;
+        let request_session_revision = snapshot.session_revision;
         let cache_request =
-            cacheable.then(|| self.start_server_response_cache_request(&request.path));
-        let response = match execute_authenticated_server_request(
+            cacheable.then(|| self.start_server_response_cache_request(&request.path, &snapshot));
+        let response = match server_client::execute_authenticated_server_request_with_snapshot(
             self,
             method,
             &request.path,
             &headers,
             request.body.map(String::into_bytes),
+            snapshot,
         )
         .await
         {
             Ok(response) => response,
             Err(error) if cacheable && error.is_retryable() => {
-                if let Some(cached) = load_cached_server_response(
-                    &self.inner.pool,
-                    cache_request
-                        .as_ref()
-                        .expect("cacheable request must retain cache state")
-                        .server_url(),
-                    &request.path,
-                )
-                .await?
+                if let Some(cached) = self
+                    .load_server_response_cache(
+                        cache_request
+                            .as_ref()
+                            .expect("cacheable request must retain cache state"),
+                    )
+                    .await
                 {
                     tracing::warn!(event = "http_cache_fallback", request_id = %crate::diagnostics::request_id(), route = %crate::diagnostics::route(&request.path));
                     return Ok(cached);
@@ -881,6 +921,16 @@ impl DaemonState {
             Err(error) => return Err(error),
         };
         let status = response.status().as_u16();
+        if status == 404
+            && let Some(request) = &cache_request
+        {
+            self.remove_server_response_cache_for_request(request).await;
+        }
+        let may_store = server_client::is_cacheable_server_response(response.headers());
+        if cacheable && !may_store {
+            self.invalidate_server_response_cache(request_session_revision)
+                .await;
+        }
         let headers = filter_proxy_response_headers(response.headers());
         let body = match response
             .text()
@@ -888,16 +938,17 @@ impl DaemonState {
             .map_err(|error| crate::diagnostics::http_error(error, "body"))
         {
             Ok(body) => body,
-            Err(error) if cacheable => {
-                if let Some(cached) = load_cached_server_response(
-                    &self.inner.pool,
-                    cache_request
-                        .as_ref()
-                        .expect("cacheable request must retain cache state")
-                        .server_url(),
-                    &request.path,
-                )
-                .await?
+            Err(error)
+                if cacheable
+                    && ((200..300).contains(&status) || is_retryable_http_status(status)) =>
+            {
+                if let Some(cached) = self
+                    .load_server_response_cache(
+                        cache_request
+                            .as_ref()
+                            .expect("cacheable request must retain cache state"),
+                    )
+                    .await
                 {
                     tracing::warn!(event = "http_cache_fallback", request_id = %crate::diagnostics::request_id(), route = %crate::diagnostics::route(&request.path));
                     return Ok(cached);
@@ -911,7 +962,14 @@ impl DaemonState {
             headers,
             body,
         };
-        if cacheable && ((200..300).contains(&status) || status == 404) {
+        if self.project_config_snapshot().session_revision != request_session_revision {
+            return Err(server_client::server_session_changed());
+        }
+        if cacheable && response.body.len() > SERVER_RESPONSE_CACHE_MAX_BODY_BYTES {
+            self.invalidate_server_response_cache(request_session_revision)
+                .await;
+        }
+        if cacheable && may_store && ((200..300).contains(&status) || status == 404) {
             self.queue_server_response_cache_write(
                 cache_request
                     .as_ref()
@@ -920,15 +978,13 @@ impl DaemonState {
             );
         } else if cacheable
             && is_retryable_http_status(status)
-            && let Some(cached) = load_cached_server_response(
-                &self.inner.pool,
-                cache_request
-                    .as_ref()
-                    .expect("cacheable request must retain cache state")
-                    .server_url(),
-                &request.path,
-            )
-            .await?
+            && let Some(cached) = self
+                .load_server_response_cache(
+                    cache_request
+                        .as_ref()
+                        .expect("cacheable request must retain cache state"),
+                )
+                .await
         {
             tracing::warn!(event = "http_cache_fallback", request_id = %crate::diagnostics::request_id(), route = %crate::diagnostics::route(&request.path));
             return Ok(cached);
@@ -936,7 +992,14 @@ impl DaemonState {
         Ok(response)
     }
 
-    fn start_server_response_cache_request(&self, path: &str) -> ServerResponseCacheRequest {
+    /// Pin a cache key and bind response ordering to the captured session revision.
+    ///
+    /// Dropping the request releases its in-flight bookkeeping; it never stores a body.
+    fn start_server_response_cache_request(
+        &self,
+        path: &str,
+        snapshot: &RuntimeProjectConfigSnapshot,
+    ) -> ServerResponseCacheRequest {
         let mut cache = self
             .inner
             .server_response_cache
@@ -947,7 +1010,7 @@ impl DaemonState {
             .next_revision
             .checked_add(1)
             .expect("server response cache revision exhausted");
-        let server_url = self.project_config().server_url;
+        let server_url = snapshot.config.server_url.clone();
         let key = (server_url, path.to_owned());
         let key_state = cache.keys.entry(key.clone()).or_default();
         key_state.in_flight = key_state
@@ -958,6 +1021,7 @@ impl DaemonState {
             inner: self.inner.clone(),
             key,
             revision,
+            session_revision: snapshot.session_revision,
         }
     }
 
@@ -972,7 +1036,7 @@ impl DaemonState {
                 .server_response_cache
                 .lock()
                 .expect("server response cache mutex poisoned");
-            if request.revision < cache.minimum_revision {
+            if cache.disabled || request.revision < cache.minimum_revision {
                 return;
             }
             let key_state = cache
@@ -981,7 +1045,7 @@ impl DaemonState {
                 .expect("active cache request must retain its key state");
             if key_state
                 .latest_success_revision
-                .is_some_and(|latest| latest >= request.revision)
+                .is_some_and(|latest| latest > request.revision)
             {
                 false
             } else {
@@ -999,7 +1063,8 @@ impl DaemonState {
                 .server_response_cache
                 .lock()
                 .expect("server response cache mutex poisoned");
-            if request.revision < cache.minimum_revision
+            if cache.disabled
+                || request.revision < cache.minimum_revision
                 || cache
                     .keys
                     .get(&request.key)
@@ -1065,7 +1130,8 @@ impl DaemonState {
                     .server_response_cache
                     .lock()
                     .expect("server response cache mutex poisoned");
-                pending.revision >= cache.minimum_revision
+                !cache.disabled
+                    && pending.revision >= cache.minimum_revision
                     && cache
                         .keys
                         .get(&key)
@@ -1073,9 +1139,14 @@ impl DaemonState {
                         == Some(pending.revision)
             };
             if is_latest
-                && let Err(error) =
-                    save_cached_server_response(&self.inner.pool, &key.0, &key.1, &pending.response)
-                        .await
+                && let Err(error) = save_cached_server_response(
+                    &self.inner.pool,
+                    &key.0,
+                    &key.1,
+                    &pending.response,
+                    server_client::server_response_cache_scope(&self.project_config()).as_deref(),
+                )
+                .await
             {
                 tracing::warn!("failed to cache Server response: {error}");
             }
@@ -1108,13 +1179,160 @@ impl DaemonState {
                 .lock()
                 .expect("server response cache mutex poisoned");
             cache.invalidate();
+            cache.disabled = true;
         }
         clear_server_response_cache(&self.inner.pool).await?;
+        self.inner
+            .server_response_cache
+            .lock()
+            .expect("server response cache mutex poisoned")
+            .disabled = false;
         Ok(ServerResponseCacheTransition {
             inner: self.inner.as_ref(),
             _write: write,
             published: false,
         })
+    }
+
+    /// Read fallback only while request/session revisions remain eligible under the write gate.
+    ///
+    /// Disabled cache, stale requests and database read failures yield no fallback;
+    /// the original live request error remains authoritative to the caller.
+    async fn load_server_response_cache(
+        &self,
+        request: &ServerResponseCacheRequest,
+    ) -> Option<DaemonServerResponse> {
+        let _write = self.inner.server_response_cache_write.lock().await;
+        {
+            let cache = self
+                .inner
+                .server_response_cache
+                .lock()
+                .expect("server response cache mutex poisoned");
+            if cache.disabled
+                || request.revision < cache.minimum_revision
+                || request.session_revision != self.project_config_snapshot().session_revision
+            {
+                return None;
+            }
+        }
+        match load_cached_server_response(&self.inner.pool, request.server_url(), &request.key.1)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!("failed to read Server response cache: {error}");
+                None
+            }
+        }
+    }
+
+    /// Invalidate a confirmed deletion without letting an older request remove newer data.
+    ///
+    /// A failed database deletion disables fallback before releasing the write gate.
+    async fn remove_server_response_cache_for_request(&self, request: &ServerResponseCacheRequest) {
+        let _write = self.inner.server_response_cache_write.lock().await;
+        {
+            let mut cache = self
+                .inner
+                .server_response_cache
+                .lock()
+                .expect("server response cache mutex poisoned");
+            if cache.disabled
+                || request.revision < cache.minimum_revision
+                || request.session_revision != self.project_config_snapshot().session_revision
+                || cache
+                    .keys
+                    .get(&request.key)
+                    .and_then(|state| state.latest_success_revision)
+                    .is_some_and(|latest| latest > request.revision)
+            {
+                return;
+            }
+            cache
+                .keys
+                .get_mut(&request.key)
+                .expect("active cache request must retain its key state")
+                .latest_success_revision = Some(request.revision);
+            cache.pending.remove(&request.key);
+        }
+        if let Err(error) =
+            sqlx::query("DELETE FROM server_response_cache WHERE server_url = $1 AND path = $2")
+                .bind(request.server_url())
+                .bind(&request.key.1)
+                .execute(&self.inner.pool)
+                .await
+        {
+            {
+                let mut cache = self
+                    .inner
+                    .server_response_cache
+                    .lock()
+                    .expect("server response cache mutex poisoned");
+                cache.invalidate();
+                cache.disabled = true;
+            }
+            let _ = clear_server_response_cache(&self.inner.pool).await;
+            tracing::warn!("Server response cache disabled after resource removal failed: {error}");
+        }
+    }
+
+    /// Invalidate memory and disk responses only for the still-current session revision.
+    ///
+    /// The cache write gate excludes publication races. Disk cleanup failures are
+    /// logged and leave fallback disabled, preventing reuse of potentially stale data.
+    pub(crate) async fn invalidate_server_response_cache(&self, session_revision: u64) {
+        let _write = self.inner.server_response_cache_write.lock().await;
+        if self.project_config_snapshot().session_revision != session_revision {
+            return;
+        }
+        {
+            let mut cache = self
+                .inner
+                .server_response_cache
+                .lock()
+                .expect("server response cache mutex poisoned");
+            cache.invalidate();
+            cache.disabled = true;
+        }
+        match clear_server_response_cache(&self.inner.pool).await {
+            Ok(()) => {
+                self.inner
+                    .server_response_cache
+                    .lock()
+                    .expect("server response cache mutex poisoned")
+                    .disabled = false
+            }
+            Err(error) => {
+                tracing::warn!("Server response cache disabled after invalidation failed: {error}")
+            }
+        }
+    }
+
+    /// Record credential rotation under the cache write gate without re-enabling unsafe rows.
+    ///
+    /// Marker-write failures disable fallback and are logged; business requests remain usable.
+    pub(crate) async fn update_server_response_cache_scope(&self, config: &RuntimeProjectConfig) {
+        let _write = self.inner.server_response_cache_write.lock().await;
+        if self
+            .inner
+            .server_response_cache
+            .lock()
+            .expect("server response cache mutex poisoned")
+            .disabled
+        {
+            return;
+        }
+        if let Err(error) =
+            server_client::save_server_response_cache_scope(&self.inner.pool, config).await
+        {
+            self.inner
+                .server_response_cache
+                .lock()
+                .expect("server response cache mutex poisoned")
+                .disabled = true;
+            tracing::warn!("Server response cache disabled after token refresh: {error}");
+        }
     }
 
     pub(crate) fn project_config_view(&self) -> DaemonProjectConfig {
@@ -1210,6 +1428,21 @@ impl DaemonState {
         request: DaemonProjectCheckoutRequest,
     ) -> Result<DaemonProjectCheckout, DaemonError> {
         commit_sync::project_checkout(self, request).await
+    }
+
+    /// Issue or acknowledge the file-backed lease required before editing a captured Base.
+    ///
+    /// The reader locks the returned file before acknowledgment and retains that shared
+    /// lock while the document depends on the Base, including across daemon restarts.
+    ///
+    /// # Errors
+    /// Returns download, validation, database or file errors, including expiration when
+    /// an acknowledgment has no matching live lock and complete cached snapshot.
+    pub async fn retain_commit_base(
+        &self,
+        request: DaemonCommitBasePinRequest,
+    ) -> Result<DaemonCommitBasePin, DaemonError> {
+        commit_sync::retain_commit_base(self, request).await
     }
 
     pub async fn activate_memory(
@@ -1330,15 +1563,6 @@ impl DaemonState {
     ) -> Result<DaemonRetryResponse, DaemonError> {
         let retry_id = format!("retry_{}", Uuid::new_v4().simple());
 
-        sqlx::query(
-            "INSERT INTO sync_retries (retry_id, channel)
-             VALUES ($1, $2)",
-        )
-        .bind(&retry_id)
-        .bind(channel.as_str())
-        .execute(&self.inner.pool)
-        .await?;
-
         let retry_drafts = matches!(channel, SyncRetryChannel::Drafts | SyncRetryChannel::All);
         let retry_commits = matches!(channel, SyncRetryChannel::Commits | SyncRetryChannel::All);
         if retry_drafts {
@@ -1369,6 +1593,23 @@ impl DaemonState {
         &self,
         request: DaemonDraftOperationRequest,
     ) -> Result<DaemonDraftOperationResponse, DaemonError> {
+        self.store_draft_operation_with_captured_base(request, false)
+            .await
+    }
+
+    /// Normalize and persist a Draft operation against either a captured or current Base.
+    ///
+    /// Captured `None` is an empty snapshot, not permission to substitute today's head.
+    /// Target normalization takes `sync_lock` before the Draft mutation lock; the operation
+    /// and index invalidation then commit together in an immediate writer transaction.
+    ///
+    /// # Errors
+    /// Returns request, captured-Base or database errors without committing a partial operation.
+    async fn store_draft_operation_with_captured_base(
+        &self,
+        request: DaemonDraftOperationRequest,
+        base_commit_captured: bool,
+    ) -> Result<DaemonDraftOperationResponse, DaemonError> {
         request.op.validate(request.resource)?;
         let has_text_update = request.op.has_text_update();
         let is_project_target_mutation = request.op.discard.is_none()
@@ -1386,11 +1627,14 @@ impl DaemonState {
                 request
             };
             let request = if is_project_target_mutation {
-                self.normalize_project_target_mutation(request).await?
+                self.normalize_project_target_mutation(request, base_commit_captured)
+                    .await?
             } else {
                 request
             };
-            return self.persist_draft_operation(request).await;
+            return self
+                .persist_draft_operation(request, base_commit_captured)
+                .await;
         }
         if request.op.delete.is_some() || request.op.discard.is_some() {
             let _sync_guard = self.inner.sync_lock.lock().await;
@@ -1402,16 +1646,20 @@ impl DaemonState {
             } else {
                 request
             };
-            return self.persist_draft_operation(request).await;
+            return self
+                .persist_draft_operation(request, base_commit_captured)
+                .await;
         }
 
         let _mutation_guard = self.inner.draft_mutation_lock.lock().await;
-        self.persist_draft_operation(request).await
+        self.persist_draft_operation(request, base_commit_captured)
+            .await
     }
 
     async fn normalize_project_target_mutation(
         &self,
         mut request: DaemonDraftOperationRequest,
+        base_commit_captured: bool,
     ) -> Result<DaemonDraftOperationRequest, DaemonError> {
         if let Some(id) = request.draft_id.as_deref() {
             let row: Option<(String, String)> = sqlx::query_as(
@@ -1472,9 +1720,18 @@ impl DaemonState {
             }
             return Ok(request);
         }
-        let resource = self
-            .load_stable_mutation_target(&request, target_id)
-            .await?;
+        let resource = if base_commit_captured {
+            let base = request.base_commit_id.as_deref().ok_or_else(|| {
+                DaemonError::InvalidRequest(
+                    "An empty captured Base has no existing Memory target".to_owned(),
+                )
+            })?;
+            commit_sync::load_captured_project_target(self, &request.project_id, base, target_id)
+                .await?
+        } else {
+            self.load_stable_mutation_target(&request, target_id)
+                .await?
+        };
         request.scope = DaemonDraftScope::Project;
         if resource.scope == SourceScope::Org {
             if request.op.delete.is_some() {
@@ -1482,12 +1739,16 @@ impl DaemonState {
                     "Remove an Organization reference using Project selections; deleting shared Organization Memory requires an explicit Org proposal".to_owned(),
                 ));
             }
-            let commit_id = commit_sync::current_base_commit_id(
-                &self.inner.pool,
-                &request.project_id,
-                DaemonDraftScope::Project,
-            )
-            .await?
+            let commit_id = if base_commit_captured {
+                request.base_commit_id.clone()
+            } else {
+                commit_sync::current_base_commit_id(
+                    &self.inner.pool,
+                    &request.project_id,
+                    DaemonDraftScope::Project,
+                )
+                .await?
+            }
             .ok_or_else(|| {
                 DaemonError::InvalidRequest(
                     "Sync the Project snapshot before adapting Organization Memory".to_owned(),
@@ -1707,16 +1968,21 @@ impl DaemonState {
     async fn persist_draft_operation(
         &self,
         request: DaemonDraftOperationRequest,
+        base_commit_captured: bool,
     ) -> Result<DaemonDraftOperationResponse, DaemonError> {
-        let new_draft_base_commit_id = match request.base_commit_id.as_deref() {
-            Some(commit_id) => Some(commit_id.to_owned()),
-            None => {
-                commit_sync::current_base_commit_id(
-                    &self.inner.pool,
-                    &request.project_id,
-                    request.scope,
-                )
-                .await?
+        let new_draft_base_commit_id = if base_commit_captured {
+            request.base_commit_id.clone()
+        } else {
+            match request.base_commit_id.as_deref() {
+                Some(commit_id) => Some(commit_id.to_owned()),
+                None => {
+                    commit_sync::current_base_commit_id(
+                        &self.inner.pool,
+                        &request.project_id,
+                        request.scope,
+                    )
+                    .await?
+                }
             }
         };
         // This transaction reads the current draft before writing both the
@@ -1730,6 +1996,7 @@ impl DaemonState {
                 &mut tx,
                 request,
                 new_draft_base_commit_id.as_deref(),
+                base_commit_captured,
             )
             .await?;
         tx.commit().await?;
@@ -1769,17 +2036,7 @@ impl DaemonState {
             }
         }
         let _mutation_guard = self.inner.draft_mutation_lock.lock().await;
-        let base_commit_id = match request.base_commit_id.as_deref() {
-            Some(id) => Some(id.to_owned()),
-            None => {
-                commit_sync::current_base_commit_id(
-                    &self.inner.pool,
-                    &request.project_id,
-                    DaemonDraftScope::Project,
-                )
-                .await?
-            }
-        };
+        let base_commit_id = request.base_commit_id.clone();
         let mut tx = self.inner.pool.begin_with("BEGIN IMMEDIATE").await?;
         let mut responses = Vec::with_capacity(request.operations.len());
         for op in request.operations {
@@ -1810,6 +2067,7 @@ impl DaemonState {
                         source: Some(DaemonDraftOperationSource::Desktop),
                     },
                     base_commit_id.as_deref(),
+                    true,
                 )
                 .await?,
             );
@@ -1829,6 +2087,7 @@ impl DaemonState {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         mut request: DaemonDraftOperationRequest,
         new_draft_base_commit_id: Option<&str>,
+        base_commit_captured: bool,
     ) -> Result<DaemonDraftOperationResponse, DaemonError> {
         let source = request
             .source
@@ -1840,6 +2099,7 @@ impl DaemonState {
                 requested_draft_id: request.draft_id.as_deref(),
                 project_id: &request.project_id,
                 requested_base_commit_id: request.base_commit_id.as_deref(),
+                requested_base_commit_captured: base_commit_captured,
                 new_draft_base_commit_id,
                 scope: request.scope,
                 resource: request.resource,
@@ -1983,7 +2243,7 @@ impl DaemonState {
         project_id: Option<&str>,
     ) -> Result<(), DaemonError> {
         let _sync_guard = self.inner.sync_lock.lock().await;
-        async {
+        let result = async {
             if !self.project_config().server_readiness().ready {
                 return Ok(());
             }
@@ -2039,7 +2299,17 @@ impl DaemonState {
                 None => Ok(()),
             }
         }
-        .await
+        .await;
+        {
+            let _mutation_guard = self.inner.draft_mutation_lock.lock().await;
+            let _storage_guard = self.inner.storage_access.write().await;
+            if let Err(error) =
+                crate::commit_retention::prune_cached_commits_under_storage_guard(self).await
+            {
+                tracing::warn!("cached Commit history cleanup is pending: {error}");
+            }
+        }
+        result
     }
 }
 
@@ -2228,6 +2498,7 @@ impl DaemonIpcService {
             }
             "memory_cache" => dispatch_async!(self, request.payload, memory_cache),
             "project_checkout" => dispatch_async!(self, request.payload, project_checkout),
+            "retain_commit_base" => dispatch_async!(self, request.payload, retain_commit_base),
             "activate_memory" => dispatch_async!(self, request.payload, activate_memory),
             "load_memory" => dispatch_async!(self, request.payload, load_memory),
             "search_index_status" => {
@@ -2276,8 +2547,27 @@ impl DaemonIpcService {
                     Err(error) => Err(error),
                 }
             }
-            "store_draft_operation" | "desktop_store_draft_operation" => {
+            "store_draft_operation" => {
                 dispatch_async!(self, request.payload, store_draft_operation)
+            }
+            "desktop_store_draft_operation" => {
+                #[derive(serde::Deserialize)]
+                struct DesktopOperation {
+                    #[serde(flatten)]
+                    operation: DaemonDraftOperationRequest,
+                    #[serde(default)]
+                    base_commit_captured: bool,
+                }
+                match self.decode_dispatch_payload::<DesktopOperation>(request.payload) {
+                    Ok(payload) => self
+                        .store_draft_operation_with_captured_base(
+                            payload.operation,
+                            payload.base_commit_captured,
+                        )
+                        .await
+                        .and_then(|value| serde_json::to_value(value).map_err(DaemonError::from)),
+                    Err(error) => Err(error),
+                }
             }
             "desktop_create_memory_drafts" => {
                 dispatch_async!(self, request.payload, create_memory_drafts)
@@ -2580,6 +2870,29 @@ mod tests {
         let (root, state) = test_state(store).await;
         assert!(state.project_config().access_token.is_none());
         (root, state)
+    }
+
+    #[tokio::test]
+    async fn manual_sync_retry_keeps_response_and_existing_history_without_new_rows() {
+        let (_root, state) =
+            unauthenticated_test_state(Arc::new(DeferredCredentialStore::new())).await;
+        sqlx::query("INSERT INTO sync_retries (retry_id, channel) VALUES ('historical', 'all')")
+            .execute(&state.inner.pool)
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            let response = state
+                .retry_sync_scoped(SyncRetryChannel::All, None)
+                .await
+                .unwrap();
+            assert!(response.started);
+            assert!(response.retry_id.starts_with("retry_"));
+        }
+        let history: Vec<String> = sqlx::query_scalar("SELECT retry_id FROM sync_retries")
+            .fetch_all(&state.inner.pool)
+            .await
+            .unwrap();
+        assert_eq!(history, vec!["historical"]);
     }
 
     #[tokio::test]
@@ -2988,9 +3301,64 @@ mod tests {
                 headers: BTreeMap::new(),
                 body: r#"{"account":"old"}"#.to_owned(),
             },
+            server_client::server_response_cache_scope(&state.project_config()).as_deref(),
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn internal_server_mutations_invalidate_the_proxy_response_cache() {
+        let app = axum::Router::new().route(
+            "/api/v1/cache-probe",
+            axum::routing::post(|| async { axum::Json(serde_json::json!({"ok": true})) })
+                .delete(|| async { axum::http::StatusCode::NO_CONTENT }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let (_root, state) =
+            unauthenticated_test_state(Arc::new(DeferredCredentialStore::new())).await;
+        state
+            .replace_project_config(DaemonProjectConfigUpdateRequest {
+                server_url: format!("http://{address}"),
+                project_id: None,
+                memory_guidelines_path: None,
+                access_token: Some("test-token".to_owned()),
+                refresh_token: None,
+            })
+            .await
+            .unwrap();
+        let path = "/api/v1/cache-probe";
+        seed_server_response_cache(&state, path).await;
+        let _: serde_json::Value = post_server_json(&state, path, &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(
+            load_cached_server_response(
+                &state.inner.pool,
+                &state.project_config().server_url,
+                path
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        seed_server_response_cache(&state, path).await;
+        delete_server_json(&state, path, 1).await.unwrap();
+        assert!(
+            load_cached_server_response(
+                &state.inner.pool,
+                &state.project_config().server_url,
+                path
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        server.abort();
     }
 
     #[tokio::test]
@@ -2999,8 +3367,10 @@ mod tests {
         let (_root, state) = unauthenticated_test_state(store).await;
         let path = "/api/v1/cache-order".to_owned();
         let write_gate = state.inner.server_response_cache_write.lock().await;
-        let older = state.start_server_response_cache_request(&path);
-        let newer = state.start_server_response_cache_request(&path);
+        let older =
+            state.start_server_response_cache_request(&path, &state.project_config_snapshot());
+        let newer =
+            state.start_server_response_cache_request(&path, &state.project_config_snapshot());
         let server_url = newer.server_url().to_owned();
         state.queue_server_response_cache_write(
             &newer,
@@ -3037,8 +3407,10 @@ mod tests {
         let write_gate = state.inner.server_response_cache_write.lock().await;
 
         for index in 0..SERVER_RESPONSE_CACHE_MAX_PENDING_WRITES * 4 {
-            let request =
-                state.start_server_response_cache_request(&format!("/api/v1/cache-{index}"));
+            let request = state.start_server_response_cache_request(
+                &format!("/api/v1/cache-{index}"),
+                &state.project_config_snapshot(),
+            );
             state.queue_server_response_cache_write(
                 &request,
                 &DaemonServerResponse {
@@ -3049,7 +3421,8 @@ mod tests {
             );
         }
         let oversized_path = "/api/v1/cache-oversized";
-        let oversized = state.start_server_response_cache_request(oversized_path);
+        let oversized = state
+            .start_server_response_cache_request(oversized_path, &state.project_config_snapshot());
         state.queue_server_response_cache_write(
             &oversized,
             &DaemonServerResponse {
@@ -3234,7 +3607,8 @@ mod tests {
             .await
             .unwrap();
 
-        let request = state.start_server_response_cache_request(&path);
+        let request =
+            state.start_server_response_cache_request(&path, &state.project_config_snapshot());
         let server_url = request.server_url().to_owned();
         state.queue_server_response_cache_write(
             &request,
@@ -3296,7 +3670,8 @@ mod tests {
             .await
             .unwrap();
 
-        let transition = state.start_server_response_cache_request(&path);
+        let transition =
+            state.start_server_response_cache_request(&path, &state.project_config_snapshot());
         let server_url = transition.server_url().to_owned();
         state.queue_server_response_cache_write(
             &transition,

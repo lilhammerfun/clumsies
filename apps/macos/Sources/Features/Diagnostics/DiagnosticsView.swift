@@ -2,18 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum RetrievalDiagnosticsLayout {
-    static let runListMinimumWidth: CGFloat = 360
-    static let runListIdealWidth: CGFloat = 360
-    static let runListMaximumWidth: CGFloat = 480
-    static let mainPaneMinimumWidth: CGFloat = 650
-    static let dividerAllowance: CGFloat = 2
-    static let minimumWindowContentWidth =
-        runListMinimumWidth
-        + mainPaneMinimumWidth
-        + dividerAllowance
-}
-
 enum RetrievalEvidenceReviewAction: Equatable {
     case done
     case noMatch
@@ -34,81 +22,6 @@ enum RetrievalEvidenceReviewAction: Equatable {
         case .done: String(localized: "Done")
         case .noMatch: String(localized: "No Match")
         case .confirm: String(localized: "Confirm")
-        }
-    }
-}
-
-struct NativeRetrievalDiagnosticsView: View {
-    @EnvironmentObject private var workspaceContext: WorkspaceContext
-    @StateObject private var retrieval: RetrievalDiagnosticsModel
-
-    init(model: @autoclosure @escaping () -> RetrievalDiagnosticsModel) {
-        _retrieval = StateObject(wrappedValue: model())
-    }
-
-    var body: some View {
-        RetrievalDiagnosticsView(
-            model: retrieval,
-            projectName: workspaceContext.activeProject?.name,
-            projectId: workspaceContext.activeProjectId
-        )
-        .feedbackHost()
-        .task(id: workspaceContext.activeProjectId) {
-            await retrieval.load(projectId: workspaceContext.activeProjectId)
-        }
-        .automaticRefresh(id: workspaceContext.activeProjectId, initially: false) {
-            await retrieval.refreshInBackground()
-        }
-    }
-}
-
-private struct RetrievalDiagnosticsView: View {
-    @ObservedObject var model: RetrievalDiagnosticsModel
-    let projectName: String?
-    let projectId: String?
-
-    @State private var confirmsClear = false
-
-    var body: some View {
-        NavigationSplitView {
-            RetrievalRunList(
-                model: model,
-                scopeTitle: projectName ?? projectId ?? String(localized: "All Projects"),
-                onRefresh: {
-                    Task { await model.load(projectId: projectId) }
-                },
-                onClearHistory: {
-                    confirmsClear = true
-                }
-            )
-            .frame(
-                minWidth: RetrievalDiagnosticsLayout.runListMinimumWidth,
-                idealWidth: RetrievalDiagnosticsLayout.runListIdealWidth,
-                maxWidth: RetrievalDiagnosticsLayout.runListMaximumWidth,
-                maxHeight: .infinity
-            )
-            .navigationSplitViewColumnWidth(
-                min: RetrievalDiagnosticsLayout.runListMinimumWidth,
-                ideal: RetrievalDiagnosticsLayout.runListIdealWidth,
-                max: RetrievalDiagnosticsLayout.runListMaximumWidth
-            )
-        } detail: {
-            RetrievalRunDetailView(model: model)
-                .frame(
-                    minWidth: RetrievalDiagnosticsLayout.mainPaneMinimumWidth,
-                    maxWidth: .infinity,
-                    maxHeight: .infinity
-                )
-        }
-        .confirmationDialog(
-            "Clear unpinned retrieval history?",
-            isPresented: $confirmsClear
-        ) {
-            Button("Clear History", role: .destructive) {
-                Task { await model.clearUnpinnedHistory() }
-            }
-        } message: {
-            Text("Runs used by Evaluation Cases will be kept.")
         }
     }
 }
@@ -176,16 +89,18 @@ struct RetrievalRunDetailView: View {
                 isPresented: $showsEvidenceReview
             )
         }
+        .automaticRefresh(id: model.selectedRunId, initially: false) {
+            await model.refreshRunningSelection()
+        }
         .onChange(of: model.selectedRunId) { _, _ in
             showsEvidenceReview = false
             exportError = nil
         }
-        .pageFeedback(exportError ?? ((!model.runs.isEmpty && (model.detail != nil || model.selectedRunId == nil)) ? model.errorMessage : nil))
+        .pageFeedback(exportError ?? (model.detail != nil ? model.errorMessage : nil))
     }
 
     private var canExportEvaluationSet: Bool {
         model.detail?.evaluationCase?.status == .ready
-            || model.runs.contains { $0.evaluationCaseStatus == .ready }
     }
 
     private var hasMoreActions: Bool {
@@ -204,124 +119,6 @@ struct RetrievalRunDetailView: View {
             try exported.fixtureJson.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             exportError = error.actionMessage
-        }
-    }
-}
-
-private struct RetrievalRunList: View {
-    @ObservedObject var model: RetrievalDiagnosticsModel
-    let scopeTitle: String
-    let onRefresh: () -> Void
-    let onClearHistory: () -> Void
-    @State private var selectedRunId: String?
-
-    var body: some View {
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                Text(scopeTitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 2)
-
-                ForEach(model.runs) { run in
-                    let isSelected = selectedRunId == run.runId
-                    Button {
-                        selectedRunId = run.runId
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(run.query)
-                                .lineLimit(2)
-                                .truncationMode(.tail)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            HStack(spacing: 6) {
-                                Image(systemName: run.status.symbolName)
-                                    .foregroundStyle(isSelected ? Color.white : run.status.tint)
-                                Text(run.createdAt)
-                                    .lineLimit(1)
-                                if let evaluationStatus = run.evaluationCaseStatus {
-                                    Image(systemName: evaluationStatus.symbolName)
-                                        .help(evaluationStatus.helpText)
-                                }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(
-                                isSelected ? Color.white.opacity(0.8) : Color.secondary
-                            )
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
-                        .background {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(Color.accentColor)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .padding(.horizontal, 8)
-                }
-                if model.nextCursor != nil {
-                    Button {
-                        Task { await model.loadMore() }
-                    } label: {
-                        if model.isLoadingMore {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text("Load More")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .frame(maxWidth: .infinity)
-                }
-            }
-            .padding(.vertical, 8)
-        }
-        .overlay {
-            if model.isLoading && model.runs.isEmpty {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.runs.isEmpty, let error = model.errorMessage {
-                ContentUnavailableView {
-                    Label("Retrieval History Unavailable", systemImage: "text.magnifyingglass")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("Retry", action: onRefresh)
-                }
-            } else if model.runs.isEmpty {
-                ContentUnavailableView(
-                    "No Retrieval Runs",
-                    systemImage: "text.magnifyingglass",
-                    description: Text("Memory activation results will appear here.")
-                )
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
-                Button(role: .destructive, action: onClearHistory) {
-                    Image(systemName: "trash")
-                }
-                .toolbarHelp(String(localized: "Clear Unpinned Retrieval History"))
-                .accessibilityLabel("Clear Unpinned Retrieval History")
-                .disabled(model.runs.isEmpty)
-            }
-        }
-        .onChange(of: selectedRunId) { _, runId in
-            guard runId != model.selectedRunId else { return }
-            DispatchQueue.main.async {
-                guard runId != model.selectedRunId else { return }
-                Task { await model.select(runId: runId) }
-            }
-        }
-        .pageFeedback(model.pageError) { Task { await model.loadMore() } }
-        .onChange(of: model.selectedRunId) { _, runId in
-            guard selectedRunId != runId else { return }
-            selectedRunId = runId
         }
     }
 }
