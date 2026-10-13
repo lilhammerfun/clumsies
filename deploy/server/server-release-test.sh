@@ -28,6 +28,10 @@ event() {
   printf '%s\n' "$*" >>"$EVENT_LOG"
 }
 
+# Preserve real implementations before replacing external work with stubs.
+# shellcheck disable=SC2294
+eval "$(declare -f verify_backup_with_image | sed '1s/^verify_backup_with_image/verify_backup_with_image_real/')"
+
 # Preserve the real probe so the DNS-cache regression test can exercise it.
 # shellcheck disable=SC2294
 eval "$(declare -f wait_public_health | sed '1s/^wait_public_health/wait_public_health_real/')"
@@ -41,6 +45,7 @@ reset_case() {
   COMPOSE_VERSION_OUTPUT="2.39.2"
   LOCAL_EDGE_EXIT=0
   PUBLIC_PATH_EXIT=0
+  HEALTH_BODY='{"status":"ok"}'
 }
 
 current_image() {
@@ -65,8 +70,10 @@ docker() {
 curl() {
   event "curl:$*"
   if [[ "$*" == *" --resolve "* ]]; then
+    printf '%s\n' "$HEALTH_BODY"
     return "$LOCAL_EDGE_EXIT"
   fi
+  printf '%s\n' "$HEALTH_BODY"
   return "$PUBLIC_PATH_EXIT"
 }
 
@@ -210,6 +217,127 @@ test_health_probe_skips_public_dns_when_edge_is_down() {
   assert_absent "curl:--fail --silent --show-error --max-time 8 https://app.clumsies.ai"
 }
 
+test_health_requires_ready_json() {
+  local body
+  for body in '{"status":"down","database":{"status":"ok"}}' '{"status":"degraded"}' '{"database":{"status":"ok"}}' '[]' 'invalid'; do
+    reset_case
+    HEALTH_BODY="$body"
+    if local_edge_healthy "https://app.clumsies.ai"; then
+      printf 'expected non-ready health body to fail\n' >&2
+      exit 1
+    fi
+  done
+  reset_case
+  HEALTH_BODY='{"database":{"status":"ok"},"status":"ok"}'
+  local_edge_healthy "https://app.clumsies.ai"
+}
+
+test_restore_receipt_records_only_success() {
+  local stamp
+  reset_case
+  mkdir -p "$BACKUP_DIR"
+  restore_drill /backup/test.dump
+  stamp="$(<"$BACKUP_DIR/.restore-drill-last-success")"
+  [[ "$stamp" =~ ^[0-9]+$ && "$stamp" -gt 0 ]]
+  printf '123\n' >"$BACKUP_DIR/.restore-drill-last-success"
+  FAIL_PREFLIGHT=1
+  if restore_drill /backup/test.dump; then
+    printf 'expected failed restore drill to fail\n' >&2
+    exit 1
+  fi
+  [[ "$(<"$BACKUP_DIR/.restore-drill-last-success")" == 123 ]]
+}
+
+# Exercise the actual verifier in a conditional context, where Bash suppresses
+# errexit for the function body. Every required command must fail explicitly.
+# These mocks are called indirectly through sourced functions and the eval-preserved verifier.
+# shellcheck disable=SC2329,SC2317
+test_restore_internal_failures_and_cleanup_preserve_receipt() (
+  local failure
+  local backup="$TEST_DIR/synthetic.dump"
+  mkdir -p "$BACKUP_DIR"
+  printf 'synthetic archive\n' >"$backup"
+  validate_backup_archive() { return 0; }
+  verify_backup_with_image() { verify_backup_with_image_real "$@"; }
+  openssl() {
+    [[ "$FAIL_POINT" != password ]] || return 1
+    printf 'synthetic-password\n'
+  }
+  date() {
+    [[ "$FAIL_POINT" != receipt-date || "$*" != '-u +%s' ]] || return 1
+    command date "$@"
+  }
+  mv() {
+    [[ "$FAIL_POINT" != receipt-mv ]] || return 1
+    command mv "$@"
+  }
+  docker() {
+    event "docker:$*"
+    case "$*" in
+      'image inspect '*) [[ "$FAIL_POINT" != image ]] ;;
+      'network create '*) [[ "$FAIL_POINT" != network ]] ;;
+      'run --detach '*)
+        if [[ "$*" == *postgres:16-alpine ]]; then
+          [[ "$FAIL_POINT" != postgres-run ]]
+        else
+          [[ "$FAIL_POINT" != server-run ]]
+        fi ;;
+      'exec '*'/proc/1/comm') printf 'postgres\n' ;;
+      'exec '*pg_isready*) return 0 ;;
+      'exec '*pg_restore*) [[ "$FAIL_POINT" != restore ]] ;;
+      'exec '*curl*)
+        if [[ "$FAIL_POINT" == health ]]; then printf '{"status":"down"}\n'
+        else printf '{"status":"ok"}\n'; fi ;;
+      'exec '*psql*pg_catalog.pg_tables*)
+        [[ "$FAIL_POINT" != tables ]] || return 1
+        printf '12\n' ;;
+      'exec '*psql*_sqlx_migrations*)
+        [[ "$FAIL_POINT" != migrations ]] || return 1
+        printf '5\n' ;;
+      'inspect '*'.State.Status'*) printf 'exited\n' ;;
+      'inspect '*'.State.ExitCode'*) printf '0\n' ;;
+      'rm --force --volumes '*server*) [[ "$FAIL_POINT" != server-cleanup ]] ;;
+      'rm --force --volumes '*postgres*) [[ "$FAIL_POINT" != postgres-cleanup ]] ;;
+      'network rm '*) [[ "$FAIL_POINT" != network-cleanup ]] ;;
+      'stop --time '*|'logs '*) return 0 ;;
+      *) printf 'unexpected synthetic Docker call: %s\n' "$*" >&2; return 1 ;;
+    esac
+  }
+  for failure in image password network postgres-run restore server-run health tables migrations server-cleanup postgres-cleanup network-cleanup receipt-date receipt-mv none; do
+    reset_case
+    FAIL_POINT="$failure"
+    printf '123\n' >"$BACKUP_DIR/.restore-drill-last-success"
+    if (restore_drill "$backup"); then
+      [[ "$failure" == none ]] || {
+        printf 'internal restore failure incorrectly succeeded: %s\n' "$failure" >&2
+        exit 1
+      }
+      [[ "$(<"$BACKUP_DIR/.restore-drill-last-success")" != 123 ]]
+    else
+      [[ "$failure" != none ]] || {
+        printf 'synthetic successful restore failed\n' >&2
+        exit 1
+      }
+      [[ "$(<"$BACKUP_DIR/.restore-drill-last-success")" == 123 ]]
+    fi
+    case "$failure" in
+      image|password) assert_absent 'docker:network create' ;;
+      network) assert_present 'docker:network rm clumsies-restore-drill-' ;;
+      postgres-run|restore)
+        assert_present 'docker:rm --force --volumes clumsies-restore-drill-postgres-'
+        assert_present 'docker:network rm clumsies-restore-drill-' ;;
+      *)
+        assert_present 'docker:rm --force --volumes clumsies-restore-drill-server-'
+        assert_present 'docker:rm --force --volumes clumsies-restore-drill-postgres-'
+        assert_present 'docker:network rm clumsies-restore-drill-' ;;
+    esac
+    case "$failure" in
+      health|tables|migrations|*-cleanup|receipt-*|none)
+        [[ -n "$(awk '/docker:exec .* curl --fail --silent --max-time 5 / {print; exit}' "$EVENT_LOG")" ]] ;;
+    esac
+  done
+)
+
 test_successful_cutover() {
   local stop_event="compose[$PREVIOUS_IMAGE]:stop --timeout 10 server"
 
@@ -303,6 +431,9 @@ test_compose_version_gate_accepts_two_and_newer
 test_compose_version_gate_rejects_legacy_and_unknown
 test_health_probe_survives_stale_host_dns
 test_health_probe_skips_public_dns_when_edge_is_down
+test_health_requires_ready_json
+test_restore_receipt_records_only_success
+test_restore_internal_failures_and_cleanup_preserve_receipt
 test_successful_cutover
 test_failed_preflight_leaves_production_untouched
 test_nonzero_exit_after_stop_aborts_cutover
