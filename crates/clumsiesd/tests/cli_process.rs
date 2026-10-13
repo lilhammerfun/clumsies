@@ -34,6 +34,10 @@ struct Protocol {
     fail_review_read: bool,
     /// Fail a continuation page after earlier results have been delivered.
     fail_project_page: bool,
+    /// Creation keys observed before authentication, including refresh retries.
+    project_creation_keys: Vec<String>,
+    /// Expire authentication on the next creation, without racing background sync.
+    refresh_project_creation: bool,
 }
 
 /// One fixture process and its independent home, daemon database, and IPC endpoint.
@@ -345,11 +349,36 @@ async fn api(
         .get("if-match")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+    let creation_key = request
+        .headers()
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let bytes = axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024)
         .await
         .unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let mut protocol = state.lock().unwrap();
+    if method == "POST" && path == "/api/v1/projects" {
+        let Some(key) = creation_key.filter(|key| !key.trim().is_empty() && key.len() <= 200)
+        else {
+            return failure(StatusCode::BAD_REQUEST, "missing_idempotency_key");
+        };
+        protocol.project_creation_keys.push(key);
+        if protocol.refresh_project_creation {
+            protocol.refresh_project_creation = false;
+            protocol.expired = true;
+            protocol.recover_refresh = true;
+            return failure(StatusCode::UNAUTHORIZED, "missing_session");
+        }
+    }
+    if path == "/fixture/project-creation-keys" {
+        return Json(json!(protocol.project_creation_keys)).into_response();
+    }
+    if path == "/fixture/project-creation-refresh" {
+        protocol.refresh_project_creation = true;
+        return Json(json!({})).into_response();
+    }
     if path == "/api/v1/auth/methods" {
         return Json(json!({"password_enabled":true,"oidc_enabled":false,"google":false}))
             .into_response();
@@ -443,6 +472,13 @@ async fn api(
             }
         }
         ("GET", "/api/v1/projects/prj_fixture") => project,
+        ("POST", "/api/v1/projects") => {
+            return (
+                StatusCode::CREATED,
+                Json(json!({"project_id":"prj_created","name":body["name"],"revision":0})),
+            )
+                .into_response();
+        }
         ("GET", "/api/v1/org/commit-state" | "/api/v1/projects/prj_fixture/commit-state") => {
             let scope = if path == "/api/v1/org/commit-state" {
                 "org"
@@ -1211,6 +1247,50 @@ fn fixture_review_editor() {
         buffer["request"]["expected_review_version"] = json!(2);
     }
     std::fs::write(file, buffer.to_string()).unwrap();
+}
+
+/// Creation keys must reach HTTP and survive the daemon's authentication retry.
+#[test]
+fn project_creation_sends_unique_keys_and_preserves_key_on_auth_refresh() {
+    let fixture = Fixture::start();
+    fixture.json(
+        &[
+            "login",
+            "--server",
+            &fixture.origin,
+            "--username",
+            "fixture",
+            "--password-stdin",
+        ],
+        Some("fixture-secret\n"),
+    );
+    let first = fixture.json(&["project", "create", "First"], None);
+    assert_eq!(first["name"], "First");
+    reqwest::blocking::Client::new()
+        .post(format!(
+            "{}/fixture/project-creation-refresh",
+            fixture.origin
+        ))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let second = fixture.json(&["project", "create", "Second"], None);
+    assert_eq!(second["name"], "Second");
+    let keys: Vec<String> = reqwest::blocking::Client::new()
+        .get(format!("{}/fixture/project-creation-keys", fixture.origin))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(keys.len(), 3, "one creation followed by an auth retry");
+    for key in &keys {
+        assert_eq!(uuid::Uuid::parse_str(key).unwrap().get_version_num(), 4);
+    }
+    assert_ne!(keys[0], keys[1], "independent creations need distinct keys");
+    assert_eq!(keys[1], keys[2], "auth refresh must preserve the key");
 }
 
 /// Human lists traverse pages automatically while explicit JSON retains one-page envelopes.
