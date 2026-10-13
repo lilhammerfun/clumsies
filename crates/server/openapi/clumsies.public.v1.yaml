@@ -2485,6 +2485,54 @@ components:
         updated_at:
           type: string
           format: date-time
+    CommitProjectOrgSelection:
+      type: object
+      required: [project_id, memories, revision]
+      properties:
+        project_id:
+          type: string
+        memories:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommitSelectionMemoryMeta"
+        revision:
+          type: integer
+    CommitSelectionMemoryMeta:
+      type: object
+      required: [memory_id, scope, project_id, path, name, description, content_hash, status, updated_at]
+      properties:
+        org_source:
+          oneOf:
+            - $ref: "#/components/schemas/OrgMemorySource"
+            - type: "null"
+        is_directory:
+          type: boolean
+          default: false
+          description: Explicit directory entry with empty content; omitted for ordinary files. The entry type cannot change after creation.
+        memory_id:
+          type: string
+        scope:
+          $ref: "#/components/schemas/ResourceScope"
+        project_id:
+          type: [string, "null"]
+        path:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          description: Agent-generated semantic summary used for retrieval and quick understanding.
+        content_hash:
+          type: string
+        status:
+          $ref: "#/components/schemas/ResourceStatus"
+        updated_at:
+          description: Original timestamp string, either RFC3339 or the historical time serializer format with a complete explicit UTC offset. Only immutable Commit downloads accept the historical format.
+          anyOf:
+            - type: string
+              format: date-time
+            - type: string
+              pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{1,9} [+-]\d{2}:\d{2}:\d{2}$'
     CommitListResponse:
       type: object
       required: [items, page_info]
@@ -2524,8 +2572,9 @@ components:
           items:
             $ref: "#/components/schemas/Blob"
         project_org_selection:
+          description: Validated immutable configuration JSON, exactly equal to the parsed selection Blob. Archived timestamp strings retain their original representation.
           oneOf:
-            - $ref: "#/components/schemas/ProjectOrgSelection"
+            - $ref: "#/components/schemas/CommitProjectOrgSelection"
             - type: "null"
     Commit:
       type: object
