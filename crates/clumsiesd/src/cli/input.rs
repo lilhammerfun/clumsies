@@ -2,7 +2,6 @@
 
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Reads a text file or '-' stdin without retaining arbitrarily large input.
 ///
@@ -118,13 +117,12 @@ fn edit_many<T>(
             files.push(file.clone());
             std::fs::write(&file, initial)?;
             // Only user configuration is interpreted; the file path is a quoted environment value.
-            let mut command = Command::new(if cfg!(windows) { "cmd" } else { "sh" });
-            command.arg(if cfg!(windows) { "/C" } else { "-c" });
-            command.arg(if cfg!(windows) {
+            let script = if cfg!(windows) {
                 format!("{editor} \"%CLUMSIES_EDITOR_FILE%\"")
             } else {
                 format!("{editor} \"$CLUMSIES_EDITOR_FILE\"")
-            });
+            };
+            let mut command = super::output::shell_command(&script);
             let status = command.env("CLUMSIES_EDITOR_FILE", &file).status()?;
             if !status.success() {
                 return Err(
@@ -153,6 +151,7 @@ fn edit_many<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn file_input_preserves_multiline_text_and_rejects_oversize() {
@@ -176,7 +175,7 @@ mod tests {
             "batch-reject",
         ] {
             let root = tempfile::Builder::new()
-                .prefix("editor home with spaces ")
+                .prefix("editor & %CLUMSIES_SHELL_SENTINEL% !CLUMSIES_SHELL_SENTINEL! ")
                 .tempdir()
                 .unwrap();
             let exe = std::env::current_exe().unwrap();
@@ -192,11 +191,12 @@ mod tests {
                 .env(
                     "VISUAL",
                     format!(
-                        "\"{}\" --exact input::tests::editor_child --ignored --nocapture --skip",
+                        "\"{}\" --exact input::tests::editor_child --ignored --nocapture --skip \"configured editor argument & with spaces\" --skip",
                         exe.display()
                     ),
                 )
                 .env_remove("EDITOR")
+                .env("CLUMSIES_SHELL_SENTINEL", "must not replace literal path")
                 .env("TMPDIR", root.path())
                 .env("TEMP", root.path())
                 .env("TMP", root.path());
@@ -263,6 +263,12 @@ mod tests {
     #[ignore = "actual external editor executable invoked by fixture"]
     fn editor_child() {
         let file = std::env::var_os("CLUMSIES_EDITOR_FILE").unwrap();
+        let args: Vec<_> = std::env::args_os().collect();
+        assert_eq!(args.last(), Some(&file));
+        assert_eq!(
+            args[args.len() - 3],
+            "configured editor argument & with spaces"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
