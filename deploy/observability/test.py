@@ -108,27 +108,25 @@ for name, success, timestamp in (("failed", "0x360", "0+60x360"), ("stale", "1x3
 # Clock rollback or future receipts must never make current evidence look healthy.
 infra_panels = {p["id"]: p for p in all_panels(infrastructure)}
 overview = json.loads((root / "grafana/dashboards/clumsies-overview.json").read_text())
-confidence = next(p for p in all_panels(overview) if p["id"] == 21)
-db_confidence = next(t["expr"] for t in confidence["targets"] if "clumsies_database_collection_success" in t["expr"])
-host_confidence = next(t["expr"] for t in confidence["targets"]
-                       if "clumsies_observability_collection_timestamp_seconds" in t["expr"]
-                       and "clumsies_database_collection_success" not in t["expr"])
+overview_panels = {p["id"]: p for p in all_panels(overview)}
+db_confidence = overview_panels[31]["targets"][0]["expr"]
+host_confidence = overview_panels[32]["targets"][0]["expr"]
 api_age = next(p for p in all_panels(api_dashboard) if p["id"] == 102)["targets"][0]["expr"]
 for name, changed, expectations in (
     ("future database collection", {"clumsies_database_collection_timestamp_seconds": "25200x360"},
      [(db_confidence, -2), (api_age, -2), (infra_panels[3]["targets"][0]["expr"], -2),
       (infra_panels[9]["targets"][0]["expr"], None)]),
     ("future host collection", {"clumsies_observability_collection_timestamp_seconds": "25200x360"},
-     [(db_confidence, -2), (host_confidence, -2), (api_age, -2), (infra_panels[3]["targets"][1]["expr"], -2),
+     [(db_confidence, -2), (host_confidence, -2), (api_age, -2), (infra_panels[28]["targets"][0]["expr"], -2),
       (infra_panels[16]["targets"][0]["expr"], -2), (infra_panels[17]["targets"][0]["expr"], -2),
-      (infra_panels[26]["targets"][1]["expr"], -2), (infra_panels[18]["targets"][0]["expr"], None)]),
+      (infra_panels[31]["targets"][0]["expr"], -2), (infra_panels[18]["targets"][0]["expr"], None)]),
     ("future success receipts", {metric: "25200x360" for metric in (
         "clumsies_backup_last_success_timestamp_seconds", "clumsies_restore_drill_last_success_timestamp_seconds",
         "clumsies_release_last_success_timestamp_seconds")},
      [(infra_panels[16]["targets"][0]["expr"], -2), (infra_panels[17]["targets"][0]["expr"], -2),
-      (infra_panels[26]["targets"][1]["expr"], -2),
-      (infra_panels[16]["targets"][1]["expr"], 25200000),
-      (infra_panels[17]["targets"][1]["expr"], 25200000),
+      (infra_panels[31]["targets"][0]["expr"], -2),
+      (infra_panels[29]["targets"][0]["expr"], 25200000),
+      (infra_panels[30]["targets"][0]["expr"], 25200000),
       (infra_panels[26]["targets"][0]["expr"], 25200000)]),
     ("future unit exit", {'clumsies_unit_last_exit_timestamp_seconds{unit="clumsies-backup.service"}': "25200x360"},
      [(infra_panels[18]["targets"][0]["expr"], None)]),
@@ -158,7 +156,7 @@ for has_state in (False, True):
 # Boundary equality is trusted, stale host collection suppresses current operational results.
 for expr, value in ((db_confidence, 1), (host_confidence, 1), (api_age, 0),
                     (infra_panels[16]["targets"][0]["expr"], 1),
-                    (infra_panels[26]["targets"][1]["expr"], 1)):
+                    (infra_panels[31]["targets"][0]["expr"], 1)):
     checks.append({"expr": expr, "eval_time": "6h", "exp_samples": [{"labels": '{__name__="clumsies_database_collection_success"}' if expr == db_confidence else "{}", "value": value}]})
 invalid_creation = dict(series)
 invalid_creation["clumsies_oldest_open_draft_age_seconds"] = "-3600x360"

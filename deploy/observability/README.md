@@ -17,7 +17,7 @@ The stack runs beside the production containers. Monitoring ports bind to host l
 | `blackbox-exporter` | HTTPS probes for App, docs, official site and www |
 | `loki` | Container logs retained 14 days |
 | `alloy` | Ships Docker container logs to Loki |
-| `server` (target) | Classified HTTP metrics, business lifecycle and database pool |
+| `server` (target) | Classified HTTP metrics, API request lifecycle and database pool |
 | `clumsies-observability-metrics.timer` | Five-minute database, backup, restore and release snapshots |
 
 The production `deploy/Caddyfile` enables per-host metrics on the internal admin endpoint:
@@ -99,10 +99,12 @@ Compose sets external URLs to `http://localhost:9090` and `http://localhost:9093
 
 | Dashboard | Work supported | Navigation |
 | --- | --- | --- |
-| Overview | Source confidence, business throughput, successful handler latency, errors, concurrency and site entrance | Business API, selected site, Infrastructure |
+| Overview | Source confidence, API request throughput, successful handler latency, errors, API concurrency and site entrance | Business API, selected site, Infrastructure |
 | Business API | Current method/route metrics, slow/busy routes, lifecycle, request correlation and collapsed product activity | App entrance to website W5; dependencies to Infrastructure |
 | Entrance and Websites | One host selector for App/docs/site/www, entrance metrics and access logs | Request correlation to API A7 |
 | Infrastructure and Operations | Expected targets, collection, database/resources, task results, success times, certificates, logs, notifications and actual Server/release information | Prometheus, Alertmanager, runbook |
+
+Summary cards show a single metric, with the object in the title and the result in the body. Scraping status, snapshot status, collection age, success time and record validity use separate cards; comparable percentiles, sites and routes share time-series charts. Durations, recorded times, rates, CPU cores and days retain their own units.
 
 Page links preserve time and applicable filters. For a log, expand **Related request logs** to carry its real ID and time into API A7. Enter complete IDs manually in the API Request ID field. That shared view matches Caddy and Server across site/route/method; empty IDs return no logs and prefixes do not match. Static requests have entrance records only.
 
@@ -112,12 +114,14 @@ Local server_request_id identifies the entrance/Server request directly. A clien
 
 ### HTTP and dependencies
 
+API request scope excludes health and metrics routes, retains unmatched requests and includes background polling and retries. Responses/s count returned handlers; logical client operations use their own completion events. A revision read followed by an update is two HTTP requests and one logical update in the load report.
+
 | Metric group | Contract |
 | --- | --- |
 | Entrance | Caddy `handler="subroute"` selects one site-handling layer; includes synthetic probes and excludes automatic HTTP-to-HTTPS redirects |
-| Response counter | `clumsies_http_requests_total{route,method,status}`; actual codes 100–599, otherwise `other`; daily business queries require method and exclude health/metrics |
+| Response counter | `clumsies_http_requests_total{route,method,status}`; actual codes 100–599, otherwise `other`; daily API request queries require method and exclude health/metrics |
 | Handler duration | `clumsies_http_request_duration_seconds{route,method,status_class}`; success 2xx/3xx, errors 4xx/5xx/other; ends at returned Response, with body transfer afterward |
-| Business lifecycle | started, response/cancelled_or_aborted termination, in-flight; excludes `/metrics` and `/api/v1/admin/health`; cancellation balances in-flight without a response/duration sample |
+| API request lifecycle | started, response/cancelled_or_aborted termination, in-flight; excludes `/metrics` and `/api/v1/admin/health`; cancellation balances in-flight without a response/duration sample |
 | Review acquisition | `review_create` and `review_merge` outcomes, duration and concurrency; includes wait, validation and opening, with BEGIN/transaction execution separate |
 | Pool | `clumsies_db_pool_size` is open connections; max_connections is configured limit; idle/used are approximate concurrent snapshots |
 
@@ -226,6 +230,6 @@ The [load tool instructions](../../dev/load-http.README.md) cover release builds
 
 ## Appendix: Compatibility and upgrade records
 
-Daily views use current route/method/status_class and business lifecycle metrics. Historical route-only histograms contain mixed outcomes; global in-flight includes operational requests. Historical observations retain their original interpretation. Allow one complete five-minute window after a Server upgrade before reading classified latency. Older daemons without performance or durable backlog starts report unavailable/unknown age through compatible decoding.
+Daily views use current route/method/status_class and API request lifecycle metrics. Historical route-only histograms contain mixed outcomes; global in-flight includes operational requests. Historical observations retain their original interpretation. Allow one complete five-minute window after a Server upgrade before reading classified latency. Older daemons without performance or durable backlog starts report unavailable/unknown age through compatible decoding.
 
 For an older installation, update the installed `/usr/local/sbin/clumsies-server-release` from the tested helper to obtain JSON readiness checks and atomic successful restore receipts. Retain the prior executable for recovery. This helper has its own installation path, outside observability configuration delivery; the bootstrap installer also configures deployment identities and is reserved for installation. Existing success records, notification credentials, `.env` and data volumes remain preserved through upgrades.

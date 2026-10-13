@@ -71,7 +71,7 @@ flowchart LR
 
 ## 埋点一致性验收
 
-每组前后的业务响应 counter、started counter、response 终止 counter 和 histogram count 增量，均等于客户端 HTTP 响应数，依次为 200、2,000、10,000、250、2,500、12,500。Cancelled/aborted 增量为零，收尾后业务 in-flight 为零。health 和 metrics 在业务核对范围之外。
+每组前后的 API 请求范围响应 counter、started counter、response 终止 counter 和 histogram count 增量，均等于客户端 HTTP 响应数，依次为 200、2,000、10,000、250、2,500、12,500。Cancelled/aborted 增量为零，收尾后该范围的 API in-flight 为零。health 和 metrics 在请求核对范围之外。
 
 本项通过真实 TCP、认证、数据库和生产 handler 验证正常路径的一致性。隔离行为测试另覆盖取消、5xx、异常状态码、目标缺失和 SQL 失败；负载测试的故障覆盖范围见下文。
 
