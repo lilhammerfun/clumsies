@@ -112,13 +112,16 @@ export default withMermaid(
                 { text: "开发流程", link: "/zh/guides/development-workflow" },
                 { text: "文档编写约定", link: "/zh/engineering-documents" },
                 {
-                  text: "性能证据",
+                  text: "性能与可观测性",
                   collapsed: true,
                   items: [
                     { text: "专题索引", link: "/zh/performance/" },
                     { text: "服务端热路径", link: "/zh/performance/server-hot-path" },
                     { text: "macOS 首次就绪", link: "/zh/performance/macos-first-ready" },
                     { text: "延迟模型与诊断", link: "/zh/performance/latency-model" },
+                    { text: "可观测性设计方案", link: "/zh/performance/observability-plan" },
+                    { text: "可观测性运维排障", link: "/zh/performance/observability-runbook" },
+                    { text: "HTTP 本地负载测试报告", link: "/zh/performance/observability-load-report" },
                     { text: "gzip 实验", link: "/zh/performance/gzip-experiment" },
                     { text: "签名边界", link: "/zh/performance/signing-boundary" },
                     { text: "验证证据台账", link: "/zh/performance/evidence-ledger" },
