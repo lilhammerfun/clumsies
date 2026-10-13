@@ -1,4 +1,71 @@
 groups:
+  - name: collection
+    rules:
+      # Derived from targets.json and probes.json; test-delivery.py detects drift.
+      - record: clumsies_observability_expected_target
+        expr: >-
+          label_replace(label_replace(vector(1), "job", "prometheus", "__name__", ".*"), "instance", "localhost:9090", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "node", "__name__", ".*"), "instance", "node-exporter:9100", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "cadvisor", "__name__", ".*"), "instance", "cadvisor:8080", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "postgres", "__name__", ".*"), "instance", "postgres-exporter:9187", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "caddy", "__name__", ".*"), "instance", "caddy:2019", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "alloy", "__name__", ".*"), "instance", "alloy:12345", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "loki", "__name__", ".*"), "instance", "loki:3100", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "server", "__name__", ".*"), "instance", "server:8080", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "alertmanager", "__name__", ".*"), "instance", "alertmanager:9093", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "blackbox-public", "__name__", ".*"), "instance", "https://app.clumsies.ai/api/v1/admin/health", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "blackbox-public", "__name__", ".*"), "instance", "https://docs.clumsies.ai/", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "blackbox-public", "__name__", ".*"), "instance", "https://clumsies.ai/", "__name__", ".*")
+          or label_replace(label_replace(vector(1), "job", "blackbox-public", "__name__", ".*"), "instance", "https://www.clumsies.ai/", "__name__", ".*")
+      - record: clumsies_observability_target_health
+        expr: >-
+          (up and on (job, instance) clumsies_observability_expected_target)
+          or on (job, instance)
+          ((clumsies_observability_expected_target unless on (job, instance) up) * -1)
+      - alert: ExpectedScrapeTargetMissing
+        expr: clumsies_observability_expected_target unless on (job, instance) up
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Expected target {{ $labels.job }} ({{ $labels.instance }}) is missing from discovery"
+          description: "Check Prometheus file discovery and the deployed targets.json/probes.json catalogs."
+
+      - alert: OperationalMetricsCollectionStale
+        expr: >-
+          (up{job="node"} == 1) unless on (job, instance)
+          ((time() - clumsies_observability_collection_timestamp_seconds >= 0) and on (job, instance)
+          (time() - clumsies_observability_collection_timestamp_seconds <= 15 * 60))
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clumsies operational metrics are missing, stale, or have invalid time"
+          description: "Check the textfile collector service and timer; backup and restore status may be out of date."
+
+      # Retain historical receipts, but do not trust their age after a clock rollback.
+      # Name each source explicitly so simultaneous invalid metrics cannot collapse labels.
+      - alert: OperationalTimestampInvalid
+        expr: >-
+          label_replace(
+          {__name__=~"clumsies_(observability_collection|database_collection|backup_last_success|restore_drill_last_success|release_last_success|unit_last_exit)_timestamp_seconds"} > time(),
+          "timestamp_metric", "$1", "__name__", "(.*)")
+          and on (job, instance) (up{job="node"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clumsies {{ $labels.timestamp_metric }} is in the future"
+          description: "Check the host clock and source receipt. Keep historical values, but do not treat a negative age as current or fresh."
+
+      - alert: AlertmanagerNotificationFailed
+        expr: sum by (integration) (increase(alertmanager_notifications_failed_total{job="alertmanager"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager notification delivery failed for {{ $labels.integration }}"
+          description: "Check Alertmanager logs and notification provider access. This failure is visible in Grafana; the same broken notification channel may not deliver this alert."
+
   - name: availability
     rules:
       - alert: PublicEndpointDown
@@ -7,8 +74,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.instance }} is not answering"
-          description: "Blackbox probe has failed for 2 minutes."
+          summary: "Public endpoint probe for {{ $labels.instance }} is failing"
+          description: "The public probe has failed for 2 minutes. Check HTTPS reachability and endpoint readiness; the App health probe requires HTTP 200 and JSON status=ok."
 
       - alert: CertificateExpiringSoon
         expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
@@ -100,28 +167,61 @@ groups:
   - name: operations
     rules:
       - alert: BackupStale
-        expr: time() - clumsies_backup_last_success_timestamp_seconds > 26 * 3600
+        expr: >-
+          (up{job="node"} == 1) unless on (job, instance)
+          ((time() - clumsies_backup_last_success_timestamp_seconds >= 0) and on (job, instance)
+          (time() - clumsies_backup_last_success_timestamp_seconds <= 26 * 3600))
         for: 30m
         labels:
           severity: critical
         annotations:
-          summary: "No successful PostgreSQL backup in the last 26 hours"
+          summary: "Backup success timestamp is missing, in the future, or older than 26 hours"
 
       - alert: RestoreDrillStale
-        expr: time() - clumsies_restore_drill_last_success_timestamp_seconds > 8 * 24 * 3600
+        expr: >-
+          (up{job="node"} == 1) unless on (job, instance)
+          ((time() - clumsies_restore_drill_last_success_timestamp_seconds >= 0) and on (job, instance)
+          (time() - clumsies_restore_drill_last_success_timestamp_seconds <= 8 * 24 * 3600))
         for: 1h
         labels:
           severity: warning
         annotations:
-          summary: "No successful restore drill in the last 8 days"
+          summary: "Restore-drill success timestamp is missing, in the future, or older than 8 days"
 
       - alert: BackupUnitFailed
-        expr: clumsies_unit_last_exit_ok{unit="clumsies-backup.service"} == 0
+        expr: >-
+          (clumsies_unit_last_exit_ok{unit="clumsies-backup.service"} == 0) and on (job, instance)
+          ((time() - clumsies_observability_collection_timestamp_seconds >= 0)
+          and on (job, instance) (time() - clumsies_observability_collection_timestamp_seconds <= 15 * 60))
+          unless on (job, instance, unit) (clumsies_unit_last_exit_timestamp_seconds > time())
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "clumsies-backup.service last run failed"
+
+      - alert: RestoreDrillFailed
+        expr: >-
+          (clumsies_unit_last_exit_ok{unit="clumsies-restore-drill.service"} == 0) and on (job, instance)
+          ((time() - clumsies_observability_collection_timestamp_seconds >= 0)
+          and on (job, instance) (time() - clumsies_observability_collection_timestamp_seconds <= 15 * 60))
+          unless on (job, instance, unit) (clumsies_unit_last_exit_timestamp_seconds > time())
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "clumsies-restore-drill.service last completed run failed"
+
+      - alert: OperationalUnitUnavailable
+        expr: >-
+          (clumsies_unit_last_exit_state{state="missing"} == 1) and on (job, instance)
+          ((time() - clumsies_observability_collection_timestamp_seconds >= 0)
+          and on (job, instance) (time() - clumsies_observability_collection_timestamp_seconds <= 15 * 60))
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.unit }} status is unavailable"
 
       - alert: Watchdog
         expr: vector(1)
@@ -129,10 +229,17 @@ groups:
           severity: none
         annotations:
           summary: "Alert pipeline watchdog (always firing)"
-          description: "This alert confirms Prometheus to Alertmanager to email delivery works."
+          description: "Always firing in Prometheus. Receipt at the configured destination confirms end-to-end notification delivery; firing alone does not."
 
       - alert: DatabaseLongRunningQuery
-        expr: clumsies_db_longest_query_seconds > 60
+        expr: >-
+          (clumsies_db_longest_query_seconds > 60) and on (job, instance)
+          ((clumsies_database_collection_success == 1) and on (job, instance)
+          ((time() - clumsies_database_collection_timestamp_seconds >= 0)
+          and on (job, instance) (time() - clumsies_database_collection_timestamp_seconds <= 15 * 60)))
+          and on (job, instance)
+          ((time() - clumsies_observability_collection_timestamp_seconds >= 0)
+          and on (job, instance) (time() - clumsies_observability_collection_timestamp_seconds <= 15 * 60))
         for: 5m
         labels:
           severity: critical
@@ -142,11 +249,14 @@ groups:
       - alert: DatabaseMetricsCollectionFailed
         expr: >-
           (up{job="node"} == 1) unless on (job, instance)
-          ((clumsies_database_collection_success == 1) and on (job, instance)
-          (time() - clumsies_database_collection_timestamp_seconds <= 15 * 60))
+          ((clumsies_database_collection_success == 1)
+          and on (job, instance) (time() - clumsies_database_collection_timestamp_seconds >= 0)
+          and on (job, instance) (time() - clumsies_database_collection_timestamp_seconds <= 15 * 60)
+          and on (job, instance) (time() - clumsies_observability_collection_timestamp_seconds >= 0)
+          and on (job, instance) (time() - clumsies_observability_collection_timestamp_seconds <= 15 * 60))
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Clumsies database metrics are missing, failed, or stale"
+          summary: "Clumsies database metrics are missing, failed, stale, or have invalid time"
           description: "Node exporter is reachable but the database snapshot is unhealthy. Check clumsies-observability-metrics.service and its timer, Compose access, and PostgreSQL."

@@ -8,9 +8,9 @@ interface only.
 |---|---|
 | `prometheus` | Scrape, rule evaluation, and 90-day retention |
 | `alertmanager` | Email delivery of firing alerts |
-| `grafana` | Provisioned Prometheus and Loki datasources, and Overview, Business API, and Website Traffic dashboards in English and Chinese |
+| `grafana` | Overview, Business API, Website Traffic, and Infrastructure dashboards in English and Chinese, with Prometheus and Loki datasources |
 | `node-exporter` | Host CPU, memory, filesystem, and the textfile metrics below |
-| `cadvisor` | Per-container CPU, memory, and restart activity |
+| `cadvisor` | Per-container CPU and memory usage |
 | `postgres-exporter` | Connections, transactions, and database size |
 | `blackbox-exporter` | Public HTTPS probes for the app, docs, official site, and the `www` alias |
 | `loki` | Container logs, 14-day retention |
@@ -67,7 +67,6 @@ Every published port binds to `127.0.0.1`. Reach Grafana through a tunnel:
 ```bash
 ssh -L 3000:127.0.0.1:3000 -N <installation-host>
 # open http://localhost:3000 and sign in with the configured administrator
-grep -E 'GRAFANA_ADMIN_(USER|PASSWORD)' /opt/clumsies/observability/.env
 ```
 
 Prometheus listens on `127.0.0.1:9090` and Alertmanager on `127.0.0.1:9093`, so
@@ -99,10 +98,11 @@ shows the loaded notification routing configuration.
 Open **Overview** to compare availability, request rate, 5xx rate and entrance
 p95 by site. The four configured hosts remain separate. Click a site series to
 open **Website Traffic** with that host and the current time range. Shared host,
-database, backup and log-delivery health stay on Overview.
+database, backup, collection and log-delivery details are in **Infrastructure**.
 
-**Business API** uses Server route templates. Select a route to compare handler
-p50/p95/p99, sample count, response codes and requests over one second. Health
+**Business API** uses Server route templates. Select a route and method to compare
+successful handler p50/p95/p99, matching sample counts, error latency, response
+codes and requests over one second. Health
 checks (`/api/v1/admin/health`) and `/metrics` are excluded in these queries;
 the underlying series remain available for operational investigations. Handler
 latency ends when a Response is returned, not after the body has been sent.
@@ -142,7 +142,7 @@ must not replace the original requested path in logs.
    counterpart. This is log correlation, not a distributed trace.
 3. Alternatively paste an `x-request-id` response header into **Request ID**.
    The dedicated correlation panel ignores site/route filters so it cannot hide
-   the other layer. An empty ID shows all logs in the selected time range.
+   the other layer. Empty IDs return no logs; IDs match the exact JSON field.
 4. If both entrance and handler are slow, investigate the backend. If only the
    entrance is slow, inspect proxy/body transfer. The two timers have different
    boundaries; their difference is not a measurement of network RTT.
@@ -153,7 +153,7 @@ connect a client report to a Server request. Missing internal DB/external-call
 spans cannot be reconstructed from an ID: add targeted timings when necessary.
 A five-minute database snapshot can miss short query/connection waits.
 
-Prometheus also scrapes Alloy and Loki. Overview shows send retries, dropped
+Prometheus also scrapes Alloy and Loki. Infrastructure shows send retries, dropped
 entries and delivered entries; sustained retries and any drops alert. A failed
 scrape uses `ScrapeTargetDown`. Zero delivered logs alone does not prove a
 failure (the source may be idle), and successful delivery does not prove that
@@ -201,8 +201,10 @@ Availability: a public endpoint down for two minutes, a certificate expiring
 within 14 days, or a scrape target down. Capacity: a filesystem below 15 percent
 free or host memory below 10 percent available. Application: PostgreSQL
 unreachable, more than 80 percent of connections in use, or a Clumsies container
-above 2 GiB. Operations: no backup for 26 hours, no restore drill for 8 days, or
-a failed backup unit. HTTP server errors above one percent for five minutes and
+above 2 GiB. Operations: no successful backup for 26 hours, no successful restore
+drill for 8 days, failed backup/restore units, missing expected targets, stale
+host collection, invalid future operational timestamps lasting five minutes,
+and failed Alertmanager notifications. HTTP server errors above one percent for five minutes and
 database queries above one minute for five minutes also alert. A failed, missing,
 or more than 15-minute-old database snapshot alerts after five minutes while
 node-exporter is reachable; exporter outages use `ScrapeTargetDown`.
@@ -223,7 +225,7 @@ the same queries and explain these limits in panel descriptions.
 
 | Metric | Meaning |
 | --- | --- |
-| `clumsies_{commits,drafts,reviews}_created_last_hour` | Retained rows whose `created_at` is in the last 60 minutes. Includes system/bootstrap Commits; deletion reduces the count. No `rate()` or `increase()` is applied. |
+| `clumsies_{commits,drafts,reviews}_created_last_hour` | Retained rows whose `created_at` falls between now minus 60 minutes and now. Future rows are excluded. Includes system/bootstrap Commits; deletion reduces the count. No `rate()` or `increase()` is applied. |
 | `clumsies_drafts`, `clumsies_reviews` | Current row counts by lifecycle state, including zero for empty states. Merged/discarded Drafts are history, not backlog. |
 | `clumsies_drafts_with_reconciliation_conflicts` | Open/submitted Drafts with a non-invalidated conflicting candidate matching their version, base commit and current main ref, following the Draft repository's validity checks. Unevaluated Drafts are excluded; zero is not proof that every Draft is conflict-free. |
 | `clumsies_inbox_unread_records` | Stored unread receipts, including archived or inaccessible notifications. Not the visible inbox badge or a delivery failure. |
@@ -237,98 +239,92 @@ Recent-row counts are approximate activity snapshots, not durable event totals.
 True event throughput or client enqueue-to-acknowledgment latency requires
 instrumentation at those events; it cannot be reconstructed from table sizes.
 
+Current host/database snapshots require an age between zero and 15 minutes.
+Future event times remain visible as invalid, with their raw values retained.
+`OperationalTimestampInvalid` warns after five minutes when a reachable node
+reports a future collection, backup, restore, release, or unit-exit timestamp.
+This does not apply to certificate expiry, which is a future deadline. A new
+valid success can replace an invalid cached snapshot; existing future receipts
+or archives still require investigation.
+
 ## Validate and update
 
-From the repository root, run `python3 deploy/observability/test.py`. It uses
-Docker Compose validation plus the shipped images' `promtool` and `amtool`, with
-sample configuration and no production credentials. An ephemeral, isolated
-PostgreSQL container applies the actual Server migrations and exercises the
-installed collector with creation, deletion, zero counts, stale candidates and
-SQL failure/recovery. The rule tests cover quiet workflow state and operational
-failures firing and resolving, including failed or stopped collection. CI runs
-the same check.
+Run `python3 deploy/observability/test.py` and
+`python3 deploy/observability/test-delivery.py` from the repository root. The
+checks use disposable databases and networks, the deployed image versions,
+actual PromQL/LogQL, and real Grafana provisioning. They cover idle traffic,
+old/new Server schema, cancelled requests, missing targets, SQL failure and
+stale snapshots, JSON readiness, exact request IDs, secret redaction, and
+configuration rollback. No production data or credentials are required.
 
-Monitoring configuration is deployed separately from Server and site delivery.
-For an existing installation, back up the current configuration, then copy the
-new `prometheus/rules.yml`, `compose.observability.yml`,
-`host/clumsies-observability-metrics` and both `grafana/dashboards/*.json` files
-into their matching paths under `/opt/clumsies/observability/`. Also back up the
-installed `/usr/local/sbin/clumsies-observability-metrics` executable.
-Preserve `.env`, data volumes, and the credential values in `alertmanager/alertmanager.yml`; merge only the Watchdog child route
-from the template if it is missing.
+Use the automated configuration delivery below for installed stacks. Deploy a
+matching Server release before the dashboards so method/result classifications
+and business lifecycle metrics become available. Update the installed
+`/usr/local/sbin/clumsies-server-release` from the tested release helper to
+require JSON readiness and persist successful restore receipts; retain the old
+helper for recovery. Do not run the bootstrap installer again merely to replace
+this executable, because it also configures deployment identities.
 
-The old `clumsies_{commits,drafts,reviews}_total` row-count counters,
-`clumsies_reconciliation_candidates`, and `clumsies_inbox_unread` are retired.
-Update custom queries to the metrics above. Historical series remain until
-Prometheus retention expires; no history is rewritten or backfilled.
-Install the collector and dashboards together, before loading the new health
-rule. No application schema migration is needed for this monitoring update.
+The managed configuration includes the two file-discovery catalogs,
+Prometheus rules/configuration, Blackbox JSON-ready module, host collector,
+Grafana provisioning and all eight dashboards. Existing Overview/API/Website
+UIDs remain valid; panel links moved to Infrastructure must be updated.
+No Server database migration or monitoring image upgrade is required.
 
-On the installation host:
+Keep `.env`, notification credentials/routing, data volumes and unrelated files.
+The deployment verifies all expected targets, four public probes, fresh
+successful collection, and actual stored dashboard definitions. Never induce
+slow traffic, collector failures or notification errors on production for these
+checks. New classifications begin at rollout; historical results cannot be
+backfilled. Wait a complete five-minute request window before reading new
+percentiles. On failure, restore the managed configuration and collector from
+the retained snapshot, then verify recovery without deleting volumes.
 
-```bash
-cd /opt/clumsies/observability
-sudo install -m 0755 host/clumsies-observability-metrics /usr/local/sbin/clumsies-observability-metrics
-sudo systemctl start clumsies-observability-metrics.service
-sudo systemctl is-active clumsies-observability-metrics.timer
-sudo grep '^clumsies_database_collection_' /var/lib/clumsies-observability/textfile/clumsies.prom
-sudo docker compose --file compose.observability.yml --env-file .env config -q
-sudo docker compose --file compose.observability.yml --env-file .env exec prometheus \
-  promtool check config /etc/prometheus/prometheus.yml
-sudo docker compose --file compose.observability.yml --env-file .env exec alertmanager \
-  amtool check-config /etc/alertmanager/alertmanager.yml
-sudo docker compose --file compose.observability.yml --env-file .env up -d --no-deps --pull never prometheus alertmanager
-```
+## Local performance diagnostics and load tests
 
-Confirm `clumsies_database_collection_success` is 1 and the collection timestamp
-is current before proceeding; the service also writes failure=0 on SQL errors.
-Grafana's file provider reloads the dashboard JSON within 30 seconds.
-Recreation is needed to apply the external URL flags. Confirm the updated rules are
-loaded in Prometheus, the five workflow alerts are absent, the Watchdog route
-repeats daily, and newly generated links work through the tunnel. An existing
-workflow alert may send a final resolved email. To roll back, restore the
-backed-up files and collector executable, run the collector once, and repeat
-validation and recreation without deleting volumes. Restore both dashboards
-with the collector so their metric names stay aligned.
+Daemon Health optionally exposes a process-scoped performance snapshot with
+fixed operation/result categories, started/in-flight counts, cumulative outcome
+histograms, process identity and collection times. macOS diagnostics export
+includes `performance.json` when available; older daemons remain compatible.
+The snapshot contains no query text, resource IDs or credentials and is not
+uploaded to Grafana. Process restart resets these counters.
 
-## Deploying the request dashboards
+Sync status separates successful Commit checks from Ref installation, and
+reports the original oldest pending/failed operation times. Index status
+provides a trustworthy current-backlog start and actual publication time;
+legacy backlog without that start remains unknown. Attempt metrics and Server
+ACK timings do not implement the durable, deduplicated write-freshness SLI.
 
-These changes are configuration/code only; no database migration or new
-service is needed. Validate with `python3 deploy/observability/test.py` and
-`cargo test -p server --lib metrics::tests`. The request test uses an isolated
-Docker network, synthetic backend and static site, real Caddy/Alloy/Loki, and
-synthetic PromQL series. It verifies site isolation, probe exclusion, idle
-windows, original paths, secret redaction and cross-layer request correlation.
-
-Back up and deploy the following together:
-
-- Production `deploy/Caddyfile`: validate with `caddy validate`, then use Caddy's
-  config reload. Existing traffic need not be interrupted.
-- Server release containing the extended histogram buckets. During the first
-  five minutes after rollout, queries may mix old/new bucket layouts; wait a
-  full window before interpreting the new tail estimate.
-- `prometheus/prometheus.yml`, `rules.yml`: validate with `promtool` then reload
-  Prometheus. This adds Alloy/Loki targets and changes errors to per-site scope.
-- All six `grafana/dashboards/*.json` and
-  `grafana/provisioning/datasources/loki.yml`: dashboards reload automatically;
-  restart Grafana or reload datasource provisioning for request links.
-
-Keep the existing Overview UIDs so saved links remain valid. The old global
-latency panels are replaced, not relabeled as per-site history. Host-tagged
-metrics and newly covered website logs begin only after deployment; historical
-site separation cannot be backfilled. Preserve credentials and storage volumes.
-Roll back the backed-up config and Server release together if validation fails.
-Check all four hosts, an API request, its derived log link, and Alloy/Loki scrape
-health after rollout. Never induce slow traffic or delivery failures in production
-just to test these scenarios.
+`python3 dev/load-http.py --self-check` validates the bounded load scheduler.
+The [local load instructions](../../dev/load-http.README.md) describe release
+builds, authenticated read/read-write profiles, complete planned-operation
+accounting and owned fixture cleanup. The tool accepts no external target.
+Read the [design](../../docs/zh/performance/observability-plan.md) and
+[runbook](../../docs/zh/performance/observability-runbook.md) for measurement
+contracts and incident procedures.
 
 ## Server metric implementation
 
 The Server uses the `prometheus` Rust library for collectors, histogram
-aggregation and text encoding. The existing `/metrics` endpoint, route/status
-labels and latency bucket boundaries remain unchanged. Requests cancelled
-before a response decrement the in-flight gauge without recording a completed
-response. Handler latency still excludes response body transfer.
+aggregation and text encoding. `/metrics` remains private to the Compose
+network. Response counters use registered route templates, bounded HTTP
+methods, and actual status codes from 100 to 599 (other values become `other`).
+The existing histogram bucket boundaries remain unchanged; histogram labels
+now include method and status_class. Dashboards label legacy route-only
+histograms as mixed outcomes, rather than treating them as successful latency.
+Wait one complete five-minute query window after rollout before interpreting
+the new distributions. Handler latency still excludes response body transfer.
+
+Business request lifecycle metrics exclude health and `/metrics`: started,
+in-flight, and terminal outcomes (`response` or `cancelled_or_aborted`). The
+legacy global in-flight gauge includes those operational requests. A cancelled
+future balances both gauges without recording a completed response or latency.
+
+Connection acquisition metrics cover only `review_create` and `review_merge`:
+attempt outcomes, acquisition duration, and in-flight attempts. Duration includes
+waiting, validation and opening connections; it excludes BEGIN and transaction
+execution. These series do not measure every database operation or pure queue
+time.
 
 `clumsies_db_pool_size` reports current open connections, preserving its
 historical values; `clumsies_db_pool_max_connections` reports the configured
@@ -356,14 +352,18 @@ not a new public endpoint, monitoring administrator credential, or SSH tunnel.
 The workflow uploads the exact commit's files, validates them with the images
 already running on the host, snapshots managed configuration, then applies it.
 Only managed configuration directories and the Compose file are synchronized;
-`.env`, data volumes and unrelated files are preserved. Prometheus and
-Alertmanager receive SIGHUP; other changed services restart. Compose changes
+`.env`, data volumes, the existing Alertmanager notification configuration and
+unrelated files are preserved. The Alertmanager template is for bootstrap;
+editing it does not replace installed SMTP credentials or routing. Prometheus
+receives SIGHUP; other changed services restart. Compose changes
 use the running immutable image IDs with no pulls or builds. Adding/removing
 services or upgrading images remains a separate infrastructure operation.
 
-Delivery checks readiness, a healthy fresh scrape for every discovered target,
-Prometheus reload status, Grafana provisioning errors and Prometheus/Loki
-queries. Empty request results are valid. These are bounded smoke checks, not
+Delivery checks readiness, a healthy fresh scrape for every expected target in
+`prometheus/targets.json` and `probes.json`, actual public probe success, fresh
+successful host/database collection, Prometheus reload status, and the stored
+content of all eight Grafana dashboards, including Grafana 13 unified storage.
+Prometheus/Loki smoke queries accept empty request results. These are bounded checks, not
 proof that every application path or external website is healthy. The existing
 integration tests cover slow traffic and failure injection without production
 data. A pre-existing monitoring outage can block delivery and require repair.

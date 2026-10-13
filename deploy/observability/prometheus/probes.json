@@ -1,0 +1,38 @@
+[
+  {
+    "targets": [
+      "https://app.clumsies.ai/api/v1/admin/health"
+    ],
+    "labels": {
+      "job": "blackbox-public",
+      "module": "https_ready"
+    }
+  },
+  {
+    "targets": [
+      "https://docs.clumsies.ai/"
+    ],
+    "labels": {
+      "job": "blackbox-public",
+      "module": "https_follow"
+    }
+  },
+  {
+    "targets": [
+      "https://clumsies.ai/"
+    ],
+    "labels": {
+      "job": "blackbox-public",
+      "module": "https_follow"
+    }
+  },
+  {
+    "targets": [
+      "https://www.clumsies.ai/"
+    ],
+    "labels": {
+      "job": "blackbox-public",
+      "module": "https_follow"
+    }
+  }
+]

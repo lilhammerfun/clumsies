@@ -1,6 +1,6 @@
 {
   "uid": "clumsies-web",
-  "title": "Clumsies Website Traffic",
+  "title": "Clumsies Entrance and Websites",
   "tags": [
     "clumsies",
     "en"
@@ -13,7 +13,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "One HTTPS site handler per request. Includes availability probes; excludes automatic HTTP→HTTPS redirects. Measures server-side response handling, not browser page load. Host labels start at deployment; old all-site history is not backfilled.",
+  "description": "Entrance request handling by site, not browser load. App entrance p95 objective is <1s; investigate other sites independently. Includes synthetic probes.",
   "links": [
     {
       "title": "Overview",
@@ -32,9 +32,25 @@
       "targetBlank": false
     },
     {
-      "title": "Website traffic",
+      "title": "Entrance and websites",
       "type": "link",
       "url": "/d/clumsies-web/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Infrastructure and operations",
+      "type": "link",
+      "url": "/d/clumsies-infrastructure/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Product activity · API bottom section",
+      "type": "link",
+      "url": "/d/clumsies-api/view",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false
@@ -59,7 +75,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "expr": "(histogram_quantile(0.5, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "p50",
           "datasource": {
             "type": "prometheus",
@@ -68,7 +84,7 @@
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "p95",
           "datasource": {
             "type": "prometheus",
@@ -77,7 +93,7 @@
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "expr": "(histogram_quantile(0.99, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "p99",
           "datasource": {
             "type": "prometheus",
@@ -106,7 +122,7 @@
       "id": 2,
       "title": "Requests observed · 5m",
       "type": "timeseries",
-      "description": "Rolling 5-minute histogram estimate, not the maximum or a single request. Read alongside the sample count. Empty means no samples, not zero latency.",
+      "description": "Extrapolated five-minute request count, not an exact log count. Read beside histogram estimates; few samples make tail percentiles unstable.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -120,7 +136,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))",
+          "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "Requests observed · 5m",
           "datasource": {
             "type": "prometheus",
@@ -163,7 +179,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(code)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))",
+          "expr": "(sum(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
+          "legendFormat": "All requests / second",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(sum by(code)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "{{code}}",
           "datasource": {
             "type": "prometheus",
@@ -206,7 +231,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) - sum(increase(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\",le=~\"1|1[.]0\"}[5m]))",
+          "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) - sum(increase(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\",le=~\"1|1[.]0\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "Requests over 1s · 5m",
           "datasource": {
             "type": "prometheus",
@@ -317,44 +342,17 @@
     },
     {
       "id": 7,
-      "title": "Logs for request ID",
-      "type": "logs",
-      "description": "Paste an ID; empty shows all logs. Ignores site selection so backend records remain visible.",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
+      "type": "text",
+      "title": "Request correlation",
+      "options": {
+        "mode": "markdown",
+        "content": "Expand a log and open **Related request logs**, or [open the shared request view](/d/clumsies-api/view?from=${__from}&to=${__to}&var-request_id=${request_id:percentencode}&viewPanel=7). Enter an ID; empty IDs return no logs. Static requests have no backend counterpart."
       },
       "gridPos": {
         "x": 0,
         "y": 32,
         "w": 24,
-        "h": 9
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "{service=~\"caddy|server\"} |= ${request_id:doublequote}",
-          "legendFormat": "",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "No samples"
-        },
-        "overrides": []
-      },
-      "options": {
-        "showTime": true,
-        "wrapLogMessage": true,
-        "sortOrder": "Descending",
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "showLabels": false
+        "h": 4
       }
     }
   ],

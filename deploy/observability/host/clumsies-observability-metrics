@@ -35,9 +35,9 @@ WHERE d.status IN ('open', 'submitted') AND c.status = 'conflicts'
     AND d.base_commit_id IS DISTINCT FROM current_ref.commit_id
 UNION ALL SELECT 'inbox_unread_records', '', count(*)::text FROM inbox_notifications WHERE read_version < version
 UNION ALL SELECT 'oldest_open_draft_age_seconds', '', coalesce(round(extract(epoch FROM (now() - min(created_at))))::text, '0') FROM drafts WHERE status = 'open'
-UNION ALL SELECT 'commits_created_last_hour', '', count(*)::text FROM commits WHERE created_at >= now() - interval '1 hour'
-UNION ALL SELECT 'drafts_created_last_hour', '', count(*)::text FROM drafts WHERE created_at >= now() - interval '1 hour'
-UNION ALL SELECT 'reviews_created_last_hour', '', count(*)::text FROM reviews WHERE created_at >= now() - interval '1 hour'
+UNION ALL SELECT 'commits_created_last_hour', '', count(*)::text FROM commits WHERE created_at >= now() - interval '1 hour' AND created_at <= now()
+UNION ALL SELECT 'drafts_created_last_hour', '', count(*)::text FROM drafts WHERE created_at >= now() - interval '1 hour' AND created_at <= now()
+UNION ALL SELECT 'reviews_created_last_hour', '', count(*)::text FROM reviews WHERE created_at >= now() - interval '1 hour' AND created_at <= now()
 UNION ALL SELECT 'db_active_backends', '', count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND pid <> pg_backend_pid()
 UNION ALL SELECT 'db_longest_query_seconds', '', coalesce(round(max(extract(epoch FROM (now() - query_start))))::text, '0') FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND pid <> pg_backend_pid()
 ORDER BY 1, 2
@@ -66,8 +66,77 @@ emit_database() {
   printf 'clumsies_database_collection_timestamp_seconds %s\n' "$(date +%s)"
 }
 
+# Keep successful timestamps in the persistent, atomically replaced textfile.
+# A failed later attempt or systemd state reset must not erase the last success.
+last_success() {
+  metric="$1"
+  candidate="$2"
+  previous="$(awk -v metric="${metric}" '$1 == metric && $2 ~ /^[0-9]+$/ {print $2}' "${OUT}" 2>/dev/null || true)"
+  current_epoch="$(date +%s)"
+  if [ -n "${previous}" ] && { [ -z "${candidate}" ] || [ "${previous}" -gt "${candidate}" ]; }; then
+    # A clock correction can produce a genuinely new valid receipt below a
+    # cached future time. Replace only the cache; retain raw receipts/history.
+    # Without valid new evidence, keep the future value visibly invalid.
+    if [ -z "${candidate}" ] || [ "${previous}" -le "${current_epoch}" ] || [ "${candidate}" -gt "${current_epoch}" ]; then
+      candidate="${previous}"
+    fi
+  fi
+  [ -z "${candidate}" ] || printf '%s %s\n' "${metric}" "${candidate}"
+}
+
+emit_unit() {
+  unit="$1"
+  metric="$2"
+  receipt="$3"
+  loaded="$(systemctl show -p LoadState --value "${unit}" 2>/dev/null || true)"
+  active="$(systemctl show -p ActiveState --value "${unit}" 2>/dev/null || true)"
+  result="$(systemctl show -p Result --value "${unit}" 2>/dev/null || true)"
+  exit_at="$(systemctl show -p ExecMainExitTimestamp --value "${unit}" 2>/dev/null || true)"
+  epoch=""
+  if [ -n "${exit_at}" ]; then
+    epoch="$(date -d "${exit_at}" +%s 2>/dev/null || true)"
+  fi
+  success=""
+  if [ "${loaded}" != loaded ]; then
+    state=missing
+  elif [ "${active}" = activating ]; then
+    state=running
+  elif [ -z "${result}" ]; then
+    state=missing
+  elif [ "${result}" != success ]; then
+    state=failed
+    printf 'clumsies_unit_last_exit_ok{unit="%s"} 0\n' "${unit}"
+  elif [ -z "${exit_at}" ]; then
+    state=never
+  elif [ -z "${epoch}" ]; then
+    state=missing
+  else
+    state=success
+    success="${epoch}"
+    printf 'clumsies_unit_last_exit_ok{unit="%s"} 1\n' "${unit}"
+  fi
+  printf 'clumsies_unit_last_exit_state{unit="%s",state="%s"} 1\n' "${unit}" "${state}"
+  [ -z "${epoch}" ] || printf 'clumsies_unit_last_exit_timestamp_seconds{unit="%s"} %s\n' "${unit}" "${epoch}"
+  if [ -n "${receipt}" ] && { [ -z "${success}" ] || [ "${receipt}" -gt "${success}" ]; }; then
+    success="${receipt}"
+  fi
+  last_success "${metric}" "${success}"
+}
+
 {
   cat <<'METADATA'
+# HELP clumsies_observability_collection_timestamp_seconds Unix time of the latest completed textfile collection, including failed database attempts.
+# TYPE clumsies_observability_collection_timestamp_seconds gauge
+# HELP clumsies_unit_last_exit_state Current systemd attempt state; never, missing and running are not completed failures.
+# TYPE clumsies_unit_last_exit_state gauge
+# HELP clumsies_unit_last_exit_ok Result of the latest known attempt: one for completed success, zero for failure including startup failure.
+# TYPE clumsies_unit_last_exit_ok gauge
+# HELP clumsies_unit_last_exit_timestamp_seconds Unix time of the latest observed systemd exit.
+# TYPE clumsies_unit_last_exit_timestamp_seconds gauge
+# HELP clumsies_backup_last_success_timestamp_seconds Unix time of the latest verified backup archive or observed successful scheduled backup, retained across later failures.
+# TYPE clumsies_backup_last_success_timestamp_seconds gauge
+# HELP clumsies_restore_drill_last_success_timestamp_seconds Unix time of the latest successful restore-drill receipt or observed successful unit exit, retained across later failures.
+# TYPE clumsies_restore_drill_last_success_timestamp_seconds gauge
 # HELP clumsies_drafts Stored Drafts by lifecycle state, including zero counts.
 # TYPE clumsies_drafts gauge
 # HELP clumsies_reviews Stored Reviews by lifecycle state, including zero counts.
@@ -96,36 +165,22 @@ METADATA
 
   newest_dump="$(find /opt/clumsies/backups -maxdepth 1 -type f -name '*.dump' \
     -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
-  if [ -n "${newest_dump:-}" ]; then
-    printf 'clumsies_backup_last_success_timestamp_seconds %s\n' "$(stat -c %Y "${newest_dump}")"
-  fi
 
   newest_release="$(grep -l '^status=success' /opt/clumsies/releases/deploy-*.env 2>/dev/null | sort | tail -1 || true)"
   if [ -n "${newest_release:-}" ]; then
     printf 'clumsies_release_last_success_timestamp_seconds %s\n' "$(stat -c %Y "${newest_release}")"
   fi
 
-  for unit in clumsies-backup.service clumsies-restore-drill.service; do
-    result="$(systemctl show -p Result --value "${unit}" 2>/dev/null || echo unknown)"
-    exit_at="$(systemctl show -p ExecMainExitTimestamp --value "${unit}" 2>/dev/null || true)"
-    case "${result}" in
-      success) ok=1 ;;
-      *) ok=0 ;;
-    esac
-    printf 'clumsies_unit_last_exit_ok{unit="%s"} %s\n' "${unit}" "${ok}"
-    if [ -n "${exit_at}" ]; then
-      epoch="$(date -d "${exit_at}" +%s 2>/dev/null || true)"
-      [ -n "${epoch}" ] && printf 'clumsies_unit_last_exit_timestamp_seconds{unit="%s"} %s\n' "${unit}" "${epoch}"
-    fi
-  done
-
-  drill_stamp="$(systemctl show -p ExecMainExitTimestamp --value clumsies-restore-drill.service 2>/dev/null || true)"
-  if [ -n "${drill_stamp}" ] && [ "$(systemctl show -p Result --value clumsies-restore-drill.service 2>/dev/null || true)" = "success" ]; then
-    epoch="$(date -d "${drill_stamp}" +%s 2>/dev/null || true)"
-    [ -n "${epoch}" ] && printf 'clumsies_restore_drill_last_success_timestamp_seconds %s\n' "${epoch}"
+  backup_success=""
+  if [ -n "${newest_dump:-}" ]; then
+    backup_success="$(stat -c %Y "${newest_dump}")"
   fi
+  restore_success="$(awk '$0 ~ /^[0-9]+$/ && $0 > 0 {print $0; exit}' /opt/clumsies/backups/.restore-drill-last-success 2>/dev/null || true)"
+  emit_unit clumsies-backup.service clumsies_backup_last_success_timestamp_seconds "${backup_success}"
+  emit_unit clumsies-restore-drill.service clumsies_restore_drill_last_success_timestamp_seconds "${restore_success}"
 
   emit_database
+  printf 'clumsies_observability_collection_timestamp_seconds %s\n' "$(date +%s)"
 } > "${TMP}"
 
 # node-exporter reads this file as an unprivileged user.
