@@ -289,6 +289,9 @@ pub struct DaemonHealth {
     pub daemon_installation_id: String,
     pub log_dir: String,
     pub local_db: LocalDbStatus,
+    /// Optional process-local summaries; never include payloads or upload to the Server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub performance: Option<crate::PerformanceSnapshot>,
 }
 
 /// Agent IPC compatibility and build provenance, carried on every proxy request.
@@ -315,6 +318,12 @@ pub struct DaemonSyncStatus {
     pub commit_sync: SyncChannelStatus,
     pub pending_operation_count: i64,
     pub failed_operation_count: i64,
+    /// Earliest original creation of accessible queued/syncing/retrying work; preserved across retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_pending_operation_at: Option<String>,
+    /// Earliest original creation of accessible failed work, not its last failure time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_failed_operation_at: Option<String>,
     pub behind_draft_count: i64,
     pub reconciliation_conflict_count: i64,
     pub last_success_at: Option<String>,
@@ -322,6 +331,9 @@ pub struct DaemonSyncStatus {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SyncChannelStatus {
+    /// Last successful validated remote check; installation and queue convergence keep their existing fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checked_success_at: Option<String>,
     pub state: SyncState,
     pub server_cursor: Option<String>,
     pub last_attempt_at: Option<String>,

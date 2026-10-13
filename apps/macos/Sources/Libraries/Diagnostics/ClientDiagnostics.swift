@@ -116,7 +116,7 @@ enum ClientDiagnostics {
          "os": ProcessInfo.processInfo.operatingSystemVersionString]
     }
 
-    static func export(to destination: URL, appDirectory: URL, daemonDirectory: URL, metadata: [String: String]) throws {
+    static func export(to destination: URL, appDirectory: URL, daemonDirectory: URL, metadata: [String: String], performance: DaemonPerformanceSnapshot? = nil) throws {
         let fm = FileManager.default
         // A fresh destination prevents merging with an unrelated previous export.
         guard !fm.fileExists(atPath: destination.path) else { throw CocoaError(.fileWriteFileExists) }
@@ -148,6 +148,13 @@ enum ClientDiagnostics {
                 }
                 try data.write(to: destination.appending(path: name), options: .atomic)
             }
+        }
+        if let performance {
+            try JSONCoding.encoder().encode(performance)
+                .write(to: destination.appending(path: "performance.json"), options: .atomic)
+            report["performance.json"] = "included; process-scoped counters"
+        } else {
+            report["performance.json"] = "unavailable"
         }
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: destination.appending(path: "manifest.json"), options: .atomic)

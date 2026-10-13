@@ -507,8 +507,8 @@ async fn load_sync_status_scoped(
         .into_iter()
         .filter(|project| project_id.is_none_or(|id| project.project_id == id))
         .collect();
-    let pending_operation_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)
+    let pending_operations = sqlx::query(
+        "SELECT COUNT(*) AS count, MIN(o.created_at) AS oldest
          FROM local_draft_operations AS o
          JOIN local_drafts AS d ON d.draft_id = o.draft_id
          WHERE o.sync_status IN ('queued', 'syncing', 'retrying')
@@ -519,8 +519,10 @@ async fn load_sync_status_scoped(
     .bind(&accessible)
     .fetch_one(pool)
     .await?;
-    let failed_operation_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)
+    let pending_operation_count: i64 = pending_operations.try_get("count")?;
+    let oldest_pending_operation_at = pending_operations.try_get("oldest")?;
+    let failed_operations = sqlx::query(
+        "SELECT COUNT(*) AS count, MIN(o.created_at) AS oldest
          FROM local_draft_operations AS o
          JOIN local_drafts AS d ON d.draft_id = o.draft_id
          WHERE o.sync_status = 'failed'
@@ -531,6 +533,8 @@ async fn load_sync_status_scoped(
     .bind(&accessible)
     .fetch_one(pool)
     .await?;
+    let failed_operation_count: i64 = failed_operations.try_get("count")?;
+    let oldest_failed_operation_at = failed_operations.try_get("oldest")?;
     let retrying_operation_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM local_draft_operations AS o
@@ -618,6 +622,7 @@ async fn load_sync_status_scoped(
     Ok(DaemonSyncStatus {
         unavailable_projects,
         draft_sync: SyncChannelStatus {
+            last_checked_success_at: None,
             state: draft_state,
             server_cursor,
             last_attempt_at,
@@ -638,6 +643,8 @@ async fn load_sync_status_scoped(
         commit_sync,
         pending_operation_count,
         failed_operation_count,
+        oldest_pending_operation_at,
+        oldest_failed_operation_at,
         behind_draft_count,
         reconciliation_conflict_count,
         last_success_at: overall_last_success_at,
@@ -704,95 +711,115 @@ pub(crate) async fn sync_one_draft_operation(
     state: &DaemonState,
     operation: QueuedDraftOperation,
 ) -> Result<(), DraftSyncError> {
-    let local_operation_id = operation.local_operation_id.clone();
-    let draft_operation: DaemonDraftOperation = serde_json::from_str(&operation.operation_json)
-        .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?;
-    if draft_operation.discard.is_some() {
-        if let Some(server_draft_id) = operation.server_draft_id.as_deref() {
-            delete_server_json(
-                state,
-                &format!("/api/v1/drafts/{server_draft_id}"),
-                operation.server_version,
-            )
-            .await
-            .map_err(|error| {
-                DraftSyncError::from_daemon_error(local_operation_id.clone(), error)
-            })?;
-        }
-        mark_operation_synced(&state.inner.pool, &local_operation_id)
-            .await
+    crate::performance::observe("draft_attempt", async {
+        let local_operation_id = operation.local_operation_id.clone();
+        let draft_operation: DaemonDraftOperation = serde_json::from_str(&operation.operation_json)
             .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?;
-        return Ok(());
-    }
-    let Some(server_operation) =
-        map_daemon_operation_to_server(operation.scope, operation.resource_kind, &draft_operation)
-            .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?
-    else {
-        mark_operation_synced(&state.inner.pool, &local_operation_id)
-            .await
-            .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?;
-        return Ok(());
-    };
-
-    if let Some(server_draft_id) = operation.server_draft_id {
-        let request = ServerDraftOperationBatchRequest {
-            daemon_installation_id: state.inner.daemon_installation_id.clone(),
-            operations: vec![ServerDraftOperationBatchItem {
-                local_operation_id: local_operation_id.clone(),
-                draft_id: server_draft_id,
-                expected_draft_version: operation.server_version,
-                operation: server_operation,
-            }],
-        };
-        let response: ServerDraftOperationBatchResponse =
-            post_server_json(state, "/api/v1/draft-operation-batches", &request)
+        if draft_operation.discard.is_some() {
+            if let Some(server_draft_id) = operation.server_draft_id.as_deref() {
+                crate::performance::observe(
+                    "draft_server_ack",
+                    delete_server_json(
+                        state,
+                        &format!("/api/v1/drafts/{server_draft_id}"),
+                        operation.server_version,
+                    ),
+                )
                 .await
                 .map_err(|error| {
                     DraftSyncError::from_daemon_error(local_operation_id.clone(), error)
                 })?;
-        if !response
-            .accepted_operations
-            .iter()
-            .any(|accepted| accepted == &local_operation_id)
-        {
-            return Err(DraftSyncError::new(
-                local_operation_id,
-                "Server did not accept local operation",
-            ));
+            }
+            mark_operation_synced(&state.inner.pool, &local_operation_id)
+                .await
+                .map_err(|error| {
+                    DraftSyncError::new(local_operation_id.clone(), error.to_string())
+                })?;
+            return Ok(());
         }
-        mark_batch_operation_synced(
+        let Some(server_operation) = map_daemon_operation_to_server(
+            operation.scope,
+            operation.resource_kind,
+            &draft_operation,
+        )
+        .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?
+        else {
+            mark_operation_synced(&state.inner.pool, &local_operation_id)
+                .await
+                .map_err(|error| {
+                    DraftSyncError::new(local_operation_id.clone(), error.to_string())
+                })?;
+            return Ok(());
+        };
+
+        if let Some(server_draft_id) = operation.server_draft_id {
+            let request = ServerDraftOperationBatchRequest {
+                daemon_installation_id: state.inner.daemon_installation_id.clone(),
+                operations: vec![ServerDraftOperationBatchItem {
+                    local_operation_id: local_operation_id.clone(),
+                    draft_id: server_draft_id,
+                    expected_draft_version: operation.server_version,
+                    operation: server_operation,
+                }],
+            };
+            crate::performance::observe("draft_server_ack", async {
+                let response: ServerDraftOperationBatchResponse =
+                    post_server_json(state, "/api/v1/draft-operation-batches", &request)
+                        .await
+                        .map_err(|error| {
+                            DraftSyncError::from_daemon_error(local_operation_id.clone(), error)
+                        })?;
+                if !response
+                    .accepted_operations
+                    .iter()
+                    .any(|accepted| accepted == &local_operation_id)
+                {
+                    return Err(DraftSyncError::new(
+                        local_operation_id.clone(),
+                        "Server did not accept local operation",
+                    ));
+                }
+                Ok(())
+            })
+            .await?;
+            mark_batch_operation_synced(
+                &state.inner.pool,
+                &operation.draft_id,
+                &local_operation_id,
+                operation.server_version + 1,
+            )
+            .await
+            .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?;
+            return Ok(());
+        }
+
+        let request = ServerCreateDraftRequest {
+            daemon_installation_id: state.inner.daemon_installation_id.clone(),
+            project_id: operation.project_id.clone(),
+            base_commit_id: operation.base_commit_id.clone(),
+            title: draft_title(&operation),
+            description: None,
+            resource: server_operation.resource.clone(),
+            operations: vec![server_operation],
+        };
+        let response: ServerDraftMutationResponse = crate::performance::observe(
+            "draft_server_ack",
+            post_server_json(state, "/api/v1/drafts", &request),
+        )
+        .await
+        .map_err(|error| DraftSyncError::from_daemon_error(local_operation_id.clone(), error))?;
+        mark_initial_operation_synced(
             &state.inner.pool,
             &operation.draft_id,
             &local_operation_id,
-            operation.server_version + 1,
+            &response.draft.draft_id,
+            response.draft.version,
         )
         .await
         .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?;
-        return Ok(());
-    }
-
-    let request = ServerCreateDraftRequest {
-        daemon_installation_id: state.inner.daemon_installation_id.clone(),
-        project_id: operation.project_id.clone(),
-        base_commit_id: operation.base_commit_id.clone(),
-        title: draft_title(&operation),
-        description: None,
-        resource: server_operation.resource.clone(),
-        operations: vec![server_operation],
-    };
-    let response: ServerDraftMutationResponse = post_server_json(state, "/api/v1/drafts", &request)
-        .await
-        .map_err(|error| DraftSyncError::from_daemon_error(local_operation_id.clone(), error))?;
-    mark_initial_operation_synced(
-        &state.inner.pool,
-        &operation.draft_id,
-        &local_operation_id,
-        &response.draft.draft_id,
-        response.draft.version,
-    )
+        Ok(())
+    })
     .await
-    .map_err(|error| DraftSyncError::new(local_operation_id.clone(), error.to_string()))?;
-    Ok(())
 }
 
 pub(crate) async fn load_next_queued_operation(

@@ -38,6 +38,10 @@ pub(crate) struct SearchIndexJobStatus {
     pub(crate) target_effective_hash: Option<String>,
     pub(crate) active_revision: Option<String>,
     pub(crate) last_error: Option<String>,
+    /// First unresolved target in the current backlog; old unmeasured backlogs remain unknown.
+    pub(crate) pending_since: Option<String>,
+    /// Last fully committed head publication, independent of later retries.
+    pub(crate) published_at: Option<String>,
 }
 
 struct ClaimedJob {
@@ -59,6 +63,8 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
             last_error TEXT,
             attempt BIGINT NOT NULL DEFAULT 0 CHECK (attempt >= 0),
             next_retry_at_ms BIGINT,
+            pending_since TEXT,
+            published_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         )",
@@ -75,6 +81,18 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> Result<(), DaemonError> {
         sqlx::query("ALTER TABLE search_index_jobs ADD COLUMN next_retry_at_ms BIGINT")
             .execute(pool)
             .await?;
+    }
+    for column in ["pending_since", "published_at"] {
+        if !columns
+            .iter()
+            .any(|row| row.get::<String, _>("name") == column)
+        {
+            sqlx::query(&format!(
+                "ALTER TABLE search_index_jobs ADD COLUMN {column} TEXT"
+            ))
+            .execute(pool)
+            .await?;
+        }
     }
     sqlx::query(
         "UPDATE search_index_jobs
@@ -113,9 +131,11 @@ pub(crate) async fn enqueue_project_in_tx(
     }
     sqlx::query(
         "INSERT INTO search_index_jobs (
-            project_id, desired_sequence, completed_sequence, state
-         ) VALUES ($1, 1, 0, 'queued')
+            project_id, desired_sequence, completed_sequence, state, pending_since
+         ) VALUES ($1, 1, 0, 'queued', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          ON CONFLICT(project_id) DO UPDATE SET
+            pending_since = CASE WHEN search_index_jobs.completed_sequence >= search_index_jobs.desired_sequence
+                THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE search_index_jobs.pending_since END,
             desired_sequence = search_index_jobs.desired_sequence + 1,
             state = 'queued',
             last_error = NULL,
@@ -169,9 +189,14 @@ pub(crate) async fn ensure_project_queued(
     }
     sqlx::query(
         "INSERT INTO search_index_jobs (
-            project_id, desired_sequence, completed_sequence, state
-         ) VALUES ($1, 1, 0, 'queued')
+            project_id, desired_sequence, completed_sequence, state, pending_since
+         ) VALUES ($1, 1, 0, 'queued', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          ON CONFLICT(project_id) DO UPDATE SET
+            pending_since = CASE
+                WHEN search_index_jobs.state = 'ready'
+                 AND search_index_jobs.completed_sequence >= search_index_jobs.desired_sequence
+                THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                ELSE search_index_jobs.pending_since END,
             desired_sequence = CASE
                 WHEN search_index_jobs.state = 'ready'
                  AND search_index_jobs.completed_sequence >= search_index_jobs.desired_sequence
@@ -219,7 +244,7 @@ pub(crate) async fn status(
 ) -> Result<Option<SearchIndexJobStatus>, DaemonError> {
     let row = sqlx::query(
         "SELECT project_id, desired_sequence, completed_sequence, state,
-                target_effective_hash, active_revision, last_error
+                target_effective_hash, active_revision, last_error, pending_since, published_at
          FROM search_index_jobs WHERE project_id = $1",
     )
     .bind(project_id)
@@ -234,6 +259,8 @@ pub(crate) async fn status(
             target_effective_hash: row.try_get("target_effective_hash")?,
             active_revision: row.try_get("active_revision")?,
             last_error: row.try_get("last_error")?,
+            pending_since: row.try_get("pending_since")?,
+            published_at: row.try_get("published_at")?,
         })
     })
     .transpose()
@@ -279,20 +306,37 @@ pub(crate) fn start_worker(state: &DaemonState) -> JoinHandle<()> {
             }
             let mut retry_backoff = CLAIM_RETRY_MIN_BACKOFF;
             loop {
+                let claim = crate::performance::start("index_claim");
                 match claim_next_job(&state.inner.pool).await {
                     Ok(Some(job)) => {
+                        claim.finish("success");
                         retry_backoff = CLAIM_RETRY_MIN_BACKOFF;
-                        if let Err(error) = build_claimed_job(&state, &job).await {
-                            tracing::warn!(
-                                project_id = %job.project_id,
-                                sequence = job.sequence,
-                                "background search index build failed: {error}"
-                            );
-                            persist_failed_job(&state.inner.pool, &job, &error).await;
-                        }
+                        let request_id = crate::diagnostics::new_request_id();
+                        crate::diagnostics::REQUEST_ID.scope(request_id.clone(), async {
+                            let observation = crate::performance::start("index_build");
+                            match build_claimed_job(&state, &job).await {
+                                Ok(outcome) => {
+                                    let elapsed_us = observation.finish(outcome);
+                                    tracing::info!(event = "index_build_completed", %request_id, outcome, elapsed_us, sequence = job.sequence, attempt = job.attempt);
+                                    if outcome != "superseded"
+                                        && let Err(error) = crate::performance::observe("index_maintenance", prune_old_revisions(&state, &job.project_id)).await {
+                                        tracing::warn!(event = "index_maintenance_failed", %request_id, kind = crate::diagnostics::error_kind(&error));
+                                    }
+                                }
+                                Err(error) => {
+                                    observation.finish("failed");
+                                    tracing::warn!(project_id = %job.project_id, sequence = job.sequence, "background search index build failed: {error}");
+                                    crate::performance::wait("index_failure_persistence", persist_failed_job(&state.inner.pool, &job, &error)).await;
+                                }
+                            }
+                        }).await;
                     }
-                    Ok(None) => break,
+                    Ok(None) => {
+                        claim.finish("skipped");
+                        break;
+                    }
                     Err(error) => {
+                        claim.finish("failed");
                         tracing::warn!(
                             retry_ms = retry_backoff.as_millis(),
                             "failed to claim a background search index job; retrying: {error}"
@@ -342,9 +386,9 @@ async fn next_failed_retry_delay(pool: &SqlitePool) -> Result<Option<Duration>, 
 async fn seed_cached_projects(pool: &SqlitePool) -> Result<(), DaemonError> {
     sqlx::query(
         "INSERT INTO search_index_jobs (
-            project_id, desired_sequence, completed_sequence, state
+            project_id, desired_sequence, completed_sequence, state, pending_since
          )
-         SELECT DISTINCT project_id, 1, 0, 'queued'
+         SELECT DISTINCT project_id, 1, 0, 'queued', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          FROM cached_refs
          WHERE scope = 'project' AND project_id IS NOT NULL
          ON CONFLICT(project_id) DO NOTHING",
@@ -395,7 +439,10 @@ async fn claim_next_job(pool: &SqlitePool) -> Result<Option<ClaimedJob>, DaemonE
     .transpose()
 }
 
-async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), DaemonError> {
+async fn build_claimed_job(
+    state: &DaemonState,
+    job: &ClaimedJob,
+) -> Result<&'static str, DaemonError> {
     let effective = match super::load_effective_memory(state, &job.project_id).await {
         Ok(effective) => effective,
         Err(DaemonError::State {
@@ -429,14 +476,14 @@ async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), 
     })
     .await?;
 
-    match prepared {
+    let outcome = match prepared {
         PrepareIndexOutcome::Superseded => {
             pool.close().await;
             mark_superseded(&state.inner.pool, job).await?;
-            return Ok(());
+            return Ok("superseded");
         }
         PrepareIndexOutcome::AlreadyReady(revision_id) => {
-            publish_ready_job(
+            if publish_ready_job(
                 state,
                 job,
                 &pool,
@@ -444,14 +491,19 @@ async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), 
                 &effective,
                 &revision_id,
             )
-            .await?;
+            .await?
+            {
+                "already_ready"
+            } else {
+                "superseded"
+            }
         }
         PrepareIndexOutcome::Prepared(prepared) => {
             // Persist the large revision outside the central writer barrier;
             // it remains invisible until the small head switch below.
             let revision_id =
                 super::index::stage_prepared_index(&pool, &effective, &prepared).await?;
-            publish_ready_job(
+            if publish_ready_job(
                 state,
                 job,
                 &pool,
@@ -459,13 +511,17 @@ async fn build_claimed_job(state: &DaemonState, job: &ClaimedJob) -> Result<(), 
                 &effective,
                 &revision_id,
             )
-            .await?;
+            .await?
+            {
+                "published"
+            } else {
+                "superseded"
+            }
         }
-    }
+    };
     pool.close().await;
     drop(storage_guard);
-    prune_old_revisions(state, &job.project_id).await?;
-    Ok(())
+    Ok(outcome)
 }
 
 pub(super) async fn prune_old_revisions(
@@ -494,48 +550,58 @@ async fn publish_ready_job(
     location_revision: i64,
     effective: &super::EffectiveMemory,
     revision_id: &str,
-) -> Result<(), DaemonError> {
-    let mut barrier = state.inner.pool.begin().await?;
-    // This no-op write acquires SQLite's single-writer barrier. Every
-    // supported Effective Memory mutation increments desired_sequence in its
-    // own transaction, so no mutation can commit after this CAS until both
-    // search heads and the job row have been published.
-    let current = sqlx::query(
-        "UPDATE search_index_jobs
+) -> Result<bool, DaemonError> {
+    let observation = crate::performance::start("index_publish");
+    let result = async {
+        let mut barrier = state.inner.pool.begin().await?;
+        // This no-op write acquires SQLite's single-writer barrier. Every
+        // supported Effective Memory mutation increments desired_sequence in its
+        // own transaction, so no mutation can commit after this CAS until both
+        // search heads and the job row have been published.
+        let current = sqlx::query(
+            "UPDATE search_index_jobs
          SET updated_at = updated_at
          WHERE project_id = $1 AND desired_sequence = $2
            AND building_sequence = $2 AND state = 'building'",
-    )
-    .bind(&job.project_id)
-    .bind(job.sequence)
-    .execute(&mut *barrier)
-    .await?
-    .rows_affected()
-        == 1;
-    if !current {
-        barrier.rollback().await?;
-        mark_superseded(&state.inner.pool, job).await?;
-        return Ok(());
-    }
+        )
+        .bind(&job.project_id)
+        .bind(job.sequence)
+        .execute(&mut *barrier)
+        .await?
+        .rows_affected()
+            == 1;
+        if !current {
+            barrier.rollback().await?;
+            mark_superseded(&state.inner.pool, job).await?;
+            return Ok(false);
+        }
 
-    super::index::publish_staged_index(
-        project_pool,
-        &job.project_id,
-        &effective.effective_hash,
-        revision_id,
-    )
-    .await?;
-    upsert_search_head_in_tx(
-        &mut barrier,
-        &job.project_id,
-        revision_id,
-        &effective.effective_hash,
-        location_revision,
-    )
-    .await?;
-    mark_ready_in_tx(&mut barrier, job, &effective.effective_hash, revision_id).await?;
-    barrier.commit().await?;
-    Ok(())
+        super::index::publish_staged_index(
+            project_pool,
+            &job.project_id,
+            &effective.effective_hash,
+            revision_id,
+        )
+        .await?;
+        upsert_search_head_in_tx(
+            &mut barrier,
+            &job.project_id,
+            revision_id,
+            &effective.effective_hash,
+            location_revision,
+        )
+        .await?;
+        mark_ready_in_tx(&mut barrier, job, &effective.effective_hash, revision_id).await?;
+        barrier.commit().await?;
+        Ok(true)
+    }
+    .await;
+    observation.finish(match &result {
+        Ok(true) => "published",
+        Ok(false) => "superseded",
+        Err(_) => "failed",
+    });
+    result
 }
 
 async fn upsert_search_head_in_tx(
@@ -589,6 +655,7 @@ async fn mark_ready_in_tx(
         "UPDATE search_index_jobs
          SET completed_sequence = $2, building_sequence = NULL, state = 'ready',
              target_effective_hash = $3, active_revision = $4, last_error = NULL,
+             pending_since = NULL, published_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
              attempt = 0, next_retry_at_ms = NULL,
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE project_id = $1 AND desired_sequence = $2 AND building_sequence = $2",
@@ -691,6 +758,87 @@ mod tests {
             .unwrap();
         assert_eq!(row.get::<i64, _>("desired_sequence"), 2);
         assert_eq!(row.get::<String, _>("state"), "queued");
+    }
+
+    #[tokio::test]
+    async fn backlog_time_survives_supersession_and_retry_then_resets_after_publication() {
+        let pool = pool().await;
+        let mut tx = pool.begin().await.unwrap();
+        enqueue_project_in_tx(&mut tx, "prj_test").await.unwrap();
+        tx.commit().await.unwrap();
+        sqlx::query("UPDATE search_index_jobs SET pending_since = '2020-01-01T00:00:00Z'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let first = claim_next_job(&pool).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        enqueue_project_in_tx(&mut tx, "prj_test").await.unwrap();
+        tx.commit().await.unwrap();
+        mark_superseded(&pool, &first).await.unwrap();
+        let second = claim_next_job(&pool).await.unwrap().unwrap();
+        mark_failed(
+            &pool,
+            &second,
+            &DaemonError::Server("fixture failure".to_owned()),
+        )
+        .await
+        .unwrap();
+        let pending: Option<String> =
+            sqlx::query_scalar("SELECT pending_since FROM search_index_jobs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(pending.as_deref(), Some("2020-01-01T00:00:00Z"));
+        sqlx::query("UPDATE search_index_jobs SET next_retry_at_ms = 0")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let retry = claim_next_job(&pool).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        mark_ready_in_tx(&mut tx, &retry, "fixture_hash", "fixture_revision")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let row = sqlx::query("SELECT pending_since, published_at FROM search_index_jobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(row.get::<Option<String>, _>("pending_since").is_none());
+        let published: String = row.get("published_at");
+        let mut tx = pool.begin().await.unwrap();
+        enqueue_project_in_tx(&mut tx, "prj_test").await.unwrap();
+        tx.commit().await.unwrap();
+        let row = sqlx::query("SELECT pending_since, published_at FROM search_index_jobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_ne!(
+            row.get::<Option<String>, _>("pending_since").as_deref(),
+            Some("2020-01-01T00:00:00Z")
+        );
+        assert_eq!(row.get::<String, _>("published_at"), published);
+    }
+
+    #[tokio::test]
+    async fn migration_does_not_invent_an_age_for_a_legacy_backlog() {
+        let pool = pool().await;
+        sqlx::query("ALTER TABLE search_index_jobs DROP COLUMN pending_since")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE search_index_jobs DROP COLUMN published_at")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO search_index_jobs (project_id, desired_sequence, completed_sequence, state, created_at) VALUES ('legacy', 2, 1, 'queued', '2000-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        migrate(&pool).await.unwrap();
+        let row = sqlx::query("SELECT pending_since, published_at FROM search_index_jobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(row.get::<Option<String>, _>("pending_since").is_none());
+        assert!(row.get::<Option<String>, _>("published_at").is_none());
     }
 
     #[tokio::test]

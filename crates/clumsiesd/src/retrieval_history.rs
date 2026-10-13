@@ -803,29 +803,34 @@ pub(crate) async fn finish_run(
     run_id: &str,
     completion: RetrievalRunCompletion,
 ) -> Result<(), DaemonError> {
-    let _history = state.inner.retrieval_history_lock.lock().await;
-    let persistence_started = std::time::Instant::now();
-    persist_run_blobs(state, &completion.resources).await?;
-    let mut tx = state.inner.pool.begin().await?;
-    insert_run_resources(&mut tx, run_id, &completion.resources).await?;
-    insert_run_candidates(&mut tx, run_id, &completion.candidates).await?;
-    let status = if completion.error_code.is_some() {
-        RetrievalRunStatus::Failed
-    } else {
-        RetrievalRunStatus::Succeeded
-    };
-    let persistence_us = elapsed_us(persistence_started);
-    let resource_count = usize_to_i64(completion.resources.len(), "resource_count")?;
-    let unit_count = usize_to_i64(completion.unit_count, "unit_count")?;
-    let returned_fragment_count = usize_to_i64(
-        completion.returned_fragment_count,
-        "returned_fragment_count",
-    )?;
-    let returned_token_count =
-        usize_to_i64(completion.returned_token_count, "returned_token_count")?;
-    let latencies = completion.latencies;
-    let updated = sqlx::query(
-        "UPDATE retrieval_runs
+    let _history = crate::performance::wait(
+        "history_lock_wait",
+        state.inner.retrieval_history_lock.lock(),
+    )
+    .await;
+    crate::performance::observe("history_persistence", async {
+        let persistence_started = std::time::Instant::now();
+        persist_run_blobs(state, &completion.resources).await?;
+        let mut tx = state.inner.pool.begin().await?;
+        insert_run_resources(&mut tx, run_id, &completion.resources).await?;
+        insert_run_candidates(&mut tx, run_id, &completion.candidates).await?;
+        let status = if completion.error_code.is_some() {
+            RetrievalRunStatus::Failed
+        } else {
+            RetrievalRunStatus::Succeeded
+        };
+        let persistence_us = elapsed_us(persistence_started);
+        let resource_count = usize_to_i64(completion.resources.len(), "resource_count")?;
+        let unit_count = usize_to_i64(completion.unit_count, "unit_count")?;
+        let returned_fragment_count = usize_to_i64(
+            completion.returned_fragment_count,
+            "returned_fragment_count",
+        )?;
+        let returned_token_count =
+            usize_to_i64(completion.returned_token_count, "returned_token_count")?;
+        let latencies = completion.latencies;
+        let updated = sqlx::query(
+            "UPDATE retrieval_runs
          SET status = $2,
              effective_hash = $3,
              index_revision = $4,
@@ -852,49 +857,51 @@ pub(crate) async fn finish_run(
              error_summary = $25,
              completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE run_id = $1 AND status = 'running'",
-    )
-    .bind(run_id)
-    .bind(status.as_str())
-    .bind(completion.effective_hash)
-    .bind(completion.index_revision)
-    .bind(resource_count)
-    .bind(unit_count)
-    .bind(completion.parser_version)
-    .bind(completion.chunker_version)
-    .bind(completion.model_revision)
-    .bind(completion.ranking_profile)
-    .bind(u64_to_i64(
-        latencies.effective_memory_us,
-        "effective_memory_us",
-    )?)
-    .bind(u64_to_i64(latencies.index_ensure_us, "index_ensure_us")?)
-    .bind(u64_to_i64(latencies.bm25_us, "bm25_us")?)
-    .bind(u64_to_i64(latencies.embedding_us, "embedding_us")?)
-    .bind(u64_to_i64(latencies.vector_us, "vector_us")?)
-    .bind(u64_to_i64(latencies.rrf_us, "rrf_us")?)
-    .bind(u64_to_i64(latencies.rerank_us, "rerank_us")?)
-    .bind(u64_to_i64(latencies.assembly_us, "assembly_us")?)
-    .bind(u64_to_i64(persistence_us, "persistence_us")?)
-    .bind(u64_to_i64(latencies.total_us, "total_us")?)
-    .bind(returned_fragment_count)
-    .bind(returned_token_count)
-    .bind(completion.error_stage)
-    .bind(completion.error_code)
-    .bind(completion.error_summary)
-    .execute(&mut *tx)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(history_corrupt(format!(
-            "Retrieval Run {run_id} is missing or already terminal"
-        )));
-    }
-    tx.commit().await?;
-    prune_runs(
-        state,
-        &completion_project_id(&state.inner.pool, run_id).await?,
-    )
-    .await?;
-    Ok(())
+        )
+        .bind(run_id)
+        .bind(status.as_str())
+        .bind(completion.effective_hash)
+        .bind(completion.index_revision)
+        .bind(resource_count)
+        .bind(unit_count)
+        .bind(completion.parser_version)
+        .bind(completion.chunker_version)
+        .bind(completion.model_revision)
+        .bind(completion.ranking_profile)
+        .bind(u64_to_i64(
+            latencies.effective_memory_us,
+            "effective_memory_us",
+        )?)
+        .bind(u64_to_i64(latencies.index_ensure_us, "index_ensure_us")?)
+        .bind(u64_to_i64(latencies.bm25_us, "bm25_us")?)
+        .bind(u64_to_i64(latencies.embedding_us, "embedding_us")?)
+        .bind(u64_to_i64(latencies.vector_us, "vector_us")?)
+        .bind(u64_to_i64(latencies.rrf_us, "rrf_us")?)
+        .bind(u64_to_i64(latencies.rerank_us, "rerank_us")?)
+        .bind(u64_to_i64(latencies.assembly_us, "assembly_us")?)
+        .bind(u64_to_i64(persistence_us, "persistence_us")?)
+        .bind(u64_to_i64(latencies.total_us, "total_us")?)
+        .bind(returned_fragment_count)
+        .bind(returned_token_count)
+        .bind(completion.error_stage)
+        .bind(completion.error_code)
+        .bind(completion.error_summary)
+        .execute(&mut *tx)
+        .await?;
+        if updated.rows_affected() != 1 {
+            return Err(history_corrupt(format!(
+                "Retrieval Run {run_id} is missing or already terminal"
+            )));
+        }
+        tx.commit().await?;
+        prune_runs(
+            state,
+            &completion_project_id(&state.inner.pool, run_id).await?,
+        )
+        .await?;
+        Ok(())
+    })
+    .await
 }
 
 /// Mark a retrieval deadline without waiting for the history serialization

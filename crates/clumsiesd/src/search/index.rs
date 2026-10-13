@@ -348,10 +348,11 @@ pub(super) async fn ready_index_revision(
         return Ok(None);
     }
     let models = state.inner.search_models.clone();
-    let (model_revision, embedding_revision) = super::run_model_work(state, move || {
-        Ok((models.revision()?, models.embedding_revision()?))
-    })
-    .await?;
+    let (model_revision, embedding_revision) =
+        super::run_model_work(state, "model_metadata", move || {
+            Ok((models.revision()?, models.embedding_revision()?))
+        })
+        .await?;
     let dimensions = i64::try_from(state.inner.search_models.dimensions())
         .map_err(|_| SearchFailure::vector("embedding dimensions exceed SQLite integer range"))?;
     ready_index_revision_for_fingerprint(
@@ -432,12 +433,13 @@ where
         return Ok(PrepareIndexOutcome::Superseded);
     }
     let models = state.inner.search_models.clone();
-    let (model_revision, embedding_revision) = super::run_model_work(state, move || {
-        let model_revision = models.revision()?;
-        let embedding_revision = models.embedding_revision()?;
-        Ok((model_revision, embedding_revision))
-    })
-    .await?;
+    let (model_revision, embedding_revision) =
+        super::run_model_work(state, "model_metadata", move || {
+            let model_revision = models.revision()?;
+            let embedding_revision = models.embedding_revision()?;
+            Ok((model_revision, embedding_revision))
+        })
+        .await?;
     let dimensions = state.inner.search_models.dimensions();
     let revision_id = index_revision_id(
         &effective.effective_hash,
@@ -481,9 +483,10 @@ where
 
             let resource = resource.clone();
             let models = state.inner.search_models.clone();
-            let units =
-                super::run_model_work(state, move || build_units(&resource, models.as_ref()))
-                    .await?;
+            let units = super::run_model_work(state, "model_build_units", move || {
+                build_units(&resource, models.as_ref())
+            })
+            .await?;
             for unit_batch in units.chunks(INDEX_EMBED_BATCH_SIZE) {
                 if !should_continue().await {
                     return Ok(PrepareIndexOutcome::Superseded);
@@ -719,8 +722,10 @@ async fn build_incremental_batch(
         }
     }
     if !missing_passages.is_empty() {
-        let embedded =
-            super::run_model_work(state, move || models.embed_passages(&missing_passages)).await?;
+        let embedded = super::run_model_work(state, "model_embedding", move || {
+            models.embed_passages(&missing_passages)
+        })
+        .await?;
         if embedded.len() != missing_indexes.len() {
             return Err(SearchFailure::vector(format!(
                 "embedding count {} does not match cache miss count {}",
