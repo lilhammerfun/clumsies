@@ -13,7 +13,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "Successful 2xx/3xx handler responses; excludes body transfer. Legacy route-only histograms appear separately as mixed results, never as success latency. All estimates use rolling 5-minute buckets; read the sample count. Missing collection is unknown, idle traffic has no latency sample.",
+  "description": "Business request performance and correlation by route and method.",
   "links": [
     {
       "title": "Overview",
@@ -24,7 +24,7 @@
       "targetBlank": false
     },
     {
-      "title": "Business API",
+      "title": "API",
       "type": "link",
       "url": "/d/clumsies-api/view",
       "includeVars": false,
@@ -32,7 +32,7 @@
       "targetBlank": false
     },
     {
-      "title": "Entrance and websites",
+      "title": "Websites",
       "type": "link",
       "url": "/d/clumsies-web/view",
       "includeVars": false,
@@ -40,7 +40,7 @@
       "targetBlank": false
     },
     {
-      "title": "Infrastructure and operations",
+      "title": "Infrastructure",
       "type": "link",
       "url": "/d/clumsies-infrastructure/view",
       "includeVars": false,
@@ -48,9 +48,9 @@
       "targetBlank": false
     },
     {
-      "title": "Product activity · API bottom section",
+      "title": "App entrance logs",
       "type": "link",
-      "url": "/d/clumsies-api/view",
+      "url": "/d/clumsies-web/view?var-site=app.clumsies.ai&viewPanel=5",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false
@@ -59,9 +59,9 @@
   "panels": [
     {
       "id": 3,
-      "title": "Requests by status / second",
+      "title": "Request throughput",
       "type": "timeseries",
-      "description": "",
+      "description": "Business response rate over five minutes, grouped by HTTP status.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -69,14 +69,14 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 12,
+        "w": 8,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "All responses / second",
+          "expr": "(sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "All",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -84,8 +84,8 @@
         },
         {
           "refId": "B",
-          "expr": "(sum by(status)(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "{{status}}",
+          "expr": "(sum by(status)(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "HTTP {{status}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -95,9 +95,22 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP other"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Other responses"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -111,24 +124,24 @@
     },
     {
       "id": 2,
-      "title": "Requests observed · 5m",
+      "title": "Response samples",
       "type": "timeseries",
-      "description": "Extrapolated window count, not an exact log count. Few requests make high percentiles unstable. Classified successful and failed distributions have their own sample counts; legacy mixed samples remain separate.",
+      "description": "Extrapolated response samples over five minutes, grouped by result.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 0,
-        "w": 12,
+        "w": 4,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Response samples",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",method!=\"\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "All",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -136,8 +149,8 @@
         },
         {
           "refId": "B",
-          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Successful response samples",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Successful",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -145,17 +158,8 @@
         },
         {
           "refId": "C",
-          "expr": "(sum by(status_class)(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"4xx|5xx|other\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "{{status_class}} samples",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "D",
-          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Legacy mixed samples",
+          "expr": "(sum by(status_class)(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"4xx|5xx|other\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "{{status_class}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -165,9 +169,22 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "other"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Other"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -181,24 +198,24 @@
     },
     {
       "id": 1,
-      "title": "Handler latency · 5m",
+      "title": "Successful response latency",
       "type": "timeseries",
-      "description": "Successful 2xx/3xx handler responses; excludes body transfer. Legacy route-only histograms appear separately as mixed results, never as success latency. All estimates use rolling 5-minute buckets; read the sample count. Missing collection is unknown, idle traffic has no latency sample.",
+      "description": "Five-minute quantiles for 2xx/3xx handlers, ending at Response return.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
-        "y": 7,
+        "x": 12,
+        "y": 0,
         "w": 12,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Successful p50",
+          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\",method!=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\",method!=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "p50",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -206,8 +223,8 @@
         },
         {
           "refId": "B",
-          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Successful p95",
+          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\",method!=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\",method!=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "p95",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -215,35 +232,8 @@
         },
         {
           "refId": "C",
-          "expr": "(histogram_quantile(0.99, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Successful p99",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "D",
-          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Legacy mixed p50",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "E",
-          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Legacy mixed p95",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "F",
-          "expr": "(histogram_quantile(0.99, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Legacy mixed p99",
+          "expr": "(histogram_quantile(0.99, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\",method!=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx\",method!=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "p99",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -253,7 +243,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -268,7 +258,7 @@
       },
       "links": [
         {
-          "title": "Inspect requests in this time range",
+          "title": "Request logs",
           "url": "/d/clumsies-api/view?${__url_time_range}&viewPanel=5&var-route=${route:percentencode}&var-method=${method:percentencode}",
           "targetBlank": false
         }
@@ -276,23 +266,23 @@
     },
     {
       "id": 4,
-      "title": "Requests over 1s by route · 5m",
+      "title": "Slow request routes",
       "type": "timeseries",
-      "description": "1s is an investigation filter, not a latency SLO.",
+      "description": "Requests exceeding one second over five minutes, showing the top eight routes.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 7,
-        "w": 12,
+        "w": 8,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(topk(8, sum by(route)(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m])) - sum by(route)(increase(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",le=~\"1|1[.]0\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
+          "expr": "(topk(8, sum by(route)(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",method!=\"\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m])) - sum by(route)(increase(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",le=~\"1|1[.]0\",method!=\"\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
           "legendFormat": "{{route}}",
           "datasource": {
             "type": "prometheus",
@@ -303,10 +293,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples",
+          "noValue": "No data",
           "links": [
             {
-              "title": "Inspect this route and method",
+              "title": "Business API",
               "url": "/d/clumsies-api/view?${__url_time_range}&var-route=${__field.labels.route}&var-method=${method:percentencode}",
               "targetBlank": false
             }
@@ -326,23 +316,23 @@
     },
     {
       "id": 9,
-      "title": "Busiest routes (top 8)",
+      "title": "Busiest routes",
       "type": "timeseries",
-      "description": "",
+      "description": "Top eight routes by five-minute request rate.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 14,
-        "w": 12,
+        "y": 7,
+        "w": 8,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(topk(8,sum by(route)(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
+          "expr": "(topk(8,sum by(route)(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",method!=\"\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
           "legendFormat": "{{route}}",
           "datasource": {
             "type": "prometheus",
@@ -352,11 +342,11 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": null,
-          "noValue": "No samples",
+          "unit": "short",
+          "noValue": "No data",
           "links": [
             {
-              "title": "Inspect this route and method",
+              "title": "Business API",
               "url": "/d/clumsies-api/view?${__url_time_range}&var-route=${__field.labels.route}&var-method=${method:percentencode}",
               "targetBlank": false
             }
@@ -376,24 +366,24 @@
     },
     {
       "id": 20,
-      "title": "5xx ratio and failed responses · 5m",
+      "title": "5xx ratio",
       "type": "timeseries",
-      "description": "Read response sample count and status distribution beside this ratio. Existing <1% objective applies at the entrance; route breakdown locates the cause. New schema counts every actual 5xx class; legacy fallback counts the existing exact-status whitelist and may classify other codes as other.",
+      "description": "5xx responses as a share of all responses for the selected route and method.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 14,
-        "w": 6,
+        "x": 16,
+        "y": 7,
+        "w": 4,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(((sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"5xx\"}[5m])) or 0 * sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class!=\"\"}[5m]))) / (sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class!=\"\"}[5m])) > 0) * 100) or (((sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status=~\"5..\"}[5m])) or 0 * sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m]))) / (sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m])) > 0) * 100) unless on() sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class!=\"\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "5xx %",
+          "expr": "((sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",route=~\"$route\",method=~\"$method\",status_class=\"5xx\"}[5m])) or 0 * sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m]))) / (sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m])) > 0) * 100) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -403,7 +393,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "noValue": "Unavailable / no samples — check collection"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -419,24 +409,24 @@
     },
     {
       "id": 22,
-      "title": "5xx responses · 5m",
+      "title": "5xx responses",
       "type": "timeseries",
-      "description": "Read response sample count and status distribution beside this ratio. Existing <1% objective applies at the entrance; route breakdown locates the cause. New schema counts every actual 5xx class; legacy fallback counts the existing exact-status whitelist and may classify other codes as other.",
+      "description": "Extrapolated 5xx responses over five minutes.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 18,
-        "y": 14,
-        "w": 6,
+        "x": 20,
+        "y": 7,
+        "w": 4,
         "h": 7
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(((sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=\"5xx\"}[5m])) or 0 * sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class!=\"\"}[5m])))) or (((sum(increase(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status=~\"5..\"}[5m])) or 0 * sum(increase(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m])))) unless on() sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class!=\"\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "5xx responses",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",route=~\"$route\",method=~\"$method\",status_class=\"5xx\"}[5m])) or 0 * sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",route=~\"$route\",method=~\"$method\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -446,7 +436,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "Unavailable / no samples — check collection"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -462,24 +452,24 @@
     },
     {
       "id": 24,
-      "title": "Business request lifecycle / second",
+      "title": "Request lifecycle",
       "type": "timeseries",
-      "description": "Business scope excludes health/metrics and respects route/method. response and cancelled_or_aborted are distinct. Absent data may be unsupported telemetry or no observed samples; do not fill it with zero.",
+      "description": "Business handler starts, responses and interruptions.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 14,
         "w": 12,
-        "h": 7
+        "h": 6
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(rate(clumsies_http_business_requests_started_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "Entered",
+          "expr": "(sum(rate(clumsies_http_business_requests_started_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "Started",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -487,7 +477,7 @@
         },
         {
           "refId": "B",
-          "expr": "(sum by(outcome)(rate(clumsies_http_business_requests_terminated_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "expr": "(sum by(outcome)(rate(clumsies_http_business_requests_terminated_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
           "legendFormat": "{{outcome}}",
           "datasource": {
             "type": "prometheus",
@@ -498,9 +488,34 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "noValue": "Unavailable / no samples — check collection"
+          "noValue": "No data"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "response"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Responses"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cancelled_or_aborted"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Interrupted"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -514,23 +529,23 @@
     },
     {
       "id": 23,
-      "title": "Failed handler latency · 5m",
+      "title": "Error response latency",
       "type": "timeseries",
-      "description": "Requires classified new-schema samples. Fast failures are not an improvement in success latency. No old mixed-result fallback is labeled as failure latency.",
+      "description": "Five-minute p95 for 4xx, 5xx and other results.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 12,
-        "y": 21,
+        "y": 14,
         "w": 12,
-        "h": 7
+        "h": 6
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(histogram_quantile(0.95,sum by(le,status_class)(rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"4xx|5xx|other\"}[5m]))) and on(status_class) (sum by(status_class)(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"4xx|5xx|other\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "expr": "(histogram_quantile(0.95,sum by(le,status_class)(rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"4xx|5xx|other\",method!=\"\"}[5m]))) and on(status_class) (sum by(status_class)(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",route=~\"$route\",method=~\"$method\",status_class=~\"4xx|5xx|other\",method!=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
           "legendFormat": "{{status_class}} p95",
           "datasource": {
             "type": "prometheus",
@@ -541,9 +556,22 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "Unavailable / no samples — check collection"
+          "noValue": "No data"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "other p95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Other p95"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -557,18 +585,18 @@
     },
     {
       "id": 5,
-      "title": "Slow backend requests > 1s",
+      "title": "Slow backend requests",
       "type": "logs",
-      "description": "Expand a log line and open Related request logs to correlate the same request at the entrance and backend.",
+      "description": "Handler requests exceeding one second, filtered by route and method.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 20,
         "w": 24,
-        "h": 9
+        "h": 10
       },
       "targets": [
         {
@@ -584,7 +612,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -599,18 +627,18 @@
     },
     {
       "id": 7,
-      "title": "Request correlation · enter a request ID",
+      "title": "Request correlation",
       "type": "logs",
-      "description": "An internal request_id links entrance and backend. A client ID first matches Server client_request_id; use that record's internal ID to find the entrance. Empty IDs, missing placeholders and prefixes return no logs. Ignores route/method/site; static requests naturally have no backend record.",
+      "description": "Exact internal or client request ID match; an empty ID returns no logs.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
         "x": 0,
-        "y": 37,
+        "y": 30,
         "w": 24,
-        "h": 9
+        "h": 10
       },
       "targets": [
         {
@@ -626,7 +654,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "No samples"
+          "noValue": "No data"
         },
         "overrides": []
       },
@@ -640,44 +668,29 @@
       }
     },
     {
-      "id": 21,
-      "type": "text",
-      "title": "Next investigation",
-      "options": {
-        "mode": "markdown",
-        "content": "[App entrance slow requests](/d/clumsies-web/view?from=${__from}&to=${__to}&var-site=app.clumsies.ai) · [Database and pool](/d/clumsies-infrastructure/view?from=${__from}&to=${__to})\n\nMethod-specific metrics need the new Server schema. Old histograms are shown only as mixed results.\n\nPaste a request ID above to correlate logs; empty ID returns no logs.\n\nProduct activity is the collapsed section at the bottom. Its snapshots do not measure request throughput or synchronization latency."
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 46,
-        "w": 24,
-        "h": 4
-      }
-    },
-    {
       "id": 100,
       "type": "row",
-      "title": "Product activity · secondary view",
+      "title": "Product activity",
       "collapsed": true,
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 40,
         "w": 24,
         "h": 1
       },
       "panels": [
         {
           "id": 101,
-          "title": "Product snapshot health",
+          "title": "Snapshot status",
           "type": "stat",
-          "description": "These are database row snapshots, not request throughput or synchronization latency. Current evidence requires host and database collection ages from 0 to 900 seconds. Future timestamps are invalid; recorded values remain unchanged.",
+          "description": "Database and host snapshots are valid for 15 minutes.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
             "x": 0,
-            "y": 51,
+            "y": 41,
             "w": 12,
             "h": 4
           },
@@ -685,7 +698,7 @@
             {
               "refId": "A",
               "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-              "legendFormat": "DB snapshot: 1 success / 0 failed / -1 stale missing / -2 invalid time",
+              "legendFormat": "Database",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -697,26 +710,46 @@
           "fieldConfig": {
             "defaults": {
               "unit": "short",
-              "noValue": "Unavailable / no samples — check collection",
+              "noValue": "Unknown",
               "mappings": [
                 {
                   "type": "value",
                   "options": {
-                    "-1": {
-                      "text": "Stale / missing",
+                    "-2": {
+                      "text": "Invalid time",
                       "color": "red"
+                    },
+                    "-1": {
+                      "text": "Missing / stale",
+                      "color": "orange"
                     },
                     "0": {
                       "text": "Failed",
                       "color": "red"
                     },
                     "1": {
-                      "text": "Fresh and successful",
+                      "text": "Healthy",
                       "color": "green"
-                    },
-                    "-2": {
-                      "text": "Invalid future timestamp",
-                      "color": "red"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "Unknown",
+                      "color": "#8e8e8e"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "nan",
+                    "result": {
+                      "text": "Unknown",
+                      "color": "#8e8e8e"
                     }
                   }
                 }
@@ -739,16 +772,16 @@
         },
         {
           "id": 102,
-          "title": "Product snapshot age",
+          "title": "Snapshot age",
           "type": "stat",
-          "description": "These are database row snapshots, not request throughput or synchronization latency. Negative age is invalid, never clamped to zero.",
+          "description": "Time since the database snapshot at the selected interval end.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
             "x": 12,
-            "y": 51,
+            "y": 41,
             "w": 12,
             "h": 4
           },
@@ -756,7 +789,7 @@
             {
               "refId": "A",
               "expr": "(((time() - clumsies_database_collection_timestamp_seconds) / 1) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))",
-              "legendFormat": "Snapshot age",
+              "legendFormat": "Age",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -768,14 +801,34 @@
           "fieldConfig": {
             "defaults": {
               "unit": "s",
-              "noValue": "Unavailable / no samples — check collection",
+              "noValue": "Unknown",
               "mappings": [
                 {
                   "type": "value",
                   "options": {
                     "-2": {
-                      "text": "Invalid future timestamp",
+                      "text": "Invalid time",
                       "color": "red"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "Unknown",
+                      "color": "#8e8e8e"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "nan",
+                    "result": {
+                      "text": "Unknown",
+                      "color": "#8e8e8e"
                     }
                   }
                 }
@@ -811,24 +864,24 @@
         },
         {
           "id": 10,
-          "title": "Commits created in the last hour",
+          "title": "Commit records · 1h",
           "type": "timeseries",
-          "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency. Includes bootstrap and system commits. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Retained Commit records created within the last hour, sampled every five minutes.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
             "x": 0,
-            "y": 55,
-            "w": 12,
-            "h": 7
+            "y": 45,
+            "w": 8,
+            "h": 6
           },
           "targets": [
             {
               "refId": "A",
               "expr": "(clumsies_commits_created_last_hour) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900)))",
-              "legendFormat": "commits / last 60m",
+              "legendFormat": "Commit",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -837,8 +890,8 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": null,
-              "noValue": "Snapshot failed / stale / unavailable"
+              "unit": "short",
+              "noValue": "No data"
             },
             "overrides": []
           },
@@ -854,24 +907,24 @@
         },
         {
           "id": 11,
-          "title": "Drafts created in the last hour",
+          "title": "Draft records · 1h",
           "type": "timeseries",
-          "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Retained Draft records created within the last hour, sampled every five minutes.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
-            "x": 12,
-            "y": 55,
-            "w": 12,
-            "h": 7
+            "x": 8,
+            "y": 45,
+            "w": 8,
+            "h": 6
           },
           "targets": [
             {
               "refId": "A",
               "expr": "(clumsies_drafts_created_last_hour) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900)))",
-              "legendFormat": "drafts / last 60m",
+              "legendFormat": "Draft",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -880,8 +933,8 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": null,
-              "noValue": "Snapshot failed / stale / unavailable"
+              "unit": "short",
+              "noValue": "No data"
             },
             "overrides": []
           },
@@ -897,24 +950,24 @@
         },
         {
           "id": 12,
-          "title": "Reviews created in the last hour",
+          "title": "Review records · 1h",
           "type": "timeseries",
-          "description": "Sampled every 5 minutes: retained rows created in the last 60 minutes. Deletions reduce the count. This is neither a lifetime event counter nor synchronization latency. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Retained Review records created within the last hour, sampled every five minutes.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
-            "x": 0,
-            "y": 62,
-            "w": 12,
-            "h": 7
+            "x": 16,
+            "y": 45,
+            "w": 8,
+            "h": 6
           },
           "targets": [
             {
               "refId": "A",
               "expr": "(clumsies_reviews_created_last_hour) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900)))",
-              "legendFormat": "reviews / last 60m",
+              "legendFormat": "Review",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -923,8 +976,8 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": null,
-              "noValue": "Snapshot failed / stale / unavailable"
+              "unit": "short",
+              "noValue": "No data"
             },
             "overrides": []
           },
@@ -940,16 +993,16 @@
         },
         {
           "id": 13,
-          "title": "Drafts by lifecycle state",
+          "title": "Draft states",
           "type": "timeseries",
-          "description": "Includes open, submitted, merged and discarded. Merged/discarded are historical states; open Drafts can remain in active use. Counts do not imply a service backlog. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Retained Draft records grouped by lifecycle state.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
-            "x": 12,
-            "y": 62,
+            "x": 0,
+            "y": 51,
             "w": 12,
             "h": 7
           },
@@ -966,10 +1019,59 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": null,
-              "noValue": "Snapshot failed / stale / unavailable"
+              "unit": "short",
+              "noValue": "No data"
             },
-            "overrides": []
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "open"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Open"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "submitted"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Submitted"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "merged"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Merged"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "discarded"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Discarded"
+                  }
+                ]
+              }
+            ]
           },
           "options": {
             "legend": {
@@ -983,16 +1085,16 @@
         },
         {
           "id": 14,
-          "title": "Open Draft net change per hour",
+          "title": "Open Draft net change",
           "type": "timeseries",
-          "description": "Hourly slope of the last 6 hours of stored open Draft counts. Includes creation, reopening, submission, discard and deletion; not creation throughput or processing latency. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Six-hour fitted change in open Draft counts, expressed per hour.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
-            "x": 0,
-            "y": 69,
+            "x": 12,
+            "y": 51,
             "w": 12,
             "h": 7
           },
@@ -1000,7 +1102,7 @@
             {
               "refId": "A",
               "expr": "(deriv(clumsies_drafts{status=\"open\"}[6h]) * 3600) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900)))",
-              "legendFormat": "drafts/h",
+              "legendFormat": "Net change",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -1009,8 +1111,8 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": null,
-              "noValue": "Snapshot failed / stale / unavailable"
+              "unit": "short",
+              "noValue": "No data"
             },
             "overrides": []
           },
@@ -1026,24 +1128,24 @@
         },
         {
           "id": 15,
-          "title": "Drafts with current reconciliation conflicts",
+          "title": "Conflicting Drafts",
           "type": "timeseries",
-          "description": "Open/submitted Drafts with a non-invalidated conflicting candidate matching the current Draft version, base commit and main ref. Historical candidates are excluded. Unevaluated Drafts are not counted; zero does not prove every Draft is conflict-free. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Valid conflict candidates matching the current Draft version, base and main ref.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
-            "x": 12,
-            "y": 69,
-            "w": 12,
+            "x": 0,
+            "y": 58,
+            "w": 8,
             "h": 7
           },
           "targets": [
             {
               "refId": "A",
               "expr": "(clumsies_drafts_with_reconciliation_conflicts) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900)))",
-              "legendFormat": "drafts",
+              "legendFormat": "Draft",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -1052,8 +1154,8 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": null,
-              "noValue": "Snapshot failed / stale / unavailable"
+              "unit": "short",
+              "noValue": "No data"
             },
             "overrides": []
           },
@@ -1069,24 +1171,24 @@
         },
         {
           "id": 16,
-          "title": "Stored unread notification records",
+          "title": "Unread notification receipts",
           "type": "timeseries",
-          "description": "Stored receipts with read_version below version, including archived or inaccessible notifications. Not the visible inbox badge or a notification delivery failure. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Stored unread notification receipts, including archived or inaccessible records.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
-            "x": 0,
-            "y": 76,
-            "w": 12,
+            "x": 8,
+            "y": 58,
+            "w": 8,
             "h": 7
           },
           "targets": [
             {
               "refId": "A",
               "expr": "(clumsies_inbox_unread_records) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900)))",
-              "legendFormat": "unread",
+              "legendFormat": "Receipts",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -1095,8 +1197,8 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": null,
-              "noValue": "Snapshot failed / stale / unavailable"
+              "unit": "short",
+              "noValue": "No data"
             },
             "overrides": []
           },
@@ -1112,24 +1214,24 @@
         },
         {
           "id": 17,
-          "title": "Oldest open Draft age since creation (days)",
+          "title": "Open Draft creation age",
           "type": "timeseries",
-          "description": "Time since created_at; recent edits do not reset this age. Zero when no open Draft exists. Not inactivity, synchronization latency or a processing deadline. Valid only after a successful snapshot no older than 15 minutes; see collection health below.",
+          "description": "Longest time since creation among open Drafts; zero when none exist.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "gridPos": {
-            "x": 12,
-            "y": 76,
-            "w": 12,
+            "x": 16,
+            "y": 58,
+            "w": 8,
             "h": 7
           },
           "targets": [
             {
               "refId": "A",
               "expr": "((clumsies_oldest_open_draft_age_seconds / 86400) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) and on(job,instance) (clumsies_oldest_open_draft_age_seconds >= 0)) or on(job,instance) (((0 * clumsies_oldest_open_draft_age_seconds - 2) and on(job,instance) (clumsies_oldest_open_draft_age_seconds < 0)) and on(job,instance) ((clumsies_database_collection_success == 1) and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))))",
-              "legendFormat": "days",
+              "legendFormat": "Since creation",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -1139,13 +1241,13 @@
           "fieldConfig": {
             "defaults": {
               "unit": "none",
-              "noValue": "Snapshot failed / stale / unavailable",
+              "noValue": "No data",
               "mappings": [
                 {
                   "type": "value",
                   "options": {
                     "-2": {
-                      "text": "Invalid creation time",
+                      "text": "Invalid time",
                       "color": "red"
                     }
                   }
@@ -1164,7 +1266,8 @@
             }
           }
         }
-      ]
+      ],
+      "description": ""
     }
   ],
   "templating": {
@@ -1173,7 +1276,7 @@
         "name": "route",
         "label": "Route",
         "type": "query",
-        "query": "label_values(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}, route)",
+        "query": "label_values(clumsies_http_requests_total{job=\"server\",method!=\"\",route!~\"/metrics|/api/v1/admin/health\"}, route)",
         "current": {
           "text": "$__all",
           "value": "$__all"
@@ -1192,7 +1295,7 @@
         "name": "method",
         "label": "Method",
         "type": "query",
-        "query": "label_values(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}, method)",
+        "query": "label_values(clumsies_http_requests_total{job=\"server\",method!=\"\",route!~\"/metrics|/api/v1/admin/health\"}, method)",
         "current": {
           "text": "$__all",
           "value": "$__all"

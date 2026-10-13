@@ -1,45 +1,33 @@
 # Clumsies 可观测性设计方案
 
-面向负责 Clumsies 开发、部署与性能评审的工程师，定义采集边界、指标口径、数据质量、看板职责和告警条件。性能判断以吞吐量和延迟为主线，结合错误与饱和度寻找原因；现场操作使用[可观测性运维排障指南](/zh/performance/observability-runbook)。
-
-| 规范信息 | 内容 |
-| --- | --- |
-| 核对日期 | 2026 年 10 月 13 日 |
-| 中心数据契约 | Server HTTP 指标含 method、结果分类及业务请求生命周期；连接获取计时仅覆盖评审创建与合并事务 |
-| 兼容范围 | 旧 route 型 HTTP 指标继续可读，混合结果延迟与全路由并发单独标注 |
-| 客户端数据归属 | macOS 与 daemon 诊断保留在本地，不向中心 Grafana 上传性能汇总或 Retrieval Run |
-| 生效条件 | 安装采用匹配的数据契约、采集配置与看板，并通过本文验收；生产启用状态以该安装的发布记录为准 |
+本方案供 Clumsies 开发、部署和性能评审人员使用，定义单个安装的指标、日志、本地诊断、看板和告警契约。运维操作见[可观测性运维排障指南](/zh/performance/observability-runbook)，测量证据见[HTTP 本地负载测试报告](/zh/performance/observability-load-report)。
 
 ## 目标与范围
 
-观察者应能在同一时间窗内确定：进入和完成了多少工作，一次工作需要多久，失败影响多大，哪个阶段开始等待。总览负责确认影响，详情负责缩小到站点、路由或操作，日志与本地诊断负责验证同一次工作的过程。
+可观测性支持四项判断：工作进入和完成的速率、完成耗时、失败影响，以及资源或执行阶段的等待。按 [Google SRE 四信号](https://sre.google/sre-book/monitoring-distributed-systems/)组织证据：吞吐量、延迟、错误和饱和度。总览确认影响，详情定位站点或操作，关联日志和阶段计时验证原因。
 
-实际吞吐量是已完成的工作量，例如每秒完成 10 次请求。容量是在指定硬件、请求组合和数据规模下，持续满足延迟与错误目标的负载。日常低负载、单次峰值或一张 CPU 曲线均不能直接证明容量。
-
-| 范围 | 观察对象 | 不应推导的结论 |
+| 范围 | 观察对象 | 支持的判断 |
 | --- | --- | --- |
-| 中心性能 | Caddy 入口、Server handler、共享连接池、数据库和资源 | 服务端正常不等于客户端同步、界面或检索正常 |
-| 运行保障 | 采集、日志、通知、备份、恢复、证书和发布记录 | 抓取成功不等于业务成功；同机监控不能独立报告整机失联 |
-| 本地性能 | 客户端请求、同步、Commit 安装、索引与检索、模型执行 | 本地过程统计不等于全体客户端统计或持久的写入 SLI |
-| 产品活动 | 保留记录数、生命周期状态、冲突与未读存量 | 存量、创建年龄和拟合净变化不等于吞吐量、同步延迟或故障积压 |
+| 中心性能 | Caddy 入口、Server handler、连接池、PostgreSQL、主机和容器 | 安装内请求表现与依赖、资源状态 |
+| 运行保障 | 采集、日志、通知、备份、恢复、证书和发布记录 | 数据可信度及恢复保障 |
+| 本地性能 | macOS 请求、daemon 同步、Commit 安装、索引、检索和模型执行 | 单个客户端的完成过程与阶段耗时 |
+| 产品活动 | 保留记录、生命周期状态、冲突和未读存量 | 产品状态及保留记录的变化 |
 
-采用 [Google SRE 的四信号](https://sre.google/sre-book/monitoring-distributed-systems/)组织性能观察：流量、延迟、错误、饱和度。信号相关性形成排查假设；判断原因仍需同一请求或任务的阶段证据。
+吞吐量是单位时间内实际完成的工作量。容量是在确定硬件、数据规模和请求组合下，持续满足延迟与错误目标的负载；容量评估需要单独的负载测试。
 
 ## 采集架构
 
-保持现有 Prometheus、Grafana、Loki、Alloy、Alertmanager 和 exporter，不为每个组件建立独立监控栈。业务请求与遥测各自沿实际边界流动，本地证据通过关联 ID 与 Server 日志连接。
-
 ```mermaid
 flowchart TB
-    subgraph center["单个安装的中心观测"]
-        Edge["Caddy 入口"] -->|业务请求| Server["Server"]
+    subgraph center["单个安装"]
+        Edge["Caddy"] -->|业务请求| Server["Server"]
         Server -->|事务与查询| DB["PostgreSQL"]
-        Edge -->|HTTP 指标| Prom["Prometheus"]
+        Edge -->|入口指标| Prom["Prometheus"]
         Server -->|HTTP 与连接池指标| Prom
-        Export["主机 容器 数据库 exporter"] -->|资源与依赖指标| Prom
-        Timer["五分钟主机采集器"] -->|textfile 快照| Export
-        Probe["同机 blackbox 探针"] -->|探测结果| Prom
-        Probe -.->|HTTPS 与 App 就绪检查| Edge
+        Export["主机 容器 数据库 exporter"] --> Prom
+        Timer["五分钟主机采集器"] -->|textfile| Export
+        Probe["同机 Blackbox"] -->|探测结果| Prom
+        Probe -.->|HTTPS 和 App 就绪检查| Edge
         Edge -->|容器日志| Alloy["Alloy"]
         Server -->|容器日志| Alloy
         Alloy --> Loki["Loki"]
@@ -48,281 +36,219 @@ flowchart TB
         Prom --> AM["Alertmanager"]
         AM --> Mail["告警邮件"]
     end
-    subgraph local["本地客户端"]
-        App["macOS 与 daemon"] --> Local["Health 性能快照 安全日志 Retrieval Run"]
-    end
-    App -->|业务 HTTP 请求| Edge
-    Local -.->|人工按 request ID 关联 不上传性能汇总| Loki
+    App["macOS 与 daemon"] -->|业务 HTTP| Edge
+    App --> Local["本地性能快照 日志 Retrieval Run"]
+    Local -.->|人工按关联 ID 查询| Loki
 ```
 
-| 数据 | 采样或保存策略 | 主要用途 |
+| 数据 | 采样与保留 | 用途 |
 | --- | --- | --- |
-| 中心请求与资源指标 | 默认每 30 秒抓取；请求看板使用滚动五分钟窗口；保留 90 天 | 比较同窗吞吐量、延迟、错误与资源 |
-| 数据库和运行保障快照 | 主机采集器每五分钟执行 | 存量、长查询、备份和任务结果；每项结合采集时间 |
-| 容器日志 | Alloy 发送到 Loki；保留 14 天 | 从异常窗口定位具体请求并关联入口与后端 |
-| 本地过程统计 | 按实际事件记录，按进程生命周期汇总 | 本地操作次数、结果和耗时分布；明确采集起点与重启边界 |
-| 本地 Retrieval Run | 沿用运行记录及清理契约 | 检索过程和质量证据；保留行数只能表示可见历史样本 |
+| 中心请求与资源指标 | 默认 30 秒抓取，保留 90 天；请求图使用滚动五分钟窗口 | 同窗性能与资源比较 |
+| 数据库与运行保障快照 | 主机采集器每五分钟执行 | 产品存量、活动查询、任务结果和成功时间 |
+| 容器日志 | Alloy 发送至 Loki，保留 14 天 | 具体请求及入口、后端关联 |
+| 本地性能快照 | 按实际操作记录，累计至进程退出 | 操作次数、当前并发和按结果划分的耗时分布 |
+| Retrieval Run | 使用既有本地记录与清理规则 | 检索过程和质量证据 |
 
-中心服务通过安装主机的 SSH 隧道访问。request_id 留在日志中；只有引入真实 trace context 后才使用标准 trace_id 和 span_id。本方案的关联能力不等于完整分布式追踪。
+中心服务通过安装主机的 SSH 隧道访问。本地性能汇总和 Retrieval Run 保留在客户端；关联 ID 用于人工连接两侧证据。当前关联机制采用请求 ID，完整分布式追踪需要独立的 trace context。
 
-指标维度限定为固定组件、操作、HTTP method、route template、结果类别与阶段。请求、Run、文档和项目 ID、原始路径、query 与正文不进入 Prometheus 标签或 Loki stream 标签。版本放在独立信息指标与日志；Loki 的 project 标签是 Compose 项目名，不是业务 Project ID；本地具体对象按既有权限查看。[Prometheus 命名与标签约定](https://prometheus.io/docs/practices/naming/)
+Prometheus 标签限定为固定组件、操作、method、route template、结果类别和阶段。Loki stream 标签为 Compose project、service、container；请求 ID、原始路径和业务对象 ID 保留在日志字段中。Run 和文档等具体 ID 同样保留在本地或日志字段，版本使用独立信息指标与日志；query、正文和凭据按既有脱敏规则处理。[Prometheus 标签约定](https://prometheus.io/docs/practices/naming/)
 
-## 四信号指标规范
+## 指标契约
 
-### 吞吐量与工作量
+### 吞吐量与生命周期
 
-入口请求、Server handler、客户端逻辑操作、同步尝试、索引构建和检索调用分别计数。一项逻辑操作可以产生多次请求与重试，各层计数不能相加，也不能用数据库保留行数代替事件计数。
+入口请求、Server handler、客户端逻辑操作、同步尝试、索引构建和检索调用分别计数。层级之间通过关联 ID 对照；多次请求或重试仍属于各自的计数范围。
 
-| 指标 | 维度或结果 | 单位与完成边界 |
+| 指标 | 维度 | 计数或快照边界 |
 | --- | --- | --- |
-| `caddy_http_request_duration_seconds_count` | host、code，限定 `handler="subroute"` | 入口处理完成请求数；rate 为请求/秒 |
-| `clumsies_http_requests_total` | route、method、status | 返回 Response 的 handler 次数；status 保留 100 至 599 的实际码，其它码归 other |
-| `clumsies_http_business_requests_started_total` | route、method | 进入业务 middleware 的次数 |
-| `clumsies_http_business_requests_terminated_total` | route、method、outcome | 当次 handler 终止；区分 response 与 cancelled_or_aborted |
-| `clumsies_http_business_requests_in_flight` | route、method | 正在执行的业务 handler 数，属于抓取时快照 |
-| `clumsies_db_pool_acquires_total` | operation、outcome | review_create、review_merge 的连接获取尝试；区分 acquired、timeout、error、cancelled_or_aborted |
+| `caddy_http_request_duration_seconds_count` | host、code；`handler="subroute"` | 一个站点处理层完成的入口请求 |
+| `clumsies_http_requests_total` | route、method、status | handler 返回 Response；100–599 保留实际码，其余归 `other` |
+| `clumsies_http_business_requests_started_total` | route、method | 进入业务 middleware |
+| `clumsies_http_business_requests_terminated_total` | route、method、outcome | handler 以 `response` 或 `cancelled_or_aborted` 终止 |
+| `clumsies_http_business_requests_in_flight` | route、method | 抓取时仍在执行的业务 handler |
+| `clumsies_db_pool_acquires_total` | operation、outcome | `review_create`、`review_merge` 的获取尝试；结果为 acquired、timeout、error、cancelled_or_aborted |
 
-Server 看板与业务生命周期指标统一排除 `/metrics` 和 `/api/v1/admin/health`；unmatched 请求仍计入。Caddy 选取一个 subroute 处理层，避免重复累加 middleware；该口径包含 synthetic probes，不包含自动 HTTP 到 HTTPS 跳转，不能称为访客流量。
+业务范围排除 `/metrics` 和 `/api/v1/admin/health`，保留 unmatched 请求。Caddy 入口范围包含 synthetic probes，排除自动 HTTP 到 HTTPS 跳转。Server 日常查询要求现行 method 标签。Counter 先按原始 series 计算 rate/increase，再聚合，保留重启识别；increase 是窗口外推量，可出现小数。
 
-Counter 先对原始 series 使用 rate 或 increase，再按所需维度聚合，以保留重启识别。increase 是窗口外推估计，可能出现小数。业务 gauge 直接表示快照；Draft 净变化采用存量斜率，仍不能命名为创建或完成速率。
+数据库活动与产品存量使用 gauge。最近一小时记录数只统计 `now()-60min ≤ created_at ≤ now()` 的保留行；删除会减少计数。开放 Draft 净变化是六小时拟合存量斜率，以 Draft/小时表示。
 
-### 延迟与结果边界
+### 延迟与结果
 
-| 对象 | 起止边界 | 展示规范 |
+| 对象 | 起止边界 | 分类与覆盖 |
 | --- | --- | --- |
-| Caddy 入口 | 入口处理开始至该层完成请求处理 | 按站点展示入口 p50/p95；p99 用于详情调查，不写成浏览器加载时间 |
-| Server handler | middleware 进入至返回 Response | histogram 按 route、method、status_class 分桶；不包含完整正文传输 |
-| Server 成功与错误响应 | 成功分类为 2xx/3xx；错误详情为 4xx/5xx/other | 分别展示耗时与各自样本数；快速失败不能降低成功延迟的判断标准 |
-| 连接获取 | pool.acquire 开始至得到连接、错误或中断 | 含等待、验证及新建连接；仅覆盖评审创建/合并事务，不含 BEGIN 或事务执行，不命名为纯排队时间 |
-| 客户端 HTTP | 发起调用至完整响应接收与解码 | 在本地查看，不用 handler 延迟替代 |
-| 客户端操作 | 操作开始至约定结果可用 | 本地保存、Server 确认、Ref 安装和索引可检索分别定义完成点 |
-| daemon activate | 参数验证开始至查询和 history 完整收尾后返回 | 过程统计包含收尾，不包含 XPC 响应传输与客户端解码；Run.total_us 另有较短边界 |
-| 后台尝试与收敛 | 当次执行至当次结果；原始待处理状态至目标结果可用 | 重试计尝试但不重置原始等待起点；未完成操作显示状态与年龄 |
+| Caddy 入口 | 入口处理开始至站点处理层结束 | host、code；p50/p95 用于概览，p99 用于详情 |
+| Server handler | middleware 进入至返回 Response | route、method、status_class；正文传输在该边界之后 |
+| 连接获取 | `pool.acquire` 开始至连接、错误或中断 | 评审创建/合并；包含等待、验证和新建连接，事务 BEGIN 与执行另计 |
+| 客户端 HTTP | 发起调用至完整响应接收与解码 | 本地观察 |
+| 客户端操作 | 操作开始至约定结果可用 | 分别定义本地保存、Server 确认、Ref 安装和索引可检索 |
+| daemon activate | 参数验证开始至 daemon 返回 | 包含查询与 history 确认等待；已接受的持久化可在后台继续，XPC 传输和客户端解码另计 |
+| 后台工作 | 当次尝试开始至结果；原始待处理起点至收敛 | 尝试计数与积压年龄分别保存 |
 
-`clumsies_http_request_duration_seconds` 的新维度是 route、method、status_class，类别为 2xx、3xx、4xx、5xx、other。旧仅 route 的 histogram 只能展示“旧口径混合结果”，不能标为成功 p95。method 筛选同样需要相应新样本；无新样本本身不能证明功能不受支持。
+HTTP histogram 统一使用 route、method、status_class。成功为 2xx/3xx，错误详情为 4xx/5xx/other；各类延迟配相同范围的样本数。分位数按滚动五分钟原始桶速率计算：先 rate，再按 le 和业务维度聚合，最后 histogram_quantile。多实例先聚合桶再计算分位数。Server 有限桶上界为 5、10、25、50、100、250、500 毫秒，以及 1、2.5、5、10、30 秒；超出有限桶的尾部受桶估计限制。[直方图语义](https://prometheus.io/docs/practices/histograms/)
 
-请求图的分位数均为滚动五分钟桶估计。先 rate，再按 le 和业务维度聚合，最后计算 histogram_quantile；不平均多个实例的 p95。尾部超出最后有限桶时仍受桶边界限制，必须同时看样本数。[Prometheus 直方图语义](https://prometheus.io/docs/practices/histograms/)
+当次耗时采用单调时钟，持久等待起点采用 UTC，跨机器分别保留各计时边界。跨层诊断比较同一请求的记录；分位数和重叠阶段的包含关系见运维指南的统计边界。
 
-各进程用单调时钟测量当次耗时，用关联 ID 连接证据，不减两台机器的墙上时间。持久化等待起点用 UTC 时间并识别异常；未保存可信起点的历史工作标为年龄未知。两层分位数不能相减得到网络耗时，重叠阶段不能相加得到完整响应耗时。
+### 错误与饱和度
 
-### 错误
+5xx、依赖超时、传输错误和取消分别保留。401、403、404、409、429 按操作契约判断影响；模型准备、主动取消、预期冲突和检索空结果分别归类。5xx 比例使用相同请求范围和窗口的分子、分母，同时展示失败次数。
 
-5xx、依赖超时、传输失败与取消分别保留。401、403、404、409、429 根据操作契约判断影响，不能一律计为服务故障；模型准备中、主动取消、预期冲突和检索空结果也不应自动报警。
-
-5xx 的分子、分母和时间窗必须一致。新版 Server 可按实际 status_class 统计全部 5xx；旧 counter 白名单兼容查询可能把部分码归为 other，应保留该限制。已观测有请求且没有 5xx 时可以显示零错误；整个数据源缺失时保持未知。
-
-HTTP 返回成功只证明该层的响应结果。写入确认、本地 synced 提交、共享发布和检索可用需要各自的事件，不能由 2xx 次数推断。
-
-### 饱和度与资源
-
-资源使用说明“消耗了多少”，等待与积压说明“是否开始受限”。连接获取进行中可能包含验证和新建连接，不能直接当作队列长度；in-flight 是并发快照，不能代替进入计数。
-
-| 对象 | 必须结合的信号 | 解释边界 |
+| 对象 | 联合观察 | 口径 |
 | --- | --- | --- |
-| Server 连接池 | used、idle、open、max；评审事务 acquire 耗时、结果、进行中次数 | 连接获取只覆盖 review_create/review_merge；不能宣称全数据库等待已覆盖 |
-| PostgreSQL | pg_up、连接数/上限、长查询与实际锁/事务证据 | 五分钟最长查询快照可以遗漏短时拥塞 |
-| CPU | 主机使用百分比、各容器占用核数 | 0.5 CPU 秒/秒表示占用 0.5 核 |
-| 内存 | 可用内存、工作集、实际限制、OOM 与交换证据 | 未配置容器限制时，固定 2 GiB 提醒不是容量百分比 |
-| 磁盘 | 根分区和承载数据库、日志、指标的实际挂载空间；I/O 证据 | 空间不足与 I/O 变慢分别调查 |
-| 本地模型与索引 | worker 或模型活动、等待、真实执行和待收敛工作 | 只在本地诊断；阶段计时的覆盖范围由实际字段决定 |
+| Server 连接池 | used、idle、open、max；acquire 耗时、结果和进行中次数 | pool gauges 为并发快照；acquire 仅覆盖评审创建与合并 |
+| PostgreSQL | pg_up、连接数/上限、活动查询、锁和事务证据 | 主机 SQL 快照排除采集器自身及 idle transaction |
+| CPU | 主机百分比、容器占用核数 | 0.5 CPU 秒/秒表示占用 0.5 核 |
+| 内存 | 可用内存、工作集、配置上限、OOM 与交换 | 固定 2 GiB 提醒是绝对工作集阈值 |
+| 磁盘 | 根分区及持久数据挂载的空间、I/O | 空间容量与读写延迟分别检查 |
+| 本地模型与索引 | 活动执行、等待、worker 与待收敛工作 | 使用本地阶段记录 |
 
-### 本地诊断契约
+### 本地诊断
 
-本地 Health.performance 以固定操作名与结果分类汇总 started、in_flight 和 outcomes[result] 的 count、total_us、累计 buckets；bucket_upper_bounds_ms 给出有限桶的毫秒上界，count 同时表示 +Inf 桶。process_id、collection_started_at、snapshot_at 和单调时钟 collection_elapsed_ms 标识统计所属进程及采集区间。重启清零；这些统计不构成中心 Grafana 的客户端覆盖率，也不代替持久 SLI。
+`Health.performance` 汇总固定操作名的 started、in_flight，以及各结果的 count、total_us、累计 buckets。bucket_upper_bounds_ms 给出有限桶上界，count 为 +Inf 桶。process_id、collection_started_at、snapshot_at 和单调 collection_elapsed_ms 标识采集进程及区间；进程重启清零。
 
-单份快照覆盖该进程自采集初始化以来的全部观察，不对应 Grafana 所选的五分钟窗口。调查一个区间时，保存同一 process_id 且 collection_started_at 相同的两份快照，对 started、结果 count、total_us 与累计桶分别取差值，并用 collection_elapsed_ms 的差值计算速率；in_flight 直接读取当前快照。进程重启或计数回退时重新建立区间，不跨进程相减，也不把缺失操作或结果补成已观察样本。
+区间分析保存同一 process_id、collection_started_at 的两份快照，对计数、耗时和桶取差值，并以 collection_elapsed_ms 差值计算速率；in_flight 读取当前值。重启或计数回退后重新建立采样区间。本地诊断可用时导出 performance.json，否则记录不可用；文件保留在客户端。
 
-| 本地对象 | 区分的工作和结果 | 计时或状态要求 |
+| 工作 | 本地证据 |
+| --- | --- |
+| 同步周期 | converged、partial、failed、skipped；sync lock 等待与执行分别记录 |
+| Draft | 同步尝试、Server ACK、本地 synced 提交；oldest_pending_operation_at 覆盖可访问项目的 queued/syncing/retrying，oldest_failed_operation_at 覆盖 failed；均保留原始入队时间 |
+| Commit | 项目级 commit_sync.last_checked_success_at 记录可信检查，包括无变化结果；Ref 安装时间独立。全局状态和 Draft channel 的 checked 字段为 None |
+| 索引 | 构建、发布、superseded 和维护结果；pending_since 跨目标更新与重试保持，收敛后清除；published_at 在原子发布后推进 |
+| 检索 | activate 返回耗时、Run、锁等待、模型 gate、blocking 排队、实际执行和 history 持久化；Run.total_us 从校验后起点至查询结束，history 阶段另计 |
+
+检索在参数校验后建立统一 60 秒截止时间，查询与常规 history 确认等待共用剩余预算。后台 writer 负责已接受的历史任务，获取 history 锁后持有至实际完成；确认等待到期后，调用可返回，持久化继续执行，Run 在提交前可能仍为 running。持久化失败单独记录，技术响应与历史终态分别核对。history_lock_wait 和 history_persistence 观察实际后台阶段；activate 观察调用返回。初始 Run 创建、超时终态写入及故障记录保留各自等待边界，完整 daemon 耗时使用 activate 快照。
+
+索引 pending_since 从收敛后的首个未解决目标开始，跨重试和目标变化保持；新积压保留较早的 published_at。模型 gate 等待、blocking 排队和实际执行分别计时；调用者取消后，blocking 工作可能继续，资源所有权随实际执行结束释放。本地数据契约见[本地运行时](/zh/runtime)和[检索与评测](/zh/retrieval-evaluation)。
+
+## 数据可信度
+
+| 状态 | 判定与处理 |
+| --- | --- |
+| 有活动 | 来源可达、字段和时间有效，展示吞吐量、分类分布及样本 |
+| 空闲 | 来源可信、窗口无事件，吞吐为零，延迟无样本 |
+| 失败 | 抓取、SQL 或任务失败；保留最近尝试结果和最后成功记录 |
+| 缺失 | 预期 target 或必要字段缺失，显示未知 |
+| 过期 | 主机或数据库采集年龄超过 900 秒，快照及当前任务判断显示未知 |
+| 时间无效 | 过去事件戳晚于观察时钟，显示 -2 并保留原戳 |
+| 未执行或未覆盖 | 阶段没有样本，按相应状态显示 |
+| 年龄未知 | 持久工作缺少可信起点，保留未知 |
+
+`clumsies_observability_expected_target` 来自目标清单；target_health 对每个预期 job/instance 输出 1 正常、0 抓取失败、-1 缺失。有效数据库快照要求 SQL success=1，且主机、数据库年龄均满足 `0 ≤ age ≤ 900 秒`。过期/缺失为 -1、失败为 0、有效为 1；未来时间严格按无效处理。
+
+SQL 失败撤掉数据库样本；textfile 的真实采集时间决定新鲜度。备份、恢复、发布的原始成功时间中性保留，与当前可信度分开展示。新可信成功可修复未来缓存；仍处于未来的原始收据或归档继续显示时间异常。任务状态区分 success、failed、never、missing、running；明确的启动失败允许没有退出时间，存在未来退出时间时按无效处理。证书到期属于未来期限，使用剩余有效期判断。
+
+## 看板与导航
+
+四个看板分别提供影响、入口、API 和运行保障视图，中英文采用相同查询。设计依据见 [Grafana 看板组织实践](https://grafana.com/docs/grafana/latest/visualizations/dashboards/build-dashboards/best-practices/)。
+
+| 看板 | 内容 | 导航 |
 | --- | --- | --- |
-| 同步周期 | converged、partial、failed、skipped 等结果 | 锁等待与周期执行分别记录；周期返回 Ok 不等于全部 Draft 收敛 |
-| Draft | 当次同步尝试、实际 Server 确认、本地 synced 提交 | oldest_pending_operation_at 与 oldest_failed_operation_at 表示可访问工作原始入队时间；重试不重置，failed 年龄不是失败发生时间 |
-| Commit | 成功检查、无变化检查、实际 Ref 安装 | 选择具体项目后读取 commit_sync.last_checked_success_at；无项目范围及 Draft channel 的此字段为 None，不是全局检查时间；安装时间另列 |
-| 索引 | 构建尝试、实际发布、superseded、维护结果 | pending_since 表示当前积压起点；published_at 仅真实原子发布后更新；目标版本差不等于任务或文档数 |
-| 检索 | 完整 activate 调用、Run、锁等待、模型等待/执行及记录收尾 | activate 过程计时覆盖参数验证至 history 收尾；Run.total_us 在收尾前截止，60 秒查询预算不约束完整调用 |
+| 运行总览 | 告警与可信度；业务吞吐、分类样本、成功延迟；5xx、并发、连接池；四站点入口 | 站点到入口页，业务到 API，资源与采集到基础设施 |
+| 入口与网站访问 | site 筛选、请求/s、状态码、延迟和样本、慢请求及访问日志 | 请求关联到 API 页 A7 |
+| 业务 API | route/method 筛选、吞吐与分类延迟、忙/慢路由、生命周期、请求关联；折叠产品活动区 | App 入口到 W5，依赖到基础设施 |
+| 基础设施与运行保障 | 预期目标、快照、数据库、资源、备份、恢复、证书、日志、通知、Server 版本和发布信息 | Prometheus、Alertmanager、运维指南 |
 
-索引 pending_since 在已收敛后首次出现新目标时设置，跨重试和目标更新保持，收敛后清除；新积压保留旧 published_at。升级前的历史积压缺少可信起点时不回填。同步的 pending/failed 年龄来自原始操作创建时间，不从索引 job.created_at、updated_at 或 Run 保留行数补造年龄和吞吐量。首次 Server 确认的持久去重及全体合格操作分母仍是写入 SLI 的独立要求。本地接口与数据归属见[本地运行时](/zh/runtime)、[检索与评测](/zh/retrieval-evaluation)。
+跨页链接保留时间和适用的 site、route、method、request_id。API 的 A7 是 Caddy/Server 共用关联区，也是手工请求 ID 的唯一输入位置，以完整 request ID 查询，两层日志在同一结果中展示。页面级导航承担视图切换；面板保留测量结果。
 
-## 数据质量状态
+本地 server_request_id 可直接关联入口与 Server。client_request_id 先定位 Server 记录，再取内部 request_id；同一客户端身份可覆盖多个尝试。检索的 retrieval_run_started 连接 request_id 与 run_id。产品活动使用 API 折叠区的八个 gauge，配快照状态与年龄。
 
-性能图必须与来源状态一起阅读。历史有效曲线可以保留，缺失或冻结时不能继续宣称当前正常。
+## 服务目标与告警
 
-| 状态 | 判定 | 展示及处理 |
+沿用[部署指南的服务目标](/zh/guides/deploy-for-an-org#服务目标)。采集正确性、运行保障和服务目标合规分别验收。
+
+| 目标 | 数值 | 测量要求 |
 | --- | --- | --- |
-| 正常有活动 | 来源可达，所需字段和时间有效，存在事件 | 展示吞吐量、结果、分布及各自样本量 |
-| 正常空闲 | 来源可信，窗口没有事件 | 吞吐可为零，延迟显示无样本，不能显示 0 ms 成功 |
-| 失败 | 抓取失败、SQL 失败或当次任务失败 | 显示失败，并保留最近成功与最近尝试结果 |
-| 缺失 | 预期 target 不存在或必要字段未提供 | 显示缺失/未知，不能通过求和把消失的目标忽略 |
-| 过期 | 主机或数据库快照超过 15 分钟 | 标为过期；产品 gauge、最长查询和当前运行保障状态不参与正常判断 |
-| 时间无效 | 采集或已经发生的成功/退出事件戳晚于观察时钟，年龄为负 | 显示 -2 时间无效，不能钳成零或判为新鲜；保留原始戳供核对 |
-| 未覆盖或未执行 | 安装未提供该埋点，或当次操作未执行该阶段 | 明确范围；不补零参与分位数 |
-| 年龄未知 | 历史工作没有可信积压起点 | 保持未知，不用创建时间或重试时间替代 |
+| 公网可用性 | 30 天 99.5% | App 为 HTTP 200 且 JSON status=ok；静态站点使用 HTTPS 模块，报告探测覆盖与缺失 |
+| 写入新鲜度 | 99% 合格改动在五分钟内到 Server | 首次持久化入队至验证对应 Server 持久确认；完整 SLI 待实现 |
+| 持久性 | RPO ≤ 26 小时；RTO ≤ 1 小时 | 可恢复副本和成功备份年龄；恢复开始至恢复后可用的独立计时 |
+| App 入口延迟 | p95 < 1 秒 | Caddy App 入口；请求范围和目标窗口待明确 |
+| 服务端错误 | <1% | 每站点同组入口请求的 5xx；API route/method 用于定位 |
 
-`clumsies_observability_expected_target` 由部署目标清单产生；`clumsies_observability_target_health` 对每个预期 job/instance 输出 1 正常、0 抓取失败、-1 缺失。旧配置兼容状态只覆盖已发现目标，不具备误删目标检测能力。
+写入 SLI 按首次入队归属窗口。到达 300 秒判定点的合格逻辑操作构成分母，300 秒内取得对应确认的操作构成分子；未到期 pending 单列并报告窗口滞后。重试沿用同一逻辑操作，迟到成功保留原判定；合并、取消和无需上传操作的处理需预先写入合格事件契约。客户端接收时间是可验证的确认上界。
 
-数据库快照有效需要 `clumsies_database_collection_success=1`，并且数据库与主机采集年龄均满足 `0 ≤ age ≤ 900 秒`。未来采集时间、时钟回拨造成的负年龄均不可信，不设隐含容差。SQL 失败撤掉数据库样本；timer 停止时 node-exporter 仍可能重读旧 textfile，因此 Prometheus 样本时间不能证明快照新鲜。运行保障另看主机采集时间和任务状态 success、failed、never、missing、running。
-
-备份、恢复和发布的最后成功时间作为历史事实保留，后续失败或时间异常不改写成功戳。备份/恢复的有效年龄与已完成任务结果需要新鲜、非负的主机采集时间；未来成功或退出时间不能证明正常。看板用中性字段保留原始成功戳，另列可信度或有效年龄，缺失/过期为未知，未来时间为无效。明确的启动失败可以没有退出时间，仍应显示失败；已有退出时间在未来时标为无效。最近失败、从未成功和最后成功年龄分别表达。证书到期时间本来位于未来，不属于过去事件的这一约束。日志发送为零可以是空闲，成功发送也不能证明每个来源都配置正确。
-
-## 四个主看板
-
-保留运行总览、业务 API、入口与网站访问的原 UID，新增基础设施与运行保障；中英版本使用相同查询。按影响和排查任务组织页面，资源与产品存量不占据性能总览。[Grafana 看板组织实践](https://grafana.com/docs/grafana/latest/visualizations/dashboards/build-dashboards/best-practices/)
-
-```mermaid
-flowchart TB
-    O["运行总览<br/>业务与站点影响 数据可信度"]
-    W["入口与网站访问<br/>站点请求与入口日志"]
-    A["业务 API<br/>路由与方法<br/>后端延迟与请求关联"]
-    I["基础设施与运行保障<br/>数据库 资源 采集 恢复 通知"]
-    O -->|入口或静态站点异常| W
-    O -->|后端吞吐或延迟异常| A
-    O -->|证据链或运行保障异常| I
-    W -->|App 请求 ID| A
-    A -->|入口或正文传输| W
-    A -->|依赖与资源| I
-    A -.-> P["API 底部默认折叠<br/>产品活动次级区"]
-```
-
-| 看板 | 页面布局 | 下钻 |
-| --- | --- | --- |
-| 运行总览 | 顶行告警与可信度；业务吞吐/样本/handler 延迟；5xx/并发/连接池摘要；四站点入口信号 | 站点到入口页，业务到 API，依赖和证据异常到基础设施 |
-| 入口与网站访问 | site selector；请求/s和状态码；延迟及样本；超过 1 秒请求；慢日志与全部访问日志 | App 的具体请求到统一关联区；静态请求自然没有 Server 记录 |
-| 业务 API | route/method selector；吞吐、分类样本与延迟；忙/慢路由、5xx及生命周期；具体日志和关联区 | route 保留 method；入口日志复用站点页；连接池复用基础设施页 |
-| 基础设施与运行保障 | 预期目标与快照状态；数据库和有限连接获取计时；主机/容器/磁盘；备份/恢复/证书/日志/通知；版本与成功发布快照 | 到对应服务、timer、日志和告警页面；保持异常时间窗 |
-
-总览布局按阅读顺序排列，资源只放异常摘要或有限概况：
-
-```mermaid
-flowchart TB
-    R0["告警状态与数据可信度"]
-    R1["业务请求进入与完成<br/>总样本与成功样本<br/>成功 handler 延迟及旧口径混合结果"]
-    R2["5xx 比例与数量<br/>业务执行中请求<br/>共享连接池占用摘要"]
-    R3["四站点可用性 吞吐 错误 入口 p95"]
-    R0 --> R1 --> R2 --> R3
-```
-
-所有跨页链接保留时间范围，site、route、method、request_id 仅传给相应视图。API 只有一个跨 Caddy/Server 的请求关联区，忽略站点和路由筛选，避免筛掉另一层。空 request_id 提示输入并不返回日志；静态配置仍可发送受约束的 Loki 查询，不承诺完全不查询。
-
-本地 HTTP 日志的 server_request_id 来自返回头，可直接关联入口与 Server；Server 的 client_request_id 对应客户端身份，先找到 Server 记录后用其内部 request_id 查入口。客户端身份可能覆盖多个 HTTP 尝试，不能把这些尝试的计时拼成同一次 HTTP 请求。检索通过 retrieval_run_started 事件连接 request_id 与 run_id，再查看对应本地 Run。
-
-产品活动导航打开 API 页，并明确提示展开页底部次级区，不依赖 row 的单面板跳转。八个产品 gauge 保留原语义和源 ID；各项受快照有效性约束，该区不参与自动故障判定，不新增第五个主看板。
-
-旧全路由 `clumsies_http_requests_in_flight` 包含 health 和当前 metrics 抓取，仅作为明确标注的兼容信息，不用于业务积压判断。版本信息和最后成功发布时间辅助对照发布记录；五分钟发布快照不是完整事件历史或 revision 映射。
-
-## 服务目标与告警规范
-
-沿用[部署指南的服务目标](/zh/guides/deploy-for-an-org#服务目标)。SLI 是具体测量，SLO 是目标；指标存在、一次演练成功或规则未报警均不代表目标已经达标。
-
-| 目标 | 数值 | 测量范围与验收条件 |
-| --- | --- | --- |
-| 公网可用性 | 30 天探测成功率 99.5% | App 按 HTTP 200 且 JSON status=ok 判断 ready，静态站点按 HTTPS 模块判断；展示探测覆盖率和缺失，整机失联另需主机外观察 |
-| 写入新鲜度 | 99% 合格客户端改动在五分钟内到 Server | 首次持久化入队到收到并验证对应 Server 持久确认；尚未形成完整 SLI，不能报告已达标 |
-| 持久性 | RPO 不超过 26 小时；RTO 不超过 1 小时 | 验证可恢复副本和成功备份年龄；恢复开始到恢复后服务可用另行计时，演练成功年龄不等于 RTO |
-| App 入口延迟 | p95 低于 1 秒 | 保持 Caddy App 入口计时；请求范围及目标窗口需明确，不能改绑 Server 成功 p95 或浏览器体验 |
-| 服务端错误 | 少于 1% | 入口按站点评估同组请求的 5xx；保留现有规则，API method/route 用于定位原因 |
-
-写入 SLI 按首次入队时间归属观察窗口，对已经达到 300 秒判定点的合格逻辑操作计算好事件/全部事件，并显示窗口滞后与未到期 pending。300 秒内取得对应确认才为好事件；到期未确认就是坏事件，即使之后成功。重试不新增分母，取消或合并不得事后任意删除坏事件。本地无需上传操作是否排除，应预先写入合格事件契约。客户端确认时间是可验证的接收上界，不是 Server 内部精确提交时间。
-
-当前本地过程计数缺少完整合格事件契约、首次确认的持久去重和未完成分母，不能替代上述 SLI。入口延迟与错误 SLO 的观察窗口和请求范围、其它操作响应预算、外部整机监测方式及告警责任/通道需由服务维护方确认。
-
-### 告警判定
-
-告警针对可行动的故障、即将耗尽的容量和证据链失败。人类工作存量、Draft 创建年龄、未读数、空结果或 CPU 单次升高不自动通知运维。低流量同时展示失败次数与比例，不能统一抑制高价值写入失败。
+告警覆盖可行动的故障、容量风险和观测链路故障。低流量结合失败次数、比例和操作价值判断；产品存量用于工作状态分析。
 
 | 规则组 | 条件与持续时间 | 排查入口 |
 | --- | --- | --- |
-| 可用性 | 公网探针失败 2 分钟；抓取失败或预期目标缺失 5 分钟；证书不足 14 天持续 1 小时 | 站点、预期 target、证书 |
-| 入口错误 | 每站点滚动五分钟 5xx 比例大于 1%，持续 5 分钟 | 入口错误日志和对应 API |
-| 容量 | 文件系统可用量低于 15% 持续 10 分钟；主机可用内存低于 10% 持续 10 分钟；PostgreSQL 连接超过 80% 持续 10 分钟 | 基础设施资源与数据库 |
-| 固定内存提醒 | Clumsies 容器工作集超过 2 GiB 持续 10 分钟 | 容器趋势；该值不是配置上限 |
-| 数据库 | pg_up=0 持续 2 分钟；最长活动查询超过 60 秒持续 5 分钟 | 数据库；长查询仍是五分钟快照 |
-| 采集 | 主机快照缺失/超过 15 分钟或数据库快照失败/缺失/过期，持续 5 分钟 | metrics service/timer、textfile 与 SQL |
-| 时间有效性（OperationalTimestampInvalid，warning） | node 可达时，主机/数据库采集、备份、恢复、发布或 unit exit 时间晚于 Prometheus 当前时间，持续 5 分钟 | 核对主机时钟及原始记录；分别标记无效来源，不重写历史 |
-| 日志与通知 | 日志发送重试持续 5 分钟；五分钟内有丢弃或通知失败 | Alloy、Loki、Alertmanager 与通知集成 |
-| 备份与恢复 | 成功备份缺失或超过 26 小时持续 30 分钟；成功演练缺失或超过 8 天持续 1 小时；最近任务失败或不可用持续 5 分钟 | 相应 service/timer，最近结果与保留成功时间 |
+| 可用性 | 公网探针失败 2 分钟；抓取失败或预期目标缺失 5 分钟；证书不足 14 天持续 1 小时 | 站点、target、证书 |
+| 入口错误 | 每站点滚动五分钟 5xx >1%，持续 5 分钟 | 入口日志、API |
+| 容量 | 文件系统可用量 <15%、主机可用内存 <10%、PostgreSQL 连接 >80%，各持续 10 分钟 | 资源、数据库 |
+| 固定内存提醒 | 容器工作集 >2 GiB，持续 10 分钟 | 容器趋势与实际限制 |
+| 数据库 | pg_up=0 持续 2 分钟；有效快照中活动查询 >60 秒持续 5 分钟 | 数据库、锁与事务 |
+| 采集 | 主机/数据库快照缺失、失败、过期或时间无效，持续 5 分钟 | service/timer、textfile、SQL |
+| 时间有效性 | OperationalTimestampInvalid：node 可达且主机/DB 采集、备份、恢复、发布或 unit exit 戳 >Prometheus time，持续 5 分钟，warning | 主机时钟和对应原始记录 |
+| 日志与通知 | 发送重试持续 5 分钟；五分钟内存在日志丢弃或通知失败 | Alloy、Loki、Alertmanager |
+| 备份与恢复 | 成功备份缺失/时间无效/>26 小时持续 30 分钟；成功演练缺失/时间无效/>8 天持续 1 小时；任务失败或不可用持续 5 分钟 | service/timer、任务结果、成功记录 |
 
-每条通知应包含受影响对象、窗口、结果或样本、详情入口和首个排查动作。Prometheus 展示 enabled、pending、firing，Alertmanager 处理通知分组与静默。当前 warning 和 critical 使用同一邮件接收器，严重度标签本身不提供不同响应优先级。
+普通邮件初次等待 30 秒，分组变化间隔五分钟，持续故障每四小时重复，恢复发送通知。warning/critical 使用同一接收器。Watchdog 常驻 firing，首次等待 10 秒、每 24 小时重复；收件箱实际收到心跳用于验证投递。通知应给出对象、窗口、结果或样本、详情入口及首个排查动作。
 
-普通通知初次等待 30 秒，分组变化间隔五分钟，持续故障每四小时重复，恢复发送通知。Watchdog 始终 firing，首次等待 10 秒、每天重复，单列为通知心跳；收到邮件才能证明到收件箱的投递。通知失败告警仍依赖同一通道，整机失联和心跳缺席不能由这条链路独立保障。
+## 验收与待完善项
 
-## 附录 40 个原面板的迁移
-
-来源用原看板标识和 panel ID 记录：O 为运行总览，A 为业务 API，W 为原网站访问；目标 I 为基础设施与运行保障，P 为 API 底部产品次级区。三个原 UID 保留；跨看板迁移后的旧单面板收藏应按下表更新。新增指标与状态面板不计入原 40 项。
-
-### 原运行总览
-
-| 源 ID | 原面板 | 去向 | 调整用途 |
-| --- | --- | --- | --- |
-| O1 | 各站点可用性 | O1 | 按站点看探测结果，采集未知结合可信度摘要 |
-| O2 | 各站点每秒请求 | O2 | 保留入口吞吐，明确探针口径，下钻 W |
-| O3 | 各站点 5xx 比例 | O3 | 保留站点错误判断，结合同窗样本与失败日志 |
-| O4 | 各站点入口 p95 | O4 | 保留入口尾部判断，结合样本，下钻 W |
-| O5 | 备份年龄 | I16 | 与最近结果和缺失状态并读 |
-| O6 | 证书剩余天数 | I19 | 全站点 min 改逐站点，定位具体证书 |
-| O7 | 根分区剩余 | I14 | 扩为实际持久挂载空间 |
-| O8 | 主机 CPU | I10 | 保留主机百分比，关联同窗延迟 |
-| O9 | 主机内存占用 | I11 | 看可用内存与压力 |
-| O10 | 容器 CPU | I12 | 改为占用核数 |
-| O11 | 容器内存 | I13 | 看工作集和真实限制 |
-| O12 | PostgreSQL 连接数 | I5 | 当前连接数与上限并列 |
-| O13 | 最长查询耗时 | I9 | 保留五分钟快照，受新鲜度约束 |
-| O14 | 抓取目标状态 | I1 | 逐预期 target 显示 1/0/-1，O 引用摘要 |
-| O15 | 日志重试与丢弃 | I20 | 判断日志证据是否完整 |
-| O16 | 每秒发送到 Loki 的日志 | I21 | 与来源、抓取及传输结果并读 |
-
-原 O 的 row100“共享基础设施”由 I 承载；O 新增业务性能和可信度摘要。
-
-### 原业务 API
-
-| 源 ID | 原面板 | 去向 | 调整用途 |
-| --- | --- | --- | --- |
-| A1 | 后端处理延迟 | A1 | 成功和旧混合结果分开，错误分布另列 |
-| A2 | 观测请求量 | A2 | 紧邻延迟，提供总量及分类样本 |
-| A3 | 每秒请求按状态码 | A3 | 完成吞吐主读，保留状态分布 |
-| A4 | 超过 1 秒请求按接口 | A4 | 与忙路由并读；1 秒为调查筛选 |
-| A5 | 后端慢请求 | A5 | 按 route/method 下钻日志与请求 ID |
-| A6 | App 入口慢请求 | 复用 W5 | A 提供预选 App 且保留时间的链接 |
-| A7 | 指定请求关联日志 | A7 | 唯一关联区；空 ID 不返回日志 |
-| A8 | 服务端连接池 | I4 | 占用与配置上限；有限 acquire 计时另列 |
-| A9 | 最忙路由前 8 | A9 | 从折叠区前移，支持 route/method 下钻 |
-| A10 | 最近一小时新建提交记录 | P 的 A10 | 保留记录 gauge，不命名为同步吞吐 |
-| A11 | 最近一小时新建草稿 | P 的 A11 | 保留创建活动快照 |
-| A12 | 最近一小时新建评审 | P 的 A12 | 保留记录数，不当事件 counter |
-| A13 | 草稿数量按生命周期 | P 的 A13 | 全部状态保留，open 不自动当故障 |
-| A14 | 开放草稿净变化 | P 的 A14 | 六小时拟合存量净变化 |
-| A15 | 有效对账冲突草稿 | P 的 A15 | 保留候选有效性范围，零不证明全部已评估 |
-| A16 | 数据库未读记录数 | P 的 A16 | 含归档/不可访问记录，不当角标或投递失败 |
-| A17 | 最早开放草稿创建年龄 | P 的 A17 | 非处理/同步等待；无 open 时零保持原义 |
-
-原 A 的 row100 改名“产品活动”，默认关闭。A8 移走、A9 前移后，八个原产品面板保留源 ID，并附快照状态与年龄。
-
-### 原网站访问
-
-| 源 ID | 原面板 | 去向 | 调整用途 |
-| --- | --- | --- | --- |
-| W1 | 入口延迟 | W1 | p50/p95 主读，p99 详情，结合样本 |
-| W2 | 观测请求量 | W2 | 修正文案为窗口外推计数 |
-| W3 | 每秒请求按状态码 | W3 | 总吞吐与状态分解 |
-| W4 | 超过 1 秒请求 | W4 | 定位调查时间窗 |
-| W5 | 站点慢请求 | W5 | 承担原 A6，保留路径/字节/上游计时 |
-| W6 | 站点访问日志 | W6 | 查不慢但失败、404 与重定向 |
-| W7 | 指定请求关联日志 | 复用 A7；W7 为导航 | 传递请求 ID 和时间范围，不复制关联查询 |
-
-## 验收
-
-中心配置、Server 指标、本地诊断和服务目标分别验收。完成看板迁移或通过构建不等于服务目标已经达标。
-
-| 验收范围 | 必须观察到的结果 |
+| 范围 | 验收结果 |
 | --- | --- |
-| 面板与导航 | 原 40 项都有明确去向，旧三个 UID 保留；八个中英看板查询一致、无重叠；跨页时间和适用过滤保持 |
-| 兼容与分类 | 旧 Server 仍有吞吐、样本与明确标注的混合延迟；新 method 隔离，成功/错误各有分布和样本；504/599 正确计入 5xx |
-| 生命周期 | started、response、cancelled_or_aborted、in-flight 范围一致；取消不会被写成完成响应，监控不会改变业务写入行为 |
-| 有限连接计时 | review_create/review_merge 与其它操作隔离；超时、错误、中断及获取进行中正确；不能据此宣称全库等待已覆盖 |
-| 数据可信度 | timer 停止、SQL 失败、target 误删、缺失或未来时间均可见；负年龄不显示成功，冻结产品值不继续呈现为当前正常 |
-| 运行保障 | never、failed、missing、running 可区分；失败与旧成功并存；恢复成功推进保留时间，通知失败/日志丢弃可见 |
-| 请求证据 | 后端慢与后端快但正文传输慢能区分；空 ID 和前缀 ID 不误返回关联日志；脱敏与原始路径保持 |
-| 本地诊断 | 进程起点和重启边界明确；同步结果、Server 确认与本地提交区分；索引实际发布、检索完整耗时和未执行阶段分别验证 |
-| 目标与容量 | 写入 SLI 的合格事件、持久去重、过期未完成分母齐备后再评估 99%；容量结果带 revision、硬件、请求组合、数据规模和持续时间 |
+| 看板与导航 | 八个中英看板查询一致，原指标有明确去向，时间与适用筛选保持 |
+| HTTP 分类 | method 隔离，成功/错误各有分布和样本，504/599 归 5xx |
+| 生命周期 | started、response、cancelled_or_aborted、in-flight 范围一致；取消终止平衡计数 |
+| 连接获取 | 评审创建/合并范围隔离；获取、超时、错误、中断和进行中正确 |
+| 数据可信度 | timer 停止、SQL 失败、target 缺失、未来时间和缓存恢复可见 |
+| 运行保障 | never/failed/missing/running 区分，最近失败与最后成功并存 |
+| 请求证据 | 入口/handler/正文传输边界明确，完整 ID 精确关联，日志脱敏有效 |
+| 本地诊断 | 进程区间、同步确认、本地提交、索引发布、activate 返回与后台持久化、阶段执行状态可验证 |
 
-复用 `deploy/observability/test.py` 的配置、collector、请求、就绪探针与 Grafana 验证，`test-delivery.py` 的部署和回滚检查，以及 Server metrics/telemetry 和本地行为测试。失败和负载场景在隔离环境执行，生产通过真实流量及就绪检查验收。
+配置与行为验收使用 `deploy/observability/test.py`、`test-delivery.py`、Server metrics/telemetry 和本地行为测试。失败注入与负载测试采用隔离环境；生产使用真实流量和就绪检查。字段或完成点调整同时更新查询、规则和 fixtures。
 
-指标标签或完成点变化时同步看板、规则与 fixtures；发布后等待完整五分钟请求窗口再解释新旧 schema 交界处的尾部。沿用现有配置交付和回滚，不重写历史指标或改变本地数据权限、保留契约。实现配置与测试集中在 `deploy/observability/`，HTTP 契约在 `crates/server/src/metrics.rs`；本地边界与质量证据沿用运行时文档及对应行为测试。
+待完善项：写入 SLI 的合格事件、首次确认持久去重和到期未完成分母；入口延迟与错误目标的观察窗口及请求范围；各类操作的响应预算；RTO 独立计时；主机外监测与告警责任、通道。当前同机监控的有效范围是安装内组件与探针，整机失联和通知通道自身故障需外部观察。
+
+统计解释遵循以下边界：低样本 p99 配样本数阅读；窗口无事件时延迟无样本；入口、handler、客户端及重叠阶段分别计时；五分钟数据库快照覆盖采样时状态；产品保留行数描述活动存量。检索质量另用人工评测，容量结论另列硬件、数据规模、请求组合及持续时间。
+
+## 附录 A：历史数据与升级
+
+日常看板采用 route、method、status_class 的现行 HTTP schema。历史 route-only histogram 为混合结果，升级前数据保留在 Prometheus；查询历史时按当时标签解释。历史全路由 in-flight 包含 health 与 metrics，现行业务视图使用 business in-flight。升级后等待完整五分钟窗口再读取分类延迟。
+
+旧 daemon 缺少 performance 或持久等待起点时，本地诊断显示不可用或年龄未知。客户端保持旧响应解码兼容。配置升级与回滚由现有交付流程执行；成功时间及历史指标保留，历史样本按原始口径解释。五分钟发布快照记录最近成功，历史 revision 对照使用发布记录。
+
+## 附录 B：原 40 项面板去向
+
+O 为原运行总览，A 为原业务 API，W 为原网站访问；I 为基础设施，P 为 API 的折叠产品活动区。原三个看板 UID 保留，跨看板收藏按表更新；页面级导航替代纯帮助面板。
+
+| 源 ID | 原面板 | 现行去向 |
+| --- | --- | --- |
+| O1 | 站点可用性 | O1，逐站点 |
+| O2 | 入口请求/s | O2 → W |
+| O3 | 站点 5xx | O3，配同窗样本 |
+| O4 | 入口 p95 | O4 → W |
+| O5 | 备份年龄 | I16，成功年龄与时间 |
+| O6 | 证书剩余天数 | I19，逐证书 |
+| O7 | 根分区空间 | I14，持久挂载空间 |
+| O8 | 主机 CPU | I10，百分比 |
+| O9 | 主机内存 | I11，可用量与压力 |
+| O10 | 容器 CPU | I12，占用核数 |
+| O11 | 容器内存 | I13，工作集与限制 |
+| O12 | PostgreSQL 连接 | I5，连接数与上限 |
+| O13 | 最长查询 | I9，有效采样快照 |
+| O14 | 抓取目标 | I1，预期目标状态；O 提供摘要 |
+| O15 | 日志重试/丢弃 | I20 |
+| O16 | Loki 日志发送/s | I21，配来源与传输状态 |
+| A1 | handler 延迟 | A1，成功分类；错误分布另列 |
+| A2 | 观测请求量 | A2，总量与分类样本 |
+| A3 | 状态码请求/s | A3 |
+| A4 | >1 秒请求 | A4，调查筛选 |
+| A5 | 后端慢请求 | A5，route/method 与请求 ID |
+| A6 | App 入口慢请求 | API 页级“App入口”导航 → W5 |
+| A7 | 请求关联 | A7，统一关联区 |
+| A8 | Server 连接池 | I4，配有限 acquire 计时 |
+| A9 | 最忙路由 | A9，route/method 下钻 |
+| A10 | 最近一小时 Commit | P / A10，保留行 gauge |
+| A11 | 最近一小时 Draft | P / A11 |
+| A12 | 最近一小时 Review | P / A12 |
+| A13 | Draft 生命周期 | P / A13 |
+| A14 | 开放 Draft 净变化 | P / A14，六小时拟合 |
+| A15 | 有效对账冲突 Draft | P / A15，候选有效性范围 |
+| A16 | 数据库未读记录 | P / A16，含归档与不可访问记录 |
+| A17 | 最早开放 Draft 创建年龄 | P / A17，无 open 时为零 |
+| W1 | 入口延迟 | W1，p50/p95/p99 与样本 |
+| W2 | 观测请求量 | W2，窗口外推量 |
+| W3 | 状态码请求/s | W3 |
+| W4 | >1 秒请求 | W4 |
+| W5 | 站点慢请求 | W5，路径、字节与上游计时 |
+| W6 | 访问日志 | W6 |
+| W7 | 请求关联 | 网站页级“请求关联”导航 → A7 |

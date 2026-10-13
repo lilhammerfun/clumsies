@@ -13,10 +13,10 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "业务范围排除 /metrics 与健康检查；新业务进入/终止/并发指标范围一致。旧版本并发含全部路由、探针及当前抓取，不能判断业务积压。中心监控未覆盖本地客户端健康。",
+  "description": "业务请求性能、站点入口与采集状态。",
   "links": [
     {
-      "title": "运行总览",
+      "title": "总览",
       "type": "link",
       "url": "/d/clumsies-overview-zh/view",
       "includeVars": false,
@@ -24,7 +24,7 @@
       "targetBlank": false
     },
     {
-      "title": "业务 API",
+      "title": "API",
       "type": "link",
       "url": "/d/clumsies-api-zh/view",
       "includeVars": false,
@@ -32,7 +32,7 @@
       "targetBlank": false
     },
     {
-      "title": "入口与网站访问",
+      "title": "网站访问",
       "type": "link",
       "url": "/d/clumsies-web-zh/view",
       "includeVars": false,
@@ -40,17 +40,9 @@
       "targetBlank": false
     },
     {
-      "title": "基础设施与运行保障",
+      "title": "基础设施",
       "type": "link",
       "url": "/d/clumsies-infrastructure-zh/view",
-      "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false
-    },
-    {
-      "title": "产品活动 · API 底部折叠区",
-      "type": "link",
-      "url": "/d/clumsies-api-zh/view",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false
@@ -59,9 +51,9 @@
   "panels": [
     {
       "id": 20,
-      "title": "故障告警 · 所选时间末端",
+      "title": "当前告警",
       "type": "stat",
-      "description": "Watchdog 是通知心跳，此处排除。零告警须结合正常采集；到基础设施页或 Prometheus Alerts 查看详情。",
+      "description": "当前触发的故障告警数量，排除通知心跳。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -75,8 +67,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "count(ALERTS{alertstate=\"firing\",alertname!=\"Watchdog\"}) or vector(0)",
-          "legendFormat": "故障告警",
+          "expr": "(count(ALERTS{alertstate=\"firing\",alertname!=\"Watchdog\"}) or vector(0)) and on() (min(up{job=\"prometheus\"}) == 1)",
+          "legendFormat": "告警",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -88,12 +80,47 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "不可用 / 无样本，请检查采集状态",
+          "noValue": "未知",
           "links": [
             {
-              "title": "查看告警及通知",
+              "title": "基础设施",
               "url": "/d/clumsies-infrastructure-zh/view?${__url_time_range}",
               "targetBlank": false
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
             }
           ]
         },
@@ -114,9 +141,9 @@
     },
     {
       "id": 21,
-      "title": "数据可信度 · 所选时间末端",
+      "title": "采集状态",
       "type": "stat",
-      "description": "未知/过期不代表成功。旧配置只检查已发现目标，无法发现目标误删。快照仅在成功且十五分钟内有效。 当前性要求主机与数据库采集年龄均在 0 至 900 秒；未来时间不算成功，原始戳保留。",
+      "description": "数据库与主机快照有效期为15分钟，负年龄标为时间无效。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -130,19 +157,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "min(clumsies_observability_target_health)",
-          "legendFormat": "预期目标：1正常 / 0失败 / -1缺失",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "min(up) unless on() clumsies_observability_target_health",
-          "legendFormat": "旧配置：仅已发现目标",
+          "expr": "min(clumsies_observability_target_health) or vector(-1)",
+          "legendFormat": "采集目标",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -153,7 +169,7 @@
         {
           "refId": "C",
           "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-          "legendFormat": "数据库快照：1成功 / 0失败 / -1过期缺失 / -2时间无效",
+          "legendFormat": "数据库采集",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -164,20 +180,30 @@
         {
           "refId": "D",
           "expr": "(((0 * clumsies_observability_collection_timestamp_seconds + 1) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-          "legendFormat": "主机采集：1新鲜 / -1过期缺失 / -2时间无效"
+          "legendFormat": "主机采集",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "不可用 / 无样本，请检查采集状态",
+          "noValue": "未知",
           "mappings": [
             {
               "type": "value",
               "options": {
-                "-1": {
-                  "text": "过期 / 缺失",
+                "-2": {
+                  "text": "时间无效",
                   "color": "red"
+                },
+                "-1": {
+                  "text": "缺失或过期",
+                  "color": "orange"
                 },
                 "0": {
                   "text": "失败",
@@ -186,23 +212,94 @@
                 "1": {
                   "text": "正常",
                   "color": "green"
-                },
-                "-2": {
-                  "text": "时间无效（未来时间戳）",
-                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
                 }
               }
             }
           ],
           "links": [
             {
-              "title": "查看采集",
+              "title": "基础设施",
               "url": "/d/clumsies-infrastructure-zh/view?${__url_time_range}",
               "targetBlank": false
             }
           ]
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-2": {
+                        "text": "时间无效",
+                        "color": "red"
+                      },
+                      "-1": {
+                        "text": "未知",
+                        "color": "orange"
+                      },
+                      "0": {
+                        "text": "失败",
+                        "color": "red"
+                      },
+                      "1": {
+                        "text": "正常",
+                        "color": "green"
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null",
+                      "result": {
+                        "text": "未知",
+                        "color": "#8e8e8e"
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "nan",
+                      "result": {
+                        "text": "未知",
+                        "color": "#8e8e8e"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "reduceOptions": {
@@ -219,9 +316,9 @@
     },
     {
       "id": 22,
-      "title": "业务请求 / 秒",
+      "title": "业务请求吞吐量",
       "type": "timeseries",
-      "description": "业务范围排除 /metrics 与健康检查；新业务进入/终止/并发指标范围一致。旧版本并发含全部路由、探针及当前抓取，不能判断业务积压。中心监控未覆盖本地客户端健康。",
+      "description": "业务 handler 的进入、响应与中断速率，使用5分钟窗口。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -235,8 +332,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "handler 返回响应",
+          "expr": "(sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "响应",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -244,8 +341,8 @@
         },
         {
           "refId": "B",
-          "expr": "(sum(rate(clumsies_http_business_requests_started_total{job=\"server\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "进入 · 新版本指标",
+          "expr": "(sum(rate(clumsies_http_business_requests_started_total{job=\"server\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "进入",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -253,8 +350,8 @@
         },
         {
           "refId": "C",
-          "expr": "(sum(rate(clumsies_http_business_requests_terminated_total{job=\"server\",outcome=\"cancelled_or_aborted\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "取消 / 中断 · 新版本指标",
+          "expr": "(sum(rate(clumsies_http_business_requests_terminated_total{job=\"server\",outcome=\"cancelled_or_aborted\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "取消/中断",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -264,10 +361,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "noValue": "不可用 / 无样本，请检查采集状态",
+          "noValue": "无数据",
           "links": [
             {
-              "title": "查看 API 路由",
+              "title": "业务 API",
               "url": "/d/clumsies-api-zh/view?${__url_time_range}",
               "targetBlank": false
             }
@@ -287,9 +384,9 @@
     },
     {
       "id": 23,
-      "title": "业务样本量 · 五分钟",
+      "title": "样本量",
       "type": "timeseries",
-      "description": "完成响应的窗口外推数；不是精确日志数或客户端逻辑操作数，与延迟和错误并读。 成功与错误分类分布对应各自样本量；旧版混合样本另列。",
+      "description": "5分钟窗口的响应样本外推量。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -303,8 +400,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "全部响应样本",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "总量",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -312,8 +409,8 @@
         },
         {
           "refId": "B",
-          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "成功响应样本",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\",method!=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "成功",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -321,8 +418,8 @@
         },
         {
           "refId": "C",
-          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "旧版本混合样本",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",status_class=~\"4xx|5xx|other\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "错误",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -332,7 +429,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "不可用 / 无样本，请检查采集状态"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -348,9 +445,9 @@
     },
     {
       "id": 24,
-      "title": "handler 延迟 · 五分钟",
+      "title": "成功响应延迟",
       "type": "timeseries",
-      "description": "成功 2xx/3xx handler 响应；不含正文传输。旧版本仅有 route 的直方图另列为混合结果，不冒称成功延迟。滚动五分钟桶估计，结合样本量；采集缺失为未知，空闲没有延迟样本。",
+      "description": "2xx/3xx handler 响应的5分钟分位数，计时止于返回 Response。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -364,8 +461,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "成功响应 p50",
+          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\",method!=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\",method!=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "p50",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -373,26 +470,8 @@
         },
         {
           "refId": "B",
-          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "成功响应 p95",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "C",
-          "expr": "(histogram_quantile(0.5, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "旧版本混合结果 p50",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "D",
-          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "旧版本混合结果 p95",
+          "expr": "(histogram_quantile(0.95, sum by(le) (rate(clumsies_http_request_duration_seconds_bucket{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\",method!=\"\"}[5m]))) and (sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=~\"2xx|3xx\",method!=\"\"}[5m])) > 0)) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "p95",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -402,10 +481,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "不可用 / 无样本，请检查采集状态",
+          "noValue": "无数据",
           "links": [
             {
-              "title": "查看 API 延迟",
+              "title": "业务 API",
               "url": "/d/clumsies-api-zh/view?${__url_time_range}",
               "targetBlank": false
             }
@@ -425,9 +504,9 @@
     },
     {
       "id": 25,
-      "title": "业务 5xx 比例 · 五分钟",
+      "title": "5xx 比例",
       "type": "timeseries",
-      "description": "与吞吐使用同组请求；无流量为无样本，抓取缺失为未知。 新版按实际5xx类别统计；旧版本兼容原精确状态码白名单，部分其它错误码归other。",
+      "description": "5分钟窗口内5xx响应占全部业务响应的比例。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -441,8 +520,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(((sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"5xx\"}[5m])) or 0 * sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m]))) / (sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])) > 0) * 100) or (((sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status=~\"5..\"}[5m])) or 0 * sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m]))) / (sum(rate(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m])) > 0) * 100) unless on() sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "5xx %",
+          "expr": "((sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",status_class=\"5xx\"}[5m])) or 0 * sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m]))) / (sum(rate(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m])) > 0) * 100) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -452,7 +531,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "noValue": "不可用 / 无样本，请检查采集状态"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -468,9 +547,9 @@
     },
     {
       "id": 26,
-      "title": "业务 5xx 响应量 · 五分钟",
+      "title": "5xx 数量",
       "type": "timeseries",
-      "description": "比例与错误量并读，低流量单次失败仍有意义。 新版按实际5xx类别统计；旧版本兼容原精确状态码白名单，部分其它错误码归other。",
+      "description": "5分钟窗口内的5xx响应外推量。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -484,8 +563,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(((sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class=\"5xx\"}[5m])) or 0 * sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])))) or (((sum(increase(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status=~\"5..\"}[5m])) or 0 * sum(increase(clumsies_http_requests_total{job=\"server\",route!~\"/metrics|/api/v1/admin/health\"}[5m])))) unless on() sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",status_class!=\"\"}[5m])))) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "5xx 响应",
+          "expr": "(sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",status_class=\"5xx\"}[5m])) or 0 * sum(increase(clumsies_http_request_duration_seconds_count{job=\"server\",route!~\"/metrics|/api/v1/admin/health\",method!=\"\",status_class=~\"2xx|3xx|4xx|5xx|other\"}[5m]))) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -495,7 +574,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "不可用 / 无样本，请检查采集状态"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -511,9 +590,9 @@
     },
     {
       "id": 27,
-      "title": "业务执行中请求",
+      "title": "业务请求并发",
       "type": "timeseries",
-      "description": "业务路由排除 /metrics 和健康检查。新增进入、终止与执行中指标范围一致。业务指标没有样本时显示全路由兼容信息，包含探针及当前抓取；缺少样本不能单独证明版本不支持，该值不能解释业务积压。中心观测不覆盖本地客户端健康。",
+      "description": "当前执行中的业务 handler 数量。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -527,17 +606,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(clumsies_http_business_requests_in_flight{job=\"server\"})) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "业务 handler",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          }
-        },
-        {
-          "refId": "B",
-          "expr": "(clumsies_http_requests_in_flight{job=\"server\"} unless on() clumsies_http_business_requests_in_flight{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "兼容全路由 · 业务指标暂无样本",
+          "expr": "(sum(clumsies_http_business_requests_in_flight{job=\"server\",method!=\"\"})) and on() (min(up{job=\"server\"}) == 1)",
+          "legendFormat": "执行中",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -547,7 +617,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "不可用 / 无样本，请检查采集状态"
+          "noValue": "无数据"
         },
         "overrides": []
       },
@@ -563,9 +633,9 @@
     },
     {
       "id": 28,
-      "title": "Server 连接池占用 · 全路由共享",
+      "title": "连接池使用量",
       "type": "timeseries",
-      "description": "近似并发快照，并非原子采样。连接获取计时仅覆盖评审创建/合并事务。",
+      "description": "Server 共享连接池的使用量与配置上限。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -589,7 +659,7 @@
         {
           "refId": "B",
           "expr": "(clumsies_db_pool_max_connections{job=\"server\"}) and on() (min(up{job=\"server\"}) == 1)",
-          "legendFormat": "配置上限",
+          "legendFormat": "上限",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -599,16 +669,41 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "不可用 / 无样本，请检查采集状态",
+          "noValue": "无数据",
           "links": [
             {
-              "title": "查看数据库及连接池",
+              "title": "基础设施",
               "url": "/d/clumsies-infrastructure-zh/view?${__url_time_range}",
               "targetBlank": false
             }
           ]
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "used"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "使用中"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "idle"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "空闲"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -622,9 +717,9 @@
     },
     {
       "id": 1,
-      "title": "各站点可用性",
+      "title": "站点可用性",
       "type": "timeseries",
-      "description": "App 探针要求 HTTP 200 且 JSON status=ok，静态站点探针跟随 HTTPS 跳转。0 表示探测失败，1 表示成功；抓取缺失为未知。失败可能是依赖未就绪，并不只表示网络不通。",
+      "description": "App 探针要求 HTTP 200 且 JSON status=ok；静态站点使用 HTTPS 探测。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -649,9 +744,100 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "noValue": "无样本"
+          "noValue": "无数据",
+          "min": 0,
+          "max": 1
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "https://app.clumsies.ai/api/v1/admin/health"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "app.clumsies.ai"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "网站访问",
+                    "url": "/d/clumsies-web-zh/view?${__url_time_range}&var-site=app.clumsies.ai",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "https://docs.clumsies.ai/"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "docs.clumsies.ai"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "网站访问",
+                    "url": "/d/clumsies-web-zh/view?${__url_time_range}&var-site=docs.clumsies.ai",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "https://clumsies.ai/"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "clumsies.ai"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "网站访问",
+                    "url": "/d/clumsies-web-zh/view?${__url_time_range}&var-site=clumsies.ai",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "https://www.clumsies.ai/"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "www.clumsies.ai"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "网站访问",
+                    "url": "/d/clumsies-web-zh/view?${__url_time_range}&var-site=www.clumsies.ai",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -665,9 +851,9 @@
     },
     {
       "id": 2,
-      "title": "各站点每秒请求",
+      "title": "站点请求吞吐量",
       "type": "timeseries",
-      "description": "每次请求只统计一个 HTTPS 站点处理层。包含可用性探针，不含自动 HTTP→HTTPS 跳转；不是浏览器页面加载时间。站点标签从部署后开始，历史混合数据不回填。",
+      "description": "HTTPS 入口请求速率，包含可用性探针。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -692,10 +878,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "noValue": "无样本",
+          "noValue": "无数据",
           "links": [
             {
-              "title": "查看此站点",
+              "title": "网站访问",
               "url": "/d/clumsies-web-zh/view?${__url_time_range}&var-site=${__field.labels.host}",
               "targetBlank": false
             }
@@ -715,9 +901,9 @@
     },
     {
       "id": 3,
-      "title": "各站点 5xx 比例 · 5 分钟",
+      "title": "站点 5xx 比例",
       "type": "timeseries",
-      "description": "每次请求只统计一个 HTTPS 站点处理层。包含可用性探针，不含自动 HTTP→HTTPS 跳转；不是浏览器页面加载时间。站点标签从部署后开始，历史混合数据不回填。",
+      "description": "各站点5分钟窗口内的5xx响应比例。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -742,10 +928,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "noValue": "无样本",
+          "noValue": "无数据",
           "links": [
             {
-              "title": "查看此站点",
+              "title": "网站访问",
               "url": "/d/clumsies-web-zh/view?${__url_time_range}&var-site=${__field.labels.host}",
               "targetBlank": false
             }
@@ -765,9 +951,9 @@
     },
     {
       "id": 4,
-      "title": "各站点入口 p95 · 5 分钟",
+      "title": "站点入口延迟",
       "type": "timeseries",
-      "description": "过去 5 分钟直方图估算值，不是最大值或某条请求的耗时。结合样本量阅读；无样本不代表零延迟。 每次请求只统计一个 HTTPS 站点处理层。包含可用性探针，不含自动 HTTP→HTTPS 跳转；不是浏览器页面加载时间。站点标签从部署后开始，历史混合数据不回填。",
+      "description": "各站点入口处理耗时的5分钟 p95。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -792,10 +978,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "无样本",
+          "noValue": "无数据",
           "links": [
             {
-              "title": "查看此站点",
+              "title": "网站访问",
               "url": "/d/clumsies-web-zh/view?${__url_time_range}&var-site=${__field.labels.host}",
               "targetBlank": false
             }
