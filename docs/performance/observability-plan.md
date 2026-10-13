@@ -36,7 +36,7 @@ flowchart TB
         Prom --> AM["Alertmanager"]
         AM --> Mail["Alert email"]
     end
-    App["macOS and daemon"] -->|Business HTTP| Edge
+    App["macOS and daemon"] -->|Client HTTP| Edge
     App --> Local["Local performance Logs Retrieval Run"]
     Local -.->|Manual correlation by ID| Loki
 ```
@@ -63,12 +63,12 @@ Entrance requests, Server handlers, logical client operations, sync attempts, in
 | --- | --- | --- |
 | `caddy_http_request_duration_seconds_count` | host, code; `handler="subroute"` | Requests completed by one site-handling layer |
 | `clumsies_http_requests_total` | route, method, status | Handler returns a Response; actual codes 100–599, otherwise `other` |
-| `clumsies_http_business_requests_started_total` | route, method | Entry into business middleware |
+| `clumsies_http_business_requests_started_total` | route, method | API request enters middleware |
 | `clumsies_http_business_requests_terminated_total` | route, method, outcome | Handler ends as `response` or `cancelled_or_aborted` |
-| `clumsies_http_business_requests_in_flight` | route, method | Business handlers executing at scrape time |
+| `clumsies_http_business_requests_in_flight` | route, method | API handlers executing at scrape time |
 | `clumsies_db_pool_acquires_total` | operation, outcome | `review_create`/`review_merge` attempts; acquired, timeout, error, cancelled_or_aborted |
 
-Business metrics exclude `/metrics` and `/api/v1/admin/health`, retaining unmatched requests. Caddy entrance metrics include synthetic probes and exclude automatic HTTP-to-HTTPS redirects. Daily Server queries require the current method label. Apply rate/increase to original counter series before aggregation to preserve restart detection. Increase extrapolates over a window and may be fractional.
+The API request scope excludes `/metrics` and `/api/v1/admin/health`, retains unmatched requests and includes HTTP requests from background polling and retries. Response throughput counts handlers returning a Response; starts, interruptions and in-flight work are shown separately. Client logical operations use their own completion events: reading a revision and submitting an update produces two HTTP requests, counted as one update operation in the load report. Caddy entrance metrics include synthetic probes and exclude automatic HTTP-to-HTTPS redirects. Daily Server queries require the current method label. Apply rate/increase to original counter series before aggregation to preserve restart detection. Increase extrapolates over a window and may be fractional.
 
 Database and product activity use gauges. Last-hour counts include retained rows with `now()-60min ≤ created_at ≤ now()`; deletion reduces the count. Open Draft net change is a six-hour fitted inventory slope, displayed as Drafts/hour.
 
@@ -84,7 +84,7 @@ Database and product activity use gauges. Last-hour counts include retained rows
 | Daemon activate | Parameter validation to daemon return | Includes query and history acknowledgment wait; accepted persistence may continue in the background; XPC transfer/client decoding are separate |
 | Background work | Attempt start to result; original pending time to convergence | Attempt count and backlog age are retained separately |
 
-HTTP histograms use route, method and status_class throughout. Success is 2xx/3xx; detailed error views use 4xx/5xx/other. Each distribution is accompanied by a sample count in the same scope. Rolling five-minute quantiles apply rate, aggregate by le and business dimensions, then histogram_quantile. Aggregate histogram buckets across instances before calculating quantiles. Server finite bounds are 5, 10, 25, 50, 100, 250, 500 milliseconds and 1, 2.5, 5, 10, 30 seconds; tails above the finite bounds remain subject to histogram estimation. See [histogram semantics](https://prometheus.io/docs/practices/histograms/).
+HTTP histograms use route, method and status_class throughout. Success is 2xx/3xx; detailed error views use 4xx/5xx/other. Each distribution is accompanied by a sample count in the same scope. Rolling five-minute quantiles apply rate, aggregate by le and selected request dimensions, then histogram_quantile. Aggregate histogram buckets across instances before calculating quantiles. Server finite bounds are 5, 10, 25, 50, 100, 250, 500 milliseconds and 1, 2.5, 5, 10, 30 seconds; tails above the finite bounds remain subject to histogram estimation. See [histogram semantics](https://prometheus.io/docs/practices/histograms/).
 
 Operations use a monotonic duration clock; durable pending times use UTC. Same-event timers retain their own boundaries across machines. Cross-layer diagnosis compares records from the same request. The runbook defines the relationships between overlapping stages and different timing boundaries.
 
@@ -142,12 +142,14 @@ Four dashboards provide impact, entrance, API and operational views. English and
 
 | Dashboard | Content | Navigation |
 | --- | --- | --- |
-| Overview | Alerts/confidence; business throughput, samples, success latency; 5xx, concurrency/pool; four-site entrance signals | Site to entrance, business to API, collection/resources to Infrastructure |
+| Overview | Alerts/confidence; API request throughput, samples, success latency; 5xx, API request concurrency/pool; four-site entrance signals | Site to entrance, requests to API, collection/resources to Infrastructure |
 | Entrance and Websites | Site filter, requests/s, response codes, latency/samples, slow requests and access logs | Request correlation to API A7 |
 | Business API | Route/method, throughput/classified latency, busy/slow routes, lifecycle and correlation; collapsed product activity | App entrance to W5; dependencies to Infrastructure |
 | Infrastructure and Operations | Expected targets, snapshots, database, resources, backup/restore, certificates, logs, notifications, Server version and release | Prometheus, Alertmanager and the runbook |
 
 Cross-page links preserve time and applicable site, route, method and request_id. API A7 is the shared Caddy/Server correlation view and the only manual request-ID input, matching the complete ID across both layers. Dashboard navigation changes views; panels present measurements.
+
+Summary cards show a single metric, with the object in the title and the result in the body. Scraping status, snapshot status, collection age, success time and record validity use separate cards; comparable percentiles, sites and routes share time-series charts. Times and elapsed durations retain their respective units. API requests/s, log entries/s, acquisitions/s, CPU cores and days identify their actual counting object or unit.
 
 Local server_request_id directly identifies entrance/Server records. client_request_id identifies Server records first; their internal request_id locates the entrance. One client identity can span attempts. retrieval_run_started links request_id to run_id. Eight product gauges remain in the collapsed API section with snapshot state/age.
 
@@ -202,7 +204,7 @@ Statistical interpretation pairs low-sample p99 with its count; idle windows hav
 
 ## Appendix A: Historical data and upgrades
 
-Daily dashboards use the current route/method/status_class HTTP schema. Historical route-only histograms contain mixed results and remain in Prometheus for queries under their original labels. Historical global in-flight includes health/metrics; current business views use business in-flight. Allow a complete five-minute window after upgrade before reading classified latency.
+Daily dashboards use the current route/method/status_class HTTP schema. Historical route-only histograms contain mixed results and remain in Prometheus for queries under their original labels. Historical global in-flight includes health/metrics; current API request views use in-flight with operational routes excluded. Allow a complete five-minute window after upgrade before reading classified latency.
 
 An older daemon without performance or a durable backlog start returns unavailable/unknown age. Client decoding remains compatible. Existing delivery/rollback manages upgrades, preserving success records and historical observations under their original contracts. Five-minute release snapshots identify the latest recorded success; historical revision mapping uses release records.
 
@@ -216,7 +218,7 @@ O is original Overview, A Business API, W Website Traffic, I Infrastructure and 
 | O2 | Entrance requests/s | O2 → W |
 | O3 | Site 5xx | O3, matching samples |
 | O4 | Entrance p95 | O4 → W |
-| O5 | Backup age | I16, success age/time |
+| O5 | Backup age | I16, success age; I29, success time |
 | O6 | Certificate days | I19, per certificate |
 | O7 | Root free space | I14, persistent mounts |
 | O8 | Host CPU | I10, percentage |

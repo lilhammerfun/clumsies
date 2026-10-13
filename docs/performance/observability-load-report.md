@@ -71,7 +71,7 @@ All failure categories were zero. Read 500/s and read-write 500/s each started 9
 
 ## Instrumentation acceptance
 
-For every run, business response-counter, started-counter, response-termination-counter and histogram-count deltas matched client HTTP responses: 200, 2,000, 10,000, 250, 2,500 and 12,500 respectively. Cancelled/aborted deltas were zero and business in-flight returned to zero after drain. Health and metrics requests were outside this business scope.
+For every run, response-counter, started-counter, response-termination-counter and histogram-count deltas in the API request scope matched client HTTP responses: 200, 2,000, 10,000, 250, 2,500 and 12,500 respectively. Cancelled/aborted deltas were zero and API in-flight in that scope returned to zero after drain. Health and metrics requests were outside the request check.
 
 This checks the normal path through real TCP, authentication, database and production handlers. Isolated behavior tests separately cover cancellation, 5xx, unusual status codes, missing targets and SQL failure; failure coverage under load is described below.
 

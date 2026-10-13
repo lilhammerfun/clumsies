@@ -13,7 +13,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "按路由与方法查看业务请求性能和请求关联。",
+  "description": "按路由与方法查看 API 请求性能与请求关联。",
   "links": [
     {
       "title": "总览",
@@ -61,7 +61,7 @@
       "id": 3,
       "title": "请求吞吐量",
       "type": "timeseries",
-      "description": "5分钟窗口的业务响应速率，按 HTTP 状态码分类。",
+      "description": "5分钟窗口的 API 响应速率，按 HTTP 状态码分类，包含后台轮询。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -400,7 +400,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -443,7 +444,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -454,7 +456,7 @@
       "id": 24,
       "title": "请求生命周期",
       "type": "timeseries",
-      "description": "业务 handler 的进入、响应与中断速率。",
+      "description": "API handler 的进入、响应与取消/中断速率，包含后台轮询。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -766,13 +768,15 @@
               "values": false
             },
             "orientation": "auto",
-            "textMode": "value_and_name",
-            "colorMode": "value"
+            "textMode": "value",
+            "colorMode": "value",
+            "wideLayout": false,
+            "justifyMode": "center"
           }
         },
         {
           "id": 102,
-          "title": "快照时效",
+          "title": "快照年龄",
           "type": "stat",
           "description": "数据库快照距所选时间末端的时长。",
           "datasource": {
@@ -858,8 +862,10 @@
               "values": false
             },
             "orientation": "auto",
-            "textMode": "value_and_name",
-            "colorMode": "value"
+            "textMode": "value",
+            "colorMode": "value",
+            "wideLayout": false,
+            "justifyMode": "center"
           }
         },
         {
@@ -898,7 +904,8 @@
           "options": {
             "legend": {
               "displayMode": "list",
-              "placement": "bottom"
+              "placement": "bottom",
+              "showLegend": false
             },
             "tooltip": {
               "mode": "multi"
@@ -941,7 +948,8 @@
           "options": {
             "legend": {
               "displayMode": "list",
-              "placement": "bottom"
+              "placement": "bottom",
+              "showLegend": false
             },
             "tooltip": {
               "mode": "multi"
@@ -984,7 +992,8 @@
           "options": {
             "legend": {
               "displayMode": "list",
-              "placement": "bottom"
+              "placement": "bottom",
+              "showLegend": false
             },
             "tooltip": {
               "mode": "multi"
@@ -1119,7 +1128,8 @@
           "options": {
             "legend": {
               "displayMode": "list",
-              "placement": "bottom"
+              "placement": "bottom",
+              "showLegend": false
             },
             "tooltip": {
               "mode": "multi"
@@ -1162,7 +1172,8 @@
           "options": {
             "legend": {
               "displayMode": "list",
-              "placement": "bottom"
+              "placement": "bottom",
+              "showLegend": false
             },
             "tooltip": {
               "mode": "multi"
@@ -1205,7 +1216,8 @@
           "options": {
             "legend": {
               "displayMode": "list",
-              "placement": "bottom"
+              "placement": "bottom",
+              "showLegend": false
             },
             "tooltip": {
               "mode": "multi"
@@ -1240,7 +1252,7 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "none",
+              "unit": "suffix: d",
               "noValue": "无数据",
               "mappings": [
                 {
@@ -1259,7 +1271,8 @@
           "options": {
             "legend": {
               "displayMode": "list",
-              "placement": "bottom"
+              "placement": "bottom",
+              "showLegend": false
             },
             "tooltip": {
               "mode": "multi"

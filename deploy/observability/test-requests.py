@@ -86,8 +86,7 @@ checks += [{'expr': expand(t['expr']), 'eval_time': '10m', 'exp_samples': []}
            for id in (22, 23, 24, 25, 26, 27) for t in panel(overview, id)['targets']]
 checks.append({'expr': '(' + panel(overview, 21)['targets'][0]['expr'] + ') == 1',
                'eval_time': '10m', 'exp_samples': []})
-expect(checks, next(t['expr'] for t in panel(overview, 21)['targets']
-                    if 'clumsies_database_collection_success' in t['expr']), -1)
+expect(checks, panel(overview, 31)['targets'][0]['expr'], -1)
 # Every actual query must parse, including folded products and new infrastructure.
 for path in (root / 'grafana/dashboards').glob('*.json'):
     if '.zh.' in path.name:

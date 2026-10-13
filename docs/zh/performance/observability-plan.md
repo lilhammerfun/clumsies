@@ -20,7 +20,7 @@
 ```mermaid
 flowchart TB
     subgraph center["单个安装"]
-        Edge["Caddy"] -->|业务请求| Server["Server"]
+        Edge["Caddy"] -->|HTTP 请求| Server["Server"]
         Server -->|事务与查询| DB["PostgreSQL"]
         Edge -->|入口指标| Prom["Prometheus"]
         Server -->|HTTP 与连接池指标| Prom
@@ -36,7 +36,7 @@ flowchart TB
         Prom --> AM["Alertmanager"]
         AM --> Mail["告警邮件"]
     end
-    App["macOS 与 daemon"] -->|业务 HTTP| Edge
+    App["macOS 与 daemon"] -->|客户端 HTTP| Edge
     App --> Local["本地性能快照 日志 Retrieval Run"]
     Local -.->|人工按关联 ID 查询| Loki
 ```
@@ -63,12 +63,12 @@ Prometheus 标签限定为固定组件、操作、method、route template、结�
 | --- | --- | --- |
 | `caddy_http_request_duration_seconds_count` | host、code；`handler="subroute"` | 一个站点处理层完成的入口请求 |
 | `clumsies_http_requests_total` | route、method、status | handler 返回 Response；100–599 保留实际码，其余归 `other` |
-| `clumsies_http_business_requests_started_total` | route、method | 进入业务 middleware |
+| `clumsies_http_business_requests_started_total` | route、method | API 请求进入 middleware |
 | `clumsies_http_business_requests_terminated_total` | route、method、outcome | handler 以 `response` 或 `cancelled_or_aborted` 终止 |
-| `clumsies_http_business_requests_in_flight` | route、method | 抓取时仍在执行的业务 handler |
+| `clumsies_http_business_requests_in_flight` | route、method | 抓取时仍在执行的 API handler |
 | `clumsies_db_pool_acquires_total` | operation、outcome | `review_create`、`review_merge` 的获取尝试；结果为 acquired、timeout、error、cancelled_or_aborted |
 
-业务范围排除 `/metrics` 和 `/api/v1/admin/health`，保留 unmatched 请求。Caddy 入口范围包含 synthetic probes，排除自动 HTTP 到 HTTPS 跳转。Server 日常查询要求现行 method 标签。Counter 先按原始 series 计算 rate/increase，再聚合，保留重启识别；increase 是窗口外推量，可出现小数。
+API 请求范围排除 `/metrics` 和 `/api/v1/admin/health`，保留 unmatched 请求，并包含后台轮询与重试产生的 HTTP 请求。响应吞吐统计返回 Response 的 handler；进入、中断和执行中数量分别展示。客户端逻辑操作按自身完成事件计数，例如先读取 revision 再提交更新产生两次 HTTP 请求，负载报告将其计为一次更新操作。Caddy 入口范围包含 synthetic probes，排除自动 HTTP 到 HTTPS 跳转。Server 日常查询要求现行 method 标签。Counter 先按原始 series 计算 rate/increase，再聚合，保留重启识别；increase 是窗口外推量，可出现小数。
 
 数据库活动与产品存量使用 gauge。最近一小时记录数只统计 `now()-60min ≤ created_at ≤ now()` 的保留行；删除会减少计数。开放 Draft 净变化是六小时拟合存量斜率，以 Draft/小时表示。
 
@@ -84,7 +84,7 @@ Prometheus 标签限定为固定组件、操作、method、route template、结�
 | daemon activate | 参数验证开始至 daemon 返回 | 包含查询与 history 确认等待；已接受的持久化可在后台继续，XPC 传输和客户端解码另计 |
 | 后台工作 | 当次尝试开始至结果；原始待处理起点至收敛 | 尝试计数与积压年龄分别保存 |
 
-HTTP histogram 统一使用 route、method、status_class。成功为 2xx/3xx，错误详情为 4xx/5xx/other；各类延迟配相同范围的样本数。分位数按滚动五分钟原始桶速率计算：先 rate，再按 le 和业务维度聚合，最后 histogram_quantile。多实例先聚合桶再计算分位数。Server 有限桶上界为 5、10、25、50、100、250、500 毫秒，以及 1、2.5、5、10、30 秒；超出有限桶的尾部受桶估计限制。[直方图语义](https://prometheus.io/docs/practices/histograms/)
+HTTP histogram 统一使用 route、method、status_class。成功为 2xx/3xx，错误详情为 4xx/5xx/other；各类延迟配相同范围的样本数。分位数按滚动五分钟原始桶速率计算：先 rate，再按 le 和所选请求维度聚合，最后 histogram_quantile。多实例先聚合桶再计算分位数。Server 有限桶上界为 5、10、25、50、100、250、500 毫秒，以及 1、2.5、5、10、30 秒；超出有限桶的尾部受桶估计限制。[直方图语义](https://prometheus.io/docs/practices/histograms/)
 
 当次耗时采用单调时钟，持久等待起点采用 UTC，跨机器分别保留各计时边界。跨层诊断比较同一请求的记录；分位数和重叠阶段的包含关系见运维指南的统计边界。
 
@@ -142,12 +142,14 @@ SQL 失败撤掉数据库样本；textfile 的真实采集时间决定新鲜度�
 
 | 看板 | 内容 | 导航 |
 | --- | --- | --- |
-| 运行总览 | 告警与可信度；业务吞吐、分类样本、成功延迟；5xx、并发、连接池；四站点入口 | 站点到入口页，业务到 API，资源与采集到基础设施 |
+| 运行总览 | 告警与可信度；API 请求吞吐量、分类样本、成功延迟；5xx、API 请求并发、连接池；四站点入口 | 站点到入口页，请求到 API，资源与采集到基础设施 |
 | 入口与网站访问 | site 筛选、请求/s、状态码、延迟和样本、慢请求及访问日志 | 请求关联到 API 页 A7 |
 | 业务 API | route/method 筛选、吞吐与分类延迟、忙/慢路由、生命周期、请求关联；折叠产品活动区 | App 入口到 W5，依赖到基础设施 |
 | 基础设施与运行保障 | 预期目标、快照、数据库、资源、备份、恢复、证书、日志、通知、Server 版本和发布信息 | Prometheus、Alertmanager、运维指南 |
 
 跨页链接保留时间和适用的 site、route、method、request_id。API 的 A7 是 Caddy/Server 共用关联区，也是手工请求 ID 的唯一输入位置，以完整 request ID 查询，两层日志在同一结果中展示。页面级导航承担视图切换；面板保留测量结果。
+
+摘要卡以标题标明对象，正文只显示一个结果。抓取状态、快照状态、采集时效、成功时间和记录可信度分别使用独立卡片；分位数、站点及路由等同类时序在同图比较。时间与距今时长分别带各自单位。API 请求/s、日志条目/s、连接获取次数/s、CPU 核数及天数按实际计数对象标明。
 
 本地 server_request_id 可直接关联入口与 Server。client_request_id 先定位 Server 记录，再取内部 request_id；同一客户端身份可覆盖多个尝试。检索的 retrieval_run_started 连接 request_id 与 run_id。产品活动使用 API 折叠区的八个 gauge，配快照状态与年龄。
 
@@ -202,7 +204,7 @@ SQL 失败撤掉数据库样本；textfile 的真实采集时间决定新鲜度�
 
 ## 附录 A：历史数据与升级
 
-日常看板采用 route、method、status_class 的现行 HTTP schema。历史 route-only histogram 为混合结果，升级前数据保留在 Prometheus；查询历史时按当时标签解释。历史全路由 in-flight 包含 health 与 metrics，现行业务视图使用 business in-flight。升级后等待完整五分钟窗口再读取分类延迟。
+日常看板采用 route、method、status_class 的现行 HTTP schema。历史 route-only histogram 为混合结果，升级前数据保留在 Prometheus；查询历史时按当时标签解释。历史全路由 in-flight 包含 health 与 metrics，现行 API 请求视图使用排除运维路由的 in-flight。升级后等待完整五分钟窗口再读取分类延迟。
 
 旧 daemon 缺少 performance 或持久等待起点时，本地诊断显示不可用或年龄未知。客户端保持旧响应解码兼容。配置升级与回滚由现有交付流程执行；成功时间及历史指标保留，历史样本按原始口径解释。五分钟发布快照记录最近成功，历史 revision 对照使用发布记录。
 
@@ -216,7 +218,7 @@ O 为原运行总览，A 为原业务 API，W 为原网站访问；I 为基础�
 | O2 | 入口请求/s | O2 → W |
 | O3 | 站点 5xx | O3，配同窗样本 |
 | O4 | 入口 p95 | O4 → W |
-| O5 | 备份年龄 | I16，成功年龄与时间 |
+| O5 | 备份年龄 | I16，成功年龄；I29，成功时间 |
 | O6 | 证书剩余天数 | I19，逐证书 |
 | O7 | 根分区空间 | I14，持久挂载空间 |
 | O8 | 主机 CPU | I10，百分比 |

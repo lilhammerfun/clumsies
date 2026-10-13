@@ -39,7 +39,7 @@ flowchart TB
 
 ### Read charts in order
 
-1. Confirm source status, current faults, business requests/s, sample counts, 5xx and successful handler latency in Overview.
+1. Confirm source status, current faults, API request throughput, sample counts, 5xx and successful handler latency in Overview. This scope includes polling, retries and unmatched requests; requests and client logical operations use their respective completion events.
 2. Select the corresponding site or method/route and compare the same operation. A changed request mix changes aggregate percentiles.
 3. Compare starts, responses, cancellations and in-flight work to distinguish completion, waiting and fast failure.
 4. Inspect acquisition, database, CPU, memory and disk evidence in the same window, then test a cause with a representative request or task.
@@ -48,7 +48,7 @@ flowchart TB
 | Signal pattern | First hypothesis to test | Evidence needed |
 | --- | --- | --- |
 | Throughput rises; latency and errors remain stable | Completion under the current load | Sustained trends; a separate load test evaluates capacity |
-| Completed throughput flattens; concurrency or waits rise | Dependency or execution limit | Acquire, transactions, model/workers and resources |
+| API response rate flattens; concurrency or waits rise | Dependency or execution limit | Acquire, transactions, model/workers and resources |
 | High error ratio at low traffic | Impact of a few failures | Failure count, operation importance and individual requests |
 | Latency falls; errors rise | Fast failure | Success/error distributions and response codes |
 | Slow entrance; fast handler | Proxy, body transfer or differing samples | Same-ID entrance, upstream and client records |
@@ -65,7 +65,7 @@ Local `Health.performance` is process-cumulative. An interval needs two snapshot
 
 ### Locate
 
-1. Confirm business completion throughput, 5xx count/ratio, successful handler latency and samples in Overview.
+1. Confirm API response rate, 5xx count/ratio, successful handler latency and samples in Overview.
 2. Select the actual method and route template in Business API. Inspect busy routes, slow requests and error-response distributions.
 3. Expand a representative log and follow **Related request logs**, carrying its real ID and time to API A7. Manual correlation also uses the complete ID in the API **Request ID** field; website navigation leads to that shared view.
 4. Match Caddy and Server using the entrance response ID or server_request_id from local HTTP records. With only a client ID, find Server client_request_id first, then use that record's internal request_id for the entrance. Correlation spans site/route/method.
@@ -174,6 +174,6 @@ See the [end-to-end latency model](/performance/latency-model), [local runtime](
 
 ## Appendix: Historical data and compatibility
 
-Daily dashboards use current method/status_class and business in-flight. Historical route-only histograms contain mixed outcomes; global in-flight includes health/metrics. Interpret historical queries under their original boundaries. Allow a complete five-minute window after upgrade before reading classified percentiles.
+Daily dashboards use current method/status_class and API in-flight with operational routes excluded. Historical route-only histograms contain mixed outcomes; global in-flight includes health/metrics. Interpret historical queries under their original boundaries. Allow a complete five-minute window after upgrade before reading classified percentiles.
 
 An older daemon lacking performance or a durable backlog start retains unavailable or unknown age; clients decode through the compatibility contract.

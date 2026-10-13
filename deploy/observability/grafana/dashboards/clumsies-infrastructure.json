@@ -228,9 +228,9 @@
     },
     {
       "id": 2,
-      "title": "Database status",
+      "title": "DB connectivity",
       "type": "stat",
-      "description": "PostgreSQL reachability and database snapshot status.",
+      "description": "Database reachability reported by the PostgreSQL exporter.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -239,20 +239,102 @@
         "x": 12,
         "y": 0,
         "w": 6,
-        "h": 6
+        "h": 3
       },
       "targets": [
         {
           "refId": "A",
           "expr": "pg_up{job=\"postgres\"}",
-          "legendFormat": "PostgreSQL",
+          "legendFormat": "Reachability",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "instant": true,
           "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid time",
+                  "color": "red"
+                },
+                "-1": {
+                  "text": "Missing / stale",
+                  "color": "orange"
+                },
+                "0": {
+                  "text": "Failed",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ]
         },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 27,
+      "title": "Database snapshot",
+      "type": "stat",
+      "description": "Database snapshot status with a 15-minute validity limit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 3
+      },
+      "targets": [
         {
           "refId": "B",
           "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
@@ -324,24 +406,26 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
       "id": 3,
-      "title": "Collection age",
+      "title": "DB snapshot age",
       "type": "stat",
-      "description": "Elapsed time since host and database collection, with a 15-minute validity limit.",
+      "description": "Time since database collection, with a 15-minute validity limit.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 18,
-        "y": 0,
+        "x": 12,
+        "y": 3,
         "w": 6,
-        "h": 6
+        "h": 3
       },
       "targets": [
         {
@@ -354,7 +438,90 @@
           },
           "instant": true,
           "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unknown",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid time",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          }
         },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 28,
+      "title": "Host snapshot age",
+      "type": "stat",
+      "description": "Time since host collection, with a 15-minute validity limit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 3,
+        "w": 6,
+        "h": 3
+      },
+      "targets": [
         {
           "refId": "B",
           "expr": "(((time() - clumsies_observability_collection_timestamp_seconds) / 1) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0))) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))",
@@ -427,8 +594,10 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
@@ -969,7 +1138,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -1020,7 +1190,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -1071,7 +1242,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -1080,7 +1252,7 @@
     },
     {
       "id": 12,
-      "title": "Container CPU usage",
+      "title": "Container CPU usage (cores)",
       "type": "timeseries",
       "description": "CPU cores used per container over five minutes.",
       "datasource": {
@@ -1384,7 +1556,7 @@
               "timestamp_metric": 6
             },
             "renameByName": {
-              "alertname": "Alert",
+              "alertname": "Rule",
               "severity": "Severity",
               "job": "Component",
               "instance": "Target",
@@ -1398,9 +1570,9 @@
     },
     {
       "id": 16,
-      "title": "Backup",
+      "title": "Backup age",
       "type": "stat",
-      "description": "Latest successful backup and elapsed time, with valid host sampling.",
+      "description": "Time since the last successful backup, with valid host sampling.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1408,7 +1580,7 @@
       "gridPos": {
         "x": 0,
         "y": 54,
-        "w": 12,
+        "w": 6,
         "h": 5
       },
       "targets": [
@@ -1416,17 +1588,6 @@
           "refId": "A",
           "expr": "((((time() - clumsies_backup_last_success_timestamp_seconds) / 3600) and on(job,instance) (((time() - clumsies_backup_last_success_timestamp_seconds) >= 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_backup_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_backup_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))) or on(job,instance) (0 * clumsies_observability_expected_target{job=\"node\"} - 1) or on() vector(-1)",
           "legendFormat": "Age",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "clumsies_backup_last_success_timestamp_seconds * 1000",
-          "legendFormat": "Last success",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1493,52 +1654,7 @@
             }
           ]
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "dateTimeAsIso"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#8e8e8e"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "null",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "nan",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -1548,16 +1664,95 @@
           "fields": "",
           "values": false
         },
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 29,
+      "title": "Backup success",
+      "type": "stat",
+      "description": "Recorded time of the last successful backup.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 54,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "clumsies_backup_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Last success",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "decimals": null,
+          "noValue": "Unknown",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
       "id": 17,
-      "title": "Restore drill",
+      "title": "Drill success age",
       "type": "stat",
-      "description": "Latest successful restore drill and elapsed time, with valid host sampling.",
+      "description": "Time since the last successful restore drill, with valid host sampling.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1565,7 +1760,7 @@
       "gridPos": {
         "x": 12,
         "y": 54,
-        "w": 12,
+        "w": 6,
         "h": 5
       },
       "targets": [
@@ -1573,17 +1768,6 @@
           "refId": "A",
           "expr": "((((time() - clumsies_restore_drill_last_success_timestamp_seconds) / 86400) and on(job,instance) (((time() - clumsies_restore_drill_last_success_timestamp_seconds) >= 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_restore_drill_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_restore_drill_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))) or on(job,instance) (0 * clumsies_observability_expected_target{job=\"node\"} - 1) or on() vector(-1)",
           "legendFormat": "Age",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "clumsies_restore_drill_last_success_timestamp_seconds * 1000",
-          "legendFormat": "Last success",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1649,52 +1833,7 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "dateTimeAsIso"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#8e8e8e"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "null",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "nan",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -1704,9 +1843,87 @@
           "fields": "",
           "values": false
         },
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 30,
+      "title": "Drill success time",
+      "type": "stat",
+      "description": "Recorded time of the last successful restore drill.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 54,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "clumsies_restore_drill_last_success_timestamp_seconds * 1000",
+          "legendFormat": "Last success",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "noValue": "Unknown",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
@@ -1842,7 +2059,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "suffix: d",
           "decimals": 1,
           "thresholds": {
             "mode": "absolute",
@@ -2055,7 +2272,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -2116,7 +2334,7 @@
     },
     {
       "id": 23,
-      "title": "Notification pipeline",
+      "title": "Alertmanager scrape and rule heartbeat",
       "type": "timeseries",
       "description": "Alertmanager scrape status and Watchdog heartbeat.",
       "datasource": {
@@ -2133,7 +2351,7 @@
         {
           "refId": "A",
           "expr": "up{job=\"alertmanager\"}",
-          "legendFormat": "Alertmanager",
+          "legendFormat": "Alertmanager scrape",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -2203,7 +2421,7 @@
         "overrides": []
       },
       "options": {
-        "showHeader": true,
+        "showHeader": false,
         "cellHeight": "sm",
         "footer": {
           "show": false
@@ -2232,9 +2450,9 @@
     },
     {
       "id": 26,
-      "title": "Latest successful release",
+      "title": "Last successful release",
       "type": "stat",
-      "description": "Recorded time and data status of the latest successful release.",
+      "description": "Recorded time of the last successful release.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2242,7 +2460,7 @@
       "gridPos": {
         "x": 6,
         "y": 80,
-        "w": 18,
+        "w": 12,
         "h": 5
       },
       "targets": [
@@ -2250,17 +2468,6 @@
           "refId": "A",
           "expr": "clumsies_release_last_success_timestamp_seconds * 1000",
           "legendFormat": "Time",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "(((0 * clumsies_release_last_success_timestamp_seconds + 1) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) >= 0) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_release_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-          "legendFormat": "Data status",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -2300,66 +2507,7 @@
             }
           ]
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "-2": {
-                        "text": "Invalid time",
-                        "color": "red"
-                      },
-                      "-1": {
-                        "text": "Missing / stale",
-                        "color": "orange"
-                      },
-                      "0": {
-                        "text": "Failed",
-                        "color": "red"
-                      },
-                      "1": {
-                        "text": "Healthy",
-                        "color": "green"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "null",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "nan",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -2370,8 +2518,107 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 31,
+      "title": "Release record",
+      "type": "stat",
+      "description": "Release timestamp validity and host snapshot status.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 80,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "(((0 * clumsies_release_last_success_timestamp_seconds + 1) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) >= 0) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_release_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "Status",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid time",
+                  "color": "red"
+                },
+                "-1": {
+                  "text": "Missing / stale",
+                  "color": "orange"
+                },
+                "0": {
+                  "text": "Failed",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     }
   ],

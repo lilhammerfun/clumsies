@@ -13,7 +13,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "Business performance, site entrances and collection status.",
+  "description": "API request performance, site entrances and collection status.",
   "links": [
     {
       "title": "Overview",
@@ -135,15 +135,17 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
       "id": 21,
-      "title": "Collection status",
+      "title": "Metric scrapes",
       "type": "stat",
-      "description": "Database and host snapshots are valid for 15 minutes; negative ages indicate invalid time.",
+      "description": "Scrape status for the expected target inventory.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -151,36 +153,114 @@
       "gridPos": {
         "x": 6,
         "y": 0,
-        "w": 18,
+        "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
           "expr": "min(clumsies_observability_target_health) or vector(-1)",
-          "legendFormat": "Targets",
+          "legendFormat": "Metric scrapes",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "instant": true,
           "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid time",
+                  "color": "red"
+                },
+                "-1": {
+                  "text": "Unknown",
+                  "color": "orange"
+                },
+                "0": {
+                  "text": "Failed",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "links": [
+            {
+              "title": "Infrastructure",
+              "url": "/d/clumsies-infrastructure/view?${__url_time_range}",
+              "targetBlank": false
+            }
+          ]
         },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 31,
+      "title": "Database snapshot",
+      "type": "stat",
+      "description": "Database snapshot status with a 15-minute validity limit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
         {
           "refId": "C",
           "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-          "legendFormat": "Database",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "D",
-          "expr": "(((0 * clumsies_observability_collection_timestamp_seconds + 1) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-          "legendFormat": "Host",
+          "legendFormat": "Database snapshot",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -244,62 +324,7 @@
             }
           ]
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "A"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "-2": {
-                        "text": "Invalid time",
-                        "color": "red"
-                      },
-                      "-1": {
-                        "text": "Unknown",
-                        "color": "orange"
-                      },
-                      "0": {
-                        "text": "Failed",
-                        "color": "red"
-                      },
-                      "1": {
-                        "text": "Healthy",
-                        "color": "green"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "null",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "nan",
-                      "result": {
-                        "text": "Unknown",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -310,15 +335,117 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 32,
+      "title": "Host snapshot",
+      "type": "stat",
+      "description": "Host snapshot status with a 15-minute validity limit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "D",
+          "expr": "(((0 * clumsies_observability_collection_timestamp_seconds + 1) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "Host snapshot",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unknown",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "Invalid time",
+                  "color": "red"
+                },
+                "-1": {
+                  "text": "Missing / stale",
+                  "color": "orange"
+                },
+                "0": {
+                  "text": "Failed",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "Unknown",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "links": [
+            {
+              "title": "Infrastructure",
+              "url": "/d/clumsies-infrastructure/view?${__url_time_range}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
       "id": 22,
-      "title": "Business throughput",
+      "title": "API request throughput",
       "type": "timeseries",
-      "description": "Business handler starts, responses and interruptions over five minutes.",
+      "description": "API request starts, responses and interruptions, including background polling; excludes /metrics and /api/v1/admin/health.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -506,7 +633,7 @@
       "id": 25,
       "title": "5xx ratio",
       "type": "timeseries",
-      "description": "5xx responses as a share of all business responses over five minutes.",
+      "description": "5xx responses as a share of all API responses over five minutes.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -538,7 +665,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -581,7 +709,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -590,9 +719,9 @@
     },
     {
       "id": 27,
-      "title": "Business concurrency",
+      "title": "API request concurrency",
       "type": "timeseries",
-      "description": "Business handlers currently in progress.",
+      "description": "API handlers in progress, including background polling; excludes /metrics and /api/v1/admin/health.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -624,7 +753,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"

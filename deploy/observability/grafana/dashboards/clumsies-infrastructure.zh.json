@@ -228,9 +228,9 @@
     },
     {
       "id": 2,
-      "title": "数据库状态",
+      "title": "PostgreSQL 连通性",
       "type": "stat",
-      "description": "PostgreSQL 可达性与数据库快照状态。",
+      "description": "PostgreSQL exporter 报告的数据库可达性。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -239,24 +239,13 @@
         "x": 12,
         "y": 0,
         "w": 6,
-        "h": 6
+        "h": 3
       },
       "targets": [
         {
           "refId": "A",
           "expr": "pg_up{job=\"postgres\"}",
-          "legendFormat": "PostgreSQL",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-          "legendFormat": "数据库采集",
+          "legendFormat": "连通性",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -324,15 +313,17 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
-      "id": 3,
-      "title": "采集时效",
+      "id": 27,
+      "title": "数据库快照",
       "type": "stat",
-      "description": "主机与数据库采集距今时长，有效期15分钟。",
+      "description": "数据库快照状态，有效期15分钟。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -341,7 +332,100 @@
         "x": 18,
         "y": 0,
         "w": 6,
-        "h": 6
+        "h": 3
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "((clumsies_database_collection_success and on(job,instance) (((time() - clumsies_database_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) <= 900)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_database_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_database_collection_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "快照",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "未知",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "时间无效",
+                  "color": "red"
+                },
+                "-1": {
+                  "text": "缺失或过期",
+                  "color": "orange"
+                },
+                "0": {
+                  "text": "失败",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "正常",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 3,
+      "title": "数据库快照年龄",
+      "type": "stat",
+      "description": "数据库采集距今时长，有效期15分钟。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 6,
+        "h": 3
       },
       "targets": [
         {
@@ -354,7 +438,90 @@
           },
           "instant": true,
           "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "未知",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "时间无效",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          }
         },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 28,
+      "title": "主机快照年龄",
+      "type": "stat",
+      "description": "主机采集距今时长，有效期15分钟。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 3,
+        "w": 6,
+        "h": 3
+      },
+      "targets": [
         {
           "refId": "B",
           "expr": "(((time() - clumsies_observability_collection_timestamp_seconds) / 1) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0))) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))",
@@ -427,8 +594,10 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
@@ -719,7 +888,7 @@
     },
     {
       "id": 7,
-      "title": "评审事务连接获取量",
+      "title": "评审事务连接获取速率",
       "type": "timeseries",
       "description": "评审创建/合并事务的连接获取速率，按结果分类。",
       "datasource": {
@@ -969,7 +1138,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -1020,7 +1190,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -1071,7 +1242,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -1080,7 +1252,7 @@
     },
     {
       "id": 12,
-      "title": "容器 CPU 使用量",
+      "title": "容器 CPU 使用量（核）",
       "type": "timeseries",
       "description": "容器占用 CPU 核数，使用5分钟窗口。",
       "datasource": {
@@ -1384,7 +1556,7 @@
               "timestamp_metric": 6
             },
             "renameByName": {
-              "alertname": "告警",
+              "alertname": "规则",
               "severity": "级别",
               "job": "组件",
               "instance": "对象",
@@ -1398,9 +1570,9 @@
     },
     {
       "id": 16,
-      "title": "备份",
+      "title": "成功备份距今",
       "type": "stat",
-      "description": "最近成功备份时间与距今时长，状态依据有效主机快照。",
+      "description": "距最近成功备份的时长，依据有效主机快照。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1408,7 +1580,7 @@
       "gridPos": {
         "x": 0,
         "y": 54,
-        "w": 12,
+        "w": 6,
         "h": 5
       },
       "targets": [
@@ -1416,17 +1588,6 @@
           "refId": "A",
           "expr": "((((time() - clumsies_backup_last_success_timestamp_seconds) / 3600) and on(job,instance) (((time() - clumsies_backup_last_success_timestamp_seconds) >= 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_backup_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_backup_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))) or on(job,instance) (0 * clumsies_observability_expected_target{job=\"node\"} - 1) or on() vector(-1)",
           "legendFormat": "距今",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "clumsies_backup_last_success_timestamp_seconds * 1000",
-          "legendFormat": "最近成功",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1493,52 +1654,7 @@
             }
           ]
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "dateTimeAsIso"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#8e8e8e"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "null",
-                      "result": {
-                        "text": "未知",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "nan",
-                      "result": {
-                        "text": "未知",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -1548,16 +1664,95 @@
           "fields": "",
           "values": false
         },
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 29,
+      "title": "最近成功备份",
+      "type": "stat",
+      "description": "记录的最近成功备份时间。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 54,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "clumsies_backup_last_success_timestamp_seconds * 1000",
+          "legendFormat": "最近成功",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "decimals": null,
+          "noValue": "未知",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
       "id": 17,
-      "title": "恢复演练",
+      "title": "恢复演练成功距今",
       "type": "stat",
-      "description": "最近成功恢复演练时间与距今时长，状态依据有效主机快照。",
+      "description": "距最近成功恢复演练的时长，依据有效主机快照。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1565,7 +1760,7 @@
       "gridPos": {
         "x": 12,
         "y": 54,
-        "w": 12,
+        "w": 6,
         "h": 5
       },
       "targets": [
@@ -1573,17 +1768,6 @@
           "refId": "A",
           "expr": "((((time() - clumsies_restore_drill_last_success_timestamp_seconds) / 86400) and on(job,instance) (((time() - clumsies_restore_drill_last_success_timestamp_seconds) >= 0)) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_restore_drill_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_restore_drill_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0))) or on(job,instance) (0 * clumsies_observability_expected_target{job=\"node\"} - 1) or on() vector(-1)",
           "legendFormat": "距今",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "clumsies_restore_drill_last_success_timestamp_seconds * 1000",
-          "legendFormat": "最近成功",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1649,52 +1833,7 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "dateTimeAsIso"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#8e8e8e"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "null",
-                      "result": {
-                        "text": "未知",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "nan",
-                      "result": {
-                        "text": "未知",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -1704,9 +1843,87 @@
           "fields": "",
           "values": false
         },
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 30,
+      "title": "最近成功恢复演练",
+      "type": "stat",
+      "description": "记录的最近成功恢复演练时间。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 54,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "clumsies_restore_drill_last_success_timestamp_seconds * 1000",
+          "legendFormat": "最近成功",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "noValue": "未知",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     },
     {
@@ -1842,7 +2059,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "suffix: d",
           "decimals": 1,
           "thresholds": {
             "mode": "absolute",
@@ -2021,7 +2238,7 @@
     },
     {
       "id": 21,
-      "title": "日志发送量",
+      "title": "日志发送速率",
       "type": "timeseries",
       "description": "成功发送到 Loki 的日志速率。",
       "datasource": {
@@ -2055,7 +2272,8 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
           "mode": "multi"
@@ -2116,7 +2334,7 @@
     },
     {
       "id": 23,
-      "title": "通知链路状态",
+      "title": "通知抓取与规则心跳",
       "type": "timeseries",
       "description": "Alertmanager 抓取状态与 Watchdog 心跳。",
       "datasource": {
@@ -2133,7 +2351,7 @@
         {
           "refId": "A",
           "expr": "up{job=\"alertmanager\"}",
-          "legendFormat": "Alertmanager",
+          "legendFormat": "Alertmanager 抓取",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -2203,7 +2421,7 @@
         "overrides": []
       },
       "options": {
-        "showHeader": true,
+        "showHeader": false,
         "cellHeight": "sm",
         "footer": {
           "show": false
@@ -2234,7 +2452,7 @@
       "id": 26,
       "title": "最近成功发布",
       "type": "stat",
-      "description": "最近成功发布的记录时间与数据状态。",
+      "description": "记录的最近成功发布时间。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2242,7 +2460,7 @@
       "gridPos": {
         "x": 6,
         "y": 80,
-        "w": 18,
+        "w": 12,
         "h": 5
       },
       "targets": [
@@ -2250,17 +2468,6 @@
           "refId": "A",
           "expr": "clumsies_release_last_success_timestamp_seconds * 1000",
           "legendFormat": "时间",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "instant": true,
-          "range": false
-        },
-        {
-          "refId": "B",
-          "expr": "(((0 * clumsies_release_last_success_timestamp_seconds + 1) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) >= 0) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_release_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
-          "legendFormat": "数据状态",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -2300,66 +2507,7 @@
             }
           ]
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "-2": {
-                        "text": "时间无效",
-                        "color": "red"
-                      },
-                      "-1": {
-                        "text": "缺失或过期",
-                        "color": "orange"
-                      },
-                      "0": {
-                        "text": "失败",
-                        "color": "red"
-                      },
-                      "1": {
-                        "text": "正常",
-                        "color": "green"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "null",
-                      "result": {
-                        "text": "未知",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  },
-                  {
-                    "type": "special",
-                    "options": {
-                      "match": "nan",
-                      "result": {
-                        "text": "未知",
-                        "color": "#8e8e8e"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -2370,8 +2518,107 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "value"
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 31,
+      "title": "发布记录状态",
+      "type": "stat",
+      "description": "发布记录的时间有效性与主机快照状态。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 80,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "(((0 * clumsies_release_last_success_timestamp_seconds + 1) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) >= 0) and on(job,instance) (((time() - clumsies_observability_collection_timestamp_seconds) >= 0) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) <= 900))) or on(job,instance) ((0 * clumsies_release_last_success_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_release_last_success_timestamp_seconds) < 0)) or on(job,instance) ((0 * clumsies_observability_collection_timestamp_seconds - 2) and on(job,instance) ((time() - clumsies_observability_collection_timestamp_seconds) < 0)) or on(job,instance) (0 * up{job=\"node\"} - 1)) or on() vector(-1)",
+          "legendFormat": "状态",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "未知",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-2": {
+                  "text": "时间无效",
+                  "color": "red"
+                },
+                "-1": {
+                  "text": "缺失或过期",
+                  "color": "orange"
+                },
+                "0": {
+                  "text": "失败",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "正常",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "未知",
+                  "color": "#8e8e8e"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "wideLayout": false,
+        "justifyMode": "center"
       }
     }
   ],

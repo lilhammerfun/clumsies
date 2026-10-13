@@ -39,7 +39,7 @@ flowchart TB
 
 ### 读图顺序
 
-1. 在总览确认来源状态、当前故障、业务请求/s、样本数、5xx 和成功 handler 延迟。
+1. 在总览确认来源状态、当前故障、API 请求吞吐量、样本数、5xx 和成功 handler 延迟。该范围含后台轮询、重试和 unmatched，请求数与客户端逻辑操作各按其完成事件计数。
 2. 进入相应站点或 method/route，比较同一操作。请求组合变化会影响聚合分位数。
 3. 对照进入、返回、取消和执行中请求，判断工作是在完成、等待还是快速失败。
 4. 查看同窗连接获取、数据库、CPU、内存和磁盘证据，再选代表性请求或任务检验原因。
@@ -48,7 +48,7 @@ flowchart TB
 | 信号组合 | 优先检验 | 所需证据 |
 | --- | --- | --- |
 | 吞吐上升，延迟与错误稳定 | 当前负载的完成情况 | 持续趋势；容量评估另做负载测试 |
-| 完成吞吐趋平，并发或等待上升 | 依赖或执行容量受限 | acquire、事务、模型/worker 和资源 |
+| API 响应速率趋平，并发或等待上升 | 依赖或执行容量受限 | acquire、事务、模型/worker 和资源 |
 | 低流量下错误比例很高 | 少量失败的实际影响 | 失败次数、操作价值和具体请求 |
 | 延迟下降，错误上升 | 快速失败 | 成功与错误分布、响应码 |
 | 入口慢，handler 快 | 代理、正文传输或样本差异 | 同一 ID 的入口、上游和客户端记录 |
@@ -65,7 +65,7 @@ flowchart TB
 
 ### 定位
 
-1. 总览确认业务完成吞吐、5xx 次数与比例、成功 handler 延迟和样本。
+1. 总览确认 API 响应速率、5xx 次数与比例、成功 handler 延迟和样本。
 2. API 页选择实际 method 和 route template。查看忙路由、慢请求与错误响应分布。
 3. 展开代表性日志并点击 **Related request logs**，携真实 ID 和时间进入 API A7。手工关联也在 API 页的 **Request ID** 输入完整 ID；网站页通过导航进入该关联区。
 4. 使用入口返回的 ID 或本地 HTTP 记录中的 server_request_id 对照 Caddy 与 Server。仅有客户端 ID 时，先查 Server client_request_id，再用该记录的内部 request_id 查入口。关联区跨 site/route/method 查询。
@@ -131,7 +131,7 @@ Acquire 涵盖等待、验证和新建连接。结合连接持有、事务与锁
 2. 区分 exporter 可达和内部任务结果，检查 pg_up、SQL success 及主机 timer。
 3. 检查主机与数据库真实采集时间。当前有效年龄为 0–900 秒；状态 -2 表示未来戳无效，-1 表示过期或缺失。检查系统时钟、回拨及源时间，保留原始记录。
 4. 日志检查时间范围、来源发现、Alloy/Loki、重试及丢弃。根据来源活动解释零发送。
-5. 备份和恢复分别检查最近任务状态、最近成功年龄、原始成功时间及采集状态。success、failed、never、missing、running 分开显示；最新失败与历史成功可同时存在。发布页也将时间与可信度分开。
+5. 备份和恢复分别检查最近任务状态、最近成功年龄、原始成功时间及采集状态。success、failed、never、missing、running 分开显示；最新失败与历史成功可同时存在。发布记录的时间与可信度分别展示。
 6. 通知检查 Alertmanager 抓取、失败计数、日志和静默。基础设施导航可直接打开 Prometheus 和 Alertmanager。
 
 在安装主机执行只读检查：
@@ -174,6 +174,6 @@ Watchdog 常驻为通知心跳，实际收件验证邮件投递。其他规则�
 
 ## 附录：历史数据与兼容
 
-日常看板统一使用现行 method/status_class 和业务 in-flight。历史 route-only histogram 为混合结果，全路由 in-flight 包含 health/metrics；历史查询按原边界解释。升级后等待一个完整五分钟窗口再读分类分位数。
+日常看板统一使用现行 method/status_class 和排除运维路由的 API 请求并发。历史 route-only histogram 为混合结果，全路由 in-flight 包含 health/metrics；历史查询按原边界解释。升级后等待一个完整五分钟窗口再读分类分位数。
 
 旧 daemon 缺少 performance 或持久积压起点时，诊断保持 unavailable 或年龄未知；客户端按兼容协议解码。
