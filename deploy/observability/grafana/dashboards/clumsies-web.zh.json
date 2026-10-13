@@ -1,6 +1,6 @@
 {
   "uid": "clumsies-web-zh",
-  "title": "Clumsies 网站访问",
+  "title": "Clumsies 入口与网站访问",
   "tags": [
     "clumsies",
     "zh"
@@ -13,7 +13,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "description": "每次请求只统计一个 HTTPS 站点处理层。包含可用性探针，不含自动 HTTP→HTTPS 跳转；不是浏览器页面加载时间。站点标签从部署后开始，历史混合数据不回填。",
+  "description": "按站点观察入口请求处理，不是浏览器加载。App 入口 p95 目标低于1秒；其它站点分别调查，当前包含探针。",
   "links": [
     {
       "title": "运行总览",
@@ -32,9 +32,25 @@
       "targetBlank": false
     },
     {
-      "title": "网站访问",
+      "title": "入口与网站访问",
       "type": "link",
       "url": "/d/clumsies-web-zh/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "基础设施与运行保障",
+      "type": "link",
+      "url": "/d/clumsies-infrastructure-zh/view",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "产品活动 · API 底部折叠区",
+      "type": "link",
+      "url": "/d/clumsies-api-zh/view",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false
@@ -59,7 +75,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "expr": "(histogram_quantile(0.5, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "p50",
           "datasource": {
             "type": "prometheus",
@@ -68,7 +84,7 @@
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "p95",
           "datasource": {
             "type": "prometheus",
@@ -77,7 +93,7 @@
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)",
+          "expr": "(histogram_quantile(0.99, sum by (le) (rate(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and (sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) > 0)) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "p99",
           "datasource": {
             "type": "prometheus",
@@ -106,7 +122,7 @@
       "id": 2,
       "title": "观测请求量 · 5 分钟",
       "type": "timeseries",
-      "description": "过去 5 分钟直方图估算值，不是最大值或某条请求的耗时。结合样本量阅读；无样本不代表零延迟。",
+      "description": "五分钟窗口外推请求数，不是精确日志条数。结合直方图估计阅读；低样本下长尾不稳定。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -120,7 +136,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))",
+          "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "观测请求量 · 5 分钟",
           "datasource": {
             "type": "prometheus",
@@ -163,7 +179,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(code)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))",
+          "expr": "(sum(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
+          "legendFormat": "全部请求 / 秒",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(sum by(code)(rate(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "{{code}}",
           "datasource": {
             "type": "prometheus",
@@ -206,7 +231,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) - sum(increase(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\",le=~\"1|1[.]0\"}[5m]))",
+          "expr": "(sum(increase(caddy_http_request_duration_seconds_count{job=\"caddy\",handler=\"subroute\",host=\"$site\"}[5m])) - sum(increase(caddy_http_request_duration_seconds_bucket{job=\"caddy\",handler=\"subroute\",host=\"$site\",le=~\"1|1[.]0\"}[5m]))) and on() (min(up{job=\"caddy\"}) == 1)",
           "legendFormat": "超过 1 秒的请求 · 5 分钟",
           "datasource": {
             "type": "prometheus",
@@ -317,44 +342,17 @@
     },
     {
       "id": 7,
-      "title": "指定请求的关联日志",
-      "type": "logs",
-      "description": "粘贴请求编号；留空显示全部。忽略站点筛选，以保留后端记录。",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
+      "type": "text",
+      "title": "请求关联",
+      "options": {
+        "mode": "markdown",
+        "content": "展开日志并打开 **Related request logs**，或[打开统一请求视图](/d/clumsies-api-zh/view?from=${__from}&to=${__to}&var-request_id=${request_id:percentencode}&viewPanel=7)。先输入请求 ID；留空不返回日志。静态请求没有后端记录。"
       },
       "gridPos": {
         "x": 0,
         "y": 32,
         "w": 24,
-        "h": 9
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "{service=~\"caddy|server\"} |= ${request_id:doublequote}",
-          "legendFormat": "",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "无样本"
-        },
-        "overrides": []
-      },
-      "options": {
-        "showTime": true,
-        "wrapLogMessage": true,
-        "sortOrder": "Descending",
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "showLabels": false
+        "h": 4
       }
     }
   ],

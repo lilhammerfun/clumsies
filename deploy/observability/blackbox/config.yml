@@ -5,3 +5,11 @@ modules:
     http:
       follow_redirects: true
       preferred_ip_protocol: ip4
+  https_ready:
+    prober: http
+    timeout: 10s
+    http:
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      fail_if_body_json_not_matches_cel: 'body.status == "ok"'

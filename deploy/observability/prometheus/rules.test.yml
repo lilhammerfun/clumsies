@@ -26,6 +26,36 @@ tests:
         values: '1x780'
       - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
         values: '0+60x780'
+      - series: 'up{job="prometheus",instance="localhost:9090"}'
+        values: '1x800'
+      - series: 'up{job="cadvisor",instance="cadvisor:8080"}'
+        values: '1x800'
+      - series: 'up{job="postgres",instance="postgres-exporter:9187"}'
+        values: '1x800'
+      - series: 'up{job="caddy",instance="caddy:2019"}'
+        values: '1x800'
+      - series: 'up{job="alloy",instance="alloy:12345"}'
+        values: '1x800'
+      - series: 'up{job="loki",instance="loki:3100"}'
+        values: '1x800'
+      - series: 'up{job="server",instance="server:8080"}'
+        values: '1x800'
+      - series: 'up{job="alertmanager",instance="alertmanager:9093"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://app.clumsies.ai/api/v1/admin/health"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://docs.clumsies.ai/"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://clumsies.ai/"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://www.clumsies.ai/"}'
+        values: '1x800'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x800'
+      - series: 'clumsies_backup_last_success_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x800'
+      - series: 'clumsies_restore_drill_last_success_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x800'
     promql_expr_test:
       - expr: 'ALERTS{alertstate="firing",alertname!="Watchdog"}'
         eval_time: 13h
@@ -43,6 +73,42 @@ tests:
         values: '0x5 1x5'
       - series: 'clumsies_db_longest_query_seconds{job="node",instance="node-exporter:9100"}'
         values: '61x5 0x5'
+      - series: 'up{job="prometheus",instance="localhost:9090"}'
+        values: '1x800'
+      - series: 'up{job="node",instance="node-exporter:9100"}'
+        values: '1x800'
+      - series: 'up{job="cadvisor",instance="cadvisor:8080"}'
+        values: '1x800'
+      - series: 'up{job="postgres",instance="postgres-exporter:9187"}'
+        values: '1x800'
+      - series: 'up{job="caddy",instance="caddy:2019"}'
+        values: '1x800'
+      - series: 'up{job="alloy",instance="alloy:12345"}'
+        values: '1x800'
+      - series: 'up{job="loki",instance="loki:3100"}'
+        values: '1x800'
+      - series: 'up{job="server",instance="server:8080"}'
+        values: '1x800'
+      - series: 'up{job="alertmanager",instance="alertmanager:9093"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://app.clumsies.ai/api/v1/admin/health"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://docs.clumsies.ai/"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://clumsies.ai/"}'
+        values: '1x800'
+      - series: 'up{job="blackbox-public",instance="https://www.clumsies.ai/"}'
+        values: '1x800'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x800'
+      - series: 'clumsies_database_collection_success{job="node",instance="node-exporter:9100"}'
+        values: '1x800'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x800'
+      - series: 'clumsies_backup_last_success_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x800'
+      - series: 'clumsies_restore_drill_last_success_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x800'
     promql_expr_test:
       - expr: 'ALERTS{alertstate="firing",alertname!="Watchdog"}'
         eval_time: 1m
@@ -72,6 +138,8 @@ tests:
         values: '0x5 1x5'
       - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
         values: '0+60x11'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x11'
     promql_expr_test:
       - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
         eval_time: 4m
@@ -98,6 +166,12 @@ tests:
         values: '1x25'
       - series: 'up{job="node",instance="down"}'
         values: '0x25'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="stale"}'
+        values: '0+60x25'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="missing"}'
+        values: '0+60x25'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="down"}'
+        values: '0+60x25'
     promql_expr_test:
       - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
         eval_time: 20m
@@ -153,4 +227,288 @@ tests:
             value: 1
       - expr: 'ALERTS{alertname=~"LogDeliveryRetries|LogEntriesDropped",alertstate="firing"}'
         eval_time: 16m
+        exp_samples: []
+
+  - name: expected targets remain visible through down missing and recovery
+    interval: 1m
+    input_series:
+      - series: 'up{job="alertmanager",instance="alertmanager:9093"}'
+        values: '1x5 0x5 stale _x5 1x5'
+    promql_expr_test:
+      - expr: 'clumsies_observability_target_health{job="alertmanager"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'clumsies_observability_target_health{job="alertmanager",instance="alertmanager:9093"}'
+            value: 1
+      - expr: 'clumsies_observability_target_health{job="alertmanager"}'
+        eval_time: 6m
+        exp_samples:
+          - labels: 'clumsies_observability_target_health{job="alertmanager",instance="alertmanager:9093"}'
+            value: 0
+      - expr: 'clumsies_observability_target_health{job="alertmanager"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'clumsies_observability_target_health{job="alertmanager",instance="alertmanager:9093"}'
+            value: -1
+      - expr: 'ALERTS{alertname="ExpectedScrapeTargetMissing",job="alertmanager",alertstate="firing"}'
+        eval_time: 17m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ExpectedScrapeTargetMissing",job="alertmanager",instance="alertmanager:9093",severity="warning",alertstate="firing"}'
+            value: 1
+      - expr: 'ALERTS{alertname="ExpectedScrapeTargetMissing",job="alertmanager",alertstate="firing"}'
+        eval_time: 18m
+        exp_samples: []
+
+  - name: restore failure does not erase a fresh last success and recovers
+    interval: 1m
+    input_series:
+      - series: 'clumsies_unit_last_exit_ok{unit="clumsies-restore-drill.service",job="node",instance="node-exporter:9100"}'
+        values: '0x5 1x10'
+      - series: 'clumsies_restore_drill_last_success_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0x15'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0+60x15'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RestoreDrillFailed",alertstate="firing"}'
+        eval_time: 4m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RestoreDrillFailed",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillFailed",job="node",instance="node-exporter:9100",unit="clumsies-restore-drill.service",severity="warning",alertstate="firing"}'
+            value: 1
+      - expr: 'ALERTS{alertname="RestoreDrillFailed",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples: []
+
+  - name: never run is not failed but missing success cannot be healthy
+    interval: 1m
+    input_series:
+      - series: 'up{job="node",instance="node-exporter:9100"}'
+        values: '1x70'
+      - series: 'clumsies_unit_last_exit_state{unit="clumsies-backup.service",state="never",job="node",instance="node-exporter:9100"}'
+        values: '1x70'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="BackupUnitFailed",alertstate="firing"}'
+        eval_time: 1h
+        exp_samples: []
+      - expr: 'ALERTS{alertname="BackupStale",alertstate="firing"}'
+        eval_time: 30m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BackupStale",job="node",instance="node-exporter:9100",severity="critical",alertstate="firing"}'
+            value: 1
+      - expr: 'ALERTS{alertname="RestoreDrillStale",alertstate="firing"}'
+        eval_time: 1h
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillStale",job="node",instance="node-exporter:9100",severity="warning",alertstate="firing"}'
+            value: 1
+
+  - name: operational collector freeze and alertmanager failures are visible
+    interval: 1m
+    input_series:
+      - series: 'up{job="node",instance="node-exporter:9100"}'
+        values: '1x30'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="node-exporter:9100"}'
+        values: '0x22 1380+60x10'
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager",integration="email",reason="authError"}'
+        values: '0x2 1x30'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="OperationalMetricsCollectionStale",alertstate="firing"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="OperationalMetricsCollectionStale",alertstate="firing"}'
+        eval_time: 21m
+        exp_samples:
+          - labels: 'ALERTS{alertname="OperationalMetricsCollectionStale",job="node",instance="node-exporter:9100",severity="warning",alertstate="firing"}'
+            value: 1
+      - expr: 'ALERTS{alertname="OperationalMetricsCollectionStale",alertstate="firing"}'
+        eval_time: 23m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationFailed",alertstate="firing"}'
+        eval_time: 4m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerNotificationFailed",integration="email",severity="warning",alertstate="firing"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationFailed",alertstate="firing"}'
+        eval_time: 12m
+        exp_samples: []
+
+  - name: future and missing snapshots cannot claim current failures or long queries
+    interval: 1m
+    input_series:
+      - series: 'up{job="node",instance="current"}'
+        values: '1x10'
+      - series: 'clumsies_database_collection_success{job="node",instance="current"}'
+        values: '1x10'
+      - series: 'clumsies_db_longest_query_seconds{job="node",instance="current"}'
+        values: '61x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="current",unit="clumsies-backup.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="current",unit="clumsies-restore-drill.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_state{job="node",instance="current",unit="unavailable.service",state="missing"}'
+        values: '1x10'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="current"}'
+        values: '0+60x10'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="current"}'
+        values: '0+60x10'
+      - series: 'up{job="node",instance="future-host"}'
+        values: '1x10'
+      - series: 'clumsies_database_collection_success{job="node",instance="future-host"}'
+        values: '1x10'
+      - series: 'clumsies_db_longest_query_seconds{job="node",instance="future-host"}'
+        values: '61x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="future-host",unit="clumsies-backup.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="future-host",unit="clumsies-restore-drill.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_state{job="node",instance="future-host",unit="unavailable.service",state="missing"}'
+        values: '1x10'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="future-host"}'
+        values: '86400x10'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="future-host"}'
+        values: '0+60x10'
+      - series: 'up{job="node",instance="future-db"}'
+        values: '1x10'
+      - series: 'clumsies_database_collection_success{job="node",instance="future-db"}'
+        values: '1x10'
+      - series: 'clumsies_db_longest_query_seconds{job="node",instance="future-db"}'
+        values: '61x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="future-db",unit="clumsies-backup.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="future-db",unit="clumsies-restore-drill.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_state{job="node",instance="future-db",unit="unavailable.service",state="missing"}'
+        values: '1x10'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="future-db"}'
+        values: '0+60x10'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="future-db"}'
+        values: '86400x10'
+      - series: 'up{job="node",instance="missing-host"}'
+        values: '1x10'
+      - series: 'clumsies_database_collection_success{job="node",instance="missing-host"}'
+        values: '1x10'
+      - series: 'clumsies_db_longest_query_seconds{job="node",instance="missing-host"}'
+        values: '61x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="missing-host",unit="clumsies-backup.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="missing-host",unit="clumsies-restore-drill.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_state{job="node",instance="missing-host",unit="unavailable.service",state="missing"}'
+        values: '1x10'
+      - series: 'clumsies_database_collection_timestamp_seconds{job="node",instance="missing-host"}'
+        values: '0+60x10'
+      - series: 'up{job="node",instance="missing-db"}'
+        values: '1x10'
+      - series: 'clumsies_database_collection_success{job="node",instance="missing-db"}'
+        values: '1x10'
+      - series: 'clumsies_db_longest_query_seconds{job="node",instance="missing-db"}'
+        values: '61x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="missing-db",unit="clumsies-backup.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="missing-db",unit="clumsies-restore-drill.service"}'
+        values: '0x10'
+      - series: 'clumsies_unit_last_exit_state{job="node",instance="missing-db",unit="unavailable.service",state="missing"}'
+        values: '1x10'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="missing-db"}'
+        values: '0+60x10'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="DatabaseLongRunningQuery",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DatabaseLongRunningQuery",alertstate="firing",job="node",instance="current",severity="critical"}'
+            value: 1
+      - expr: 'ALERTS{alertname="BackupUnitFailed",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BackupUnitFailed",alertstate="firing",job="node",instance="current",severity="critical",unit="clumsies-backup.service"}'
+            value: 1
+          - labels: 'ALERTS{alertname="BackupUnitFailed",alertstate="firing",job="node",instance="future-db",severity="critical",unit="clumsies-backup.service"}'
+            value: 1
+          - labels: 'ALERTS{alertname="BackupUnitFailed",alertstate="firing",job="node",instance="missing-db",severity="critical",unit="clumsies-backup.service"}'
+            value: 1
+      - expr: 'ALERTS{alertname="RestoreDrillFailed",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillFailed",alertstate="firing",job="node",instance="current",severity="warning",unit="clumsies-restore-drill.service"}'
+            value: 1
+          - labels: 'ALERTS{alertname="RestoreDrillFailed",alertstate="firing",job="node",instance="future-db",severity="warning",unit="clumsies-restore-drill.service"}'
+            value: 1
+          - labels: 'ALERTS{alertname="RestoreDrillFailed",alertstate="firing",job="node",instance="missing-db",severity="warning",unit="clumsies-restore-drill.service"}'
+            value: 1
+      - expr: 'ALERTS{alertname="OperationalUnitUnavailable",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="OperationalUnitUnavailable",alertstate="firing",job="node",instance="current",severity="warning",unit="unavailable.service",state="missing"}'
+            value: 1
+          - labels: 'ALERTS{alertname="OperationalUnitUnavailable",alertstate="firing",job="node",instance="future-db",severity="warning",unit="unavailable.service",state="missing"}'
+            value: 1
+          - labels: 'ALERTS{alertname="OperationalUnitUnavailable",alertstate="firing",job="node",instance="missing-db",severity="warning",unit="unavailable.service",state="missing"}'
+            value: 1
+      - expr: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="future-host",severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="future-db",severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="missing-host",severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="DatabaseMetricsCollectionFailed",alertstate="firing",job="node",instance="missing-db",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname="OperationalMetricsCollectionStale",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="OperationalMetricsCollectionStale",alertstate="firing",job="node",instance="future-host",severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="OperationalMetricsCollectionStale",alertstate="firing",job="node",instance="missing-host",severity="warning"}'
+            value: 1
+
+  - name: future task history is preserved but invalid until trustworthy timestamps recover
+    interval: 1m
+    input_series:
+      - series: 'up{job="node",instance="future-history"}'
+        values: '1x66'
+      - series: 'clumsies_backup_last_success_timestamp_seconds{job="node",instance="future-history"}'
+        values: '86400x60 3660+60x5'
+      - series: 'clumsies_restore_drill_last_success_timestamp_seconds{job="node",instance="future-history"}'
+        values: '86400x60 3660+60x5'
+      - series: 'clumsies_release_last_success_timestamp_seconds{job="node",instance="future-history"}'
+        values: '86400x60 3660+60x5'
+      - series: 'clumsies_unit_last_exit_timestamp_seconds{job="node",instance="future-history",unit="clumsies-backup.service"}'
+        values: '86400x60 3660+60x5'
+      - series: 'clumsies_observability_collection_timestamp_seconds{job="node",instance="future-history"}'
+        values: '0+60x66'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="future-history",unit="clumsies-backup.service"}'
+        values: '0x66'
+      - series: 'clumsies_unit_last_exit_ok{job="node",instance="future-history",unit="clumsies-restore-drill.service"}'
+        values: '0x66'
+      - series: 'clumsies_unit_last_exit_timestamp_seconds{job="node",instance="future-history",unit="clumsies-restore-drill.service"}'
+        values: '86400x60 3660+60x5'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname=~"BackupUnitFailed|RestoreDrillFailed",alertstate="firing",instance="future-history"}'
+        eval_time: 5m
+        exp_samples: []
+      - expr: 'count(ALERTS{alertname="OperationalTimestampInvalid",alertstate="firing",instance="future-history"})'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 5
+      - expr: 'clumsies_release_last_success_timestamp_seconds{instance="future-history"}'
+        eval_time: 1h
+        exp_samples:
+          - labels: 'clumsies_release_last_success_timestamp_seconds{job="node",instance="future-history"}'
+            value: 86400
+      - expr: 'ALERTS{alertname="BackupStale",alertstate="firing",instance="future-history"}'
+        eval_time: 30m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BackupStale",alertstate="firing",job="node",instance="future-history",severity="critical"}'
+            value: 1
+      - expr: 'ALERTS{alertname="RestoreDrillStale",alertstate="firing",instance="future-history"}'
+        eval_time: 1h
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillStale",alertstate="firing",job="node",instance="future-history",severity="warning"}'
+            value: 1
+      - expr: 'ALERTS{alertname=~"OperationalTimestampInvalid|BackupStale|RestoreDrillStale",alertstate="firing",instance="future-history"}'
+        eval_time: 61m
         exp_samples: []

@@ -1,0 +1,74 @@
+[
+  {
+    "targets": [
+      "localhost:9090"
+    ],
+    "labels": {
+      "job": "prometheus"
+    }
+  },
+  {
+    "targets": [
+      "node-exporter:9100"
+    ],
+    "labels": {
+      "job": "node"
+    }
+  },
+  {
+    "targets": [
+      "cadvisor:8080"
+    ],
+    "labels": {
+      "job": "cadvisor"
+    }
+  },
+  {
+    "targets": [
+      "postgres-exporter:9187"
+    ],
+    "labels": {
+      "job": "postgres"
+    }
+  },
+  {
+    "targets": [
+      "caddy:2019"
+    ],
+    "labels": {
+      "job": "caddy"
+    }
+  },
+  {
+    "targets": [
+      "alloy:12345"
+    ],
+    "labels": {
+      "job": "alloy"
+    }
+  },
+  {
+    "targets": [
+      "loki:3100"
+    ],
+    "labels": {
+      "job": "loki"
+    }
+  },
+  {
+    "targets": [
+      "server:8080"
+    ],
+    "labels": {
+      "job": "server"
+    }
+  },
+  {
+    "targets": [
+      "alertmanager:9093"
+    ],
+    "labels": {
+      "job": "alertmanager"
+    }
+  }
+]

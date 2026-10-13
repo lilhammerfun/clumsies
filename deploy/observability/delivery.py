@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,8 @@ import urllib.parse
 import urllib.request
 
 
-MANAGED = ('compose.observability.yml', 'prometheus', 'alertmanager', 'grafana',
+# Runtime notification credentials and routing, like .env, belong to the installation.
+MANAGED = ('compose.observability.yml', 'prometheus', 'grafana',
            'blackbox', 'loki', 'alloy', 'host')
 HOST_FILES = {
     'clumsies-observability-metrics': Path('/usr/local/sbin/clumsies-observability-metrics'),
@@ -76,8 +78,87 @@ def query(expression):
     return result['data']['result']
 
 
-def verify(started, compose):
+def expected_targets(root):
+    """Read configured discovery, including the pre-catalog bootstrap rollback."""
+    targets = set()
+    catalogs = [root / 'prometheus' / name for name in ('targets.json', 'probes.json')]
+    if any(path.exists() for path in catalogs):
+        for path in catalogs:
+            for group in json.loads(path.read_text()):
+                targets.update((group['labels']['job'], instance) for instance in group['targets'])
+    else:
+        # shortcut: only the former static job format, remove after all stacks use catalogs.
+        text = (root / 'prometheus/prometheus.yml').read_text().partition('scrape_configs:')[2]
+        jobs = re.findall(r'^  - job_name: ([a-zA-Z0-9_-]+)\n(.*?)(?=^  - job_name:|\Z)', text, re.M | re.S)
+        for job, block in jobs:
+            if 'static_configs:' not in block or 'file_sd_configs:' in block:
+                raise ValueError(f'Legacy discovery format is unsupported: {job}')
+            instances = []
+            for flow in re.findall(r'^\s+- targets: (\[[^\n]+\])\s*$', block, re.M):
+                instances.extend(json.loads(flow))
+            instances.extend(re.findall(r'^\s+- (https?://\S+)\s*$', block, re.M))
+            if not instances:
+                raise ValueError(f'Legacy target list is empty or unsupported: {job}')
+            targets.update((job, instance) for instance in instances)
+    if not targets:
+        raise ValueError('Expected target discovery is empty')
+    return targets
+
+
+def verify_dashboards(root, compose):
+    """Inspect provisioned content read-only; initial admin env is not a login."""
+    expected = {dashboard['uid']: dashboard for path in (root / 'grafana/dashboards').glob('*.json')
+                for dashboard in [json.loads(path.read_text())]}
+    if not expected:
+        raise RuntimeError('No expected dashboards')
+    container = compose('ps', '-q', 'grafana')
+    mounts = json.loads(run('docker', 'inspect', '--format', '{{json .Mounts}}', container))
+    mounted = {mount['Destination']: Path(mount['Source']) for mount in mounts}
+    dashboard_path = mounted['/var/lib/grafana/dashboards']
+    for path in (root / 'grafana/dashboards').glob('*.json'):
+        if (dashboard_path / path.name).read_bytes() != path.read_bytes():
+            raise RuntimeError(f'Grafana dashboard mount is stale: {path.name}')
+    database = mounted['/var/lib/grafana'] / 'grafana.db'
+    with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=5) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        stored = {}
+        folder_ready = False
+        resource_folders = {}
+        folder_names = set()
+        if 'resource' in tables:
+            for name, value, folder in connection.execute(
+                    'SELECT name,value,folder FROM resource WHERE resource=? AND "group"=? AND namespace=?',
+                    ('dashboards', 'dashboard.grafana.app', 'default')):
+                stored[name] = json.loads(value)['spec']
+                resource_folders[name] = folder
+            folder_names = {name for name, value in connection.execute(
+                'SELECT name,value FROM resource WHERE resource=? AND "group"=? AND namespace=?',
+                ('folders', 'folder.grafana.app', 'default')) if json.loads(value)['spec'].get('title') == 'Clumsies'}
+            folder_ready = bool(folder_names)
+        if 'dashboard' in tables:
+            for uid, data, is_folder in connection.execute('SELECT uid,data,is_folder FROM dashboard WHERE org_id=1'):
+                dashboard = json.loads(data)
+                if is_folder:
+                    folder_ready = folder_ready or dashboard.get('title') == 'Clumsies'
+                else:
+                    stored.setdefault(uid, dashboard)
+        if not folder_ready:
+            raise RuntimeError('Grafana Clumsies folder is not provisioned')
+        for uid, dashboard in expected.items():
+            actual = stored.get(uid)
+            if uid in resource_folders and resource_folders[uid] not in folder_names:
+                raise RuntimeError(f'Grafana dashboard is outside the Clumsies folder: {uid}')
+            if actual is None or any(actual.get(key) != dashboard.get(key) for key in ('title', 'panels', 'templating', 'links')):
+                raise RuntimeError(f'Grafana dashboard content has not been provisioned: {uid}')
+
+
+def verify(started, compose, root):
     """Allow scrape/provisioning convergence, but never accept empty target discovery."""
+    expected = expected_targets(root)
+    collector = (root / 'host/clumsies-observability-metrics').read_text()
+    collection_timestamp = ('clumsies_observability_collection_timestamp_seconds'
+                            if 'clumsies_observability_collection_timestamp_seconds' in collector
+                            else 'clumsies_database_collection_timestamp_seconds')
     deadline = time.monotonic() + 180
     last = 'not ready'
     while time.monotonic() < deadline:
@@ -88,9 +169,29 @@ def verify(started, compose):
             if json.loads(get('http://127.0.0.1:3000/api/health'))['database'] != 'ok':
                 raise RuntimeError('Grafana database is not ready')
             targets = json.loads(get('http://127.0.0.1:9090/api/v1/targets'))['data']['activeTargets']
-            if not targets or any(t['health'] != 'up' or datetime.datetime.fromisoformat(
-                    t['lastScrape'].replace('Z', '+00:00')).timestamp() < started for t in targets):
-                raise RuntimeError('Scrape targets have not completed a healthy post-deploy scrape')
+            observed = {(target['labels']['job'], target['labels']['instance']): target for target in targets}
+            missing = expected - observed.keys()
+            if missing:
+                raise RuntimeError(f'Expected scrape targets are missing: {sorted(missing)}')
+            current = time.time()
+            if any(observed[key]['health'] != 'up' or not started <= datetime.datetime.fromisoformat(
+                    observed[key]['lastScrape'].replace('Z', '+00:00')).timestamp() <= current for key in expected):
+                raise RuntimeError('Expected scrape targets have not completed a healthy post-deploy scrape with valid time')
+            probes = {entry['metric']['instance']: float(entry['value'][1]) for entry in query('probe_success{job="blackbox-public"}')}
+            if any(probes.get(instance) != 1 for job, instance in expected if job == 'blackbox-public'):
+                raise RuntimeError('Public probes have not passed after deployment')
+            nodes = {key for key in expected if key[0] == 'node'}
+            samples = {}
+            for metric in {'clumsies_database_collection_success', collection_timestamp,
+                           'clumsies_database_collection_timestamp_seconds'}:
+                samples[metric] = {(entry['metric']['job'], entry['metric']['instance']): float(entry['value'][1])
+                                   for entry in query(metric)}
+            current = time.time()
+            if not nodes or any(samples['clumsies_database_collection_success'].get(key) != 1
+                    or any(not int(started) <= samples[metric].get(key, float('nan')) <= current
+                           for metric in {collection_timestamp, 'clumsies_database_collection_timestamp_seconds'})
+                    for key in nodes):
+                raise RuntimeError('Operational/database collection has not succeeded after deployment with valid time')
             loaded = query('prometheus_config_last_reload_successful')
             if not loaded or any(float(v['value'][1]) != 1 for v in loaded):
                 raise RuntimeError('Prometheus configuration reload failed')
@@ -103,8 +204,9 @@ def verify(started, compose):
             logs = compose('logs', '--since', str(int(started)), '--no-color', 'grafana')
             if any('logger=provisioning' in line and 'level=error' in line for line in logs.splitlines()):
                 raise RuntimeError('Grafana provisioning reported an error')
+            verify_dashboards(root, compose)
             return
-        except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError) as error:
+        except (OSError, ValueError, KeyError, RuntimeError, sqlite3.Error, subprocess.CalledProcessError) as error:
             last = str(error)
             time.sleep(3)
     raise RuntimeError(f'Post-deploy verification timed out: {last}')
@@ -144,13 +246,16 @@ def deploy(source, root, commit):
         for service, binary, arguments in (
             ('prometheus', '/bin/promtool', ['check', 'config', '/etc/prometheus/prometheus.yml']),
             ('alertmanager', '/bin/amtool', ['check-config', '/etc/alertmanager/alertmanager.yml']),
+            ('blackbox', '/bin/blackbox_exporter', ['--config.check', '--config.file=/etc/blackbox/config.yml']),
             ('alloy', '/bin/alloy', ['validate', '/etc/alloy/config.alloy']),
             ('loki', '/usr/bin/loki', ['-verify-config=true', '-config.file=/etc/loki/loki-config.yml']),
         ):
             run('docker', 'run', '--rm', '--pull=never', '--network=none', '--entrypoint', binary,
-                '-v', f'{source / service}:/etc/{service}:ro', images[service]['image'], *arguments)
+                '-v', f'{(root if service == "alertmanager" else source) / service}:/etc/{service}:ro', images['blackbox-exporter' if service == 'blackbox' else service]['image'], *arguments)
         if not changed:
-            verify(time.time(), compose)
+            started = time.time()
+            run('systemctl', 'start', 'clumsies-observability-metrics.service')
+            verify(started, compose, root)
             (state / 'current').write_text(commit + '\n')
             print(f'Configuration unchanged; verified {commit}')
             return
@@ -177,23 +282,23 @@ def deploy(source, root, commit):
                 HOST_FILES['clumsies-observability-metrics'].chmod(0o755)
                 run('systemctl', 'daemon-reload')
                 run('systemctl', 'restart', 'clumsies-observability-metrics.timer')
-                run('systemctl', 'start', 'clumsies-observability-metrics.service')
             if 'compose.observability.yml' in changed:
                 compose('up', '-d', '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '120', override=override)
-            for service in ('prometheus', 'alertmanager', 'grafana', 'blackbox', 'loki', 'alloy'):
+            for service in ('prometheus', 'grafana', 'blackbox', 'loki', 'alloy'):
                 if service in changed:
                     name = 'blackbox-exporter' if service == 'blackbox' else service
-                    if service in ('prometheus', 'alertmanager'):
+                    if service == 'prometheus':
                         compose('kill', '--signal', 'SIGHUP', name)
                     else:
                         compose('restart', name)
+            run('systemctl', 'start', 'clumsies-observability-metrics.service')
 
         started = time.time()
         try:
             for name in changed:
                 sync(source / name, root / name)
             apply()
-            verify(started, compose)
+            verify(started, compose, root)
         except BaseException:
             print('Deployment failed; restoring previous configuration', file=sys.stderr)
             try:
@@ -207,7 +312,7 @@ def deploy(source, root, commit):
                     run('systemctl', 'restart', 'clumsies-observability-metrics.timer')
                     run('systemctl', 'start', 'clumsies-observability-metrics.service')
                 apply(restore=True)
-                verify(rollback_started, compose)
+                verify(rollback_started, compose, root)
             except BaseException:
                 print(f'ROLLBACK FAILED: restore files retained at {previous}', file=sys.stderr)
                 raise
